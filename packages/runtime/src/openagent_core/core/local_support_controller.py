@@ -3768,10 +3768,19 @@ def _diagnostic_reply_suffix(state: SupportState, italian: bool) -> str:
     # only while the app is in the foreground. Every capture that came back
     # empty came back empty for this reason - the customer reproduced the fault
     # and closed the app immediately, exactly as a well-behaved tester would.
+    # Order matters, and it used to be wrong. Enabling a capture sets it
+    # server-side; the client only arms it on its NEXT config fetch, which a
+    # cold app performs when it comes back to the foreground. Asking the
+    # customer to "reproduce, THEN bring the app to the front" therefore armed
+    # the capture with the reproduction already behind it - every single time.
+    # Measured on a real thread (14 set 2026): categories enabled at 12:19,
+    # customer reported the test done at 12:25, client armed at 12:26:40. The
+    # failure he had just reproduced was never recorded. Restart first, then
+    # reproduce, then hold it in front.
     return (
-        f" Ho attivato la diagnostica {category}: riproduci il problema una volta, poi lascia l’app aperta e in primo piano per una trentina di secondi senza chiuderla né bloccare lo schermo, e rispondi qui."
+        f" Ho attivato la diagnostica {category}: prima chiudi del tutto l’app e riaprila, perché la raccolta parte solo alla riapertura e non registra nulla di quello che succede prima. Poi riproduci il problema una volta, lascia l’app aperta e in primo piano per una trentina di secondi senza chiuderla né bloccare lo schermo, e rispondi qui."
         if italian else
-        f" I enabled {category} diagnostics. Reproduce the issue once, then leave the app open and in the foreground for about 30 seconds without closing it or locking the screen, and reply here."
+        f" I enabled {category} diagnostics. First close the app completely and reopen it - the capture only starts on reopening, and records nothing that happens before that. Then reproduce the issue once, leave the app open and in the foreground for about 30 seconds without closing it or locking the screen, and reply here."
     )
 
 
@@ -4304,8 +4313,22 @@ def _fallback_reply_base(state: SupportState) -> str:
                 if italian else
                 f"I read the {category} diagnostic logs, added them to the tracked issue, then disabled and cleared the capture. I can’t confirm a cause or fix yet."
             )
-        if state.outcome in {"bug_diagnostics_not_captured", "bug_diagnostics_category_missing"}:
+        if state.outcome == "bug_diagnostics_not_captured":
             return ("Non trovo la diagnostica necessaria dopo la prova. Prima di chiederti di ripeterla serve verificare la raccolta e l’invio dei log. " if italian else "I cannot find the required diagnostics after your test. Capture and upload need checking before asking you to repeat it. ") + (("Ho passato questa verifica al team." if italian else "I passed that check to the team.") if state.facts.get("human_handoff_confirmed") else "")
+        if state.outcome == "bug_diagnostics_category_missing":
+            # Not the same fact as the line above, so not the same sentence.
+            # Logs ARE arriving; the one step that fails is the part the capture
+            # has not seen yet, because it armed after the customer's test.
+            # Telling him nothing arrived is false, and it costs him the round
+            # trip that would have closed the case.
+            # Phrased as an instruction, never as a claim about the account's
+            # capture state. "Logs are arriving" would be true here, but it is
+            # exactly the shape both reply guards treat as a diagnostics claim,
+            # and the only envelope that can back one is a `diagnostic_enable`
+            # receipt, which this turn does not have. The customer needs the
+            # next action, not a status report - and above all not the false
+            # "nothing arrived" of the branch above.
+            return ("Il passaggio che fallisce va rifatto dopo aver riaperto l’app da zero: l’altra volta è stato fatto prima, ed è per questo che non è rimasto registrato. Puoi riaprire l’app, rifare solo quella singola azione e poi rispondermi qui? Non serve ripetere altro. " if italian else "The step that fails needs to happen after the app has been freshly reopened - last time it was done before that, which is why nothing about it was recorded. Could you reopen the app, do just that one action, and then reply here? Nothing else needs repeating. ") + (("Ho chiesto al team di controllare in parallelo." if italian else "I have asked the team to check in parallel.") if state.facts.get("human_handoff_confirmed") else "")
         if state.outcome.endswith("_human"):
             # "It needs manual review" is triage language: true, and it tells
             # the customer nothing about why he is waiting. Same fact said as a
@@ -6210,9 +6233,32 @@ async def _collect_bug_diagnostics(pool: Any, state: SupportState) -> None:
 
     expected = _diagnostic_category(state.thread_customer_text or state.customer_message)
     if expected != "general" and expected not in names:
+        # The capture is alive and uploading - `names` is what actually arrived.
+        # What is missing is the one slice that only exists once the customer
+        # performs that action WHILE the capture is armed, and the capture arms
+        # on the app's next config fetch, which routinely lands after the
+        # customer has already reproduced. So a missing category is the normal
+        # shape of "not done yet", not evidence that capture or upload broke.
+        # Carry both halves forward: the reply must not be built from the same
+        # sentence as `bug_diagnostics_not_captured`. On 14 set 2026 it was, and
+        # a thread whose four streams were uploading at that very moment was
+        # told the diagnostics could not be found and escalated; the missing
+        # slice arrived three minutes later carrying the exact proof of the
+        # fault, unread, because the customer had been told to stand down.
         state.decision = "human"
         state.outcome = "bug_diagnostics_category_missing"
+        state.facts["diagnostic_partial"] = {"expected": expected, "present": list(names)}
         state.human_reason = "Capture exists but the relevant diagnostic category is absent. Verify the enabled categories and upload window; preserve the available data."
+        state.instructions.append(
+            "The capture is running and uploading: "
+            f"{', '.join(names)} arrived. Only '{expected}' is missing, which "
+            "means the customer has not performed that action since the capture "
+            "armed - it is NOT evidence that capture or upload failed. Do not "
+            "say the diagnostics are missing, absent, or not visible. Ask the "
+            "customer to perform that one action once more with the app open "
+            "and in the foreground, then reply here. Do not ask for the whole "
+            "reproduction sequence again."
+        )
         return
     category = expected if expected in names else names[0]
     if state.tenant.key == "lyra":

@@ -119,3 +119,62 @@ async def t_auth_vs_purchases(_ctx: TestContext):
         "Non riesco a rientrare dentro il mio account di eSound. Ho tutta la musica."
     ) == "auth"
     assert c._diagnostic_category("no puedo entrar en mi cuenta") == "auth"
+
+
+def _state(outcome: str, **facts) -> c.SupportState:
+    s = c.SupportState(thread_id="t", customer_message="search finds nothing")
+    s.outcome = outcome
+    s.facts.update({"language": "en", **facts})
+    return s
+
+
+@test("support_diagnostic_routing", "a partial capture is not reported as no capture")
+async def t_category_missing_is_not_not_captured(_ctx: TestContext):
+    # These two outcomes shared one sentence. `not_captured` means zero streams;
+    # `category_missing` means the capture is alive and uploading and only the
+    # slice tied to the customer's action has not been produced yet. Saying
+    # "I cannot find the diagnostics" for the second is false: on 14 set 2026 it
+    # went to a customer whose four streams were uploading at that moment, and
+    # the missing slice arrived three minutes later carrying the exact proof.
+    missing = c._fallback_reply_base(_state("bug_diagnostics_category_missing"))
+    none_at_all = c._fallback_reply_base(_state("bug_diagnostics_not_captured"))
+    assert missing != none_at_all
+    for absolute in ("cannot find", "can't find", "not seeing", "no diagnostic"):
+        assert absolute not in missing.lower(), absolute
+    # It must ask for the ONE action, after a restart - not the whole sequence.
+    assert "reopen" in missing.lower()
+    assert "one action" in missing.lower()
+    # The Italian branch carries the same meaning, not the old "non trovo".
+    it = c._fallback_reply_base(_state("bug_diagnostics_category_missing", language="it"))
+    assert "non trovo" not in it.lower()
+    assert "riaprire" in it.lower() or "riaperto" in it.lower()
+
+
+@test("support_diagnostic_routing", "the partial-capture reply claims nothing the turn cannot back")
+async def t_category_missing_makes_no_unbacked_claim(_ctx: TestContext):
+    # This turn holds no `diagnostic_enable` receipt - it only listed streams -
+    # and that receipt is the only envelope either reply guard accepts behind a
+    # diagnostics claim. So the reply must instruct, never report capture state.
+    for lang in ("en", "it"):
+        reply = c._fallback_reply_base(_state("bug_diagnostics_category_missing", language=lang))
+        assert not c.reply_guard.claims_diagnostics(reply), lang
+
+
+@test("support_diagnostic_routing", "the capture is armed before the reproduction, not after")
+async def t_enable_suffix_restart_first(_ctx: TestContext):
+    # Enabling sets the capture server-side; the client arms it on its NEXT
+    # config fetch. "Reproduce, THEN bring the app to the front" therefore armed
+    # it with the reproduction already behind it - measured on a real thread:
+    # enabled 12:19, customer done 12:25, client armed 12:26:40, nothing caught.
+    for italian, reopen, reproduce in (
+        (False, "reopen it", "reproduce the issue"),
+        (True, "riaprila", "riproduci il problema"),
+    ):
+        s = c.SupportState(thread_id="t", customer_message="x")
+        s.facts["diagnostic_capture"] = {"category": "search", "status": "enabled"}
+        text = c._diagnostic_reply_suffix(s, italian)
+        assert reopen in text and reproduce in text, text
+        assert text.index(reopen) < text.index(reproduce), text
+        # Still a diagnostics claim - and rightly so: this turn DOES hold the
+        # diagnostic_enable receipt. Losing that would silently unguard it.
+        assert c.reply_guard.claims_diagnostics(text)
