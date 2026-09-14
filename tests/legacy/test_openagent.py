@@ -50,6 +50,7 @@ from scripts.tests._setup import build_test_config, cleanup_extras  # noqa: E402
 # execution order of the whole suite, so add new modules deliberately.
 _TEST_MODULES: tuple[str, ...] = (
     "test_support_context",
+    "test_support_diagnostic_routing",
     "test_support_sept6",
     "test_support_progress",
     "test_support_voice",

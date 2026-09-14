@@ -5664,29 +5664,107 @@ def _symptom_context(state: SupportState) -> str:
     the playback capture the first message had earned.
     """
     return " ".join(filter(None, [
-        state.customer_message,
+        _strip_report_metadata(state.customer_message),
         state.subject,
-        *(turn.get("text", "") for turn in state.recent_exchange
-          if turn.get("from") == "customer"),
+        *(_strip_report_metadata(turn.get("text", ""))
+          for turn in state.recent_exchange if turn.get("from") == "customer"),
     ]))
+
+
+# The web form and the store-review importer append a `--- key: value ...`
+# trailer (app_version, device, os, premium, reviewer_language...). It is
+# device metadata, not something the customer said, and routing on it is how a
+# playback report from a paying user became a `purchases` capture: the trailer
+# always carries `premium: yes`, which the purchases route matches.
+#
+# The separator is cut only when a KNOWN form field follows it, so a customer
+# who writes `---` in their own prose keeps every word. `_FORM_FIELD` stays the
+# single definition of what a form field is, and fields that arrived without a
+# separator are removed too.
+_REPORT_METADATA_SEPARATOR = re.compile(r"\s*-{3,}\s*")
+
+
+def _strip_report_metadata(message: str) -> str:
+    """Drop the appended device/account metadata block from a customer message."""
+    text = str(message or "")
+    parts = _REPORT_METADATA_SEPARATOR.split(text, maxsplit=1)
+    if len(parts) == 2 and _FORM_FIELD.search(parts[1]):
+        text = parts[0]
+    return _FORM_FIELD.sub("", text).strip()
+
+
+# Ordered most-specific first: a later route must never be reachable only
+# through a word an earlier one already swallows. `playlist` sits above
+# `play` for exactly that reason — as a plain substring scan with `play`
+# first, every playlist report was captured as `playback`.
+#
+# Terms are STEMS matched at a word boundary, not bare substrings. The
+# substring form routed "download"/"load" to `ads`, because "ad " is inside
+# "downloa|d |". A stem still matches its own inflections ("riproduz" ->
+# riproduzione, "reproduc" -> reproducción/reprodução), which is what the
+# multilingual vocabulary below relies on.
+_DIAGNOSTIC_ROUTES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("playlist", "lista de reproduccion", "lista de reproducao"), "playlists"),
+    # No bare "ad": in Italian `ad` is the euphonic form of the preposition
+    # `a` ("non riesco ad accedere"), so it fires on reports that are about
+    # anything but advertising. "ads"/"advert" carry the English side.
+    (("advert", "ads", "pubblicit", "annunci", "anunci", "publicid",
+      "werbung"), "ads"),
+    # Purchases sits above auth so an explicit billing word wins: "account" is
+    # the commonest word in both kinds of report, and a refund thread that
+    # merely mentions the account is not an authentication fault.
+    (("purchase", "premium", "acquist", "abbonament", "subscription",
+      "suscripcion", "assinatura", "abonnement", "refund", "rimbors",
+      "reembols", "billing", "fattur"), "purchases"),
+    (("login", "log in", "sign in", "signin", "auth", "accesso", "accedere",
+      "iniciar sesion", "connexion", "password", "passwort", "account",
+      "cuenta", "conta", "compte", "konto", "registrar", "registrat"), "auth"),
+    # Playback is the widest net on purpose: it is the single largest class of
+    # bug report, and the phrasings customers actually use ("le canzoni si
+    # bloccano", "songs keep stopping", "a musica para") carried none of the
+    # four English words the old list looked for, so they fell to `general` —
+    # which skips the capture entirely unless a recurrence marker fires.
+    (("play", "player", "buffer", "audio", "track", "brano", "brani",
+      "canzon", "cancion", "cancao", "musica", "music", "song", "ascolt",
+      "riproduz", "reproduc", "listen", "sound", "suono", "skip", "salta",
+      "pausa", "pause", "stutter", "freeze", "stops", "stopping", "interromp",
+      "ecout", "lecture", "lied", "abspiel"), "playback"),
+    (("library", "libreria", "biblioteca", "bibliothe"), "library"),
+    (("search", "ricerca", "cercare", "buscar", "busca", "busqued",
+      "recherche", "suche"), "search"),
+    (("sync", "sincron", "synchronis"), "sync"),
+    (("network", "rete", "connession", "conexion", "conexao", "connexion",
+      "verbindung", "offline", "wifi", "wi-fi"), "network"),
+)
+
+# Word-boundary at the START of the stem only: the stem is allowed to run into
+# the rest of an inflected word ("ascolt" -> "ascoltando") but must not begin
+# mid-word ("ad" must not fire inside "download").
+_DIAGNOSTIC_ROUTE_PATTERNS: tuple[tuple[Any, str], ...] = tuple(
+    (re.compile(r"\b(?:%s)" % "|".join(re.escape(t) for t in terms)), category)
+    for terms, category in _DIAGNOSTIC_ROUTES
+)
+
+
+def _fold_accents(text: str) -> str:
+    """`música` -> `musica`, `reprodução` -> `reproducao`, `écoute` -> `ecoute`.
+
+    The stems below are written unaccented, and Spanish and Portuguese are two
+    of the largest locales here: without folding, "no me carga la música" and
+    "a reprodução para" matched nothing and fell to `general`, which skips the
+    capture outright.
+    """
+    return "".join(
+        ch for ch in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(ch)
+    )
 
 
 def _diagnostic_category(message: str) -> str:
     """Pick one narrow, product-supported capture category from the symptom."""
-    low = str(message or "").lower()
-    routes = (
-        (("ad ", "ads", "advert", "pubblicit", "annunci"), "ads"),
-        (("play", "player", "buffer", "audio", "track", "brano"), "playback"),
-        (("playlist",), "playlists"),
-        (("library", "libreria", "biblioteca"), "library"),
-        (("login", "sign in", "auth", "accesso"), "auth"),
-        (("search", "ricerca", "buscar"), "search"),
-        (("sync", "sincron"), "sync"),
-        (("network", "rete", "connession"), "network"),
-        (("purchase", "premium", "acquist", "abbonament"), "purchases"),
-    )
-    for terms, category in routes:
-        if any(term in low for term in terms):
+    low = _fold_accents(_strip_report_metadata(message)).lower()
+    for pattern, category in _DIAGNOSTIC_ROUTE_PATTERNS:
+        if pattern.search(low):
             return category
     return "general"
 
@@ -6029,14 +6107,33 @@ async def _maybe_enable_bug_diagnostics(pool: Any, state: SupportState) -> None:
         "status": "simulated" if _simulated(state) else "enabled",
     }
     await _record_tags(state, pool, ["diagnostics-active"])
-    state.instructions.append(
-        "Diagnostic capture is active only because the product-admin receipt "
-        "succeeded. Ask the customer to reproduce the issue once AND to leave "
-        "the app open, in the foreground, for about 30 seconds afterwards - "
-        "the upload only runs while the app is in front, so an app closed "
-        "straight after the failure sends an empty file. Do not claim that "
-        "logs have already been captured or analysed."
-    )
+    # The foreground ritual is a cost to the customer, so ask for it only
+    # where it buys something. The uploader is a timer in the JS runtime: while
+    # audio plays, the media foreground service keeps that runtime alive and
+    # the capture rides the listening session itself, phone in a pocket
+    # included (verified against a real car-playback capture). Demanding the
+    # ritual for a playback report is what sends someone away to reproduce a
+    # fault they can only reproduce somewhere the app is never in front.
+    if category in ("playback", "player", "ads"):
+        state.instructions.append(
+            "Diagnostic capture is active only because the product-admin "
+            "receipt succeeded. It records by itself while the customer "
+            "listens, including with the screen off or the app in the "
+            "background, so do NOT ask them to reproduce the fault on demand "
+            "or to hold the app in the foreground: ask them to keep using the "
+            "app as usual. Do not claim that logs have already been captured "
+            "or analysed."
+        )
+    else:
+        state.instructions.append(
+            "Diagnostic capture is active only because the product-admin "
+            "receipt succeeded. Ask the customer to reproduce the issue once "
+            "AND to leave the app open, in the foreground, for about 30 "
+            "seconds afterwards - outside playback nothing keeps the uploader "
+            "running, so an app closed straight after the failure sends an "
+            "empty file. Do not claim that logs have already been captured or "
+            "analysed."
+        )
 
 
 def _diagnostic_log_excerpt(result: Any) -> str:

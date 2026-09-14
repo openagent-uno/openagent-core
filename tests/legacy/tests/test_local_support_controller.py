@@ -3495,8 +3495,16 @@ async def t_reproducible_bug_enables_diagnostics(_ctx: TestContext) -> None:
         action.get("kind") == "diagnostic_enable" and action.get("success")
         for action in state.actions
     ), state.actions
+    # A playback capture rides the listening session: the media foreground
+    # service keeps the uploader alive with the screen off, so demanding a
+    # reproduction on demand is a round trip that buys nothing -- and for a
+    # fault that only happens in the car it asks for the one thing the
+    # customer cannot do.
     instruction = " ".join(state.instructions).lower()
-    assert "foreground" in instruction and "30 seconds" in instruction, instruction
+    assert "30 seconds" not in instruction, instruction
+    assert "do not ask them to reproduce" in instruction, instruction
+    assert "hold the app in the foreground" in instruction, instruction
+    assert "background" in instruction and "as usual" in instruction, instruction
 
 
 @test("local_support_controller", "a vague complaint still earns no capture")
