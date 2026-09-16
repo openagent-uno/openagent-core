@@ -57,6 +57,23 @@ class Contracts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.r.events('run',0,self.ctx),before)
         self.assertEqual(await self.r.events('run',before[-1].cursor,self.ctx),())
 
+    async def test_reconnect_reads_original_admission_without_rebinding(self):
+        original=replace(self.ctx,ingress_id='old-device')
+        request=self.request(deadline_seconds=4,attachments=({'artifact_id':'verified'},),model_ref=None)
+        await self.r.start();await self.r.submit(request,original)
+        await self.r.wait('run',original)
+        fresh=replace(self.ctx,ingress_id='new-device')
+        accepted=await self.r.accepted_request('run',fresh)
+        self.assertEqual(accepted.request,request);self.assertEqual(accepted.author,original.author)
+        self.assertFalse(hasattr(accepted,'capabilities'))
+        with self.assertRaises(IdempotencyConflict):await self.r.submit(request,fresh)
+        self.assertEqual(len(self.executor.calls),1)
+        self.policy.denied.add('run.replay')
+        with self.assertRaises(PermissionError):await self.r.accepted_request('run',fresh)
+        self.policy.denied.clear()
+        await self.r.cancel('reservation',fresh,reserve=True)
+        with self.assertRaises(LookupError):await self.r.accepted_request('reservation',fresh)
+
     async def test_changed_input_or_author_conflicts(self):
         await self.r.start();req=self.request();await self.r.submit(req,self.ctx)
         for request,ctx in [(replace(req,input='changed'),self.ctx),(req,replace(self.ctx,author=PrincipalRef('host','tenant','bob')))]:

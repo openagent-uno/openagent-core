@@ -284,6 +284,16 @@ class Runtime:
         await self._authorize(context,'run.replay',record.session_id,record.tenant_id)
         return await self.services.store.events(run_id,after)
 
+    async def accepted_request(self, run_id: str, context: ExecutionContext):
+        """Read original admission facts to reconcile a reconnect or retry.
+
+        This is an observation with fresh authorization. It never rebinds the
+        original authority/capabilities to a new device or restarts execution.
+        """
+        record=await self.get_run(run_id,context)
+        await self._authorize(context,'run.replay',record.session_id,record.tenant_id)
+        return await self.services.store.accepted_request(run_id)
+
     async def cancel(self, run_id: str, context: ExecutionContext, *, reserve: bool = False) -> RunRecord:
         if reserve and await self.services.store.get(run_id) is None:
             self._admission()

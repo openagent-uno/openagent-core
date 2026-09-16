@@ -20,7 +20,7 @@ from openagent_core.persistence import run_sync
 
 from .search import enqueue_source, restore_runtime_search_intents
 
-from openagent_core.contracts import (ExecutionContext, IdempotencyConflict, RunEvent,
+from openagent_core.contracts import (AcceptedRunRequest, PrincipalRef, ExecutionContext, IdempotencyConflict, RunEvent,
     RunRecord, RunRequest, TERMINAL_STATUSES, canonical_json)
 
 
@@ -354,6 +354,17 @@ class SqliteRuntimeStore:
         rows=self.connection.execute("SELECT * FROM session_runs WHERE json_extract(metadata_json,'$.execution_context.parent_run_id')=? ORDER BY created_at_ms,id",(run_id,))
         return tuple(self._record(row) for row in rows)
 
+    def _accepted_request(self, run_id: str) -> AcceptedRunRequest:
+        row=self.connection.execute("SELECT * FROM session_runs WHERE id=? AND json_extract(metadata_json,'$.runtime_contract')=1",(run_id,)).fetchone()
+        if row is None:
+            raise LookupError('No durable request has been accepted for this run')
+        metadata=json.loads(row['metadata_json']);context=metadata['execution_context']
+        request=RunRequest(row['id'],row['session_id'],row['idempotency_key'],json.loads(row['input_json']),
+            metadata.get('deadline_seconds'),tuple(metadata.get('attachments',())),
+            metadata.get('model_ref'),metadata.get('steer_run_id'))
+        return AcceptedRunRequest(request,PrincipalRef(**context['author']),
+            PrincipalRef(**context['initiator']),PrincipalRef(**context['authority']))
+
     # Public asynchronous operations share one per-instance transaction lane.
     start = _serialized(_start)
     close = _serialized(_close)
@@ -368,3 +379,4 @@ class SqliteRuntimeStore:
     events = _serialized(_events)
     recover = _serialized(_recover)
     children = _serialized(_children)
+    accepted_request = _serialized(_accepted_request)
