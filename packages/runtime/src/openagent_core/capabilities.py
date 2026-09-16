@@ -31,6 +31,16 @@ class ToolDescriptor:
     effects: frozenset[str] = frozenset()
 
 
+@dataclass(frozen=True, slots=True)
+class ToolInventoryEntry:
+    """Read-only durable binding metadata; never an invocation reference."""
+    source_id: str
+    name: str
+    description: str
+    input_schema: Mapping[str, Any]
+    target_label: str
+
+
 class CapabilitySource(Protocol):
     async def discover(self, context: ExecutionContext) -> tuple[ToolDefinition, ...]: ...
 
@@ -125,6 +135,34 @@ class CapabilityCatalog:
     def _available(self, registration: _Registration, context: ExecutionContext) -> bool:
         return (self._sources.get(registration.source_id) is registration and
                 (registration.lease is None or (not context.deferred and registration.lease in context.capabilities)))
+
+    async def inspect(self, context: Any, *, authorizer: Authorizer) -> tuple[ToolInventoryEntry, ...]:
+        """Inspect host-owned schema metadata without constructing an agent turn.
+
+        A host supplies its management authorizer. Only sources explicitly
+        implementing inspect participate; temporary client registrations never
+        do. Discovery/invocation still require the regular ExecutionContext.
+        """
+        result = []
+        for registration in tuple(self._sources.values()):
+            inspect = getattr(registration.source, "inspect", None)
+            if registration.lease is not None or not callable(inspect):
+                continue
+            resource = ResourceRef("capability", context.tenant_id, registration.source_id)
+            if not await authorizer.authorize(context, "catalog.inspect", resource, audience=()):
+                continue
+            definitions = tuple(await inspect(context))
+            if (self._sources.get(registration.source_id) is not registration or
+                    not await authorizer.authorize(context, "catalog.inspect", resource, audience=())):
+                continue
+            names = set()
+            for definition in definitions:
+                if definition.name in names or len(result) >= 4096:
+                    raise ValueError("Catalog inventory is ambiguous or exceeds its bound")
+                names.add(definition.name)
+                result.append(ToolInventoryEntry(registration.source_id, definition.name, definition.description,
+                    copy.deepcopy(definition.input_schema), registration.target_label))
+        return tuple(result)
 
     async def discover(self, context: ExecutionContext) -> tuple[ToolDescriptor, ...]:
         result: list[ToolDescriptor] = []

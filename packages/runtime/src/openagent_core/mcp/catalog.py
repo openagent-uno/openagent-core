@@ -30,6 +30,14 @@ class PoolCapabilitySource:
         if self.pool.toolkit_by_name(self.source_id) is not self.toolkit:
             raise CapabilityUnavailable("The registered MCP instance was removed or replaced")
 
+    async def inspect(self, context) -> tuple[ToolDefinition, ...]:
+        # Schema-only host administration; the catalog authorizes this path
+        # twice and does not issue tool references or bind an agent principal.
+        from .servers.tool_search.adapters import _functions_dict
+        self._check()
+        return tuple(ToolDefinition(name, getattr(fn, "description", "") or "",
+            getattr(fn, "parameters", None) or {}) for name, fn in _functions_dict(self.toolkit).items())
+
     async def discover(self, context: ExecutionContext) -> tuple[ToolDefinition, ...]:
         from .servers.tool_search.adapters import _functions_dict, _tool_is_denied, _require_server_allowed
         try:
