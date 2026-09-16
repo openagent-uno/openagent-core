@@ -2,9 +2,9 @@ import base64
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
-from src.stream.media import Audio, File, Image
-from src.core._runner.utils.log import log_error, log_warning
-from src.core._runner.utils.media import resolve_image_mime_type
+from openagent_core.stream.media import Audio, File, Image
+from openagent_core.core._runner.utils.log import log_error, log_warning
+from openagent_core.core._runner.utils.media import resolve_image_mime_type
 
 
 def audio_to_message(audio: Sequence[Audio]) -> List[Dict[str, Any]]:

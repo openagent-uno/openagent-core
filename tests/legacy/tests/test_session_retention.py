@@ -80,7 +80,7 @@ def _ids(db_path: str) -> set[str]:
 
 @test("retention", "module imports and exposes callable entry points")
 async def t_retention_importable(ctx: TestContext) -> None:
-    import src.core.session_retention as sr
+    import openagent_core.core.session_retention as sr
 
     for name in ("prune", "load_settings", "run_once", "main"):
         assert callable(getattr(sr, name, None)), f"missing/uncallable: {name}"
@@ -92,7 +92,7 @@ async def t_retention_importable(ctx: TestContext) -> None:
 
 @test("retention", "run_once prunes/keeps/trims a mock DB per the yaml knobs")
 async def t_retention_run_once(ctx: TestContext) -> None:
-    import src.core.session_retention as sr
+    import openagent_core.core.session_retention as sr
 
     with tempfile.TemporaryDirectory() as tmp:
         db_path = str(Path(tmp) / "openagent.db")

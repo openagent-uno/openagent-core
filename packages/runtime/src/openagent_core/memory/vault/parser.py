@@ -16,8 +16,8 @@ from pathlib import Path
 
 import yaml
 
-from src.memory.vault import taxonomy
-from src.memory.vault.model import Note
+from openagent_core.memory.vault import taxonomy
+from openagent_core.memory.vault.model import Note
 
 # Capture the target of [[target]] / [[target|alias]] (alias ignored).
 _WIKILINK_RE = re.compile(r"\[\[([^\]|\n]+)(?:\|[^\]\n]+)?\]\]")

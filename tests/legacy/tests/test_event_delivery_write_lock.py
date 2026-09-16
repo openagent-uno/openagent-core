@@ -32,14 +32,14 @@ from ._framework import TestContext, test
 
 
 async def _make_db(path):
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
     db = MemoryDB(str(path))
     await db.connect()
     return db
 
 
 async def _an_event(db):
-    from src.core.event_secret import make_secret_material
+    from openagent_core.core.event_secret import make_secret_material
     _clear, enc, hint = make_secret_material(db_path=db.db_path)
     return await db.add_event(
         name="evt-lock", action_kind="prompt", slug=f"lock-{uuid.uuid4().hex[:6]}",

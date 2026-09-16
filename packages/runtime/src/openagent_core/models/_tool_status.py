@@ -133,7 +133,7 @@ def _default_execution_host(args: Any) -> dict[str, Any]:
     server = args.get("server") if isinstance(args, dict) else None
     if isinstance(server, str) and server.startswith("client:"):
         try:
-            from src.core.execution_origin import current_execution_origin
+            from openagent_core.core.execution_origin import current_execution_origin
 
             origin = current_execution_origin()
         except Exception:  # noqa: BLE001

@@ -24,7 +24,7 @@ import sys
 import time
 from pathlib import Path
 
-from src.network import identity as identity_module
+from openagent_core.network import identity as identity_module
 
 identity_path = Path(sys.argv[1])
 barrier_dir = Path(sys.argv[2])
@@ -95,8 +95,8 @@ async def _dial(*, cert_wire: bytes, peer_node_id: str, state):
     from aiohttp import web
     from aiohttp.test_utils import make_mocked_request
 
-    from src.network.auth.middleware import make_auth_middleware
-    from src.network.transport.aiohttp_iroh_site import (
+    from openagent_core.network.auth.middleware import make_auth_middleware
+    from openagent_core.network.transport.aiohttp_iroh_site import (
         _current_cert_wire,
         _current_peer_node_id,
     )
@@ -125,9 +125,9 @@ async def _dial(*, cert_wire: bytes, peer_node_id: str, state):
 async def t_gateway_cert_is_peer_bound(ctx: TestContext) -> None:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    from src.network.auth.device_cert import issue_cert
-    from src.network.auth.middleware import NetworkAuthState
-    from src.network.identity import Identity
+    from openagent_core.network.auth.device_cert import issue_cert
+    from openagent_core.network.auth.middleware import NetworkAuthState
+    from openagent_core.network.identity import Identity
 
     coordinator_key = Ed25519PrivateKey.generate()
     device = Identity.generate()
@@ -162,9 +162,9 @@ async def t_capability_ws_rejects_synthetic_http_token(ctx: TestContext) -> None
     from aiohttp.test_utils import TestClient, TestServer
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    from src.gateway.server import Gateway
-    from src.network.auth.middleware import NetworkAuthState, make_auth_middleware
-    import src.network.transport.aiohttp_iroh_site as transport
+    from openagent_core.gateway.server import Gateway
+    from openagent_core.network.auth.middleware import NetworkAuthState, make_auth_middleware
+    import openagent_core.network.transport.aiohttp_iroh_site as transport
 
     previous = os.environ.get("OPENAGENT_HTTP_TOKEN")
     os.environ["OPENAGENT_HTTP_TOKEN"] = "synthetic-token-must-not-register"
@@ -211,9 +211,9 @@ async def t_capability_ws_rejects_synthetic_http_token(ctx: TestContext) -> None
 async def t_gateway_checks_live_device_roster(ctx: TestContext) -> None:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    from src.network.auth.device_cert import issue_cert
-    from src.network.auth.middleware import NetworkAuthState
-    from src.network.identity import Identity
+    from openagent_core.network.auth.device_cert import issue_cert
+    from openagent_core.network.auth.middleware import NetworkAuthState
+    from openagent_core.network.identity import Identity
 
     coordinator_key = Ed25519PrivateKey.generate()
     device = Identity.generate()
@@ -255,9 +255,9 @@ async def t_gateway_checks_live_device_roster(ctx: TestContext) -> None:
 async def t_auth_epoch_closes_roster_lookup_race(ctx: TestContext) -> None:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    from src.network.auth.device_cert import issue_cert
-    from src.network.auth.middleware import NetworkAuthState
-    from src.network.identity import Identity
+    from openagent_core.network.auth.device_cert import issue_cert
+    from openagent_core.network.auth.middleware import NetworkAuthState
+    from openagent_core.network.identity import Identity
 
     coordinator_key = Ed25519PrivateKey.generate()
     device = Identity.generate()
@@ -293,7 +293,7 @@ async def t_auth_epoch_closes_roster_lookup_race(ctx: TestContext) -> None:
 async def t_member_live_roster_poll(ctx: TestContext) -> None:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    from src.network.auth.middleware import NetworkAuthState
+    from openagent_core.network.auth.middleware import NetworkAuthState
 
     coordinator = Ed25519PrivateKey.generate()
     device = b"\x33" * 32
@@ -326,7 +326,7 @@ async def t_member_live_roster_poll(ctx: TestContext) -> None:
 async def t_device_status_rpc_auth(ctx: TestContext) -> None:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    from src.network.coordinator.service import CoordinatorService
+    from openagent_core.network.coordinator.service import CoordinatorService
 
     device = b"\x71" * 32
 
@@ -362,7 +362,7 @@ async def t_device_status_rpc_auth(ctx: TestContext) -> None:
 async def t_temporary_disconnect(ctx: TestContext) -> None:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    from src.network.auth.middleware import NetworkAuthState
+    from openagent_core.network.auth.middleware import NetworkAuthState
 
     coordinator = Ed25519PrivateKey.generate()
     state = NetworkAuthState(
@@ -391,7 +391,7 @@ async def t_login_finish_requires_peer_key(ctx: TestContext) -> None:
         _make_login_state,
         _make_service,
     )
-    from src.network.identity import Identity
+    from openagent_core.network.identity import Identity
 
     device = Identity.generate()
     impostor = Identity.generate()

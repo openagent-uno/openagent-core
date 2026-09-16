@@ -58,7 +58,7 @@ class _ScopeSpyAgent:
 
     async def run(self, *, message, user_id, session_id,
                   model_override=None, author=None, on_status=None) -> str:
-        from src.core.tool_scope import current_tool_allowlist
+        from openagent_core.core.tool_scope import current_tool_allowlist
 
         self.seen_allowlist = current_tool_allowlist()
         self.seen_override = model_override
@@ -108,7 +108,7 @@ class _FakeToolkit:
 @test("delegation_tool_scope",
       "run_child_session builds an override for model_id=X and none for model_id=None (pre-existing)")
 async def t_primitive_model_override(ctx: TestContext) -> None:
-    from src.core import child_session as cs
+    from openagent_core.core import child_session as cs
 
     # Default: model_id omitted → NO override → model_override=None (today's path).
     a0 = _ScopeSpyAgent(model=_FakeModel())
@@ -135,7 +135,7 @@ async def t_primitive_model_override(ctx: TestContext) -> None:
 @test("delegation_tool_scope",
       "run_child_session(allowed_tools=None) leaves the child UNRESTRICTED (contextvar None during the run)")
 async def t_primitive_default_unrestricted(ctx: TestContext) -> None:
-    from src.core import child_session as cs
+    from openagent_core.core import child_session as cs
 
     agent = _ScopeSpyAgent()
     await cs.run_child_session(
@@ -149,7 +149,7 @@ async def t_primitive_default_unrestricted(ctx: TestContext) -> None:
 @test("delegation_tool_scope",
       "run_child_session(allowed_tools=[...]) scopes the child's run to that subset")
 async def t_primitive_restricted(ctx: TestContext) -> None:
-    from src.core import child_session as cs
+    from openagent_core.core import child_session as cs
 
     agent = _ScopeSpyAgent()
     await cs.run_child_session(
@@ -162,7 +162,7 @@ async def t_primitive_restricted(ctx: TestContext) -> None:
 @test("delegation_tool_scope",
       "a scoped ancestor can only NARROW: a nested child intersects the ambient allowlist")
 async def t_primitive_monotonic_narrowing(ctx: TestContext) -> None:
-    from src.core import child_session as cs
+    from openagent_core.core import child_session as cs
 
     inner = _ScopeSpyAgent()
 
@@ -188,8 +188,8 @@ async def t_primitive_monotonic_narrowing(ctx: TestContext) -> None:
 @test("delegation_tool_scope",
       "the allowlist is reset after the run — no leak onto the caller's context")
 async def t_primitive_no_leak(ctx: TestContext) -> None:
-    from src.core import child_session as cs
-    from src.core.tool_scope import current_tool_allowlist
+    from openagent_core.core import child_session as cs
+    from openagent_core.core.tool_scope import current_tool_allowlist
 
     assert current_tool_allowlist() is None
     await cs.run_child_session(
@@ -205,7 +205,7 @@ async def t_primitive_no_leak(ctx: TestContext) -> None:
 async def _run_delegate(task, *, allowed_tools=None, pool=None):
     """Drive the REAL ``delegate_task`` (and thus the real ``run_child_session``)
     with a fresh fake context; returns ``(result, spy_agent)``."""
-    from src.mcp.servers.delegation import handlers
+    from openagent_core.mcp.servers.delegation import handlers
 
     agent = _ScopeSpyAgent()
     tokens = handlers.install_context(
@@ -267,7 +267,7 @@ async def t_handler_no_pool_errors(ctx: TestContext) -> None:
 def _make_provider(toolkits):
     """A NativeProvider with just the fields ``_compatible_mcp_toolkits`` reads
     (bypassing the heavy __init__)."""
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
 
     p = NativeProvider.__new__(NativeProvider)
     p.model = "anthropic:claude-opus-4-8"  # a provider with no blocked families
@@ -279,7 +279,7 @@ def _make_provider(toolkits):
 @test("delegation_tool_scope",
       "native provider: no allowlist → full toolkits and the shared cache populates (byte-identical)")
 async def t_np_default(ctx: TestContext) -> None:
-    from src.core.tool_scope import current_tool_allowlist
+    from openagent_core.core.tool_scope import current_tool_allowlist
 
     assert current_tool_allowlist() is None
     p = _make_provider([_FakeToolkit("vault"), _FakeToolkit("web"), _FakeToolkit("shell")])
@@ -295,7 +295,7 @@ async def t_np_default(ctx: TestContext) -> None:
 @test("delegation_tool_scope",
       "native provider: an allowlist filters toolkits and NEVER pollutes the shared cache")
 async def t_np_restricted(ctx: TestContext) -> None:
-    from src.core import tool_scope
+    from openagent_core.core import tool_scope
 
     p = _make_provider([_FakeToolkit("vault"), _FakeToolkit("web"), _FakeToolkit("shell")])
     tok = tool_scope.set_tool_allowlist(["vault", "web"])
@@ -314,7 +314,7 @@ async def t_np_restricted(ctx: TestContext) -> None:
 @test("delegation_tool_scope",
       "native provider keeps the scoped tool-search broker, but not other families")
 async def t_np_restricted_broker(ctx: TestContext) -> None:
-    from src.core import tool_scope
+    from openagent_core.core import tool_scope
 
     p = _make_provider([
         _FakeToolkit("tool-search"), _FakeToolkit("vault"), _FakeToolkit("shell"),
@@ -330,7 +330,7 @@ async def t_np_restricted_broker(ctx: TestContext) -> None:
 @test("delegation_tool_scope",
       "native provider: family names normalise, so 'computer-control' matches the 'computer_control' toolkit")
 async def t_np_normalises(ctx: TestContext) -> None:
-    from src.core import tool_scope
+    from openagent_core.core import tool_scope
 
     p = _make_provider([_FakeToolkit("computer_control"), _FakeToolkit("web")])
     tok = tool_scope.set_tool_allowlist(["computer-control"])  # human spelling

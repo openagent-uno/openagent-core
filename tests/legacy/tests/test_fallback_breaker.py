@@ -29,8 +29,8 @@ class _Stub:
 
 @test("fallback_breaker", "un gradino che fallisce scivola in fondo al giro dopo")
 async def t_failure_moves_candidate_last(_ctx: TestContext) -> None:
-    from src.core.runtime_errors import ModelProviderError
-    from src.models.providers import fallback as fb
+    from openagent_core.core.runtime_errors import ModelProviderError
+    from openagent_core.models.providers import fallback as fb
 
     fb.reset_breaker()
     try:
@@ -54,7 +54,7 @@ async def t_failure_moves_candidate_last(_ctx: TestContext) -> None:
 
 @test("fallback_breaker", "scaduta la quarantena il gradino viene risondato e, se risponde, rientra")
 async def t_half_open_probe_restores(_ctx: TestContext) -> None:
-    from src.models.providers import fallback as fb
+    from openagent_core.models.providers import fallback as fb
 
     fb.reset_breaker()
     try:
@@ -80,7 +80,7 @@ async def t_half_open_probe_restores(_ctx: TestContext) -> None:
 
 @test("fallback_breaker", "se sono tutti in quarantena si prova lo stesso, in ordine")
 async def t_never_empties_the_chain(_ctx: TestContext) -> None:
-    from src.models.providers import fallback as fb
+    from openagent_core.models.providers import fallback as fb
 
     fb.reset_breaker()
     try:
@@ -100,7 +100,7 @@ async def t_never_empties_the_chain(_ctx: TestContext) -> None:
 
 @test("fallback_breaker", "la quarantena cresce a ogni fallimento consecutivo")
 async def t_backoff_grows(_ctx: TestContext) -> None:
-    from src.models.providers import fallback as fb
+    from openagent_core.models.providers import fallback as fb
 
     fb.reset_breaker()
     try:

@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.mcp.servers.vault_gate import contradictions, handlers, recall
+from openagent_core.mcp.servers.vault_gate import contradictions, handlers, recall
 
 
 def build_runtime_toolkit() -> Any:
-    from src.mcp._runtime import Toolkit
+    from openagent_core.mcp._runtime import Toolkit
 
     async def vault_gate(strict: bool = False, limit: int = 40) -> dict:
         """Run the vault quality gate over every note. Reports missing

@@ -28,7 +28,7 @@ from ._framework import TestContext, test
 
 
 def _install_fake_runtime() -> tuple[dict[str, Any], type]:
-    """Stub ``src.mcp._runtime.mcp`` and ``src.mcp._runtime.mcp.params`` so the lazy
+    """Stub ``openagent_core.mcp._runtime.mcp`` and ``openagent_core.mcp._runtime.mcp.params`` so the lazy
     import inside ``_build_and_enter_toolkit`` resolves to our fakes.
 
     Returns ``(captured, FakeStreamableHTTPClientParams)``. ``captured``
@@ -56,18 +56,18 @@ def _install_fake_runtime() -> tuple[dict[str, Any], type]:
             self.headers = headers
             self.rest = rest
 
-    # src.mcp._runtime.mcp.mcp
-    fake_mcp_mod = types.ModuleType("src.mcp._runtime.mcp.mcp")
+    # openagent_core.mcp._runtime.mcp.mcp
+    fake_mcp_mod = types.ModuleType("openagent_core.mcp._runtime.mcp.mcp")
     fake_mcp_mod.MCPTools = FakeMCPTools  # type: ignore[attr-defined]
 
-    # src.mcp._runtime.mcp.params
-    fake_params_mod = types.ModuleType("src.mcp._runtime.mcp.params")
+    # openagent_core.mcp._runtime.mcp.params
+    fake_params_mod = types.ModuleType("openagent_core.mcp._runtime.mcp.params")
     fake_params_mod.StreamableHTTPClientParams = (  # type: ignore[attr-defined]
         FakeStreamableHTTPClientParams
     )
 
-    sys.modules["src.mcp._runtime.mcp.mcp"] = fake_mcp_mod
-    sys.modules["src.mcp._runtime.mcp.params"] = fake_params_mod
+    sys.modules["openagent_core.mcp._runtime.mcp.mcp"] = fake_mcp_mod
+    sys.modules["openagent_core.mcp._runtime.mcp.params"] = fake_params_mod
     return captured, FakeStreamableHTTPClientParams
 
 
@@ -86,12 +86,12 @@ def _restore_real_runtime(saved: dict[str, Any]) -> None:
 async def t_headers_forwarded_to_transport(ctx: TestContext) -> None:
     # Save originals so we don't poison the rest of the suite.
     saved = {
-        "src.mcp._runtime.mcp.mcp": sys.modules.get("src.mcp._runtime.mcp.mcp"),
-        "src.mcp._runtime.mcp.params": sys.modules.get("src.mcp._runtime.mcp.params"),
+        "openagent_core.mcp._runtime.mcp.mcp": sys.modules.get("openagent_core.mcp._runtime.mcp.mcp"),
+        "openagent_core.mcp._runtime.mcp.params": sys.modules.get("openagent_core.mcp._runtime.mcp.params"),
     }
     captured, fake_params_cls = _install_fake_runtime()
     try:
-        from src.mcp.pool import MCPPool, _ServerSpec
+        from openagent_core.mcp.pool import MCPPool, _ServerSpec
 
         spec = _ServerSpec(
             name="mixout",

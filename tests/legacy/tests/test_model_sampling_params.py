@@ -24,7 +24,7 @@ from ._framework import TestContext, test
 
 
 def _provider(metadata: dict | None):
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
 
     d = tempfile.mkdtemp()
     path = os.path.join(d, "t.db")

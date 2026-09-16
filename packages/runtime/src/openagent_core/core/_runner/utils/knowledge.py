@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional, Union
 
-from src.core._runner._stubs import FilterExpr
-from src.core._runner.utils.log import log_info
+from openagent_core.core._runner._stubs import FilterExpr
+from openagent_core.core._runner.utils.log import log_info
 
 
 def get_agentic_or_user_search_filters(

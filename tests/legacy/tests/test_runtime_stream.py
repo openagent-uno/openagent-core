@@ -14,8 +14,8 @@ from ._framework import TestContext, test
 
 @test("runtime_stream", "stream zero-delta fallback yields generate() content")
 async def t_agno_stream_zero_delta_fallback(_ctx: TestContext) -> None:
-    from src.models.native_provider import NativeProvider
-    from src.models.base import ModelResponse
+    from openagent_core.models.native_provider import NativeProvider
+    from openagent_core.models.base import ModelResponse
 
     provider = NativeProvider(
         model="openai:gpt-4o-mini",

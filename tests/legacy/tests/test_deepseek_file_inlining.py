@@ -28,7 +28,7 @@ from ._framework import TestContext, test
 def _make_file(*, content: bytes, mime: str, filename: str):
     """Build a minimal runtime ``File`` from in-memory bytes — keeps the
     test off-disk and independent of any tempfile cleanup."""
-    from src.stream.media import File as _RuntimeFile
+    from openagent_core.stream.media import File as _RuntimeFile
     return _RuntimeFile(
         content=content,
         mime_type=mime,
@@ -37,24 +37,24 @@ def _make_file(*, content: bytes, mime: str, filename: str):
 
 
 def _make_image(*, content: bytes, mime: str = "image/png"):
-    from src.stream.media import Image as _RuntimeImage
+    from openagent_core.stream.media import Image as _RuntimeImage
     return _RuntimeImage(content=content, mime_type=mime)
 
 
 def _make_audio(*, content: bytes, fmt: str = "wav"):
-    from src.stream.media import Audio as _RuntimeAudio
+    from openagent_core.stream.media import Audio as _RuntimeAudio
     return _RuntimeAudio(content=content, format=fmt, mime_type=f"audio/{fmt}")
 
 
 def _make_video(*, content: bytes, fmt: str = "mp4"):
-    from src.stream.media import Video as _RuntimeVideo
+    from openagent_core.stream.media import Video as _RuntimeVideo
     return _RuntimeVideo(content=content, format=fmt, mime_type=f"video/{fmt}")
 
 
 def _make_message(*, content: str, files: list | None = None,
                   images: list | None = None, audios: list | None = None,
                   videos: list | None = None):
-    from src.models.providers.message import Message
+    from openagent_core.models.providers.message import Message
     return Message(role="user", content=content, files=files,
                    images=images, audio=audios, videos=videos)
 
@@ -62,7 +62,7 @@ def _make_message(*, content: str, files: list | None = None,
 def _format(message):
     """Run the patched DeepSeek's serializer against ``message`` and
     return the resulting OpenAI-wire dict."""
-    from src.models._provider_overrides import DeepSeekTextOnly
+    from openagent_core.models._provider_overrides import DeepSeekTextOnly
     model = DeepSeekTextOnly(id="deepseek-chat", api_key="sk-test")
     return model._format_message(message)
 
@@ -234,7 +234,7 @@ async def t_no_attachments_passthrough(ctx: TestContext) -> None:
     # files=None (not an empty list) — the parent serializer reshapes
     # content into a parts-array whenever any of files/images/audio is set
     # (even ``[]``), so this case pins the truly-no-attachments fall-through.
-    from src.models.providers.message import Message
+    from openagent_core.models.providers.message import Message
     message = Message(role="user", content="plain text turn")
 
     serialized = _format(message)
@@ -245,7 +245,7 @@ async def t_no_attachments_passthrough(ctx: TestContext) -> None:
 @test("deepseek_file_inlining", "RUNTIME_PROVIDER_CLASSES wires the patched class for deepseek")
 async def t_provider_wired(ctx: TestContext) -> None:
     """Without this wiring the fix would compile but not run in production."""
-    from src.models.native_provider import RUNTIME_PROVIDER_CLASSES
+    from openagent_core.models.native_provider import RUNTIME_PROVIDER_CLASSES
 
     entry = RUNTIME_PROVIDER_CLASSES.get("deepseek")
     assert entry is not None, "deepseek entry missing from RUNTIME_PROVIDER_CLASSES"

@@ -1,10 +1,10 @@
 from typing import List, Set, Union
 
-from src.core.runtime_errors import RunCancelledException
-from src.models.providers.response import ToolExecution
-from src.core._runner._stubs import ReasoningStep
-from src.core._run_state.agent import RunOutput, RunOutputEvent, RunPausedEvent
-from src.core._run_state.team import TeamRunOutput, TeamRunOutputEvent
+from openagent_core.core.runtime_errors import RunCancelledException
+from openagent_core.models.providers.response import ToolExecution
+from openagent_core.core._runner._stubs import ReasoningStep
+from openagent_core.core._run_state.agent import RunOutput, RunOutputEvent, RunPausedEvent
+from openagent_core.core._run_state.team import TeamRunOutput, TeamRunOutputEvent
 
 
 def create_panel(content, title, border_style="blue"):

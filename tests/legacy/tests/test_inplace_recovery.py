@@ -17,15 +17,15 @@ and a bug inside recovery degrades to that same path (never worse than today).
 """
 from __future__ import annotations
 
-import src.models.providers.fallback as fb_mod
-from src.core.runtime_errors import ModelProviderError, ModelRateLimitError
-from src.models.providers.fallback import (
+import openagent_core.models.providers.fallback as fb_mod
+from openagent_core.core.runtime_errors import ModelProviderError, ModelRateLimitError
+from openagent_core.models.providers.fallback import (
     FallbackConfig,
     acall_model_stream_with_fallback,
     acall_model_with_fallback,
 )
-from src.models.providers.message import Message
-from src.models.providers.response import ModelResponse
+from openagent_core.models.providers.message import Message
+from openagent_core.models.providers.response import ModelResponse
 
 from ._framework import TestContext, test
 

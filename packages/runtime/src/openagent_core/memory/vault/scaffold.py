@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.memory.vault import taxonomy
+from openagent_core.memory.vault import taxonomy
 
 _CANON_README = """\
 # Canon — the single source of hard facts

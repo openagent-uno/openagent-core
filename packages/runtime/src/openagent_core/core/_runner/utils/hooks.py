@@ -1,10 +1,10 @@
 from copy import deepcopy
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from src.core._runner._stubs import BaseEval
-from src.core._runner._stubs import BaseGuardrail
-from src.core._runner._stubs import HOOK_RUN_IN_BACKGROUND_ATTR
-from src.core._runner.utils.log import log_warning
+from openagent_core.core._runner._stubs import BaseEval
+from openagent_core.core._runner._stubs import BaseGuardrail
+from openagent_core.core._runner._stubs import HOOK_RUN_IN_BACKGROUND_ATTR
+from openagent_core.core._runner.utils.log import log_warning
 
 # Keys that should be deep copied for background hooks to prevent race conditions
 BACKGROUND_HOOK_COPY_KEYS = frozenset(

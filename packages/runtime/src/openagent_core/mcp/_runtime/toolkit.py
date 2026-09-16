@@ -3,10 +3,10 @@ from inspect import iscoroutinefunction
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
-from src.core.runtime_errors import PathSecurityError
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.log import log_debug, log_warning
-from src.core._runner.utils.path_safety import safe_join_relative_path
+from openagent_core.core.runtime_errors import PathSecurityError
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.log import log_debug, log_warning
+from openagent_core.core._runner.utils.path_safety import safe_join_relative_path
 
 
 class Toolkit:

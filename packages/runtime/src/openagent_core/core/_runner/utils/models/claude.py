@@ -2,12 +2,12 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
-from src.stream.media import File, Image
-from src.models.providers.message import Message
-from src.core._runner.utils.log import log_error, log_info, log_warning
+from openagent_core.stream.media import File, Image
+from openagent_core.models.providers.message import Message
+from openagent_core.core._runner.utils.log import log_error, log_info, log_warning
 
 if TYPE_CHECKING:
-    from src.models.providers.anthropic.claude import SystemPromptBlock
+    from openagent_core.models.providers.anthropic.claude import SystemPromptBlock
 
 # Models that support assistant message prefill. This is a closed set —
 # prefill was deprecated starting with Claude 4.6 and all future models
@@ -465,7 +465,7 @@ def format_messages(
     Returns:
         Tuple[List[Dict[str, Union[str, list]]], str]: A tuple containing the list of API messages and the concatenated system messages.
     """
-    from src.core._runner.utils.message import normalize_tool_messages
+    from openagent_core.core._runner.utils.message import normalize_tool_messages
 
     # Backwards compat: expand old Gemini combined tool messages into individual canonical messages
     messages = normalize_tool_messages(messages)

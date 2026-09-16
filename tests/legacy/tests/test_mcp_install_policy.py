@@ -3,7 +3,7 @@
 Like ``test_safety.py``, these drive the actual surfaces — ``mcp-manager``'s
 ``add_custom_mcp`` / ``update_mcp`` against a temp DB, and the marketplace's
 ``handle_install`` handler — rather than asserting things about
-``src.mcp.install_policy`` in isolation. A test that only proved
+``openagent_core.mcp.install_policy`` in isolation. A test that only proved
 ``check_mcp_install_allowed`` raises would pass identically in a world where no
 handler ever called it, which is precisely the failure this repo already shipped
 once: config plumbing intact, enforcement deleted, nobody noticed for months.
@@ -61,7 +61,7 @@ def _manager_db(ctx: TestContext):
     ``SharedConnection`` singleton, so the path must be swapped and the conn
     reset around the call.
     """
-    import src.mcp.servers.mcp_manager.server as mgr
+    import openagent_core.mcp.servers.mcp_manager.server as mgr
 
     tmp = ctx.db_path.with_name(f"installpol-{uuid.uuid4().hex[:8]}.db")
     prev = os.environ.get("OPENAGENT_DB_PATH")
@@ -80,7 +80,7 @@ def _manager_db(ctx: TestContext):
 
 async def _seed(tmp) -> None:
     """Create the schema the manager writes into."""
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(str(tmp))
     await db.connect()
@@ -88,7 +88,7 @@ async def _seed(tmp) -> None:
 
 
 async def _row(tmp, name: str):
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(str(tmp))
     await db.connect()
@@ -153,7 +153,7 @@ async def t_on_blocks_and_writes_nothing(ctx: TestContext) -> None:
     to spawn on the next message — the refusal would be a log line and the RCE
     would happen anyway.
     """
-    from src.mcp.install_policy import BlockedInstallError
+    from openagent_core.mcp.install_policy import BlockedInstallError
 
     with _policy_env(
         OPENAGENT_MCP_INSTALL_POLICY="1",
@@ -176,7 +176,7 @@ async def t_on_blocks_remote(ctx: TestContext) -> None:
     """A remote MCP spawns no subprocess, but it is still a capability grant —
     its tool results flow into the model as trusted content. "Freeze the
     capability set" has to mean all of it."""
-    from src.mcp.install_policy import BlockedInstallError
+    from openagent_core.mcp.install_policy import BlockedInstallError
 
     with _policy_env(
         OPENAGENT_MCP_INSTALL_POLICY="1",
@@ -209,7 +209,7 @@ async def t_allow_pattern_permits(ctx: TestContext) -> None:
         assert await _row(tmp, "fs") is not None, "allow_pattern did not permit the install"
 
         # Everything else still refused — the exception is narrow.
-        from src.mcp.install_policy import BlockedInstallError
+        from openagent_core.mcp.install_policy import BlockedInstallError
 
         raised = False
         try:
@@ -226,8 +226,8 @@ async def t_update_is_gated(ctx: TestContext) -> None:
     ANY name, including a builtin the pool already trusts. Gating add_custom_mcp
     alone would just move the door one function to the left.
     """
-    from src.mcp.install_policy import BlockedInstallError
-    from src.memory.db import MemoryDB
+    from openagent_core.mcp.install_policy import BlockedInstallError
+    from openagent_core.memory.db import MemoryDB
 
     with _policy_env(
         OPENAGENT_MCP_INSTALL_POLICY="1",
@@ -261,7 +261,7 @@ async def t_update_env_only_untouched(ctx: TestContext) -> None:
     policy is on, which is exactly the "protection makes my agent unusable"
     pressure that gets a policy switched off.
     """
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     with _policy_env(
         OPENAGENT_MCP_INSTALL_POLICY="1",
@@ -290,8 +290,8 @@ async def _install_via_marketplace(ctx: TestContext, tmp):
     Seeding the cache is what keeps this offline: handle_install re-fetches
     server.json unless the ("server", name, version) key is already present.
     """
-    from src.gateway.api import marketplace
-    from src.memory.db import MemoryDB
+    from openagent_core.gateway.api import marketplace
+    from openagent_core.memory.db import MemoryDB
 
     class _Req:
         can_read_body = True
@@ -346,7 +346,7 @@ async def t_marketplace_surface(ctx: TestContext) -> None:
     The off case asserts a 201 AND the row — proving the gate is a no-op rather
     than a silent reject. The on case asserts 403 AND no row.
     """
-    from src.gateway.api._common import gateway_db
+    from openagent_core.gateway.api._common import gateway_db
 
     tmp = ctx.db_path.with_name(f"mktpol-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -400,7 +400,7 @@ async def t_descriptor_shape(ctx: TestContext) -> None:
     argument containing a space could forge a token boundary and smuggle a fake
     runtime into a descriptor an operator anchored a pattern on.
     """
-    from src.mcp.install_policy import describe_install
+    from openagent_core.mcp.install_policy import describe_install
 
     assert describe_install(
         command=["npx"], args=["-y", "@foo/bar@1.0.0"],
@@ -421,8 +421,8 @@ async def t_config_is_wired(ctx: TestContext) -> None:
     sets env by hand and would pass even if ``_build_agent`` never parsed the
     stanza — leaving a documented toggle that does nothing, which is exactly
     how ``safety.approvals`` shipped inert."""
-    from src.core.server import _build_agent
-    from src.mcp.install_policy import install_policy_enabled
+    from openagent_core.core.server import _build_agent
+    from openagent_core.mcp.install_policy import install_policy_enabled
 
     keys = ("OPENAGENT_MCP_INSTALL_POLICY", "OPENAGENT_MCP_INSTALL_ALLOW_PATTERNS")
     with _policy_env(**dict.fromkeys(keys, None)):

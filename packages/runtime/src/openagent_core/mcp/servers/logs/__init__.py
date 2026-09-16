@@ -15,7 +15,7 @@ aggregate.
 
 This MCP replaces that with three structured tools (``logs_query``,
 ``logs_summary``, ``logs_context``). It is **in-process on purpose**: the log
-location comes from :func:`src.core.paths.log_dir`, which resolves against the
+location comes from :func:`openagent_core.core.paths.log_dir`, which resolves against the
 *live* agent directory set by ``set_agent_dir``. A subprocess MCP would
 re-resolve it from platform defaults and silently read a *different* agent's
 log (the same class of bug that forced ``OPENAGENT_DB_PATH`` injection for the

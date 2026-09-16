@@ -55,7 +55,7 @@ async def _connection(db: Any):
 def _access_context(principal: Any) -> Any | None:
     if principal is None:
         return None
-    from src.memory.operational.access import AccessContext
+    from openagent_core.memory.operational.access import AccessContext
 
     if isinstance(principal, AccessContext):
         return principal
@@ -112,7 +112,7 @@ async def _assert_session_visible(
         raise MessagePartsError("normalized session is unavailable")
     access = _access_context(principal)
     if access is not None:
-        from src.memory.operational.access import resource_is_visible
+        from openagent_core.memory.operational.access import resource_is_visible
 
         if not await resource_is_visible(conn, session, access):
             raise MessagePartsError("normalized session is unavailable")
@@ -128,7 +128,7 @@ async def _attachment_link(
     attachment_ordinal: int,
     attachment: Mapping[str, Any],
 ) -> str | None:
-    from src.memory.artifacts import (
+    from openagent_core.memory.artifacts import (
         attachment_kind,
         safe_attachment_filename,
     )
@@ -227,7 +227,7 @@ async def _ui_link(
         return False
     access = _access_context(principal)
     if access is not None:
-        from src.memory.operational.access import resource_is_visible
+        from openagent_core.memory.operational.access import resource_is_visible
 
         if not await resource_is_visible(conn, row, access):
             return False
@@ -456,8 +456,8 @@ async def canonical_parts_for_messages_on_connection(
     identifiers = [str(value) for value in message_ids if str(value)]
     if not identifiers:
         return {}
-    from src.memory.artifacts import public_attachment_ref, safe_attachment_filename
-    from src.memory.operational.access import resource_is_visible
+    from openagent_core.memory.artifacts import public_attachment_ref, safe_attachment_filename
+    from openagent_core.memory.operational.access import resource_is_visible
 
     output: dict[str, list[dict[str, Any]]] = {}
     for start in range(0, len(identifiers), 300):

@@ -15,13 +15,13 @@ from ._framework import TestContext, test
 
 
 def _render(summary, descriptions, tool_names):
-    from src.core.prompts import _render_catalog_summary_lines
+    from openagent_core.core.prompts import _render_catalog_summary_lines
     return _render_catalog_summary_lines(summary, descriptions, tool_names)
 
 
 @test("catalog_inline", "builtin allowlist server inlines its keys (capped)")
 async def t_builtin_inlined(ctx: TestContext) -> None:
-    from src.core.prompts import _INLINE_TOOL_KEYS_CAP
+    from openagent_core.core.prompts import _INLINE_TOOL_KEYS_CAP
 
     keys = [f"vault_tool_{i:02d}" for i in range(_INLINE_TOOL_KEYS_CAP + 5)]
     out = _render({"vault": len(keys)}, {}, {"vault": keys})
@@ -50,7 +50,7 @@ async def t_thirdparty_not_inlined(ctx: TestContext) -> None:
 
 @test("catalog_inline", "operator-opted MCP inlines ALL keys (no cap, no guessing)")
 async def t_operator_optin_full(ctx: TestContext) -> None:
-    from src.core.prompts import _INLINE_TOOL_KEYS_CAP
+    from openagent_core.core.prompts import _INLINE_TOOL_KEYS_CAP
 
     # 37 keys — more than the builtin cap; the whole point is none is dropped.
     keys = sorted(f"replio_tool_{i:02d}" for i in range(37))
@@ -72,7 +72,7 @@ async def t_operator_optin_full(ctx: TestContext) -> None:
 
 @test("catalog_inline", "env parsing tolerates whitespace / empty / trailing commas")
 async def t_env_parsing(ctx: TestContext) -> None:
-    from src.core.prompts import _operator_inline_servers
+    from openagent_core.core.prompts import _operator_inline_servers
 
     prev = os.environ.get("OPENAGENT_INLINE_TOOL_KEYS_SERVERS")
     try:

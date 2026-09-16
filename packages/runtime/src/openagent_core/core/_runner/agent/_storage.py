@@ -16,26 +16,26 @@ from typing import (
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from src.core._runner.agent.agent import Agent
+    from openagent_core.core._runner.agent.agent import Agent
 
-from src.memory.store.base import BaseDb, ComponentType, SessionType
-from src.memory.store.utils import resolve_db_from_config
-from src.core.metrics import RunMetrics, SessionMetrics
-from src.models.providers.base import Model
-from src.models.providers.message import Message
-from src.core._runner._stubs import Registry
-from src.core._run_state.agent import RunOutput
-from src.memory.sessions import AgentSession, TeamSession, WorkflowSession
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.agent import (
+from openagent_core.memory.store.base import BaseDb, ComponentType, SessionType
+from openagent_core.memory.store.utils import resolve_db_from_config
+from openagent_core.core.metrics import RunMetrics, SessionMetrics
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.message import Message
+from openagent_core.core._runner._stubs import Registry
+from openagent_core.core._run_state.agent import RunOutput
+from openagent_core.memory.sessions import AgentSession, TeamSession, WorkflowSession
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.agent import (
     aget_last_run_output_util,
     aget_run_output_util,
     get_last_run_output_util,
     get_run_output_util,
 )
-from src.core._runner.utils.log import log_debug, log_error, log_warning
-from src.core._runner.utils.merge_dict import merge_dictionaries
-from src.core._runner.utils.string import generate_id_from_name
+from openagent_core.core._runner.utils.log import log_debug, log_error, log_warning
+from openagent_core.core._runner.utils.merge_dict import merge_dictionaries
+from openagent_core.core._runner.utils.string import generate_id_from_name
 
 # ---------------------------------------------------------------------------
 # Run output accessors
@@ -147,7 +147,7 @@ async def aread_session(
     agent: Agent, session_id: str, session_type: SessionType = SessionType.AGENT, user_id: Optional[str] = None
 ) -> Optional[Union[AgentSession, TeamSession, WorkflowSession]]:
     """Get a Session from the database."""
-    from src.core._runner.agent import _init
+    from openagent_core.core._runner.agent import _init
 
     try:
         if not agent.db:
@@ -185,7 +185,7 @@ async def aupsert_session(
     agent: Agent, session: Union[AgentSession, TeamSession, WorkflowSession]
 ) -> Optional[Union[AgentSession, TeamSession, WorkflowSession]]:
     """Upsert a Session into the database."""
-    from src.core._runner.agent import _init
+    from openagent_core.core._runner.agent import _init
 
     try:
         if not agent.db:
@@ -359,7 +359,7 @@ async def aread_or_create_session(
     from time import time
     from uuid import uuid4
 
-    from src.core._runner.agent import _init
+    from openagent_core.core._runner.agent import _init
 
     # Returning cached session if we have one
     if (
@@ -445,7 +445,7 @@ def to_dict(agent: Agent) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Dictionary representation of the agent configuration
     """
-    from src.core._runner.agent._tools import parse_tools
+    from openagent_core.core._runner.agent._tools import parse_tools
 
     config: Dict[str, Any] = {}
 
@@ -760,7 +760,7 @@ def from_dict(cls: Type[Agent], data: Dict[str, Any], registry: Optional[Registr
     Returns:
         Agent: Reconstructed agent instance
     """
-    from src.models.providers.utils import get_model
+    from openagent_core.models.providers.utils import get_model
 
     config = data.copy()
 
@@ -835,36 +835,36 @@ def from_dict(cls: Type[Agent], data: Dict[str, Any], registry: Optional[Registr
     # --- Handle MemoryManager reconstruction ---
     # TODO: implement memory manager deserialization
     # if "memory_manager" in config and isinstance(config["memory_manager"], dict):
-    #     from src.core._runner._stubs import MemoryManager
+    #     from openagent_core.core._runner._stubs import MemoryManager
     #     config["memory_manager"] = MemoryManager.from_dict(config["memory_manager"])
 
     # --- Handle SessionSummaryManager reconstruction ---
     # TODO: implement session summary manager deserialization
     # if "session_summary_manager" in config and isinstance(config["session_summary_manager"], dict):
-    #     from src.memory.sessions import SessionSummaryManager
+    #     from openagent_core.memory.sessions import SessionSummaryManager
     #     config["session_summary_manager"] = SessionSummaryManager.from_dict(config["session_summary_manager"])
 
     # --- Handle CultureManager reconstruction ---
     # TODO: implement culture manager deserialization
     # if "culture_manager" in config and isinstance(config["culture_manager"], dict):
-    #     from src.core._runner._stubs import CultureManager
+    #     from openagent_core.core._runner._stubs import CultureManager
     #     config["culture_manager"] = CultureManager.from_dict(config["culture_manager"])
 
     # --- Handle Knowledge reconstruction ---
     # TODO: implement knowledge deserialization
     # if "knowledge" in config and isinstance(config["knowledge"], dict):
-    #     from src.core._runner._stubs import Knowledge
+    #     from openagent_core.core._runner._stubs import Knowledge
     #     config["knowledge"] = Knowledge.from_dict(config["knowledge"])
 
     # --- Handle CompressionManager reconstruction ---
     # TODO: implement compression manager deserialization
     # if "compression_manager" in config and isinstance(config["compression_manager"], dict):
-    #     from src.core._runner._stubs import CompressionManager
+    #     from openagent_core.core._runner._stubs import CompressionManager
     #     config["compression_manager"] = CompressionManager.from_dict(config["compression_manager"])
 
     # --- Handle Learning reconstruction ---
     if "learning" in config and isinstance(config["learning"], dict):
-        from src.core._runner._stubs import LearningMachine
+        from openagent_core.core._runner._stubs import LearningMachine
 
         config["learning"] = LearningMachine.from_dict(config["learning"])
 

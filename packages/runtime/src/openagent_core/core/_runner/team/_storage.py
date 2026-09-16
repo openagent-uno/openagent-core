@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.core._runner.team.mode import TeamMode
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team.mode import TeamMode
+    from openagent_core.core._runner.team.team import Team
 
 from typing import (
     Any,
@@ -19,22 +19,22 @@ from typing import (
 
 from pydantic import BaseModel
 
-from src.core._runner.agent import Agent
-from src.memory.store.base import AsyncBaseDb, BaseDb, ComponentType, SessionType
-from src.memory.store.utils import resolve_db_from_config
-from src.core.metrics import RunMetrics, SessionMetrics
-from src.models.providers.base import Model
-from src.models.providers.message import Message
-from src.models.providers.utils import get_model
-from src.core._runner._stubs import Registry
-from src.core._run_state.agent import RunOutput
-from src.core._run_state.team import (
+from openagent_core.core._runner.agent import Agent
+from openagent_core.memory.store.base import AsyncBaseDb, BaseDb, ComponentType, SessionType
+from openagent_core.memory.store.utils import resolve_db_from_config
+from openagent_core.core.metrics import RunMetrics, SessionMetrics
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.message import Message
+from openagent_core.models.providers.utils import get_model
+from openagent_core.core._runner._stubs import Registry
+from openagent_core.core._run_state.agent import RunOutput
+from openagent_core.core._run_state.team import (
     TeamRunOutput,
 )
-from src.memory.sessions import TeamSession, WorkflowSession
-from src.mcp._runtime import Toolkit
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.agent import (
+from openagent_core.memory.sessions import TeamSession, WorkflowSession
+from openagent_core.mcp._runtime import Toolkit
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.agent import (
     aget_last_run_output_util,
     aget_run_output_util,
     aget_session_metrics_util,
@@ -42,13 +42,13 @@ from src.core._runner.utils.agent import (
     get_run_output_util,
     get_session_metrics_util,
 )
-from src.core._runner.utils.log import (
+from openagent_core.core._runner.utils.log import (
     log_debug,
     log_error,
     log_warning,
 )
-from src.core._runner.utils.merge_dict import merge_dictionaries
-from src.core._runner.utils.string import generate_id_from_name
+from openagent_core.core._runner.utils.merge_dict import merge_dictionaries
+from openagent_core.core._runner.utils.string import generate_id_from_name
 
 # ---------------------------------------------------------------------------
 # Run output accessors
@@ -179,7 +179,7 @@ async def _aread_session(
     team: "Team", session_id: str, session_type: SessionType = SessionType.TEAM, user_id: Optional[str] = None
 ) -> Optional[Union[TeamSession, WorkflowSession]]:
     """Get a Session from the database."""
-    from src.core._runner.team._init import _has_async_db
+    from openagent_core.core._runner.team._init import _has_async_db
 
     try:
         if not team.db:
@@ -209,7 +209,7 @@ def _upsert_session(team: "Team", session: TeamSession) -> Optional[TeamSession]
 
 async def _aupsert_session(team: "Team", session: TeamSession) -> Optional[TeamSession]:
     """Upsert a Session into the database."""
-    from src.core._runner.team._init import _has_async_db
+    from openagent_core.core._runner.team._init import _has_async_db
 
     try:
         if not team.db:
@@ -231,8 +231,8 @@ def _read_or_create_session(team: "Team", session_id: str, user_id: Optional[str
     """
     from time import time
 
-    from src.memory.sessions.team import TeamSession
-    from src.core._runner.team._telemetry import get_team_data
+    from openagent_core.memory.sessions.team import TeamSession
+    from openagent_core.core._runner.team._telemetry import get_team_data
 
     # Return existing session if we have one
     if (
@@ -299,9 +299,9 @@ async def _aread_or_create_session(team: "Team", session_id: str, user_id: Optio
     """
     from time import time
 
-    from src.memory.sessions.team import TeamSession
-    from src.core._runner.team._init import _has_async_db
-    from src.core._runner.team._telemetry import get_team_data
+    from openagent_core.memory.sessions.team import TeamSession
+    from openagent_core.core._runner.team._init import _has_async_db
+    from openagent_core.core._runner.team._telemetry import get_team_data
 
     # Return existing session if we have one
     if (
@@ -419,7 +419,7 @@ def to_dict(team: "Team") -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Dictionary representation of the team configuration
     """
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team.team import Team
 
     config: Dict[str, Any] = {}
 
@@ -727,7 +727,7 @@ def _deserialize_learning(value: Any) -> Any:
     if value is None or value is True or value is False:
         return value
     if isinstance(value, dict):
-        from src.core._runner._stubs import LearningMachine
+        from openagent_core.core._runner._stubs import LearningMachine
 
         return LearningMachine.from_dict(value)
     return value
@@ -737,7 +737,7 @@ def _parse_team_mode(value: Optional[str]) -> Optional["TeamMode"]:
     """Parse a string into a TeamMode enum, returning None if not provided."""
     if value is None:
         return None
-    from src.core._runner.team.mode import TeamMode
+    from openagent_core.core._runner.team.mode import TeamMode
 
     return TeamMode(value)
 
@@ -771,8 +771,8 @@ def from_dict(
 
     # --- Handle Members reconstruction ---
     members: Optional[List[Union[Agent, "Team"]]] = None
-    from src.core._runner.agent import get_agent_by_id
-    from src.core._runner.team import get_team_by_id
+    from openagent_core.core._runner.agent import get_agent_by_id
+    from openagent_core.core._runner.team import get_team_by_id
 
     if "members" in config and config["members"]:
         members = []
@@ -862,25 +862,25 @@ def from_dict(
     # --- Handle MemoryManager reconstruction ---
     # TODO: implement memory manager deserialization
     # if "memory_manager" in config and isinstance(config["memory_manager"], dict):
-    #     from src.core._runner._stubs import MemoryManager
+    #     from openagent_core.core._runner._stubs import MemoryManager
     #     config["memory_manager"] = MemoryManager.from_dict(config["memory_manager"])
 
     # --- Handle SessionSummaryManager reconstruction ---
     # TODO: implement session summary manager deserialization
     # if "session_summary_manager" in config and isinstance(config["session_summary_manager"], dict):
-    #     from src.memory.sessions import SessionSummaryManager
+    #     from openagent_core.memory.sessions import SessionSummaryManager
     #     config["session_summary_manager"] = SessionSummaryManager.from_dict(config["session_summary_manager"])
 
     # --- Handle Knowledge reconstruction ---
     # TODO: implement knowledge deserialization
     # if "knowledge" in config and isinstance(config["knowledge"], dict):
-    #     from src.core._runner._stubs import Knowledge
+    #     from openagent_core.core._runner._stubs import Knowledge
     #     config["knowledge"] = Knowledge.from_dict(config["knowledge"])
 
     # --- Handle CompressionManager reconstruction ---
     # TODO: implement compression manager deserialization
     # if "compression_manager" in config and isinstance(config["compression_manager"], dict):
-    #     from src.core._runner._stubs import CompressionManager
+    #     from openagent_core.core._runner._stubs import CompressionManager
     #     config["compression_manager"] = CompressionManager.from_dict(config["compression_manager"])
 
     team = cast(
@@ -1036,7 +1036,7 @@ def save(
     Returns:
         Optional[int]: The version number of the saved config.
     """
-    from src.core._runner.agent.agent import Agent
+    from openagent_core.core._runner.agent.agent import Agent
 
     db_ = db or team.db
     if not db_:
@@ -1107,7 +1107,7 @@ def _hydrate_from_graph(
 
     This avoids re-querying the DB for nested teams whose graphs are already available.
     """
-    from src.core._runner.agent.agent import Agent
+    from openagent_core.core._runner.agent.agent import Agent
 
     config = graph["config"].get("config")
     if config is None:

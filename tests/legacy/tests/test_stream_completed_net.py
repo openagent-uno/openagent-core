@@ -40,7 +40,7 @@ class _FakeRuntime:
 
 
 async def _drain(events: list[Any], session_id: str = "s1") -> str:
-    from src.models.dispatcher import _arun_runtime_stream
+    from openagent_core.models.dispatcher import _arun_runtime_stream
 
     out: list[str] = []
     async for chunk in _arun_runtime_stream(
@@ -60,7 +60,7 @@ async def _drain(events: list[Any], session_id: str = "s1") -> str:
 async def test_completed_content_recovered(ctx: TestContext) -> None:
     # Si usano le classi VERE: un finto evento passerebbe il test senza
     # dimostrare che l'isinstance in produzione lo riconosce.
-    from src.core._run_state.agent import RunCompletedEvent
+    from openagent_core.core._run_state.agent import RunCompletedEvent
 
     got = await _drain([RunCompletedEvent(session_id="s1", content="La risposta vera.")])
     assert "La risposta vera." in got, (
@@ -72,7 +72,7 @@ async def test_completed_content_recovered(ctx: TestContext) -> None:
 @test("stream_completed_net",
       "deltas arrived → the net stays out of the way (no duplicated answer)")
 async def test_no_duplicate_when_deltas_arrived(ctx: TestContext) -> None:
-    from src.core._run_state.agent import RunCompletedEvent, RunContentEvent
+    from openagent_core.core._run_state.agent import RunCompletedEvent, RunContentEvent
 
     got = await _drain([
         RunContentEvent(session_id="s1", content="La risposta "),
@@ -88,7 +88,7 @@ async def test_no_duplicate_when_deltas_arrived(ctx: TestContext) -> None:
 @test("stream_completed_net",
       "empty completed run → nothing yielded (the fallback still owns that case)")
 async def test_empty_completion_yields_nothing(ctx: TestContext) -> None:
-    from src.core._run_state.agent import RunCompletedEvent
+    from openagent_core.core._run_state.agent import RunCompletedEvent
 
     got = await _drain([RunCompletedEvent(session_id="s1", content="")])
     assert got == "", (

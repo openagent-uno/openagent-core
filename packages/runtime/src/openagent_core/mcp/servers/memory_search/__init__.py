@@ -1,6 +1,6 @@
 """Memory-search MCP — full-text recall across past conversations.
 
-Wraps :mod:`src.memory.transcript_index` as a subprocess MCP so the agent can
+Wraps :mod:`openagent_core.memory.transcript_index` as a subprocess MCP so the agent can
 find what was said in any stored session (§16) — the counterpart to the vault,
 which holds what it deliberately learned (§5).
 

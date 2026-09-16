@@ -1,9 +1,9 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
-from src.stream.media import Image
-from src.core._runner.utils.log import logger
-from src.core._runner.utils.media import resolve_image_mime_type
+from openagent_core.stream.media import Image
+from openagent_core.core._runner.utils.log import logger
+from openagent_core.core._runner.utils.media import resolve_image_mime_type
 
 
 def _process_bytes_image(
@@ -124,7 +124,7 @@ def sanitize_response_schema(schema: dict):
 
             # Ensure all properties are required, EXCEPT Dict fields
             if "properties" in schema:
-                from src.core._runner.utils.models.schema_utils import is_dict_field
+                from openagent_core.core._runner.utils.models.schema_utils import is_dict_field
 
                 required_fields = []
                 for prop_name, prop_schema in schema["properties"].items():

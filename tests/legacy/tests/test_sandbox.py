@@ -40,7 +40,7 @@ def _sandbox_env(**vars: str | None):
     then route real spawns in later modules. Resetting on exit hands the next
     module a clean, env-derived (default: local) selection.
     """
-    from src.mcp.servers.shell import backends
+    from openagent_core.mcp.servers.shell import backends
 
     prev = {k: os.environ.get(k) for k in vars}
     try:
@@ -61,7 +61,7 @@ def _sandbox_env(**vars: str | None):
 
 
 def _reset_shell_hub() -> None:
-    from src.mcp.servers.shell import handlers
+    from openagent_core.mcp.servers.shell import handlers
     handlers._reset_hub_for_tests()
 
 
@@ -75,7 +75,7 @@ async def t_default_is_local_and_runs(ctx: TestContext) -> None:
     the backend must be local and a command must actually execute on the host,
     same exit code and stdout as before this feature existed.
     """
-    from src.mcp.servers.shell import backends, handlers
+    from openagent_core.mcp.servers.shell import backends, handlers
 
     _reset_shell_hub()
     with _sandbox_env(OPENAGENT_SANDBOX_BACKEND=None, OPENAGENT_SANDBOX_DOCKER=None):
@@ -97,8 +97,8 @@ async def t_local_spawn_spec_identical(ctx: TestContext) -> None:
     path has stopped being byte-identical, which is the one thing this whole
     change promised not to do.
     """
-    from src.mcp.servers.shell import backends
-    from src.mcp.servers.shell.shells import _pick_shell
+    from openagent_core.mcp.servers.shell import backends
+    from openagent_core.mcp.servers.shell.shells import _pick_shell
 
     spec = backends.LocalBackend().build_spawn(command="echo x", cwd="/tmp", env=None)
     shell, flag = _pick_shell()
@@ -118,7 +118,7 @@ async def t_local_spawn_spec_identical(ctx: TestContext) -> None:
 
 @test("sandbox", "server local Windows shell preserves the command-line string")
 async def t_local_windows_shell_avoids_argv_requoting(ctx: TestContext) -> None:
-    from src.mcp.servers.shell import backends, shells
+    from openagent_core.mcp.servers.shell import backends, shells
 
     command = '"C:\\Program Files\\Python\\python.exe" -c "print(\'quoted value\')"'
     sentinel = object()
@@ -198,7 +198,7 @@ class _FakeDocker:
         self.prepare_called = True
 
     def build_spawn(self, *, command, cwd, env):
-        from src.mcp.servers.shell.backends import SpawnSpec
+        from openagent_core.mcp.servers.shell.backends import SpawnSpec
 
         self.build_called = True
         return SpawnSpec(argv=["echo", "sentinel"], env=os.environ.copy(), cwd=None)
@@ -209,7 +209,7 @@ class _FakeDocker:
 
 @test("sandbox", "docker config routes through the docker backend (fake, no daemon)")
 async def t_docker_routing_via_fake(ctx: TestContext) -> None:
-    from src.mcp.servers.shell import backends, handlers
+    from openagent_core.mcp.servers.shell import backends, handlers
 
     _reset_shell_hub()
     orig = backends._BACKENDS["docker"]
@@ -247,7 +247,7 @@ async def t_docker_build_spawn_pure(ctx: TestContext) -> None:
     and assert its shape and, critically, that the ONLY environment crossing
     into the container is the forward_env allowlist.
     """
-    from src.mcp.servers.shell import backends
+    from openagent_core.mcp.servers.shell import backends
 
     cfg = backends.DockerConfig(forward_env=("PATH", "HOME"))
     dock = backends.DockerBackend(cfg)
@@ -292,7 +292,7 @@ async def t_unknown_backend_fails_safe(ctx: TestContext) -> None:
     posture as a typo'd ``safety.approvals`` flag. It must NOT break exec (which
     a raise would) and must NOT arm docker on a name we don't recognise.
     """
-    from src.mcp.servers.shell import backends, handlers
+    from openagent_core.mcp.servers.shell import backends, handlers
 
     _reset_shell_hub()
     with _sandbox_env(OPENAGENT_SANDBOX_BACKEND="dcoker"):  # typo for "docker"
@@ -315,7 +315,7 @@ async def t_ssh_routing_and_build_spawn(ctx: TestContext) -> None:
     argv targeting ``user@host``, running the command via ``bash -lc``, and
     carrying the docker-client's spawn discipline (cwd=None, no host pgroup).
     """
-    from src.mcp.servers.shell import backends
+    from openagent_core.mcp.servers.shell import backends
 
     with _sandbox_env(
         OPENAGENT_SANDBOX_BACKEND="ssh",
@@ -362,7 +362,7 @@ async def t_ssh_routing_and_build_spawn(ctx: TestContext) -> None:
 async def t_unknown_ssh_backend_fails_safe(ctx: TestContext) -> None:
     """A typo for ``ssh`` must degrade to local, exactly like the ``dcoker``
     case — never raise, never arm ssh on a name we don't recognise."""
-    from src.mcp.servers.shell import backends, handlers
+    from openagent_core.mcp.servers.shell import backends, handlers
 
     _reset_shell_hub()
     with _sandbox_env(OPENAGENT_SANDBOX_BACKEND="sssh"):  # typo for "ssh"
@@ -388,7 +388,7 @@ async def t_ssh_live_localhost(ctx: TestContext) -> None:
     failing — the live path is opportunistic, the pure routing test above is the
     hard contract.
     """
-    from src.mcp.servers.shell import backends, handlers
+    from openagent_core.mcp.servers.shell import backends, handlers
 
     # Guard 1 — port reachability. Skip cleanly if nothing answers on :22.
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:

@@ -24,27 +24,27 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from src.core._runner._stubs import CompressionManager
+    from openagent_core.core._runner._stubs import CompressionManager
 from uuid import uuid4
 
 from pydantic import BaseModel
 
-from src.core.runtime_errors import (
+from openagent_core.core.runtime_errors import (
     AgentRunException,
     ContextWindowExceededError,
     ModelProviderError,
     RetryableModelProviderError,
 )
-from src.stream.media import Audio, File, Image, Video
-from src.core.metrics import MessageMetrics, ModelType, ToolCallMetrics
-from src.models.providers.message import Citations, Message
-from src.models.providers.response import ModelResponse, ModelResponseEvent, ToolExecution
-from src.core._run_state.agent import CustomEvent, RunContentEvent, RunOutput, RunOutputEvent
-from src.core._run_state.requirement import RunRequirement
-from src.core._run_state.team import RunContentEvent as TeamRunContentEvent
-from src.core._run_state.team import TeamRunOutput, TeamRunOutputEvent
-from src.core._run_state.workflow import WorkflowRunOutputEvent
-from src.mcp._runtime.function import (
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.core.metrics import MessageMetrics, ModelType, ToolCallMetrics
+from openagent_core.models.providers.message import Citations, Message
+from openagent_core.models.providers.response import ModelResponse, ModelResponseEvent, ToolExecution
+from openagent_core.core._run_state.agent import CustomEvent, RunContentEvent, RunOutput, RunOutputEvent
+from openagent_core.core._run_state.requirement import RunRequirement
+from openagent_core.core._run_state.team import RunContentEvent as TeamRunContentEvent
+from openagent_core.core._run_state.team import TeamRunOutput, TeamRunOutputEvent
+from openagent_core.core._run_state.workflow import WorkflowRunOutputEvent
+from openagent_core.mcp._runtime.function import (
     Function,
     FunctionCall,
     FunctionExecutionResult,
@@ -52,9 +52,9 @@ from src.mcp._runtime.function import (
     UserFeedbackQuestion,
     UserInputField,
 )
-from src.core._runner.utils.log import log_debug, log_error, log_info, log_warning
-from src.core._runner.utils.timer import Timer
-from src.core._runner.utils.tools import get_function_call_for_tool_call, get_function_call_for_tool_execution
+from openagent_core.core._runner.utils.log import log_debug, log_error, log_info, log_warning
+from openagent_core.core._runner.utils.timer import Timer
+from openagent_core.core._runner.utils.tools import get_function_call_for_tool_call, get_function_call_for_tool_execution
 
 
 @dataclass
@@ -627,7 +627,7 @@ class Model(ABC):
         tools: Optional[Sequence[Union[Function, Dict[str, Any]]]] = None,
         output_schema: Optional[Union[Dict, Type[BaseModel]]] = None,
     ) -> int:
-        from src.core._runner.utils.tokens import count_tokens
+        from openagent_core.core._runner.utils.tokens import count_tokens
 
         return count_tokens(
             messages,
@@ -719,7 +719,7 @@ class Model(ABC):
 
                 # Accumulate metrics for non-stream responses
                 if run_response is not None and model_response.response_usage is not None:
-                    from src.core.metrics import accumulate_model_metrics
+                    from openagent_core.core.metrics import accumulate_model_metrics
 
                     accumulate_model_metrics(model_response, self, self.model_type, run_response.metrics)
 
@@ -941,7 +941,7 @@ class Model(ABC):
 
                 # Accumulate metrics for non-stream responses
                 if run_response is not None and model_response.response_usage is not None:
-                    from src.core.metrics import accumulate_model_metrics
+                    from openagent_core.core.metrics import accumulate_model_metrics
 
                     accumulate_model_metrics(model_response, self, self.model_type, run_response.metrics)
 
@@ -1451,7 +1451,7 @@ class Model(ABC):
 
                     # Accumulate metrics for this streamed iteration
                     if run_response is not None and assistant_message.metrics is not None:
-                        from src.core.metrics import accumulate_model_metrics
+                        from openagent_core.core.metrics import accumulate_model_metrics
 
                         _stream_model_response = ModelResponse()
                         _stream_model_response.response_usage = assistant_message.metrics
@@ -1472,7 +1472,7 @@ class Model(ABC):
                     )
                     # Accumulate metrics for non-streamed response within stream
                     if run_response is not None and model_response.response_usage is not None:
-                        from src.core.metrics import accumulate_model_metrics
+                        from openagent_core.core.metrics import accumulate_model_metrics
 
                         accumulate_model_metrics(model_response, self, self.model_type, run_response.metrics)
                     if self.cache_response:
@@ -1727,7 +1727,7 @@ class Model(ABC):
 
                     # Accumulate metrics for this streamed iteration
                     if run_response is not None and assistant_message.metrics is not None:
-                        from src.core.metrics import accumulate_model_metrics
+                        from openagent_core.core.metrics import accumulate_model_metrics
 
                         _stream_model_response = ModelResponse()
                         _stream_model_response.response_usage = assistant_message.metrics
@@ -1748,7 +1748,7 @@ class Model(ABC):
                     )
                     # Accumulate metrics for non-streamed response within stream
                     if run_response is not None and model_response.response_usage is not None:
-                        from src.core.metrics import accumulate_model_metrics
+                        from openagent_core.core.metrics import accumulate_model_metrics
 
                         accumulate_model_metrics(model_response, self, self.model_type, run_response.metrics)
                     if self.cache_response:
@@ -2100,7 +2100,7 @@ class Model(ABC):
         # Cap the result HERE, not at the display record: this is the message
         # every provider hands back to the model, and it is re-sent on every
         # following step of the turn. See src/core/tool_output.py.
-        from src.core.tool_output import cap_tool_output
+        from openagent_core.core.tool_output import cap_tool_output
 
         return Message(
             role=self.tool_message_role,
@@ -2198,7 +2198,7 @@ class Model(ABC):
                             item.tool_call_id = function_call.call_id
 
                         # For WorkflowCompletedEvent, extract content for final output
-                        from src.core._run_state.workflow import WorkflowCompletedEvent
+                        from openagent_core.core._run_state.workflow import WorkflowCompletedEvent
 
                         if isinstance(item, WorkflowCompletedEvent):
                             if item.content is not None:
@@ -2230,7 +2230,7 @@ class Model(ABC):
                 ):
                     function_execution_result.updated_session_state = function_call.function._run_context.session_state
         else:
-            from src.mcp._runtime.function import ToolResult
+            from openagent_core.mcp._runtime.function import ToolResult
 
             if isinstance(function_execution_result.result, ToolResult):
                 # Extract content and media from ToolResult
@@ -2473,7 +2473,7 @@ class Model(ABC):
         # re-stream the in-flight chip carrying child_session_id (→ its card
         # flips clickable mid-run). The dispatcher invokes inner tools in this
         # same context, so a tool-search-wrapped spawn reads the OUTER chip.
-        from src.stream.card_link import set_active_tool_call, reset_active_tool_call
+        from openagent_core.stream.card_link import set_active_tool_call, reset_active_tool_call
         _tool_tok = set_active_tool_call(function_call.call_id, function_call.function.name)
         try:
             if (
@@ -2744,7 +2744,7 @@ class Model(ABC):
                             item.tool_call_id = function_call.call_id
 
                             # For WorkflowCompletedEvent, extract content for final output
-                            from src.core._run_state.workflow import WorkflowCompletedEvent
+                            from openagent_core.core._run_state.workflow import WorkflowCompletedEvent
 
                             if isinstance(item, WorkflowCompletedEvent):
                                 if item.content is not None:
@@ -2908,7 +2908,7 @@ class Model(ABC):
                     (GeneratorType, collections.abc.Iterator, AsyncGeneratorType, collections.abc.AsyncIterator),
                 )
             ):
-                from src.mcp._runtime.function import ToolResult
+                from openagent_core.mcp._runtime.function import ToolResult
 
                 if isinstance(function_execution_result.result, ToolResult):
                     tool_result = function_execution_result.result

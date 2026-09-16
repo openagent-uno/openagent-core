@@ -14,19 +14,19 @@ from typing import (
     Union,
 )
 
-from src.core.runtime_errors import (
+from openagent_core.core.runtime_errors import (
     InputCheckError,
     OutputCheckError,
 )
-from src.core._run_state import RunContext, RunStatus
-from src.core._run_state.agent import RunOutputEvent
-from src.core._run_state.team import (
+from openagent_core.core._run_state import RunContext, RunStatus
+from openagent_core.core._run_state.agent import RunOutputEvent
+from openagent_core.core._run_state.team import (
     TeamRunInput,
     TeamRunOutput,
     TeamRunOutputEvent,
 )
-from src.memory.sessions import TeamSession
-from src.core._runner.utils.events import (
+from openagent_core.memory.sessions import TeamSession
+from openagent_core.core._runner.utils.events import (
     create_team_post_hook_completed_event,
     create_team_post_hook_started_event,
     create_team_pre_hook_completed_event,
@@ -34,19 +34,19 @@ from src.core._runner.utils.events import (
     create_team_run_paused_event,
     handle_event,
 )
-from src.core._runner.utils.hooks import (
+from openagent_core.core._runner.utils.hooks import (
     copy_args_for_background,
     filter_hook_args,
     is_guardrail_hook,
     should_run_hook_in_background,
 )
-from src.core._runner.utils.log import (
+from openagent_core.core._runner.utils.log import (
     log_debug,
     log_exception,
 )
 
 if TYPE_CHECKING:
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team.team import Team
 
 
 # ---------------------------------------------------------------------------
@@ -91,8 +91,8 @@ def handle_team_run_paused(
     session: TeamSession,
     run_context: Optional[RunContext] = None,
 ) -> TeamRunOutput:
-    from src.core._run_state.approval import create_approval_from_pause
-    from src.core._runner.team._run import _cleanup_and_store
+    from openagent_core.core._run_state.approval import create_approval_from_pause
+    from openagent_core.core._runner.team._run import _cleanup_and_store
 
     run_response.status = RunStatus.paused
     if not run_response.content:
@@ -128,8 +128,8 @@ def handle_team_run_paused_stream(
     session: TeamSession,
     run_context: Optional[RunContext] = None,
 ) -> Iterator[Union[TeamRunOutputEvent, RunOutputEvent]]:
-    from src.core._run_state.approval import create_approval_from_pause
-    from src.core._runner.team._run import _cleanup_and_store
+    from openagent_core.core._run_state.approval import create_approval_from_pause
+    from openagent_core.core._runner.team._run import _cleanup_and_store
 
     run_response.status = RunStatus.paused
     if not run_response.content:
@@ -165,8 +165,8 @@ async def ahandle_team_run_paused(
     session: TeamSession,
     run_context: Optional[RunContext] = None,
 ) -> TeamRunOutput:
-    from src.core._run_state.approval import acreate_approval_from_pause
-    from src.core._runner.team._run import _acleanup_and_store
+    from openagent_core.core._run_state.approval import acreate_approval_from_pause
+    from openagent_core.core._runner.team._run import _acleanup_and_store
 
     run_response.status = RunStatus.paused
     if not run_response.content:
@@ -200,8 +200,8 @@ async def ahandle_team_run_paused_stream(
     session: TeamSession,
     run_context: Optional[RunContext] = None,
 ) -> AsyncIterator[Union[TeamRunOutputEvent, RunOutputEvent]]:
-    from src.core._run_state.approval import acreate_approval_from_pause
-    from src.core._runner.team._run import _acleanup_and_store
+    from openagent_core.core._run_state.approval import acreate_approval_from_pause
+    from openagent_core.core._runner.team._run import _acleanup_and_store
 
     run_response.status = RunStatus.paused
     if not run_response.content:
@@ -245,7 +245,7 @@ def _execute_pre_hooks(
     **kwargs: Any,
 ) -> Iterator[TeamRunOutputEvent]:
     """Execute multiple pre-hook functions in succession."""
-    from src.core._runner.team._init import _set_debug
+    from openagent_core.core._runner.team._init import _set_debug
 
     if hooks is None:
         return
@@ -343,7 +343,7 @@ async def _aexecute_pre_hooks(
     **kwargs: Any,
 ) -> AsyncIterator[TeamRunOutputEvent]:
     """Execute multiple pre-hook functions in succession (async version)."""
-    from src.core._runner.team._init import _set_debug
+    from openagent_core.core._runner.team._init import _set_debug
 
     if hooks is None:
         return
@@ -445,7 +445,7 @@ def _execute_post_hooks(
     **kwargs: Any,
 ) -> Iterator[TeamRunOutputEvent]:
     """Execute multiple post-hook functions in succession."""
-    from src.core._runner.team._init import _set_debug
+    from openagent_core.core._runner.team._init import _set_debug
 
     if hooks is None:
         return
@@ -540,7 +540,7 @@ async def _aexecute_post_hooks(
     **kwargs: Any,
 ) -> AsyncIterator[TeamRunOutputEvent]:
     """Execute multiple post-hook functions in succession (async version)."""
-    from src.core._runner.team._init import _set_debug
+    from openagent_core.core._runner.team._init import _set_debug
 
     if hooks is None:
         return

@@ -6,7 +6,7 @@ from ._framework import TestContext, test
 
 @test("dream", "DREAM_MODE_PROMPT covers all three missions")
 async def t_dream_prompt(ctx: TestContext) -> None:
-    from src.core.server import DREAM_MODE_PROMPT, DREAM_MODE_TASK_NAME
+    from openagent_core.core.server import DREAM_MODE_PROMPT, DREAM_MODE_TASK_NAME
     assert isinstance(DREAM_MODE_PROMPT, str)
     assert len(DREAM_MODE_PROMPT) > 100
     lower = DREAM_MODE_PROMPT.lower()
@@ -50,7 +50,7 @@ async def t_dream_uses_logs_mcp(ctx: TestContext) -> None:
     100% via ``logs_summary``. The `logs` MCP (vision §14) now exists, so
     the shell workaround must not creep back.
     """
-    from src.core.server import DREAM_MODE_PROMPT
+    from openagent_core.core.server import DREAM_MODE_PROMPT
 
     for tool in ("logs_summary", "logs_query", "logs_context"):
         assert tool in DREAM_MODE_PROMPT, f"Mission 2 no longer calls {tool}"
@@ -65,8 +65,8 @@ async def t_dream_uses_logs_mcp(ctx: TestContext) -> None:
 
 @test("dream", "manager-review built-in is fully removed")
 async def t_no_manager_review(ctx: TestContext) -> None:
-    import src.core.server as server
-    import src.core.builtin_tasks as bt
+    import openagent_core.core.server as server
+    import openagent_core.core.builtin_tasks as bt
 
     assert not hasattr(server, "MANAGER_REVIEW_PROMPT")
     assert not hasattr(server.AgentServer, "_sync_manager_review")
@@ -90,7 +90,7 @@ async def t_dream_consumes_recall(ctx: TestContext) -> None:
     red, the loop has been quietly re-opened and the scoring subsystem is
     back to writing rows nobody reads.
     """
-    from src.core.server import DREAM_MODE_PROMPT
+    from openagent_core.core.server import DREAM_MODE_PROMPT
 
     assert "vault_recall_stats" in DREAM_MODE_PROMPT, (
         "nothing consumes the recall score — vault_recall_stats writes rows "
@@ -122,7 +122,7 @@ async def t_dream_recall_is_not_a_verdict(ctx: TestContext) -> None:
     """
     import re
 
-    from src.core.server import DREAM_MODE_PROMPT
+    from openagent_core.core.server import DREAM_MODE_PROMPT
 
     # Collapse the prompt's hard wrapping before matching. A prose guard that
     # breaks when a paragraph reflows holds the wording hostage to its line
@@ -169,7 +169,7 @@ async def t_dream_runs_mechanical_pass(ctx: TestContext) -> None:
     is no longer a second code path that would quietly cover for the
     prompt dropping `vault_dream()`. Do not relax it.
     """
-    from src.core.server import DREAM_MODE_PROMPT
+    from openagent_core.core.server import DREAM_MODE_PROMPT
 
     assert "vault_dream" in DREAM_MODE_PROMPT, (
         "Mission 1 never runs the mechanical pass. `vault_dream()` is one "
@@ -202,7 +202,7 @@ async def t_dream_flags_contradictions(ctx: TestContext) -> None:
     """
     import re
 
-    from src.core.server import DREAM_MODE_PROMPT
+    from openagent_core.core.server import DREAM_MODE_PROMPT
 
     lower = re.sub(r"\s+", " ", DREAM_MODE_PROMPT).lower()
     assert "vault_contradiction_candidates" in DREAM_MODE_PROMPT, (

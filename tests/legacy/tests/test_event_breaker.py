@@ -37,14 +37,14 @@ def _fresh_db_path(ctx: TestContext):
 
 
 async def _make_db(path):
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
     db = MemoryDB(str(path))
     await db.connect()
     return db
 
 
 async def _add_event(db, *, slug: str, max_retries=None) -> str:
-    from src.core.event_secret import make_secret_material
+    from openagent_core.core.event_secret import make_secret_material
     _clear, enc, hint = make_secret_material(db_path=db.db_path)
     eid = await db.add_event(
         name=f"evt-{slug}", action_kind="prompt", slug=slug,
@@ -68,7 +68,7 @@ async def _drive_dispatch(db, event, *, raise_exc=None, result=None):
     """Run the REAL ``dispatch_event`` for one fresh delivery with a fake
     ``_dispatch_prompt`` that raises ``raise_exc`` or returns ``result``. Returns
     (delivery_id, outcome) where outcome is 'ok' | 'raised' | 'cancelled'."""
-    import src.core.event_dispatcher as ed
+    import openagent_core.core.event_dispatcher as ed
 
     did = await db.add_event_delivery(
         event_id=event["id"], payload={"ticket": {"id": "x"}}, claimed=True,
@@ -142,8 +142,8 @@ async def t_trips_on_permanent(ctx: TestContext) -> None:
 @test("event_breaker",
       "a tripped breaker parks a new delivery blocked and the drain never dispatches it")
 async def t_tripped_breaker_blocks_drain(ctx: TestContext) -> None:
-    import src.core.event_dispatcher as ed
-    from src.core.scheduler import Scheduler
+    import openagent_core.core.event_dispatcher as ed
+    from openagent_core.core.scheduler import Scheduler
 
     path = _fresh_db_path(ctx)
     db = await _make_db(path)
@@ -195,7 +195,7 @@ async def t_tripped_breaker_blocks_drain(ctx: TestContext) -> None:
 @test("event_breaker",
       "transient failures (429 / rate-limit / cancellation) never trip the breaker")
 async def t_transient_never_trips(ctx: TestContext) -> None:
-    from src.core.runtime_errors import ModelRateLimitError
+    from openagent_core.core.runtime_errors import ModelRateLimitError
 
     path = _fresh_db_path(ctx)
     db = await _make_db(path)

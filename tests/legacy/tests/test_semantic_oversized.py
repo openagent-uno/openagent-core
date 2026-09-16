@@ -25,7 +25,7 @@ class _PickyEmbedder:
         self.calls: list[int] = []
 
     def embed(self, texts):
-        from src.memory.semantic_index import EmbeddingError
+        from openagent_core.memory.semantic_index import EmbeddingError
 
         self.calls.append(len(texts))
         if any(len(t) > self.limit for t in texts):
@@ -34,7 +34,7 @@ class _PickyEmbedder:
 
 
 def _index_with(embedder):
-    from src.memory.semantic_index import SemanticIndex
+    from openagent_core.memory.semantic_index import SemanticIndex
 
     idx = SemanticIndex.__new__(SemanticIndex)   # no DB / no filesystem needed
     idx.embedder = embedder
@@ -72,7 +72,7 @@ async def t_shrinks(ctx: TestContext) -> None:
 async def t_hopeless_item(ctx: TestContext) -> None:
     class _AlwaysRefuses(_PickyEmbedder):
         def embed(self, texts):
-            from src.memory.semantic_index import EmbeddingError
+            from openagent_core.memory.semantic_index import EmbeddingError
 
             self.calls.append(len(texts))
             # The width probe is the one call that succeeds, so the

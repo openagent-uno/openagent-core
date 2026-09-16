@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Optional, Union
 from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
-from src.core._runner.utils.log import log_debug, log_exception
+from openagent_core.core._runner.utils.log import log_debug, log_exception
 
 try:
     from mcp import ClientSession
@@ -24,16 +24,16 @@ except (ImportError, ModuleNotFoundError):
     raise ImportError("`mcp` not installed. Please install using `pip install mcp`")
 
 
-from src.stream.media import Audio, File, Image, Video
-from src.mcp._runtime.function import ToolResult
-from src.memory.artifacts import safe_attachment_filename
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.mcp._runtime.function import ToolResult
+from openagent_core.memory.artifacts import safe_attachment_filename
 
 if TYPE_CHECKING:
-    from src.core._runner.agent import Agent
-    from src.core._run_state import RunContext
-    from src.core._runner.team.team import Team
-    from src.mcp._runtime.mcp.mcp import MCPTools
-    from src.mcp._runtime.mcp.multi_mcp import MultiMCPTools
+    from openagent_core.core._runner.agent import Agent
+    from openagent_core.core._run_state import RunContext
+    from openagent_core.core._runner.team.team import Team
+    from openagent_core.mcp._runtime.mcp.mcp import MCPTools
+    from openagent_core.mcp._runtime.mcp.multi_mcp import MultiMCPTools
 
 
 # MCP payloads are already resident when the SDK hands them to us, but these
@@ -142,7 +142,7 @@ def get_entrypoint_for_tool(
             # this will create/reuse a session with dynamic headers
             if mcp_tools_instance and hasattr(mcp_tools_instance, "get_session_for_run"):
                 # Import here to avoid circular imports
-                from src.mcp._runtime.mcp.multi_mcp import MultiMCPTools
+                from openagent_core.mcp._runtime.mcp.multi_mcp import MultiMCPTools
 
                 # For MultiMCPTools, pass server_idx; for MCPTools, only pass run_context
                 if isinstance(mcp_tools_instance, MultiMCPTools):
@@ -164,7 +164,7 @@ def get_entrypoint_for_tool(
             # Stamp dry-run meta when the current run is a dry-run so the MCP
             # server captures/rejects writes instead of executing them. None on
             # a live run (identical to not passing meta at all).
-            from src.core.dry_run import call_meta
+            from openagent_core.core.dry_run import call_meta
 
             log_debug(f"Calling MCP Tool '{tool_name}' with args: {kwargs}")
             result: CallToolResult = await active_session.call_tool(

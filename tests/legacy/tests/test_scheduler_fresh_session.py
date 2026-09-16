@@ -57,7 +57,7 @@ class _SpyAgent:
 
 @test("scheduler_fresh_session", "durable firings get unique per-run sessions (issue #5)")
 async def t_run_task_unique_sessions(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
+    from openagent_core.core.scheduler import Scheduler
 
     os.environ.pop("OPENAGENT_SCHEDULER_DURABLE_SESSIONS", None)  # default = durable
     agent = _SpyAgent()
@@ -82,7 +82,7 @@ async def t_run_task_unique_sessions(ctx: TestContext) -> None:
 
 @test("scheduler_fresh_session", "durable firing still releases when the run raises")
 async def t_run_task_releases_on_error(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
+    from openagent_core.core.scheduler import Scheduler
 
     os.environ.pop("OPENAGENT_SCHEDULER_DURABLE_SESSIONS", None)
 
@@ -109,7 +109,7 @@ async def t_run_task_releases_on_error(ctx: TestContext) -> None:
 
 @test("scheduler_fresh_session", "legacy hatch reuses one session + forgets it")
 async def t_run_task_legacy_forget(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
+    from openagent_core.core.scheduler import Scheduler
 
     os.environ["OPENAGENT_SCHEDULER_DURABLE_SESSIONS"] = "0"
     try:
@@ -134,13 +134,13 @@ async def t_run_task_legacy_forget(ctx: TestContext) -> None:
     "self-hosted scheduled task is lean, strict-local and execution-level dry-run",
 )
 async def t_local_task_execution_profile(ctx: TestContext) -> None:
-    from src.core.dry_run import is_dry_run
-    from src.core.execution_profile import (
+    from openagent_core.core.dry_run import is_dry_run
+    from openagent_core.core.execution_profile import (
         lean_local_event_active,
         strict_local_only_active,
     )
-    from src.core.scheduler import Scheduler
-    from src.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"sched-local-{uuid.uuid4().hex[:8]}.db")
 

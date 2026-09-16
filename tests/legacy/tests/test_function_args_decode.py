@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from src.core._runner.utils.functions import _decode_function_arguments
-from src.core._runner.utils.string import parse_response_model_str
+from openagent_core.core._runner.utils.functions import _decode_function_arguments
+from openagent_core.core._runner.utils.string import parse_response_model_str
 
 from ._framework import TestContext, test
 

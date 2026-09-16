@@ -136,7 +136,7 @@ def narrow_execution_policy(
     outer_tools = outer.get("allowed_tool_families")
     inner_tools = inner.get("allowed_tool_families")
     if outer_tools is not None and inner_tools is not None:
-        from src.core.tool_scope import normalize_family
+        from openagent_core.core.tool_scope import normalize_family
 
         inner_set = {normalize_family(item) for item in inner_tools}
         out["allowed_tool_families"] = [

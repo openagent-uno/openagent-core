@@ -69,7 +69,7 @@ def normalize_schema_for_provider(schema: Dict[str, Any], provider: str) -> Dict
 
 def _normalize_for_openai(schema: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize schema for OpenAI structured outputs."""
-    from src.core._runner.utils.models.openai_responses import sanitize_response_schema
+    from openagent_core.core._runner.utils.models.openai_responses import sanitize_response_schema
 
     sanitize_response_schema(schema)
     return schema

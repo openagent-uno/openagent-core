@@ -10,7 +10,7 @@ from ._framework import TestContext, test
 
 @test("catalog", "split_runtime_id + model_id_from_runtime")
 async def t_catalog_split(ctx: TestContext) -> None:
-    from src.models.catalog import split_runtime_id, model_id_from_runtime
+    from openagent_core.models.catalog import split_runtime_id, model_id_from_runtime
     assert split_runtime_id("openai:gpt-4o-mini") == ("openai", "gpt-4o-mini")
     assert split_runtime_id("anthropic:claude-opus-4-7") == ("anthropic", "claude-opus-4-7")
     assert split_runtime_id("just-a-name") == ("just-a-name", "just-a-name")
@@ -22,8 +22,8 @@ async def t_pricing_missing(ctx: TestContext) -> None:
     """With no bundled table and a cold OpenRouter cache, an unknown
     model resolves to zero cost logged as 'missing' — not a crash."""
     import time
-    from src.models import discovery
-    from src.models.catalog import get_model_pricing, compute_cost
+    from openagent_core.models import discovery
+    from openagent_core.models.catalog import get_model_pricing, compute_cost
 
     prev = discovery._OPENROUTER_CACHE
     try:
@@ -44,8 +44,8 @@ async def t_pricing_live(ctx: TestContext) -> None:
     """User config metadata is no longer consulted for pricing. The
     OpenRouter cache is the only pricing source."""
     import time
-    from src.models import discovery
-    from src.models.catalog import get_model_pricing
+    from openagent_core.models import discovery
+    from openagent_core.models.catalog import get_model_pricing
 
     prev = discovery._OPENROUTER_CACHE
     try:
@@ -69,8 +69,8 @@ async def t_pricing_live(ctx: TestContext) -> None:
 async def t_openrouter_cache_pricing(ctx: TestContext) -> None:
     """After discovery fetches OpenRouter's catalog, cost lookups consult it."""
     import time
-    from src.models import discovery
-    from src.models.catalog import get_model_pricing
+    from openagent_core.models import discovery
+    from openagent_core.models.catalog import get_model_pricing
 
     prev = discovery._OPENROUTER_CACHE
     try:

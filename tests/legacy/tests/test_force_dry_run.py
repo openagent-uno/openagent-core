@@ -29,7 +29,7 @@ def _set(v):
 
 @test("force_dry_run", "senza env il comportamento e' invariato (opt-in)")
 async def test_absent_is_off(ctx: TestContext) -> None:
-    from src.core.event_dispatcher import _force_dry_run
+    from openagent_core.core.event_dispatcher import _force_dry_run
 
     prev = _set(None)
     try:
@@ -40,7 +40,7 @@ async def test_absent_is_off(ctx: TestContext) -> None:
 
 @test("force_dry_run", "1/true/yes/on inchiodano l'intero processo al dry-run")
 async def test_truthy_values(ctx: TestContext) -> None:
-    from src.core.event_dispatcher import _force_dry_run
+    from openagent_core.core.event_dispatcher import _force_dry_run
 
     prev = _set(None)
     try:
@@ -56,7 +56,7 @@ async def test_truthy_values(ctx: TestContext) -> None:
 
 @test("force_dry_run", "si rilegge a ogni turno, non e' congelato all'import")
 async def test_read_per_turn(ctx: TestContext) -> None:
-    from src.core.event_dispatcher import _force_dry_run
+    from openagent_core.core.event_dispatcher import _force_dry_run
 
     prev = _set("1")
     try:

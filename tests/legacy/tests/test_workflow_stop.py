@@ -142,8 +142,8 @@ def _make_request(scheduler, *, method: str = "POST", path: str = "/x",
 
 
 async def _new_scheduler(ctx: TestContext, tag: str):
-    from src.core.scheduler import Scheduler
-    from src.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"wf-stop-{tag}-{uuid.uuid4().hex[:8]}.db")
     db = MemoryDB(str(tmp_db))
@@ -182,7 +182,7 @@ async def t_route_registered(_ctx: TestContext) -> None:
     the pair can't drift apart again."""
     from aiohttp import web
 
-    from src.gateway.server import Gateway
+    from openagent_core.gateway.server import Gateway
 
     # ``_register_routes`` only reaches for ``self._handle_*`` bound methods,
     # so an uninitialised instance is enough — building a real Gateway needs a
@@ -215,7 +215,7 @@ async def t_rest_start_rest_stop(ctx: TestContext) -> None:
     a real run, POST /stop flags it, the scheduler's own drain hard-cancels the
     executor, and the row finalizes ``cancelled`` — not stranded ``running``,
     not ``failed``."""
-    from src.gateway.api.workflow_tasks import handle_run, handle_stop
+    from openagent_core.gateway.api.workflow_tasks import handle_run, handle_stop
 
     sched, db, tmp_db = await _new_scheduler(ctx, "e2e")
     run_task = None
@@ -276,7 +276,7 @@ async def t_stop_wait_true(ctx: TestContext) -> None:
     """``wait`` defaults to True, so the default response must reflect what
     actually happened rather than the intent — same promise the scheduled-task
     endpoint makes."""
-    from src.gateway.api.workflow_tasks import handle_stop
+    from openagent_core.gateway.api.workflow_tasks import handle_stop
 
     sched, db, tmp_db = await _new_scheduler(ctx, "wait")
     run_task = drain = None
@@ -322,7 +322,7 @@ async def t_stop_wait_true(ctx: TestContext) -> None:
 
 @test("workflow_stop", "stopping an unknown workflow is 404; no scheduler is 503")
 async def t_unknown_and_no_scheduler(ctx: TestContext) -> None:
-    from src.gateway.api.workflow_tasks import handle_stop
+    from openagent_core.gateway.api.workflow_tasks import handle_stop
 
     sched, db, tmp_db = await _new_scheduler(ctx, "404")
     try:
@@ -352,7 +352,7 @@ async def t_nothing_to_stop(ctx: TestContext) -> None:
     invents a failure. The Stop button the app renders is at best one frame
     stale, so a benign race must not surface as an error dialog — this is the
     call ``/api/scheduled-tasks/{id}/stop`` already makes."""
-    from src.gateway.api.workflow_tasks import handle_stop
+    from openagent_core.gateway.api.workflow_tasks import handle_stop
 
     sched, db, tmp_db = await _new_scheduler(ctx, "noop")
     try:
@@ -411,7 +411,7 @@ async def t_nothing_to_stop(ctx: TestContext) -> None:
 async def t_cross_workflow_run_id(ctx: TestContext) -> None:
     """``run_id`` is caller-supplied, so the workflow in the path must actually
     constrain it — otherwise /api/workflows/{A}/stop could reach into B's run."""
-    from src.gateway.api.workflow_tasks import handle_stop
+    from openagent_core.gateway.api.workflow_tasks import handle_stop
 
     sched, db, tmp_db = await _new_scheduler(ctx, "cross")
     try:
@@ -436,9 +436,9 @@ async def t_rest_and_mcp_share_the_helper(ctx: TestContext) -> None:
     """Two requesters, one hand-off. If either grows its own copy of the SQL,
     the ``status='running'`` guard can drift on one side only — and that guard
     is what stops a settled run being rewritten as cancelled."""
-    import src.mcp.servers.workflow_manager.server as wf_server
-    from src.gateway.api import workflow_tasks
-    from src.workflow.cancel import flag_workflow_runs_cancelling
+    import openagent_core.mcp.servers.workflow_manager.server as wf_server
+    from openagent_core.gateway.api import workflow_tasks
+    from openagent_core.workflow.cancel import flag_workflow_runs_cancelling
 
     assert wf_server.flag_workflow_runs_cancelling is flag_workflow_runs_cancelling
 
@@ -500,7 +500,7 @@ async def t_settled_run_not_resurrected(ctx: TestContext) -> None:
     the UPDATE gets flagged anyway; the scheduler's drain then finds no live
     task and finalizes the *successful* run as ``cancelled``. History would
     record a lie, and the run screen would show a green run as stopped."""
-    from src.workflow.cancel import flag_workflow_runs_cancelling
+    from openagent_core.workflow.cancel import flag_workflow_runs_cancelling
 
     sched, db, tmp_db = await _new_scheduler(ctx, "race")
     try:

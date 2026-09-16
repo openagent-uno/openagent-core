@@ -9,8 +9,8 @@ from unittest.mock import patch
 from ._framework import TestContext, test
 from .test_local_support_controller import _Doubles, _drive
 from .test_local_support_controller import _Pool, _Toolkit
-from src.core import local_support_controller as controller
-from src.core.support_turn import delivery_state, missing_bug_fields, read_reported_turn
+from openagent_core.core import local_support_controller as controller
+from openagent_core.core.support_turn import delivery_state, missing_bug_fields, read_reported_turn
 
 
 @test("support_turn", "resolved latest message does not reopen an old bug questionnaire")
@@ -65,7 +65,7 @@ async def t_media_burst_latest_text(_ctx: TestContext) -> None:
 
 @test("support_turn", "unmarked support quote cannot turn thanks into another bug report")
 async def t_unmarked_support_echo(_ctx: TestContext) -> None:
-    from src.core.support_email import without_support_echo
+    from openagent_core.core.support_email import without_support_echo
     prior = "Folders hold playlists and albums, not individual songs. Put the songs into a playlist first, then move that playlist into the folder."
     thanks = "So many thanks!\nI will follow your instructions later.\nCheers"
     mail = thanks + "\n\n" + prior.replace(" ", " \n ")
@@ -222,7 +222,7 @@ async def t_unknown_send(_ctx: TestContext) -> None:
 
 @test("support_turn", "reader corrects a topic collision without authorizing account mutations")
 async def t_reader_route_and_scope(_ctx: TestContext) -> None:
-    from src.core.tool_scope import current_tool_allowlist
+    from openagent_core.core.tool_scope import current_tool_allowlist
     text = "Three downloaded songs disappeared from my library."
     seen = []
     class Model:
@@ -337,7 +337,7 @@ async def t_native_evidence_scope(_ctx: TestContext) -> None:
 
 @test("support_turn", "delivery diagnostics preserve only bounded operational labels")
 async def t_compact_delivery_receipt(_ctx: TestContext) -> None:
-    from src.core.support_delivery_receipts import summarize
+    from openagent_core.core.support_delivery_receipts import summarize
     actions=[{"kind":"customer_reply","success":False,"receipt":{"isError":True,"content":[{"type":"text","text":"HTTPException: 409: Thread changed; re-read thread_brief. private@example.test token=private-secret"}]}}]
     result=summarize(actions)
     assert result['state']=='failed' and result['http_status']==409
@@ -427,7 +427,7 @@ async def t_history_email_readonly(_ctx: TestContext) -> None:
 
 @test("support_turn", "human request negatives do not stop ordinary bot questions")
 async def t_human_request_negatives(_ctx: TestContext) -> None:
-    from src.core.support_turn import human_requested, repeated_reply
+    from openagent_core.core.support_turn import human_requested, repeated_reply
     assert human_requested("Bot don’t reply")
     assert human_requested("I want to talk to a real person")
     assert not human_requested("I don't want to talk to a human")
@@ -437,6 +437,6 @@ async def t_human_request_negatives(_ctx: TestContext) -> None:
 
 @test("support_turn", "next-step guidance is not a request for reproduction steps")
 async def t_next_step_is_not_question(_ctx: TestContext) -> None:
-    from src.core.support_turn import requested_fields
+    from openagent_core.core.support_turn import requested_fields
     assert "steps" not in requested_fields("Your best next step is to search the store to see what is available.")
     assert "steps" in requested_fields("Which steps did you take before the error?")

@@ -1,6 +1,6 @@
-from src.mcp.builtins import BUILTIN_MCP_SPECS
-from src.mcp.pool import MCPPool
-from src.mcp.tool_providers import (
+from openagent_core.mcp.builtins import BUILTIN_MCP_SPECS
+from openagent_core.mcp.pool import MCPPool
+from openagent_core.mcp.tool_providers import (
     InteractiveClientMCPProvider,
     ServerMCPProvider,
     ToolCatalogProvider,

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from src.models.providers.openai.responses import OpenAIResponses
+from openagent_core.models.providers.openai.responses import OpenAIResponses
 
 
 @dataclass

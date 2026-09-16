@@ -12,11 +12,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.mcp.servers.skills import handlers
+from openagent_core.mcp.servers.skills import handlers
 
 
 def build_runtime_toolkit() -> Any:
-    from src.mcp._runtime import Toolkit
+    from openagent_core.mcp._runtime import Toolkit
 
     async def skill_view(name: str) -> dict:
         """Load the FULL body of one skill by name. The system-prompt skills
@@ -61,10 +61,10 @@ def build_runtime_toolkit() -> Any:
     # With hub off the toolkit is byte-identical to the three-tool original —
     # the hub tools never enter the tool list, so the schema the model sees is
     # unchanged.
-    from src.core.config import load_config, skills_settings
+    from openagent_core.core.config import load_config, skills_settings
 
     if skills_settings(load_config()).hub_enabled:
-        from src.mcp.servers.skills import hub
+        from openagent_core.mcp.servers.skills import hub
 
         async def skill_hub_pull(tap: str, force: bool = False) -> dict:
             """Pull SKILL.md skills from a shared git *tap* into your skills

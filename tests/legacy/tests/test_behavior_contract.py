@@ -45,7 +45,7 @@ class _FakeResp:
 
 
 async def _tmp_db(ctx: TestContext, tag: str):
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
     path = ctx.db_path.with_name(f"contract-{tag}-{uuid.uuid4().hex[:8]}.db")
     db = MemoryDB(str(path))
     await db.connect()
@@ -216,7 +216,7 @@ async def t_unpin_drops_pin(ctx: TestContext) -> None:
 
 @test("contract", "runtime_id format — always 2-part provider:model (framework arg ignored)")
 async def t_runtime_id_format(ctx: TestContext) -> None:
-    from src.models.catalog import build_runtime_model_id
+    from openagent_core.models.catalog import build_runtime_model_id
 
     assert build_runtime_model_id("openai", "gpt-4o-mini", "api-based") == "openai:gpt-4o-mini"
     assert (

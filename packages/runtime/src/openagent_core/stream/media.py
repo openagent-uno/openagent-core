@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, field_validator, model_validator
 
-from src.core._runner.utils.log import log_error
+from openagent_core.core._runner.utils.log import log_error
 
 
 class Image(BaseModel):

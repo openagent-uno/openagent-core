@@ -78,7 +78,7 @@ class _FakeModel:
         on_status: Callable[[str], Awaitable[None]] | None = None,
         session_id: str | None = None,
     ):
-        from src.models.base import ModelResponse
+        from openagent_core.models.base import ModelResponse
         self.generate_calls += 1
         self.generate_session_ids.append(session_id)
         if self._generate_raises is not None:
@@ -98,7 +98,7 @@ async def _drive(agent, message: str, session_id: str = "sess-A") -> list[dict]:
 
 def _make_agent(model: _FakeModel):
     """Build a DB-less Agent so initialize() short-circuits."""
-    from src.core.agent import Agent
+    from openagent_core.core.agent import Agent
     return Agent(name="test-agent", model=model, system_prompt="test", memory=None)
 
 
@@ -374,7 +374,7 @@ class _SignatureFreeModel:
         tools: list[dict[str, Any]] | None = None,
         **_kwargs: Any,
     ):
-        from src.models.base import ModelResponse
+        from openagent_core.models.base import ModelResponse
         self.generate_calls += 1
         return ModelResponse(content="", model=self.model_name)
 
@@ -428,7 +428,7 @@ class _MidStreamTypeErrorModel:
         tools: list[dict[str, Any]] | None = None,
         **_kwargs: Any,
     ):
-        from src.models.base import ModelResponse
+        from openagent_core.models.base import ModelResponse
         self.generate_calls += 1
         return ModelResponse(content="GENERATE FALLBACK SHOULD NOT BE USED", model=self.model_name)
 
@@ -549,8 +549,8 @@ async def t_burst_no_freeze_on_swallowed_cancel(_ctx: TestContext) -> None:
     barge-in yielding zero deltas, and answers normally on the merged turn.
     """
     import asyncio
-    from src.stream.session import StreamSession
-    from src.stream.events import TextFinal, OutTextFinal, now_ms
+    from openagent_core.stream.session import StreamSession
+    from openagent_core.stream.events import TextFinal, OutTextFinal, now_ms
 
     class _SwallowModel(_FakeModel):
         async def stream(

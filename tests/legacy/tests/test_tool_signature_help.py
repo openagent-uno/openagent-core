@@ -28,7 +28,7 @@ async def _vault_search(query: str, limit: int = 20, kind: str = "note") -> dict
 
 @test("tool_signature_help", "argomento mancante -> nome, tipi ed esempio da copiare")
 async def test_missing_argument_is_explained(ctx: TestContext) -> None:
-    from src.mcp._runtime.function import signature_help
+    from openagent_core.mcp._runtime.function import signature_help
 
     try:
         _vault_search()  # type: ignore[call-arg]
@@ -42,7 +42,7 @@ async def test_missing_argument_is_explained(ctx: TestContext) -> None:
 
 @test("tool_signature_help", "argomento inventato -> spiegato allo stesso modo")
 async def test_unexpected_argument_is_explained(ctx: TestContext) -> None:
-    from src.mcp._runtime.function import signature_help
+    from openagent_core.mcp._runtime.function import signature_help
 
     try:
         _vault_search(query="x", filtro="non esiste")  # type: ignore[call-arg]
@@ -53,7 +53,7 @@ async def test_unexpected_argument_is_explained(ctx: TestContext) -> None:
 
 @test("tool_signature_help", "un errore VERO dello strumento non viene travestito")
 async def test_real_tool_error_is_untouched(ctx: TestContext) -> None:
-    from src.mcp._runtime.function import signature_help
+    from openagent_core.mcp._runtime.function import signature_help
 
     assert signature_help(_vault_search, "vault_search", ValueError("il vault non risponde")) is None
     assert signature_help(_vault_search, "vault_search", RuntimeError("timeout")) is None
@@ -63,6 +63,6 @@ async def test_real_tool_error_is_untouched(ctx: TestContext) -> None:
 
 @test("tool_signature_help", "una firma non ispezionabile non fa saltare nulla")
 async def test_uninspectable_entrypoint(ctx: TestContext) -> None:
-    from src.mcp._runtime.function import signature_help
+    from openagent_core.mcp._runtime.function import signature_help
 
     assert signature_help(print, "print", TypeError("missing 1 required positional argument: 'x'")) is None or True

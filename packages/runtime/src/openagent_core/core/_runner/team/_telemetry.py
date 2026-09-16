@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from src.core._runner.utils.log import log_debug
+from openagent_core.core._runner.utils.log import log_debug
 
 if TYPE_CHECKING:
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team.team import Team
 
 
 def get_team_data(team: "Team") -> Dict[str, Any]:
@@ -41,13 +41,13 @@ def get_telemetry_data(team: "Team") -> Dict[str, Any]:
 def log_team_telemetry(team: "Team", session_id: str, run_id: Optional[str] = None) -> None:
     """Send a telemetry event to the API for a created Team run"""
 
-    from src.core._runner.team._init import _set_telemetry
+    from openagent_core.core._runner.team._init import _set_telemetry
 
     _set_telemetry(team)
     if not team.telemetry:
         return
 
-    from src.core._runner._stubs import TeamRunCreate, create_team_run
+    from openagent_core.core._runner._stubs import TeamRunCreate, create_team_run
 
     try:
         create_team_run(
@@ -60,13 +60,13 @@ def log_team_telemetry(team: "Team", session_id: str, run_id: Optional[str] = No
 async def alog_team_telemetry(team: "Team", session_id: str, run_id: Optional[str] = None) -> None:
     """Send a telemetry event to the API for a created Team async run"""
 
-    from src.core._runner.team._init import _set_telemetry
+    from openagent_core.core._runner.team._init import _set_telemetry
 
     _set_telemetry(team)
     if not team.telemetry:
         return
 
-    from src.core._runner._stubs import TeamRunCreate, acreate_team_run
+    from openagent_core.core._runner._stubs import TeamRunCreate, acreate_team_run
 
     try:
         await acreate_team_run(run=TeamRunCreate(session_id=session_id, run_id=run_id, data=get_telemetry_data(team)))

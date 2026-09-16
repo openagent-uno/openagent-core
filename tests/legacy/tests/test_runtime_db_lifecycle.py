@@ -26,7 +26,7 @@ class _Runtime:
 
 @test("runtime_db_lifecycle", "team databases are closed once even when shared by members")
 async def t_close_tree_deduplicates(ctx: TestContext) -> None:
-    from src.models.runtime_db_lifecycle import close_runtime_databases
+    from openagent_core.models.runtime_db_lifecycle import close_runtime_databases
 
     shared = _Db()
     own = _Db()
@@ -38,7 +38,7 @@ async def t_close_tree_deduplicates(ctx: TestContext) -> None:
 
 @test("runtime_db_lifecycle", "LRU eviction disposes the removed runtime")
 async def t_native_eviction_closes(ctx: TestContext) -> None:
-    from src.models.native_provider import _evict_oldest
+    from openagent_core.models.native_provider import _evict_oldest
 
     old_db = _Db()
     keep_db = _Db()

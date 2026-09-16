@@ -24,7 +24,7 @@ from ._framework import TestContext, test
 
 @test("run_evidence", "successo senza una sola chiamata a tool viene nominato")
 async def t_zero_calls_is_flagged(ctx: TestContext) -> None:
-    from src.core.run_evidence import unevidenced_reason
+    from openagent_core.core.run_evidence import unevidenced_reason
 
     run = {"status": "COMPLETED", "messages": [
         {"role": "assistant", "content": "Fatto: ho controllato tutto.",
@@ -41,7 +41,7 @@ async def t_zero_calls_is_flagged(ctx: TestContext) -> None:
 
 @test("run_evidence", "un'esecuzione che ha lavorato non viene disturbata")
 async def t_real_work_is_silent(ctx: TestContext) -> None:
-    from src.core.run_evidence import count_tool_calls, unevidenced_reason
+    from openagent_core.core.run_evidence import count_tool_calls, unevidenced_reason
 
     run = {"messages": [
         {"role": "assistant", "tool_calls": [{"function": {"name": "logs_query"}}]},
@@ -56,7 +56,7 @@ async def t_real_work_is_silent(ctx: TestContext) -> None:
 
 @test("run_evidence", "zero e 'non lo so' non sono la stessa cosa")
 async def t_unknown_is_not_zero(ctx: TestContext) -> None:
-    from src.core.run_evidence import count_tool_calls, unevidenced_reason
+    from openagent_core.core.run_evidence import count_tool_calls, unevidenced_reason
 
     # Nessuna chiave nota: la forma del run e' cambiata, oppure non e' un run.
     # La risposta onesta e' None. Dire zero qui accuserebbe OGNI compito nello
@@ -75,7 +75,7 @@ async def t_unknown_is_not_zero(ctx: TestContext) -> None:
 
 @test("run_evidence", "un fallimento dichiarato e' gia' onesto: non si commenta")
 async def t_declared_failure_is_left_alone(ctx: TestContext) -> None:
-    from src.core.run_evidence import unevidenced_reason
+    from openagent_core.core.run_evidence import unevidenced_reason
 
     # Il difetto e' la BUGIA, non l'assenza di lavoro. Un'esecuzione che dice
     # di essere fallita sta gia' dicendo la verita', anche senza tool.
@@ -86,7 +86,7 @@ async def t_declared_failure_is_left_alone(ctx: TestContext) -> None:
 
 @test("run_evidence", "i tool contano ovunque siano annidati")
 async def t_counts_at_any_depth(ctx: TestContext) -> None:
-    from src.core.run_evidence import count_tool_calls
+    from openagent_core.core.run_evidence import count_tool_calls
 
     # I run salvati annidano diversamente a seconda del runtime; un conteggio
     # che guarda un solo livello direbbe zero su una struttura sana, che e' il
@@ -98,7 +98,7 @@ async def t_counts_at_any_depth(ctx: TestContext) -> None:
 
 @test("run_evidence", "il controllo non puo' rompere l'esecuzione che osserva")
 async def t_never_raises(ctx: TestContext) -> None:
-    from src.core.run_evidence import count_tool_calls
+    from openagent_core.core.run_evidence import count_tool_calls
 
     # Una struttura ciclica: un testimone che esplode sul caso strano
     # trasformerebbe un'esecuzione sana in un fallimento riportato.

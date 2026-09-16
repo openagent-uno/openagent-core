@@ -128,7 +128,7 @@ async def t_local_stt_real_audio(_ctx: TestContext) -> None:
         if not _make_wav_fixture(wav):
             raise TestSkip("cannot synthesise test audio (no `say` binary)")
 
-        from src.channels.voice import transcribe
+        from openagent_core.channels.voice import transcribe
         text = await asyncio.wait_for(
             transcribe(wav, db=None, language="en"),
             timeout=30.0,
@@ -154,7 +154,7 @@ async def t_local_stt_handles_telegram_ogg(_ctx: TestContext) -> None:
         if not _make_ogg_fixture(wav, ogg):
             raise TestSkip("cannot transcode to OGG (no ffmpeg)")
 
-        from src.channels.voice import transcribe
+        from openagent_core.channels.voice import transcribe
         text = await asyncio.wait_for(
             transcribe(ogg, db=None, language="en"),
             timeout=30.0,
@@ -176,8 +176,8 @@ async def t_bridge_fallback_with_dead_gateway(_ctx: TestContext) -> None:
     if not _faster_whisper_available():
         raise TestSkip("faster-whisper not installed in this env")
 
-    from src.bridges.base import VOICE_FALLBACK
-    from src.bridges.telegram import TelegramBridge
+    from openagent_core.bridges.base import VOICE_FALLBACK
+    from openagent_core.bridges.telegram import TelegramBridge
 
     with tempfile.TemporaryDirectory(prefix="oa_v_") as tmp:
         wav = str(Path(tmp) / "speech.wav")
@@ -228,7 +228,7 @@ async def t_gateway_stt_route_transcribes_upload(_ctx: TestContext) -> None:
         raise TestSkip("faster-whisper not installed in this env")
 
     from aiohttp import web, ClientSession, FormData, ClientTimeout
-    from src.gateway.server import Gateway
+    from openagent_core.gateway.server import Gateway
 
     with tempfile.TemporaryDirectory(prefix="oa_v_") as tmp:
         wav = str(Path(tmp) / "speech.wav")
@@ -296,7 +296,7 @@ async def t_telegram_voice_extract_calls_transcribe(_ctx: TestContext) -> None:
     if not _faster_whisper_available():
         raise TestSkip("faster-whisper not installed in this env")
 
-    from src.bridges.telegram import TelegramBridge
+    from openagent_core.bridges.telegram import TelegramBridge
 
     with tempfile.TemporaryDirectory(prefix="oa_v_") as tmp:
         wav = str(Path(tmp) / "speech.wav")

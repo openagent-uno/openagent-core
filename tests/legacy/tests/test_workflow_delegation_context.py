@@ -102,7 +102,7 @@ def _delegation_toolkit() -> _ToolkitStub:
     handler wrapper — so it reads the live contextvars exactly like the
     in-process MCP does. Lands in ``async_functions`` (async callable),
     which ``_h_mcp_tool`` merges and dispatches over."""
-    from src.mcp.servers.delegation import handlers
+    from openagent_core.mcp.servers.delegation import handlers
 
     async def delegate_task(model_id: str, task: str) -> dict:
         return await handlers.delegate_task(model_id=model_id, task=task)
@@ -144,7 +144,7 @@ def _delegating_workflow() -> dict:
     "executor.run installs a delegation context so delegate_task succeeds",
 )
 async def t_delegate_task_succeeds_in_workflow(ctx: TestContext) -> None:
-    from src.workflow.executor import WorkflowExecutor
+    from openagent_core.workflow.executor import WorkflowExecutor
 
     dispatcher = _StubDispatcher()
     db = _StubDB()
@@ -191,7 +191,7 @@ async def t_delegate_task_errors_without_context(ctx: TestContext) -> None:
     delegation context installed — must still hit the guard. This pins
     the cause: it is the missing context the executor now installs, not
     any change to how the block resolves the tool."""
-    from src.mcp.servers.delegation import handlers
+    from openagent_core.mcp.servers.delegation import handlers
 
     # No context installed in this scope (default contextvars → None).
     result = await handlers.delegate_task(
@@ -206,8 +206,8 @@ async def t_delegate_task_errors_without_context(ctx: TestContext) -> None:
     "executor.run resets the delegation context after the run (no leak)",
 )
 async def t_context_reset_after_run(ctx: TestContext) -> None:
-    from src.mcp.servers.delegation import handlers
-    from src.workflow.executor import WorkflowExecutor
+    from openagent_core.mcp.servers.delegation import handlers
+    from openagent_core.workflow.executor import WorkflowExecutor
 
     dispatcher = _StubDispatcher()
     db = _StubDB()

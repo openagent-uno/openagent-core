@@ -40,7 +40,7 @@ async def _seed_device_binding(db, handle: str, pubkey_hex: str) -> None:
 
 @test("sessions_cross_device", "list_all_sessions matches by handle")
 async def t_match_by_handle(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"xd-handle-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -66,7 +66,7 @@ async def t_exclude_delegation_children(ctx: TestContext) -> None:
     card (which uses ``list_child_sessions``, unaffected). Chats and other
     child origins (scheduler / workflow) stay visible. NULL-safe: a legacy
     chat row with no ``origin`` is always kept."""
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"xd-excl-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -110,8 +110,8 @@ async def t_exclude_all_child_origins(ctx: TestContext) -> None:
     scheduler + workflow), so a scheduled firing and a workflow node are hidden
     from the sidebar too — each navigable only from its run's execution screen.
     Only chat sessions (and legacy no-origin rows) remain in the flat list."""
-    from src.memory.db import MemoryDB
-    from src.core.child_session import HIDDEN_CHILD_ORIGINS
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.child_session import HIDDEN_CHILD_ORIGINS
 
     tmp_db = ctx.db_path.with_name(f"xd-excl-all-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -157,8 +157,8 @@ async def t_rest_sessions_live_flag_uses_gateway_active_state(ctx: TestContext) 
     state, not legacy attached-session RAM."""
     import json
     from aiohttp.test_utils import make_mocked_request
-    from src.gateway.api.sessions import handle_list
-    from src.memory.db import MemoryDB
+    from openagent_core.gateway.api.sessions import handle_list
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"xd-live-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -226,8 +226,8 @@ async def t_rest_child_sessions_are_acl_scoped(ctx: TestContext) -> None:
     """
     import json
     from aiohttp.test_utils import make_mocked_request
-    from src.gateway.api.sessions import handle_list
-    from src.memory.db import MemoryDB
+    from openagent_core.gateway.api.sessions import handle_list
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"xd-child-acl-{uuid.uuid4().hex[:8]}.db")
     db = MemoryDB(str(tmp_db))
@@ -373,8 +373,8 @@ async def t_legacy_session_endpoints_share_acl_boundary(ctx: TestContext) -> Non
     a caller-supplied identity.
     """
     import json
-    from src.gateway.api import sessions as api
-    from src.memory.db import MemoryDB
+    from openagent_core.gateway.api import sessions as api
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"xd-rest-acl-{uuid.uuid4().hex[:8]}.db")
     db = MemoryDB(str(tmp_db))
@@ -574,7 +574,7 @@ async def t_legacy_pubkey_via_devices(ctx: TestContext) -> None:
     user later pairs device B (so ``network_devices`` binds pubkey_B to
     handle_A). Listing by handle_A must surface that row even though
     its ``client_id`` is still the pubkey form."""
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"xd-legacy-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -614,7 +614,7 @@ async def t_device_id_preserved(ctx: TestContext) -> None:
     ``metadata.client_id`` AND the originating device in
     ``metadata.device_id`` so both pieces of routing information
     survive a process restart."""
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"xd-devid-{uuid.uuid4().hex[:8]}.db")
     try:

@@ -1,8 +1,8 @@
 from typing import Any, Dict, Optional
 
-from src.models.providers.response import ToolExecution
-from src.mcp._runtime.function import Function, FunctionCall
-from src.core._runner.utils.functions import get_function_call
+from openagent_core.models.providers.response import ToolExecution
+from openagent_core.mcp._runtime.function import Function, FunctionCall
+from openagent_core.core._runner.utils.functions import get_function_call
 
 
 def get_function_call_for_tool_call(

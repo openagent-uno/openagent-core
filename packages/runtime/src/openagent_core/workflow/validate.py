@@ -21,7 +21,7 @@ from __future__ import annotations
 import difflib
 from typing import Any
 
-from src.workflow.blocks import BLOCK_CATALOG, BlockSpec
+from openagent_core.workflow.blocks import BLOCK_CATALOG, BlockSpec
 
 
 def _safe_prefix(name: str) -> str:

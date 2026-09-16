@@ -27,7 +27,7 @@ class ArtifactAclMigrationError(RuntimeError):
 
 
 def migration_sql() -> str:
-    return files("src.memory.operational.sql").joinpath("artifact_acl_v1.sql").read_text(
+    return files("openagent_core.memory.operational.sql").joinpath("artifact_acl_v1.sql").read_text(
         encoding="utf-8"
     )
 

@@ -22,7 +22,7 @@ from ._framework import TestContext, test
 
 
 def _run(deltas: list[str]) -> tuple[str, str]:
-    from src.core._runner.utils.think_stream import ThinkStreamScrubber
+    from openagent_core.core._runner.utils.think_stream import ThinkStreamScrubber
 
     s = ThinkStreamScrubber()
     shown = "".join(s.feed(d) for d in deltas)
@@ -96,7 +96,7 @@ async def t_flush_emits_real_text(ctx: TestContext) -> None:
     # Il flusso finisce con qualcosa che POTEVA diventare un tag e non lo e'
     # diventato. E' testo vero e non va perso: senza il flush la risposta
     # perderebbe la sua ultima parola.
-    from src.core._runner.utils.think_stream import ThinkStreamScrubber
+    from openagent_core.core._runner.utils.think_stream import ThinkStreamScrubber
 
     s = ThinkStreamScrubber()
     assert s.feed("risposta finita <") == "risposta finita "
@@ -114,7 +114,7 @@ async def t_flush_emits_real_text(ctx: TestContext) -> None:
 
 @test("think_stream", "lo stato non sopravvive al turno")
 async def t_state_is_per_stream(ctx: TestContext) -> None:
-    from src.core._runner.utils.think_stream import ThinkStreamScrubber
+    from openagent_core.core._runner.utils.think_stream import ThinkStreamScrubber
 
     # Uno scrubber lasciato dentro un blocco non deve poter zittire la
     # risposta successiva: se ne crea uno per flusso, ed e' la ragione per cui
@@ -130,7 +130,7 @@ async def t_state_is_per_stream(ctx: TestContext) -> None:
 
 @test("think_stream", "non e' un tag solo: la famiglia intera")
 async def t_the_whole_tag_family(ctx: TestContext) -> None:
-    from src.core._runner.utils.think_stream import TAG_NAMES
+    from openagent_core.core._runner.utils.think_stream import TAG_NAMES
 
     # Coprire <think> e dire "fatto" lascia passare gli altri, e i modelli li
     # usano davvero: <thinking> e <reasoning> sono comuni quanto <think>.
@@ -147,8 +147,8 @@ async def t_the_whole_tag_family(ctx: TestContext) -> None:
 
 @test("think_stream", "il parser dei delta esce pulito, e senza scrubber non cambia niente")
 async def t_wired_into_the_delta_parser(ctx: TestContext) -> None:
-    from src.core._runner.utils.think_stream import ThinkStreamScrubber
-    from src.models.providers.openai.chat import OpenAIChat
+    from openagent_core.core._runner.utils.think_stream import ThinkStreamScrubber
+    from openagent_core.models.providers.openai.chat import OpenAIChat
 
     class _Delta:
         def __init__(self, content):

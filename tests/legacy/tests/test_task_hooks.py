@@ -22,7 +22,7 @@ class _FakeScheduler:
 
 @test("task_hooks", "re-installing a hook does not stack (no duplicate firing)")
 async def t_no_stacking(ctx: TestContext) -> None:
-    from src.core.server import AgentServer
+    from openagent_core.core.server import AgentServer
 
     sched = _FakeScheduler()
     fired = {"n": 0}
@@ -42,7 +42,7 @@ async def t_no_stacking(ctx: TestContext) -> None:
 
 @test("task_hooks", "the dispatcher forwards the trigger kwarg to the real run_task")
 async def t_trigger_forwarded(ctx: TestContext) -> None:
-    from src.core.server import AgentServer
+    from openagent_core.core.server import AgentServer
 
     sched = _FakeScheduler()
 
@@ -58,7 +58,7 @@ async def t_trigger_forwarded(ctx: TestContext) -> None:
 
 @test("task_hooks", "passing hook=None removes a previously-installed hook")
 async def t_removable(ctx: TestContext) -> None:
-    from src.core.server import AgentServer
+    from openagent_core.core.server import AgentServer
 
     sched = _FakeScheduler()
     fired = {"n": 0}
@@ -78,7 +78,7 @@ async def t_removable(ctx: TestContext) -> None:
 
 @test("task_hooks", "multiple distinct hooks each fire for their own task")
 async def t_multiple_hooks(ctx: TestContext) -> None:
-    from src.core.server import AgentServer
+    from openagent_core.core.server import AgentServer
 
     sched = _FakeScheduler()
     fired = {"a": 0, "b": 0}

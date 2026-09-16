@@ -10,7 +10,7 @@ from ._framework import TestContext, test
 
 
 def _access(tenant: str, handle: str):
-    from src.memory.operational.access import AccessContext
+    from openagent_core.memory.operational.access import AccessContext
 
     principal = f"user:{handle}"
     return AccessContext(
@@ -75,8 +75,8 @@ async def _seed_message(
 
 @test("message_parts", "checksummed ordered-parts migration is additive and idempotent")
 async def t_message_parts_migration(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.memory.message_parts_migration import (
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.message_parts_migration import (
         MIGRATION_ID,
         ensure_message_parts_storage,
         migration_checksum,
@@ -110,8 +110,8 @@ async def t_message_parts_migration(ctx: TestContext) -> None:
 
 @test("message_parts", "failed ordered-parts DDL rolls back atomically")
 async def t_message_parts_migration_rollback(ctx: TestContext) -> None:
-    import src.memory.message_parts_migration as migration
-    from src.memory.db import MemoryDB
+    import openagent_core.memory.message_parts_migration as migration
+    from openagent_core.memory.db import MemoryDB
 
     with tempfile.TemporaryDirectory(prefix="oa-message-parts-rollback-") as raw:
         db = MemoryDB(str(Path(raw) / "agent.db"))
@@ -164,10 +164,10 @@ async def t_message_parts_migration_rollback(ctx: TestContext) -> None:
 
 @test("message_parts", "mixed text, attachment, and View order survives delayed projection")
 async def t_message_parts_projection_and_hydration(ctx: TestContext) -> None:
-    from src.custom_views.repository import CustomViewRepository
-    from src.memory.artifacts import persist_output_attachments
-    from src.memory.db import MemoryDB
-    from src.memory.message_parts import (
+    from openagent_core.custom_views.repository import CustomViewRepository
+    from openagent_core.memory.artifacts import persist_output_attachments
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.message_parts import (
         canonical_parts_for_messages_on_connection,
         persist_parts_for_latest_message,
     )
@@ -283,10 +283,10 @@ async def t_message_parts_projection_and_hydration(ctx: TestContext) -> None:
 
 @test("message_parts", "canonical parts are insert-once and retries cannot leave new links")
 async def t_message_parts_are_immutable(ctx: TestContext) -> None:
-    from src.custom_views.repository import CustomViewRepository
-    from src.memory.artifacts import persist_output_attachments
-    from src.memory.db import MemoryDB
-    from src.memory.message_parts import MessagePartsError, persist_parts_for_latest_message
+    from openagent_core.custom_views.repository import CustomViewRepository
+    from openagent_core.memory.artifacts import persist_output_attachments
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.message_parts import MessagePartsError, persist_parts_for_latest_message
 
     with tempfile.TemporaryDirectory(prefix="oa-message-parts-immutable-") as raw:
         root = Path(raw)

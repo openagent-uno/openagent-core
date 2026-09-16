@@ -22,7 +22,7 @@ from ._framework import TestContext, test
 
 @test("task_runs", "add/update/get round-trips a task run")
 async def t_add_update_get(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskruns-crud-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -60,7 +60,7 @@ async def t_add_update_get(ctx: TestContext) -> None:
 
 @test("task_runs", "list returns newest-first, honours limit + status filter")
 async def t_list(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskruns-list-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -97,7 +97,7 @@ async def t_list(ctx: TestContext) -> None:
 async def t_requeue_interrupted(ctx: TestContext) -> None:
     """A restart kills the firing; the reap settles the row. The work still
     owes, so the task is re-enqueued through the same path a manual run uses."""
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskruns-requeue-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -128,7 +128,7 @@ async def t_requeue_stops_after_second_kill(ctx: TestContext) -> None:
     """If the run before the reaped one was ALSO reaped, we already retried and
     got killed again — the likeliest cause is this task taking the process
     down, so it is left for a human instead of looping."""
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskruns-loop-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -164,7 +164,7 @@ async def t_requeue_ignores_historical_reaps(ctx: TestContext) -> None:
     run another process already settled.  This is the production shape that
     turned every eSound/Lyra restart into a scheduled-task stampede.
     """
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskruns-history-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -192,7 +192,7 @@ async def t_requeue_ignores_historical_reaps(ctx: TestContext) -> None:
 
 @test("task_runs", "a disabled task is not resurrected by the requeue")
 async def t_requeue_skips_disabled(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskruns-disabled-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -216,7 +216,7 @@ async def t_requeue_skips_disabled(ctx: TestContext) -> None:
 
 @test("task_runs", "reap flips orphaned running rows to failed")
 async def t_reap(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskruns-reap-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -248,7 +248,7 @@ async def t_reap(ctx: TestContext) -> None:
 
 @test("task_runs", "prune keeps only the most recent N runs")
 async def t_prune(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskruns-prune-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -273,7 +273,7 @@ async def t_prune(ctx: TestContext) -> None:
 
 @test("task_runs", "deleting a task cascades its runs away")
 async def t_cascade(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskruns-cascade-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -296,7 +296,7 @@ async def t_cascade(ctx: TestContext) -> None:
 
 @test("task_runs", "due-task claim advances schedule and opens run atomically")
 async def t_atomic_due_claim(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskruns-claim-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -346,7 +346,7 @@ async def t_atomic_due_claim(ctx: TestContext) -> None:
 
 @test("task_runs", "failed run insert rolls the schedule claim back")
 async def t_atomic_due_claim_rollback(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskruns-rollback-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -417,8 +417,8 @@ async def t_scheduler_due_claim_precedes_execution(ctx: TestContext) -> None:
     import asyncio
     import os
 
-    from src.core.scheduler import Scheduler
-    from src.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskruns-due-{uuid.uuid4().hex[:8]}.db")
     previous = os.environ.get("OPENAGENT_SCHEDULER_DURABLE_SESSIONS")
@@ -461,8 +461,8 @@ async def t_scheduler_due_claim_precedes_execution(ctx: TestContext) -> None:
 
 @test("task_runs", "run_task records a success run with the output preview")
 async def t_scheduler_records_success(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
-    from src.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskruns-sched-ok-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -490,8 +490,8 @@ async def t_scheduler_records_success(ctx: TestContext) -> None:
 
 @test("task_runs", "run_task records a failed run with the error")
 async def t_scheduler_records_failure(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
-    from src.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskruns-sched-err-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -525,8 +525,8 @@ async def t_scheduler_records_failure(ctx: TestContext) -> None:
 
 @test("task_runs", "run_task fails when the durable child session stores runtime ERROR")
 async def t_scheduler_records_child_runtime_error(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
-    from src.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskruns-child-error-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -582,7 +582,7 @@ async def t_scheduler_records_child_runtime_error(ctx: TestContext) -> None:
 
 @test("task_runs", "run_task is a no-op recorder when constructed without a db")
 async def t_scheduler_no_db(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
+    from openagent_core.core.scheduler import Scheduler
 
     # db=None is how the headless / unit-test scheduler is built; the
     # recording must simply skip rather than AttributeError.
@@ -596,7 +596,7 @@ async def t_scheduler_no_db(ctx: TestContext) -> None:
 
 @test("task_runs", "task run requests: claim is atomic + one-shot, links a run_id")
 async def t_run_request_db(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskreq-db-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -626,7 +626,7 @@ async def t_run_request_db(ctx: TestContext) -> None:
 
 @test("task_runs", "run request claim cascades away with its task")
 async def t_run_request_cascade(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskreq-cascade-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -648,7 +648,7 @@ async def t_run_request_cascade(ctx: TestContext) -> None:
 
 @test("task_runs", "flag_task_runs_cancelling flags running firings, no-ops when idle")
 async def t_flag_cancelling(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskstop-flag-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -681,7 +681,7 @@ async def t_flag_cancelling(ctx: TestContext) -> None:
 
 @test("task_runs", "running_task_ids reports tasks with an in-flight firing")
 async def t_running_ids(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskstop-running-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -709,8 +709,8 @@ async def t_running_ids(ctx: TestContext) -> None:
 
 @test("task_runs", "stop drain finalizes an orphan cancelling firing as cancelled")
 async def t_stop_orphan_drain(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
-    from src.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskstop-orphan-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -744,8 +744,8 @@ async def t_stop_orphan_drain(ctx: TestContext) -> None:
 async def t_drain_run_request(ctx: TestContext) -> None:
     import asyncio
 
-    from src.core.scheduler import Scheduler
-    from src.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"taskreq-drain-{uuid.uuid4().hex[:8]}.db")
     try:

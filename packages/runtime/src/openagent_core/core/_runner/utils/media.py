@@ -7,8 +7,8 @@ from typing import List, Optional, Union
 
 import httpx
 
-from src.stream.media import Audio, File, Image, Video
-from src.core._runner.utils.log import log_info, log_warning
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.core._runner.utils.log import log_info, log_warning
 
 # Ensure .webp is recognized on all platforms
 mimetypes.add_type("image/webp", ".webp")

@@ -34,7 +34,7 @@ class _DyingAgent:
 
     async def run(self, *, message, user_id, session_id, model_override=None,
                   author=None, on_status=None):
-        from src.core.agent import _format_run_error
+        from openagent_core.core.agent import _format_run_error
         self.prompts.append(message)
         return _format_run_error(self.exc)
 
@@ -44,7 +44,7 @@ class _DyingAgent:
 
 @test("event_failed_turn", "_format_run_error lascia il marcatore, e si legge una volta sola")
 async def t_marker_is_set_and_consumed(_ctx: TestContext) -> None:
-    from src.core.agent import _format_run_error, clear_run_failure, take_run_failure
+    from openagent_core.core.agent import _format_run_error, clear_run_failure, take_run_failure
 
     clear_run_failure()
     assert take_run_failure() is None
@@ -60,10 +60,10 @@ async def t_marker_is_set_and_consumed(_ctx: TestContext) -> None:
 @test("event_failed_turn", "una delivery il cui turno e' morto viene chiusa failed, col motivo")
 async def t_dead_turn_marks_delivery_failed(ctx: TestContext) -> None:
     import os
-    from src.memory.db import MemoryDB
-    from src.core.scheduler import Scheduler
-    from src.core.event_dispatcher import dispatch_event
-    from src.core.event_secret import make_secret_material
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.core.event_dispatcher import dispatch_event
+    from openagent_core.core.event_secret import make_secret_material
 
     os.environ.pop("OPENAGENT_SCHEDULER_DURABLE_SESSIONS", None)
     db = MemoryDB(str(ctx.db_path))
@@ -97,10 +97,10 @@ async def t_dead_turn_marks_delivery_failed(ctx: TestContext) -> None:
 @test("event_failed_turn", "un turno che risponde davvero resta success")
 async def t_healthy_turn_stays_success(ctx: TestContext) -> None:
     import os
-    from src.memory.db import MemoryDB
-    from src.core.scheduler import Scheduler
-    from src.core.event_dispatcher import dispatch_event
-    from src.core.event_secret import make_secret_material
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.core.event_dispatcher import dispatch_event
+    from openagent_core.core.event_secret import make_secret_material
 
     class _HealthyAgent(_DyingAgent):
         async def run(self, *, message, user_id, session_id, model_override=None,
@@ -135,10 +135,10 @@ async def t_healthy_turn_stays_success(ctx: TestContext) -> None:
 @test("event_failed_turn", "una morte per mancanza di capacita' viene marcata ritentabile e ripescata")
 async def t_transient_failure_is_reenqueued(ctx: TestContext) -> None:
     import os
-    from src.memory.db import MemoryDB
-    from src.core.scheduler import Scheduler
-    from src.core.event_dispatcher import dispatch_event
-    from src.core.event_secret import make_secret_material
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.core.event_dispatcher import dispatch_event
+    from openagent_core.core.event_secret import make_secret_material
 
     os.environ.pop("OPENAGENT_SCHEDULER_DURABLE_SESSIONS", None)
     db = MemoryDB(str(ctx.db_path))
@@ -176,10 +176,10 @@ async def t_transient_failure_is_reenqueued(ctx: TestContext) -> None:
 @test("event_failed_turn", "un guasto permanente NON viene ripescato")
 async def t_permanent_failure_stays_terminal(ctx: TestContext) -> None:
     import os
-    from src.memory.db import MemoryDB
-    from src.core.scheduler import Scheduler
-    from src.core.event_dispatcher import dispatch_event
-    from src.core.event_secret import make_secret_material
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.core.event_dispatcher import dispatch_event
+    from openagent_core.core.event_secret import make_secret_material
 
     os.environ.pop("OPENAGENT_SCHEDULER_DURABLE_SESSIONS", None)
     db = MemoryDB(str(ctx.db_path))
@@ -214,10 +214,10 @@ async def t_permanent_failure_stays_terminal(ctx: TestContext) -> None:
 async def t_stale_sweep_retries_transient(ctx: TestContext) -> None:
     import os
     import time
-    from src.memory.db import MemoryDB
-    from src.core.scheduler import Scheduler
-    from src.core.event_dispatcher import dispatch_event
-    from src.core.event_secret import make_secret_material
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.core.event_dispatcher import dispatch_event
+    from openagent_core.core.event_secret import make_secret_material
 
     os.environ.pop("OPENAGENT_SCHEDULER_DURABLE_SESSIONS", None)
     db = MemoryDB(str(ctx.db_path))
@@ -261,8 +261,8 @@ async def t_stale_sweep_retries_transient(ctx: TestContext) -> None:
 @test("event_failed_turn", "il tetto dei tentativi vale anche per il ripescaggio")
 async def t_retry_budget_is_respected(ctx: TestContext) -> None:
     import time
-    from src.memory.db import MemoryDB
-    from src.core.event_secret import make_secret_material
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.event_secret import make_secret_material
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -292,7 +292,7 @@ async def t_retry_budget_is_respected(ctx: TestContext) -> None:
 async def t_text_updated_at_does_not_break_hydration(ctx: TestContext) -> None:
     import time
     import uuid
-    from src.memory.db import MemoryDB, _as_epoch
+    from openagent_core.memory.db import MemoryDB, _as_epoch
 
     # Il 24-ago-2026 un `update models set updated_at=datetime('now')` fatto a
     # mano ha scritto TEXT dove tutto il resto e' REAL. In SQLite il testo ordina

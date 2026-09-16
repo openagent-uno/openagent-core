@@ -10,10 +10,10 @@ node — because they are all ordinary rows in the ``sessions`` table
 
 Everything here is *reused*, not reinvented:
 
-* token counting → :mod:`src.core._runner.utils.tokens`
+* token counting → :mod:`openagent_core.core._runner.utils.tokens`
   (``count_text_tokens`` / ``count_tool_tokens``), the same tokenizer the
   providers use internally;
-* conversation-history measurement → :mod:`src.core.compaction`'s
+* conversation-history measurement → :mod:`openagent_core.core.compaction`'s
   ``_load_runs`` / ``_extract_run_text`` — literally the loop
   ``should_compact`` already runs, so the "Messages" section agrees with
   the compaction trigger;
@@ -21,12 +21,12 @@ Everything here is *reused*, not reinvented:
   exact two-layer framework+persona prompt (vision §15);
 * the MCP-catalog footprint → :func:`build_mcp_catalog_summary`, the block
   substituted into that prompt;
-* pricing + context-window size → :mod:`src.models.catalog`
+* pricing + context-window size → :mod:`openagent_core.models.catalog`
   (``get_model_pricing`` / ``get_model_context_window``), OpenRouter-backed
   so it works for *any* configured provider;
 * cumulative session usage (cost, output tokens, cache) → the persisted
   ``sessions.session_data['session_metrics']`` the runtime already
-  maintains (:class:`src.core.metrics.SessionMetrics`).
+  maintains (:class:`openagent_core.core.metrics.SessionMetrics`).
 
 The single public entry point, :func:`build_context_report`, returns a
 JSON-friendly dict — the shared wire contract rendered by the desktop/mobile
@@ -41,12 +41,12 @@ import json
 import sqlite3
 from typing import Any
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 # Reuse compaction's session I/O + token estimation verbatim so the
 # "Messages" section and the compaction trigger measure the conversation
 # the same way, and the DB path resolution matches the runtime's.
-from src.core.compaction import (
+from openagent_core.core.compaction import (
     _estimate_text_tokens,
     _extract_run_text,
     _load_runs,
@@ -103,7 +103,7 @@ def _resolve_runtime_id(agent: Any, runs: list[dict[str, Any]], session_id: str 
     historical / child session), then the live dispatcher's
     ``effective_model_id(session_id)``, then the agent's own model id.
     """
-    from src.models.catalog import build_runtime_model_id
+    from openagent_core.models.catalog import build_runtime_model_id
 
     for run in reversed(runs):
         model = run.get("model")
@@ -149,7 +149,7 @@ def build_context_report(agent: Any, session_id: str | None) -> dict[str, Any] |
 
     runtime_id = _resolve_runtime_id(agent, runs, session_id)
 
-    from src.models.catalog import (
+    from openagent_core.models.catalog import (
         get_model_context_window,
         get_model_pricing,
         model_id_from_runtime,
@@ -159,7 +159,7 @@ def build_context_report(agent: Any, session_id: str | None) -> dict[str, Any] |
     window, window_source = get_model_context_window(runtime_id)
 
     # ── Section token counts (estimates via the shared tokenizer) ──────
-    from src.core._runner.utils.tokens import count_text_tokens
+    from openagent_core.core._runner.utils.tokens import count_text_tokens
 
     # System prompt = the two-layer framework+persona string, minus the
     # MCP catalog block (counted under Tools & MCP below). Reuses the exact
@@ -169,7 +169,7 @@ def build_context_report(agent: Any, session_id: str | None) -> dict[str, Any] |
     try:
         catalog_text = ""
         try:
-            from src.core.prompts import build_mcp_catalog_summary
+            from openagent_core.core.prompts import build_mcp_catalog_summary
 
             catalog_text = build_mcp_catalog_summary(getattr(agent, "_mcp", None))
         except Exception:  # noqa: BLE001
@@ -270,7 +270,7 @@ def build_context_report(agent: Any, session_id: str | None) -> dict[str, Any] |
 def _tool_search_schema_tokens(agent: Any, tokenizer_id: str) -> int:
     """Tokens of the upfront tool-search meta-tool schemas (best-effort)."""
     try:
-        from src.core._runner.utils.tokens import count_tool_tokens
+        from openagent_core.core._runner.utils.tokens import count_tool_tokens
 
         pool = getattr(agent, "_mcp", None)
         if pool is None:

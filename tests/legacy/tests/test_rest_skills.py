@@ -40,7 +40,7 @@ class _FakeRequest:
 
 
 def _api():
-    from src.gateway.api import skills as api
+    from openagent_core.gateway.api import skills as api
 
     return api
 

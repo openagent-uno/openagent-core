@@ -16,9 +16,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.core.on_behalf_context import current_on_behalf_identity
-from src.memory.operational.access import AccessContext
-from src.memory.operational.service import (
+from openagent_core.core.on_behalf_context import current_on_behalf_identity
+from openagent_core.memory.operational.access import AccessContext
+from openagent_core.memory.operational.service import (
     OperationalSearchInputError,
     OperationalSearchService,
     SUPPORTED_SCOPES,
@@ -32,7 +32,7 @@ _DEFAULT_LIMIT = 5
 def build_runtime_toolkit(pool: Any) -> Any:
     """Build the runtime toolkit around the pool's canonical database."""
 
-    from src.mcp._runtime import Toolkit
+    from openagent_core.mcp._runtime import Toolkit
 
     service = OperationalSearchService(getattr(pool, "_db", None))
 

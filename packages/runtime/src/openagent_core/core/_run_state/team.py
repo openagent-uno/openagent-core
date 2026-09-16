@@ -5,16 +5,16 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 
 from pydantic import BaseModel
 
-from src.stream.media import Audio, File, Image, Video
-from src.models.providers.message import Citations, Message
-from src.models.providers.metrics import RunMetrics
-from src.models.providers.response import ToolExecution
-from src.core._runner._stubs import ReasoningStep
-from src.core._run_state.agent import RunEvent, RunOutput, RunOutputEvent, run_output_event_from_dict
-from src.core._run_state.base import BaseRunOutputEvent, MessageReferences, RunStatus
-from src.core._run_state.requirement import RunRequirement
-from src.core._runner.utils.log import log_error
-from src.core._runner.utils.media import (
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.models.providers.message import Citations, Message
+from openagent_core.models.providers.metrics import RunMetrics
+from openagent_core.models.providers.response import ToolExecution
+from openagent_core.core._runner._stubs import ReasoningStep
+from openagent_core.core._run_state.agent import RunEvent, RunOutput, RunOutputEvent, run_output_event_from_dict
+from openagent_core.core._run_state.base import BaseRunOutputEvent, MessageReferences, RunStatus
+from openagent_core.core._run_state.requirement import RunRequirement
+from openagent_core.core._runner.utils.log import log_error
+from openagent_core.core._runner.utils.media import (
     reconstruct_audio_list,
     reconstruct_files,
     reconstruct_images,
@@ -916,7 +916,7 @@ class TeamRunOutput:
         for event in events or []:
             if "agent_id" in event:
                 # Use the factory from response.py for agent events
-                from src.core._run_state.agent import run_output_event_from_dict
+                from openagent_core.core._run_state.agent import run_output_event_from_dict
 
                 event = run_output_event_from_dict(event)
             else:

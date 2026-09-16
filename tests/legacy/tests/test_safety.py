@@ -7,7 +7,7 @@ blocked destructive commands and the operator's post-incident notes recorded
 enabling it as a mitigation. Zero tests referenced it, so nothing caught it.
 
 So these tests drive ``handlers.shell_exec`` — the real callsite — rather than
-asserting things about ``src.core.safety`` in isolation. A test that only
+asserting things about ``openagent_core.core.safety`` in isolation. A test that only
 proves ``check_command_allowed`` matches a regex would have passed just as
 happily in the years the function was never called. (Cf. ``test_vault_reminder``,
 which asserted "on by default" for a feature its only callsite defaulted off.)
@@ -53,7 +53,7 @@ def _safety_env(**vars: str | None):
 
 
 def _reset_shell_hub() -> None:
-    from src.mcp.servers.shell import handlers
+    from openagent_core.mcp.servers.shell import handlers
     handlers._reset_hub_for_tests()
 
 
@@ -73,7 +73,7 @@ async def t_off_by_default_still_runs(ctx: TestContext) -> None:
     in, which is exactly the "live outage on someone's nightly cron" this was
     designed to avoid.
     """
-    from src.mcp.servers.shell import handlers
+    from openagent_core.mcp.servers.shell import handlers
 
     _reset_shell_hub()
     with _safety_env(
@@ -92,7 +92,7 @@ async def t_off_by_default_still_runs(ctx: TestContext) -> None:
 @test("safety", "OFF explicitly (enabled: false): a blocklisted command still runs")
 async def t_off_explicit_still_runs(ctx: TestContext) -> None:
     """``safety.approvals.enabled: false`` exports "0" — must behave as unset."""
-    from src.mcp.servers.shell import handlers
+    from openagent_core.mcp.servers.shell import handlers
 
     _reset_shell_hub()
     with _safety_env(OPENAGENT_SAFETY_APPROVALS="0"):
@@ -110,7 +110,7 @@ async def t_off_extras_inert(ctx: TestContext) -> None:
     in. Arming on the presence of extras would be a behaviour change for any
     config that carries the commented example stanza.
     """
-    from src.mcp.servers.shell import handlers
+    from openagent_core.mcp.servers.shell import handlers
 
     _reset_shell_hub()
     with _safety_env(
@@ -129,7 +129,7 @@ async def t_off_unrecognised_value(ctx: TestContext) -> None:
     blocklist on a running deployment — the failure mode we can tolerate is
     "the guard I asked for isn't on", not "commands my agent needs are now
     refused at 3am"."""
-    from src.mcp.servers.shell import handlers
+    from openagent_core.mcp.servers.shell import handlers
 
     _reset_shell_hub()
     with _safety_env(OPENAGENT_SAFETY_APPROVALS="ture"):  # typo for "true"
@@ -144,8 +144,8 @@ async def t_off_unrecognised_value(ctx: TestContext) -> None:
 
 @test("safety", "ON: shell_exec refuses a blocklisted command and spawns nothing")
 async def t_on_blocks_foreground(ctx: TestContext) -> None:
-    from src.core.safety import BlockedCommandError
-    from src.mcp.servers.shell import handlers
+    from openagent_core.core.safety import BlockedCommandError
+    from openagent_core.mcp.servers.shell import handlers
 
     _reset_shell_hub()
     with _safety_env(OPENAGENT_SAFETY_APPROVALS="1", OPENAGENT_SAFETY_BLOCK_EXTRA_PATTERNS=None):
@@ -161,7 +161,7 @@ async def t_on_blocks_foreground(ctx: TestContext) -> None:
 @test("safety", "ON: a benign command is untouched")
 async def t_on_allows_benign(ctx: TestContext) -> None:
     """The blocklist must not become a general-purpose brake."""
-    from src.mcp.servers.shell import handlers
+    from openagent_core.mcp.servers.shell import handlers
 
     _reset_shell_hub()
     with _safety_env(OPENAGENT_SAFETY_APPROVALS="1"):
@@ -179,8 +179,8 @@ async def t_on_blocks_background(ctx: TestContext) -> None:
     ``run_in_background=True``, so assert the block lands before spawn AND that
     no shell got registered in the hub.
     """
-    from src.core.safety import BlockedCommandError
-    from src.mcp.servers.shell import handlers
+    from openagent_core.core.safety import BlockedCommandError
+    from openagent_core.mcp.servers.shell import handlers
 
     _reset_shell_hub()
     with _safety_env(OPENAGENT_SAFETY_APPROVALS="1"):
@@ -200,8 +200,8 @@ async def t_on_blocks_background(ctx: TestContext) -> None:
 @test("safety", "ON: block_extra_patterns from config extend the built-in list")
 async def t_on_extra_patterns(ctx: TestContext) -> None:
     """The documented extension point — the yaml's example is terraform."""
-    from src.core.safety import BlockedCommandError
-    from src.mcp.servers.shell import handlers
+    from openagent_core.core.safety import BlockedCommandError
+    from openagent_core.mcp.servers.shell import handlers
 
     _reset_shell_hub()
     with _safety_env(
@@ -227,8 +227,8 @@ async def t_on_extra_patterns(ctx: TestContext) -> None:
 @test("safety", "ON: an unparseable extra pattern is dropped, not fatal")
 async def t_on_bad_extra_pattern(ctx: TestContext) -> None:
     """A typo'd regex must not take the agent down at its first shell call."""
-    from src.core.safety import BlockedCommandError
-    from src.mcp.servers.shell import handlers
+    from openagent_core.core.safety import BlockedCommandError
+    from openagent_core.mcp.servers.shell import handlers
 
     _reset_shell_hub()
     with _safety_env(
@@ -255,8 +255,8 @@ async def t_on_covers_retired_list(ctx: TestContext) -> None:
     substring-based, so this proves the pattern fires without running anything
     destructive if the gate were ever to regress open.
     """
-    from src.core.safety import BlockedCommandError
-    from src.mcp.servers.shell import handlers
+    from openagent_core.core.safety import BlockedCommandError
+    from openagent_core.mcp.servers.shell import handlers
 
     probes = [
         "echo rm -rf /",
@@ -399,7 +399,7 @@ async def t_allow_pattern_exempts(ctx: TestContext) -> None:
     """
     import os
 
-    from src.core import safety
+    from openagent_core.core import safety
 
     safety._compile.cache_clear()
     safety._compile_allow.cache_clear()
@@ -456,7 +456,7 @@ async def t_allow_pattern_inert_when_off(ctx: TestContext) -> None:
     """
     import os
 
-    from src.core import safety
+    from openagent_core.core import safety
 
     safety._compile.cache_clear()
     safety._compile_allow.cache_clear()
@@ -491,7 +491,7 @@ async def t_bad_allow_pattern_audited(ctx: TestContext) -> None:
     """
     import os
 
-    from src.core import safety
+    from openagent_core.core import safety
 
     safety._compile_allow.cache_clear()
     prev_on = os.environ.get(safety._APPROVALS_ENV)

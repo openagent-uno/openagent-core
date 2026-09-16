@@ -27,7 +27,7 @@ async def _dial(method: str, path: str):
     from aiohttp.test_utils import make_mocked_request
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    from src.network.auth.middleware import NetworkAuthState, make_auth_middleware
+    from openagent_core.network.auth.middleware import NetworkAuthState, make_auth_middleware
 
     state = NetworkAuthState(
         coordinator_pubkey=Ed25519PrivateKey.generate().public_key(),
@@ -97,7 +97,7 @@ async def t_health_payload_minimal(ctx: TestContext) -> None:
     from aiohttp import web
     from aiohttp.test_utils import make_mocked_request
 
-    from src.gateway.api import health
+    from openagent_core.gateway.api import health
 
     SECRET_NODE = "SECRET_NODE_ID_deadbeef"
     SECRET_KEY = "sk-super-secret-should-never-appear"

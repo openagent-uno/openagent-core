@@ -24,8 +24,8 @@ from ._framework import TestContext, test
 @test("list_agents_ordering",
       "agent whose NodeId == coordinator NodeId is returned first")
 async def t_coord_agent_first(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.network.coordinator.store import CoordinatorStore
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.network.coordinator.store import CoordinatorStore
 
     tmp_db = ctx.db_path.with_name(f"list-agents-{uuid.uuid4().hex[:8]}.db")
     db = MemoryDB(str(tmp_db))
@@ -76,8 +76,8 @@ async def t_coord_agent_first(ctx: TestContext) -> None:
 @test("list_agents_ordering",
       "single-agent network: only row returned, no ordering hazard")
 async def t_only_one_agent(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.network.coordinator.store import CoordinatorStore
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.network.coordinator.store import CoordinatorStore
 
     tmp_db = ctx.db_path.with_name(f"single-agent-{uuid.uuid4().hex[:8]}.db")
     db = MemoryDB(str(tmp_db))
@@ -115,8 +115,8 @@ async def t_no_network_row(ctx: TestContext) -> None:
     """If somehow ``list_agents`` is called before ``set_network_role``,
     we fall back to a stable order rather than crashing. The 'coord
     NodeId' is the empty string, so no row matches the priority clause."""
-    from src.memory.db import MemoryDB
-    from src.network.coordinator.store import CoordinatorStore
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.network.coordinator.store import CoordinatorStore
 
     tmp_db = ctx.db_path.with_name(f"no-net-{uuid.uuid4().hex[:8]}.db")
     db = MemoryDB(str(tmp_db))

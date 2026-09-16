@@ -85,7 +85,7 @@ class _FakeClient:
 @contextmanager
 def _patch_httpx(capture: dict, *, resp: _FakeResp | None = None, exc: BaseException | None = None):
     """Patch the httpx.AsyncClient the llm module calls, capturing the request."""
-    from src.gateway.api import llm
+    from openagent_core.gateway.api import llm
 
     def _factory(**kwargs):
         return _FakeClient(capture, resp, exc, **kwargs)
@@ -141,7 +141,7 @@ def _parse(resp):
 
 @test("llm_gateway", "model 'provider:model' splits on the first colon → bare model out")
 async def t_model_split(ctx: TestContext) -> None:
-    from src.gateway.api.llm import handle_chat_completions
+    from openagent_core.gateway.api.llm import handle_chat_completions
 
     db = _FakeDB(_providers())
     cap: dict = {}
@@ -155,7 +155,7 @@ async def t_model_split(ctx: TestContext) -> None:
 
 @test("llm_gateway", "model with no colon → 400 explaining provider:model")
 async def t_missing_colon(ctx: TestContext) -> None:
-    from src.gateway.api.llm import handle_chat_completions
+    from openagent_core.gateway.api.llm import handle_chat_completions
 
     db = _FakeDB(_providers())
     for bad in ("claude-haiku", "", "local", ":only-model", "only-provider:"):
@@ -167,7 +167,7 @@ async def t_missing_colon(ctx: TestContext) -> None:
 
 @test("llm_gateway", "unknown provider → 404 naming the provider")
 async def t_unknown_provider(ctx: TestContext) -> None:
-    from src.gateway.api.llm import handle_chat_completions
+    from openagent_core.gateway.api.llm import handle_chat_completions
 
     db = _FakeDB(_providers())  # only 'local' exists
     req = _make_request(db, {"model": "deepseek:deepseek-chat", "messages": []})
@@ -178,7 +178,7 @@ async def t_unknown_provider(ctx: TestContext) -> None:
 
 @test("llm_gateway", "disabled provider → 400 naming the provider")
 async def t_disabled_provider(ctx: TestContext) -> None:
-    from src.gateway.api.llm import handle_chat_completions
+    from openagent_core.gateway.api.llm import handle_chat_completions
 
     db = _FakeDB(_providers(enabled=False))
     req = _make_request(db, {"model": "local:m", "messages": []})
@@ -190,7 +190,7 @@ async def t_disabled_provider(ctx: TestContext) -> None:
 
 @test("llm_gateway", "provider with no base_url → 502 (no hardcoded fallback URL)")
 async def t_no_base_url(ctx: TestContext) -> None:
-    from src.gateway.api.llm import handle_chat_completions
+    from openagent_core.gateway.api.llm import handle_chat_completions
 
     for empty in (None, "", "   "):
         db = _FakeDB(_providers(base_url=empty))
@@ -205,7 +205,7 @@ async def t_no_base_url(ctx: TestContext) -> None:
 
 @test("llm_gateway", "base_url join is correct across trailing-slash / /v1 variants")
 async def t_base_url_join(ctx: TestContext) -> None:
-    from src.gateway.api.llm import handle_chat_completions
+    from openagent_core.gateway.api.llm import handle_chat_completions
 
     cases = {
         "http://h/v1": "http://h/v1/chat/completions",
@@ -226,7 +226,7 @@ async def t_base_url_join(ctx: TestContext) -> None:
 
 @test("llm_gateway", "outbound body: bare model + stream=false + pass-through fields")
 async def t_outbound_body(ctx: TestContext) -> None:
-    from src.gateway.api.llm import handle_chat_completions
+    from openagent_core.gateway.api.llm import handle_chat_completions
 
     db = _FakeDB(_providers())
     cap: dict = {}
@@ -255,7 +255,7 @@ async def t_outbound_body(ctx: TestContext) -> None:
 
 @test("llm_gateway", "Authorization header carries the PROVIDER key, not the gateway token")
 async def t_provider_key_forwarded(ctx: TestContext) -> None:
-    from src.gateway.api.llm import handle_chat_completions
+    from openagent_core.gateway.api.llm import handle_chat_completions
 
     db = _FakeDB(_providers(api_key="sk-provider-xyz"))
     cap: dict = {}
@@ -272,7 +272,7 @@ async def t_provider_key_forwarded(ctx: TestContext) -> None:
 
 @test("llm_gateway", "upstream JSON + status relayed verbatim")
 async def t_verbatim_relay(ctx: TestContext) -> None:
-    from src.gateway.api.llm import handle_chat_completions
+    from openagent_core.gateway.api.llm import handle_chat_completions
 
     db = _FakeDB(_providers())
     upstream = {
@@ -290,7 +290,7 @@ async def t_verbatim_relay(ctx: TestContext) -> None:
 
 @test("llm_gateway", "upstream non-2xx → clean JSON error carrying status + body")
 async def t_upstream_error(ctx: TestContext) -> None:
-    from src.gateway.api.llm import handle_chat_completions
+    from openagent_core.gateway.api.llm import handle_chat_completions
 
     db = _FakeDB(_providers())
     cap: dict = {}
@@ -308,7 +308,7 @@ async def t_upstream_error(ctx: TestContext) -> None:
 async def t_timeout(ctx: TestContext) -> None:
     import httpx
 
-    from src.gateway.api.llm import handle_chat_completions
+    from openagent_core.gateway.api.llm import handle_chat_completions
 
     db = _FakeDB(_providers())
     cap: dict = {}
@@ -323,7 +323,7 @@ async def t_timeout(ctx: TestContext) -> None:
 async def t_connect_error(ctx: TestContext) -> None:
     import httpx
 
-    from src.gateway.api.llm import handle_chat_completions
+    from openagent_core.gateway.api.llm import handle_chat_completions
 
     db = _FakeDB(_providers())
     cap: dict = {}
@@ -336,7 +336,7 @@ async def t_connect_error(ctx: TestContext) -> None:
 
 @test("llm_gateway", "OPENAGENT_LLM_GATEWAY_TIMEOUT overrides the default")
 async def t_timeout_env(ctx: TestContext) -> None:
-    from src.gateway.api.llm import handle_chat_completions
+    from openagent_core.gateway.api.llm import handle_chat_completions
 
     db = _FakeDB(_providers())
     cap: dict = {}
@@ -387,7 +387,7 @@ async def _dial_with_headers(headers: dict, *, token: str):
     from aiohttp.test_utils import make_mocked_request
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    from src.network.auth.middleware import NetworkAuthState, make_auth_middleware
+    from openagent_core.network.auth.middleware import NetworkAuthState, make_auth_middleware
 
     with _http_token_env(token):
         state = NetworkAuthState(

@@ -102,7 +102,7 @@ def _computer_catalog() -> list[dict]:
 
 @test("client_capabilities", "registry pins exact instance and preserves MCP result")
 async def t_registry_exact_instance(ctx: TestContext) -> None:
-    from src.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
+    from openagent_core.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
 
     registry = CapabilityRegistry()
     sent_a: list[dict] = []
@@ -221,7 +221,7 @@ async def t_registry_exact_instance(ctx: TestContext) -> None:
 
 @test("client_capabilities", "artifact chunks are bounded, ordered, and digest-checked")
 async def t_artifact_chunks(ctx: TestContext) -> None:
-    from src.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
+    from openagent_core.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
 
     registry = CapabilityRegistry()
     sent: list[dict] = []
@@ -293,7 +293,7 @@ async def t_artifact_chunks(ctx: TestContext) -> None:
     # unbounded in-memory/serialised response by repeating its reference.
     # Use a lightweight stand-in so this regression proves the accounting
     # without allocating a real 64 MiB fixture.
-    from src.gateway.capabilities import MAX_ARTIFACT_BYTES_PER_CALL
+    from openagent_core.gateway.capabilities import MAX_ARTIFACT_BYTES_PER_CALL
 
     class _LargeCompleteArtifact:
         complete = True
@@ -386,7 +386,7 @@ async def t_artifact_chunks(ctx: TestContext) -> None:
         except ClientCapabilityError as exc:
             assert exc.code == "INVALID_ARTIFACT"
 
-    from src.gateway.capabilities import MAX_ARTIFACT_TRANSFERS_PER_CALL
+    from openagent_core.gateway.capabilities import MAX_ARTIFACT_TRANSFERS_PER_CALL
 
     digest = hashlib.sha256(b"x").hexdigest()
     for index in range(MAX_ARTIFACT_TRANSFERS_PER_CALL):
@@ -417,15 +417,15 @@ async def t_artifact_chunks(ctx: TestContext) -> None:
 
 @test("client_capabilities", "tool-search exposes canonical scoped catalogs without fallback")
 async def t_scoped_tool_search(ctx: TestContext) -> None:
-    from src.core.execution_origin import install_execution_origin, reset_execution_origin
-    from src.gateway.capabilities import CapabilityRegistry
-    from src.mcp.servers.tool_search.adapters import (
+    from openagent_core.core.execution_origin import install_execution_origin, reset_execution_origin
+    from openagent_core.gateway.capabilities import CapabilityRegistry
+    from openagent_core.mcp.servers.tool_search.adapters import (
         _call_scoped_tool_impl,
         _coerce_to_jsonable,
         _list_scoped_servers_impl,
         _resolve_tool,
     )
-    from src.mcp._runtime.function import Function
+    from openagent_core.mcp._runtime.function import Function
 
     hook_hits: list[str] = []
     async def server_read_file(**_kwargs):
@@ -529,9 +529,9 @@ async def t_scoped_tool_search(ctx: TestContext) -> None:
     "tool catalog and dispatcher providers keep server and client isolated",
 )
 async def t_tool_provider_contracts(ctx: TestContext) -> None:
-    from src.core.execution_origin import install_execution_origin, reset_execution_origin
-    from src.gateway.capabilities import CapabilityRegistry
-    from src.mcp.tool_providers import (
+    from openagent_core.core.execution_origin import install_execution_origin, reset_execution_origin
+    from openagent_core.gateway.capabilities import CapabilityRegistry
+    from openagent_core.mcp.tool_providers import (
         InteractiveClientMCPProvider,
         ServerMCPProvider,
         ToolCatalogProvider,
@@ -637,10 +637,10 @@ async def t_tool_provider_contracts(ctx: TestContext) -> None:
 async def t_workflow_node_client_dispatch(ctx: TestContext) -> None:
     from types import SimpleNamespace
 
-    from src.core.execution_origin import execution_origin_scope
-    from src.gateway.capabilities import CapabilityRegistry
-    from src.mcp.servers.tool_search.adapters import build_runtime_toolkit
-    from src.workflow.executor import _RunCtx, _h_mcp_tool
+    from openagent_core.core.execution_origin import execution_origin_scope
+    from openagent_core.gateway.capabilities import CapabilityRegistry
+    from openagent_core.mcp.servers.tool_search.adapters import build_runtime_toolkit
+    from openagent_core.workflow.executor import _RunCtx, _h_mcp_tool
 
     registry = CapabilityRegistry()
     conn_box: dict[str, object] = {}
@@ -718,7 +718,7 @@ async def t_workflow_node_client_dispatch(ctx: TestContext) -> None:
     "safe calls retry only on the exact same-generation host",
 )
 async def t_disconnect_result_classification(ctx: TestContext) -> None:
-    from src.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
+    from openagent_core.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
 
     registry = CapabilityRegistry()
     sent: list[dict] = []
@@ -857,7 +857,7 @@ async def t_disconnect_result_classification(ctx: TestContext) -> None:
     "argument-specific classification is preserved and used before dispatch",
 )
 async def t_argument_specific_classification(ctx: TestContext) -> None:
-    from src.gateway.capabilities import (
+    from openagent_core.gateway.capabilities import (
         CapabilityRegistry,
         ClientCapabilityError,
         _classification_for_arguments,
@@ -1045,7 +1045,7 @@ async def _record_send(target: list[dict], frame: dict) -> bool:
     "mutating timeout and transport ambiguity are never reported retryable",
 )
 async def t_indeterminate_timeout_and_transport(ctx: TestContext) -> None:
-    from src.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
+    from openagent_core.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
 
     registry = CapabilityRegistry()
 
@@ -1142,8 +1142,8 @@ async def t_indeterminate_timeout_and_transport(ctx: TestContext) -> None:
     "server cancellation preserves cancellation and audits mutation ambiguity",
 )
 async def t_mutating_cancellation_audit(ctx: TestContext) -> None:
-    import src.gateway.capabilities as capability_module
-    from src.gateway.capabilities import CapabilityRegistry
+    import openagent_core.gateway.capabilities as capability_module
+    from openagent_core.gateway.capabilities import CapabilityRegistry
 
     registry = CapabilityRegistry()
     sent: list[dict] = []
@@ -1198,8 +1198,8 @@ async def t_runtime_mcp_envelope(ctx: TestContext) -> None:
         ResourceLink,
         TextContent,
     )
-    from src.core._runner.utils.mcp import get_entrypoint_for_tool
-    from src.mcp.servers.tool_search.adapters import _coerce_to_jsonable
+    from openagent_core.core._runner.utils.mcp import get_entrypoint_for_tool
+    from openagent_core.mcp.servers.tool_search.adapters import _coerce_to_jsonable
 
     image_bytes = b"image-bytes"
     audio_bytes = b"audio-bytes"
@@ -1258,7 +1258,7 @@ async def t_runtime_mcp_envelope(ctx: TestContext) -> None:
     "deep MCP JSON is lossless and over-limit envelopes fail explicitly",
 )
 async def t_runtime_mcp_deep_envelope_limits(ctx: TestContext) -> None:
-    import src.mcp.servers.tool_search.adapters as adapters
+    import openagent_core.mcp.servers.tool_search.adapters as adapters
 
     nested: object = "leaf"
     for index in range(20, 0, -1):
@@ -1301,8 +1301,8 @@ async def t_runtime_mcp_deep_envelope_limits(ctx: TestContext) -> None:
 
 @test("client_capabilities", "client dispatch audit records routing but no payload")
 async def t_client_dispatch_audit(ctx: TestContext) -> None:
-    import src.gateway.capabilities as capability_module
-    from src.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
+    import openagent_core.gateway.capabilities as capability_module
+    from openagent_core.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
 
     registry = CapabilityRegistry()
     sent: list[dict] = []
@@ -1378,8 +1378,8 @@ async def t_client_dispatch_audit(ctx: TestContext) -> None:
 
 @test("client_capabilities", "pending client calls apply bounded backpressure")
 async def t_client_call_backpressure(ctx: TestContext) -> None:
-    import src.gateway.capabilities as capability_module
-    from src.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
+    import openagent_core.gateway.capabilities as capability_module
+    from openagent_core.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
 
     registry = CapabilityRegistry()
     sent: list[dict] = []
@@ -1421,7 +1421,7 @@ async def t_client_call_backpressure(ctx: TestContext) -> None:
 
 @test("client_capabilities", "argument hash is stable across JavaScript number normalisation")
 async def t_cross_language_argument_hash(ctx: TestContext) -> None:
-    from src.gateway.capabilities import _canonical_json_sha256
+    from openagent_core.gateway.capabilities import _canonical_json_sha256
 
     integer_form = {"x": 1, "nested": [0, {"v": 2}], "text": "è"}
     javascript_roundtrip_form = {
@@ -1435,7 +1435,7 @@ async def t_cross_language_argument_hash(ctx: TestContext) -> None:
 
 @test("client_capabilities", "heartbeat reaper closes stale host and pending calls")
 async def t_capability_heartbeat_reaper(ctx: TestContext) -> None:
-    from src.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
+    from openagent_core.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
 
     registry = CapabilityRegistry()
     sent: list[dict] = []
@@ -1487,8 +1487,8 @@ async def t_capability_heartbeat_reaper(ctx: TestContext) -> None:
 async def t_live_device_revocation(ctx: TestContext) -> None:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    from src.gateway.server import Gateway
-    from src.network.auth.middleware import NetworkAuthState
+    from openagent_core.gateway.server import Gateway
+    from openagent_core.network.auth.middleware import NetworkAuthState
 
     auth_state = NetworkAuthState(
         coordinator_pubkey=Ed25519PrivateKey.generate().public_key(),
@@ -1539,7 +1539,7 @@ async def t_live_device_revocation(ctx: TestContext) -> None:
     "revocation epoch blocks late hello and aborts safe reconnect waiters",
 )
 async def t_revocation_epoch_barrier(ctx: TestContext) -> None:
-    from src.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
+    from openagent_core.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
 
     registry = CapabilityRegistry()
     sent: list[dict] = []
@@ -1651,8 +1651,8 @@ async def t_revocation_epoch_barrier(ctx: TestContext) -> None:
     "capability, generation, catalog, and artifact reservations are bounded",
 )
 async def t_capability_resource_quotas(ctx: TestContext) -> None:
-    import src.gateway.capabilities as capability_module
-    from src.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
+    import openagent_core.gateway.capabilities as capability_module
+    from openagent_core.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
 
     originals = {
         name: getattr(capability_module, name)
@@ -1757,9 +1757,9 @@ async def t_capability_resource_quotas(ctx: TestContext) -> None:
     "device revocation cancels only that ingress in a shared durable session",
 )
 async def t_revoke_only_matching_ingress(ctx: TestContext) -> None:
-    from src.core.execution_origin import TrustedIngressIdentity
-    from src.stream.events import TextFinal
-    from src.stream.session import StreamSession
+    from openagent_core.core.execution_origin import TrustedIngressIdentity
+    from openagent_core.stream.events import TextFinal
+    from openagent_core.stream.session import StreamSession
 
     class Agent:
         db = None
@@ -1812,10 +1812,10 @@ async def t_revoke_only_matching_ingress(ctx: TestContext) -> None:
     "chat frame cannot re-admit revoked ingress after an attach await",
 )
 async def t_chat_attach_epoch_recheck(ctx: TestContext) -> None:
-    from src.core.on_behalf_context import OnBehalfIdentity
-    from src.gateway.server import Gateway, _StreamHolder
-    from src.stream.events import TextFinal
-    from src.stream.wire import event_to_wire
+    from openagent_core.core.on_behalf_context import OnBehalfIdentity
+    from openagent_core.gateway.server import Gateway, _StreamHolder
+    from openagent_core.stream.events import TextFinal
+    from openagent_core.stream.wire import event_to_wire
 
     class AuthState:
         epoch = 0
@@ -1891,8 +1891,8 @@ async def t_chat_attach_epoch_recheck(ctx: TestContext) -> None:
     "detached scoring and compaction clear the interactive execution origin",
 )
 async def t_detached_tasks_clear_origin(ctx: TestContext) -> None:
-    from src.core import compaction, quality_monitor
-    from src.core.execution_origin import (
+    from openagent_core.core import compaction, quality_monitor
+    from openagent_core.core.execution_origin import (
         TurnExecutionOrigin,
         current_execution_origin,
         execution_origin_scope,
@@ -1942,8 +1942,8 @@ async def t_detached_tasks_clear_origin(ctx: TestContext) -> None:
     "client shell events wake only the exact interactive origin",
 )
 async def t_client_shell_event_origin(ctx: TestContext) -> None:
-    from src.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
-    from src.mcp.servers.shell import handlers
+    from openagent_core.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
+    from openagent_core.mcp.servers.shell import handlers
 
     handlers._reset_hub_for_tests()
     hub = handlers.get_hub()
@@ -2086,8 +2086,8 @@ async def t_client_shell_event_origin(ctx: TestContext) -> None:
     "client shell reconnect ledger rejects generation changes and revocation",
 )
 async def t_client_shell_reconnect_boundaries(ctx: TestContext) -> None:
-    from src.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
-    from src.mcp.servers.shell import handlers
+    from openagent_core.gateway.capabilities import CapabilityRegistry, ClientCapabilityError
+    from openagent_core.mcp.servers.shell import handlers
 
     handlers._reset_hub_for_tests()
     hub = handlers.get_hub()
@@ -2177,13 +2177,13 @@ async def t_client_shell_reconnect_boundaries(ctx: TestContext) -> None:
 async def t_workflow_origin_boundaries(ctx: TestContext) -> None:
     from types import SimpleNamespace
 
-    from src.core.execution_origin import (
+    from openagent_core.core.execution_origin import (
         TurnExecutionOrigin,
         current_execution_origin,
         execution_origin_scope,
     )
-    from src.core.scheduler import Scheduler
-    from src.mcp.servers.tool_search.adapters import _call_tool_impl
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.mcp.servers.tool_search.adapters import _call_tool_impl
 
     seen: list[object] = []
     fallback_calls: list[dict] = []
@@ -2281,9 +2281,9 @@ async def t_workflow_origin_boundaries(ctx: TestContext) -> None:
 
 @test("client_capabilities", "delegation inherits origin; automation explicitly clears it")
 async def t_automation_origin_clearing(ctx: TestContext) -> None:
-    import src.core.scheduler as scheduler_module
-    from src.core.child_session import run_child_session
-    from src.core.execution_origin import (
+    import openagent_core.core.scheduler as scheduler_module
+    from openagent_core.core.child_session import run_child_session
+    from openagent_core.core.execution_origin import (
         TurnExecutionOrigin,
         current_execution_origin,
         install_execution_origin,
@@ -2378,8 +2378,8 @@ async def t_automation_origin_clearing(ctx: TestContext) -> None:
 
 @test("client_capabilities", "stream turn freezes and resets its trusted origin")
 async def t_stream_turn_origin(ctx: TestContext) -> None:
-    from src.core.execution_origin import TurnExecutionOrigin, current_execution_origin
-    from src.stream.session import StreamSession, StreamTurnRunner
+    from openagent_core.core.execution_origin import TurnExecutionOrigin, current_execution_origin
+    from openagent_core.stream.session import StreamSession, StreamTurnRunner
 
     seen: list[object] = []
 
@@ -2413,14 +2413,14 @@ async def t_stream_turn_origin(ctx: TestContext) -> None:
     "stream turn freezes principal and rendering policy through persistence",
 )
 async def t_stream_turn_security_context(ctx: TestContext) -> None:
-    import src.memory.artifacts as artifact_module
-    import src.stream.content_parts as content_parts_module
-    from src.core.execution_origin import TrustedTurnContext
-    from src.core.on_behalf_context import (
+    import openagent_core.memory.artifacts as artifact_module
+    import openagent_core.stream.content_parts as content_parts_module
+    from openagent_core.core.execution_origin import TrustedTurnContext
+    from openagent_core.core.on_behalf_context import (
         OnBehalfIdentity,
         current_on_behalf_identity,
     )
-    from src.stream.session import StreamSession, StreamTurnRunner
+    from openagent_core.stream.session import StreamSession, StreamTurnRunner
 
     principal_a = OnBehalfIdentity("network", "user", "alice", "device-a")
     principal_b = OnBehalfIdentity("network", "user", "alice", "device-b")
@@ -2495,11 +2495,11 @@ async def t_stream_turn_security_context(ctx: TestContext) -> None:
 
 @test("client_capabilities", "session-open carries instance id and prompt tail is uncached")
 async def t_wire_and_prompt_tail(ctx: TestContext) -> None:
-    from src.gateway import protocol as P
-    from src.gateway.capabilities import CAPABILITY_PROTOCOL
-    from src.stream.events import SessionOpen
-    from src.stream.wire import event_to_wire, wire_to_event
-    from src.models.providers.anthropic.claude import _split_session_id_tag
+    from openagent_core.gateway import protocol as P
+    from openagent_core.gateway.capabilities import CAPABILITY_PROTOCOL
+    from openagent_core.stream.events import SessionOpen
+    from openagent_core.stream.wire import event_to_wire, wire_to_event
+    from openagent_core.models.providers.anthropic.claude import _split_session_id_tag
 
     evt = SessionOpen(session_id="s", client_instance_id="desktop")
     wire = event_to_wire(evt)

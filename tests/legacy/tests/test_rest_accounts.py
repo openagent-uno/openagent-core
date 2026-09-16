@@ -89,7 +89,7 @@ async def _serve(payload, port):
 
 
 async def _call(rows):
-    from src.gateway.api import accounts as api
+    from openagent_core.gateway.api import accounts as api
 
     resp = await api.handle_list(_FakeRequest(_FakeDB(rows)))
     body = json.loads(resp.body.decode())

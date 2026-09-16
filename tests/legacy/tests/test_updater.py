@@ -16,8 +16,8 @@ from ._framework import TestContext, test
 @test("updater", "updater symbols exist + current __version__ is sane")
 async def t_updater_callable(ctx: TestContext) -> None:
     import src
-    from src.updater import check_for_update, UpdateInfo, perform_self_update_sync
-    assert src.__version__ and isinstance(src.__version__, str)
+    from openagent_core.updater import check_for_update, UpdateInfo, perform_self_update_sync
+    assert openagent_core.__version__ and isinstance(openagent_core.__version__, str)
     assert callable(check_for_update)
     assert callable(perform_self_update_sync)
     fields = getattr(UpdateInfo, "_fields", None)
@@ -78,7 +78,7 @@ class _FakeHTTPResponse:
 @test("updater", "check_for_update prefers server asset over CLI asset")
 async def t_updater_prefers_server_asset(ctx: TestContext) -> None:
     import src
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     payload = {
         "tag_name": "v0.5.17",
@@ -121,7 +121,7 @@ async def t_updater_prefers_server_asset(ctx: TestContext) -> None:
 
 @test("updater", "release asset must exactly match the selected version")
 async def t_updater_rejects_cross_version_asset(ctx: TestContext) -> None:
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     assets = [{
         "name": "openagent-0.19.23-linux-x64.tar.gz",
@@ -140,7 +140,7 @@ async def t_apply_update_bundle_swap(ctx: TestContext) -> None:
     from pathlib import Path
     from unittest.mock import patch
     import platform
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -164,7 +164,7 @@ async def t_apply_update_bundle_swap(ctx: TestContext) -> None:
         new_bin.write_bytes(b"new binary")
         new_bin.chmod(0o755)
 
-        with patch("src._frozen.executable_path", return_value=cur_bin), \
+        with patch("openagent_core._frozen.executable_path", return_value=cur_bin), \
              patch("platform.system", return_value="Darwin"):
             updater.apply_update(new_bin)
 
@@ -179,7 +179,7 @@ async def t_apply_update_bundle_swap(ctx: TestContext) -> None:
 
 @test("updater", "download_update rejects archives without server binary")
 async def t_updater_rejects_cli_only_archive(ctx: TestContext) -> None:
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tf:
@@ -218,7 +218,7 @@ async def t_updater_streaming_bound(ctx: TestContext) -> None:
     more than one chunk in memory.
     """
     import os
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     # Build a tarball whose CONTENT is uncompressible (random bytes) so
     # the archive itself stays larger than the chunk size and we can
@@ -260,7 +260,7 @@ async def t_updater_streaming_checksum(ctx: TestContext) -> None:
     """The SHA is computed incrementally as chunks land — a mismatch
     must still raise so a corrupt download never gets installed."""
     import hashlib
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     big_payload = b"Y" * (3 * updater._DOWNLOAD_CHUNK_SIZE)
     buf = io.BytesIO()
@@ -317,7 +317,7 @@ async def t_updater_skips_prerelease(ctx: TestContext) -> None:
     code now does its own check too. Without it, a future migration to
     ``/releases`` would auto-deploy RC builds to every production agent."""
     import src
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     payload = {
         "tag_name": "v9.9.9-rc1",
@@ -360,7 +360,7 @@ def _release(tag: str, *, prerelease: bool) -> dict:
 @test("updater", "stable channel ignores every prerelease in a synthetic feed")
 async def t_updater_stable_feed_isolation(ctx: TestContext) -> None:
     import src
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     feed = [_release("v0.19.23-beta.2", prerelease=True)]
     with (
@@ -375,7 +375,7 @@ async def t_updater_stable_feed_isolation(ctx: TestContext) -> None:
 @test("updater", "beta channel accepts only compatible beta prereleases")
 async def t_updater_beta_feed_isolation(ctx: TestContext) -> None:
     import src
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     feed = [
         _release("v0.20.0-beta.1", prerelease=True),
@@ -396,7 +396,7 @@ async def t_updater_beta_feed_isolation(ctx: TestContext) -> None:
 @test("updater", "beta channel may promote to a semantically newer stable")
 async def t_updater_beta_promotes_to_stable(ctx: TestContext) -> None:
     import src
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     feed = [
         _release("v0.19.23-beta.3", prerelease=True),
@@ -416,7 +416,7 @@ async def t_updater_beta_promotes_to_stable(ctx: TestContext) -> None:
 @test("updater", "explicit beta channel opts a stable build into compatible betas")
 async def t_updater_explicit_beta_channel(ctx: TestContext) -> None:
     import src
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     feed = [_release("v0.19.23-beta.1", prerelease=True)]
     with (
@@ -436,14 +436,14 @@ async def t_updater_logs_bad_tag(ctx: TestContext) -> None:
     looked healthy in events.jsonl while never receiving updates."""
     import logging
     import src
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     payload = {"tag_name": "main", "assets": []}
 
     captured: list[logging.LogRecord] = []
     handler = logging.Handler()
     handler.emit = captured.append  # type: ignore[assignment]
-    upd_logger = logging.getLogger("src.updater")
+    upd_logger = logging.getLogger("openagent_core.updater")
     upd_logger.addHandler(handler)
     try:
         with (
@@ -472,7 +472,7 @@ async def t_apply_update_rollback_bare(ctx: TestContext) -> None:
     import tempfile
     from pathlib import Path
     from unittest.mock import patch
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -490,7 +490,7 @@ async def t_apply_update_rollback_bare(ctx: TestContext) -> None:
             raise OSError("simulated disk full")
 
         with (
-            patch("src._frozen.executable_path", return_value=cur),
+            patch("openagent_core._frozen.executable_path", return_value=cur),
             patch("platform.system", return_value="Linux"),
             patch.object(updater.shutil, "copy2", side_effect=boom),
         ):
@@ -520,7 +520,7 @@ async def t_swap_lock_blocks(ctx: TestContext) -> None:
     import asyncio
     import tempfile
     from pathlib import Path
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     if not hasattr(__import__("os"), "fork"):
         # Best-effort: skip on platforms without fcntl. The lock is a
@@ -576,12 +576,12 @@ async def t_try_elog_safe(ctx: TestContext) -> None:
     """Updater observability events fire from contexts where logging
     may not yet be wired. The helper must swallow every error so the
     update flow never aborts because of a logging side-effect."""
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     def boom(*a, **kw):
         raise RuntimeError("logging not ready")
 
-    import src.core.logging as logmod
+    import openagent_core.core.logging as logmod
     with patch.object(logmod, "elog", side_effect=boom):
         # Should NOT raise.
         updater._try_elog("update.test", level="warning", foo=1)
@@ -602,7 +602,7 @@ async def t_run_upgrade_sibling_swap(ctx: TestContext) -> None:
     run_upgrade without calling perform_self_update_sync — the running
     process is stale and a restart will pick up the new binary.
     """
-    import src.core.server as server_mod
+    import openagent_core.core.server as server_mod
 
     sentinel_called = {"perform_self_update_sync": 0}
 
@@ -620,10 +620,10 @@ async def t_run_upgrade_sibling_swap(ctx: TestContext) -> None:
             return _FakeStat()
 
     with patch.object(server_mod, "_INITIAL_EXECUTABLE_MTIME", 1000.0), \
-         patch.object(server_mod.src._frozen, "is_frozen", return_value=True), \
-         patch.object(server_mod.src._frozen, "executable_path", return_value=_FakePath()), \
+         patch.object(server_mod.openagent_core._frozen, "is_frozen", return_value=True), \
+         patch.object(server_mod.openagent_core._frozen, "executable_path", return_value=_FakePath()), \
          patch.object(server_mod, "_read_disk_binary_version", return_value="0.12.99"), \
-         patch("src.updater.perform_self_update_sync", side_effect=fake_perform_self_update_sync):
+         patch("openagent_core.updater.perform_self_update_sync", side_effect=fake_perform_self_update_sync):
         old, new = server_mod.run_upgrade()
 
     # The short-circuit MUST have fired — perform_self_update_sync
@@ -640,7 +640,7 @@ async def t_run_upgrade_sibling_swap(ctx: TestContext) -> None:
 async def t_run_upgrade_normal_path(ctx: TestContext) -> None:
     """Regression guard: the sibling-swap short-circuit must NOT fire
     when our on-disk binary still matches what we started with."""
-    import src.core.server as server_mod
+    import openagent_core.core.server as server_mod
 
     sentinel_called = {"perform_self_update_sync": 0}
 
@@ -656,9 +656,9 @@ async def t_run_upgrade_normal_path(ctx: TestContext) -> None:
             return _FakeStat()
 
     with patch.object(server_mod, "_INITIAL_EXECUTABLE_MTIME", 1000.0), \
-         patch.object(server_mod.src._frozen, "is_frozen", return_value=True), \
-         patch.object(server_mod.src._frozen, "executable_path", return_value=_FakePath()), \
-         patch("src.updater.perform_self_update_sync", side_effect=fake_perform_self_update_sync):
+         patch.object(server_mod.openagent_core._frozen, "is_frozen", return_value=True), \
+         patch.object(server_mod.openagent_core._frozen, "executable_path", return_value=_FakePath()), \
+         patch("openagent_core.updater.perform_self_update_sync", side_effect=fake_perform_self_update_sync):
         old, new = server_mod.run_upgrade()
 
     assert sentinel_called["perform_self_update_sync"] == 1, (
@@ -687,7 +687,7 @@ async def t_updater_fail_closed_no_checksum(ctx: TestContext) -> None:
     supervisor will immediately exec is the brick we must never risk.
     With no digest and no .sha256, download_update must refuse BEFORE it
     even downloads."""
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     archive = _gz_tar_with_openagent()
     with (
@@ -712,7 +712,7 @@ async def t_updater_api_digest(ctx: TestContext) -> None:
     the version and can't go missing — it must be accepted as the
     integrity anchor, and a mismatch must abort."""
     import hashlib
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     archive = _gz_tar_with_openagent(b"Z" * 1234)
     good = "sha256:" + hashlib.sha256(archive).hexdigest()
@@ -750,7 +750,7 @@ async def t_updater_truncation_guard(ctx: TestContext) -> None:
     body. When the server advertised a Content-Length, a size mismatch
     must raise rather than install a half-download."""
     import hashlib
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     archive = _gz_tar_with_openagent(b"Q" * 5000)
     digest = "sha256:" + hashlib.sha256(archive).hexdigest()
@@ -780,7 +780,7 @@ async def t_apply_update_bare_atomic(ctx: TestContext) -> None:
     the target was never unlinked (os.replace overwrites in place)."""
     import tempfile
     from pathlib import Path
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -793,7 +793,7 @@ async def t_apply_update_bare_atomic(ctx: TestContext) -> None:
         new.chmod(0o755)
 
         with (
-            patch("src._frozen.executable_path", return_value=cur),
+            patch("openagent_core._frozen.executable_path", return_value=cur),
             patch("platform.system", return_value="Linux"),
         ):
             updater.apply_update(new)
@@ -815,7 +815,7 @@ async def t_verify_new_binary(ctx: TestContext) -> None:
     import stat
     import tempfile
     from pathlib import Path
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -861,7 +861,7 @@ async def t_verify_new_binary_isolated_context(ctx: TestContext) -> None:
     import tempfile
     from pathlib import Path
     from unittest.mock import patch as _patch
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     captured = {}
 
@@ -913,7 +913,7 @@ async def t_verify_new_binary_diagnostics(ctx: TestContext) -> None:
     import tempfile
     from pathlib import Path
     from unittest.mock import patch as _patch
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     with tempfile.TemporaryDirectory() as tmp:
         candidate = Path(tmp) / "openagent"
@@ -943,14 +943,14 @@ async def t_verify_new_binary_diagnostics(ctx: TestContext) -> None:
 async def t_selfcheck_loads_operational_resources(ctx: TestContext) -> None:
     import src
     from click.testing import CliRunner
-    from src.cli import main
+    from openagent_core.cli import main
 
     result = CliRunner().invoke(
         main,
-        ["selfcheck", "--quiet", "--expect", src.__version__],
+        ["selfcheck", "--quiet", "--expect", openagent_core.__version__],
     )
     assert result.exit_code == 0, result.output
-    assert result.output.strip() == src.__version__
+    assert result.output.strip() == openagent_core.__version__
 
 
 @test("updater", "perform_self_update_sync cleans up its temp dir and records the pending update")
@@ -960,7 +960,7 @@ async def t_perform_self_update_cleans_temp(ctx: TestContext) -> None:
     import tempfile
     from pathlib import Path
     from unittest.mock import patch as _patch
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     created = {}
 
@@ -988,7 +988,7 @@ async def t_perform_self_update_cleans_temp(ctx: TestContext) -> None:
         _patch.object(updater, "verify_new_binary", return_value=None),
         _patch.object(updater, "apply_update", return_value=None),
         _patch.object(tempfile, "mkdtemp", side_effect=tracking_mkdtemp),
-        _patch("src.update_guard.record_pending", side_effect=lambda *a, **k: recorded.update(a=a, k=k)),
+        _patch("openagent_core.update_guard.record_pending", side_effect=lambda *a, **k: recorded.update(a=a, k=k)),
     ):
         old, new = updater.perform_self_update_sync()
 
@@ -1004,7 +1004,7 @@ async def t_updater_skips_rolled_back(ctx: TestContext) -> None:
     every poll — the boot guard records rolled-back versions and
     check_for_update honours them."""
     import src
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     payload = {
         "tag_name": "v9.9.9",
@@ -1022,7 +1022,7 @@ async def t_updater_skips_rolled_back(ctx: TestContext) -> None:
         patch.object(updater, "_ssl_context", return_value=None),
         patch.object(updater, "urlopen",
                      return_value=_FakeHTTPResponse(json.dumps(payload).encode())),
-        patch("src.update_guard.rolled_back_versions", return_value={"9.9.9"}),
+        patch("openagent_core.update_guard.rolled_back_versions", return_value={"9.9.9"}),
     ):
         info = updater.check_for_update()
     assert info is None, "a previously rolled-back version must be skipped"
@@ -1031,7 +1031,7 @@ async def t_updater_skips_rolled_back(ctx: TestContext) -> None:
 @test("updater", "check_for_update surfaces the GitHub asset digest in UpdateInfo")
 async def t_updater_captures_digest(ctx: TestContext) -> None:
     import src
-    import src.updater as updater
+    import openagent_core.updater as updater
 
     payload = {
         "tag_name": "v2.0.0",
@@ -1049,7 +1049,7 @@ async def t_updater_captures_digest(ctx: TestContext) -> None:
         patch.object(updater, "_ssl_context", return_value=None),
         patch.object(updater, "urlopen",
                      return_value=_FakeHTTPResponse(json.dumps(payload).encode())),
-        patch("src.update_guard.rolled_back_versions", return_value=set()),
+        patch("openagent_core.update_guard.rolled_back_versions", return_value=set()),
     ):
         info = updater.check_for_update()
     assert info is not None

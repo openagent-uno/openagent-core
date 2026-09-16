@@ -22,7 +22,7 @@ T = TypeVar("T")
 
 
 def _access(tenant: str):
-    from src.memory.operational.access import AccessContext
+    from openagent_core.memory.operational.access import AccessContext
 
     return AccessContext(
         tenant_id=tenant,
@@ -47,12 +47,12 @@ async def _measure(fn: Callable[[], Awaitable[T]], repeats: int = 5) -> tuple[fl
 
 
 async def run(session_count: int, view_count: int) -> dict:
-    from src.custom_views.repository import CustomViewRepository
-    from src.memory.db import MemoryDB
-    from src.memory.message_parts import canonical_parts_for_messages_on_connection
-    from src.memory.operational.access import resource_is_visible
-    from src.memory.operational.search import sync_operational_search
-    from src.memory.operational.service import OperationalSearchService
+    from openagent_core.custom_views.repository import CustomViewRepository
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.message_parts import canonical_parts_for_messages_on_connection
+    from openagent_core.memory.operational.access import resource_is_visible
+    from openagent_core.memory.operational.search import sync_operational_search
+    from openagent_core.memory.operational.service import OperationalSearchService
 
     with tempfile.TemporaryDirectory(prefix="oa-history-benchmark-") as raw:
         db = MemoryDB(str(Path(raw) / "agent.db"))

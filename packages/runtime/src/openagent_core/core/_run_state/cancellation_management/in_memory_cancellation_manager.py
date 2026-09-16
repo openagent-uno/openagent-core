@@ -4,9 +4,9 @@ import asyncio
 import threading
 from typing import Dict
 
-from src.core.runtime_errors import RunCancelledException
-from src.core._run_state.cancellation_management.base import BaseRunCancellationManager
-from src.core._runner.utils.log import logger
+from openagent_core.core.runtime_errors import RunCancelledException
+from openagent_core.core._run_state.cancellation_management.base import BaseRunCancellationManager
+from openagent_core.core._runner.utils.log import logger
 
 
 class InMemoryRunCancellationManager(BaseRunCancellationManager):

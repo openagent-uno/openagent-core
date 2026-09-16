@@ -58,8 +58,8 @@ def _seed_skill(root: Path, folder: str, name: str, *, category: str = "support"
 
 @test("skill_curator", "create stamps created_by:agent; filter excludes seed skills")
 async def t_provenance_stamp_and_filter(_ctx: TestContext) -> None:
-    from src.mcp.servers.skills import handlers
-    from src.mcp.servers.skills.registry import SkillsRegistry
+    from openagent_core.mcp.servers.skills import handlers
+    from openagent_core.mcp.servers.skills.registry import SkillsRegistry
 
     root = _mkskills()
     prev = os.environ.get("OPENAGENT_SKILLS_PATH")
@@ -129,7 +129,7 @@ async def _bare_server(config: dict, db):
     """A minimally-constructed AgentServer wired just enough to drive
     ``_sync_skill_curator``: it reads ``self.config`` and ``self.agent._db``.
     ``__new__`` skips the heavy ``__init__`` (no pool, gateway, or model)."""
-    from src.core.server import AgentServer
+    from openagent_core.core.server import AgentServer
 
     srv = AgentServer.__new__(AgentServer)
     srv.config = config
@@ -144,15 +144,15 @@ async def _bare_server(config: dict, db):
 
 
 async def _curator_row(db):
-    from src.core.builtin_tasks import SKILL_CURATOR_TASK_NAME
+    from openagent_core.core.builtin_tasks import SKILL_CURATOR_TASK_NAME
     tasks = await db.get_tasks()
     return next((t for t in tasks if t["name"] == SKILL_CURATOR_TASK_NAME), None)
 
 
 @test("skill_curator", "OFF by default: no scheduled task seeded; ON when opted in")
 async def t_curator_gating(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
-    from src.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.memory.db import MemoryDB
 
     # (a) DEFAULT config → nothing seeded (byte-identical to no feature).
     off_db = MemoryDB(str(ctx.db_path.with_name(f"curator-off-{uuid.uuid4().hex[:8]}.db")))
@@ -213,7 +213,7 @@ async def t_provenance_boundary(_ctx: TestContext) -> None:
     curated seed content: the curator discovers its work through
     ``agent_authored()``, and that filter must never admit a skill lacking
     the ``created_by: agent`` stamp — no matter its category or contents."""
-    from src.mcp.servers.skills.registry import SkillsRegistry
+    from openagent_core.mcp.servers.skills.registry import SkillsRegistry
 
     root = _mkskills()
     try:
@@ -255,8 +255,8 @@ async def t_provenance_boundary(_ctx: TestContext) -> None:
 
 @test("skill_curator", "an archived skill is dropped from render_skills_index")
 async def t_archived_excluded_from_index(_ctx: TestContext) -> None:
-    from src.mcp.servers.skills import handlers
-    from src.mcp.servers.skills.registry import SkillsRegistry
+    from openagent_core.mcp.servers.skills import handlers
+    from openagent_core.mcp.servers.skills.registry import SkillsRegistry
 
     root = _mkskills()
     prev = os.environ.get("OPENAGENT_SKILLS_PATH")
@@ -305,7 +305,7 @@ async def t_archived_excluded_from_index(_ctx: TestContext) -> None:
 
 @test("skill_curator", "SKILL_CURATOR_PROMPT names the provenance boundary and tools")
 async def t_curator_prompt(_ctx: TestContext) -> None:
-    from src.core.server import SKILL_CURATOR_DEFAULT_CRON, SKILL_CURATOR_PROMPT
+    from openagent_core.core.server import SKILL_CURATOR_DEFAULT_CRON, SKILL_CURATOR_PROMPT
 
     lower = SKILL_CURATOR_PROMPT.lower()
     # It must use the skill tools, not shell out.

@@ -1,8 +1,8 @@
 from typing import Any, Union
 
-from src.memory.sessions.agent import AgentSession
-from src.memory.sessions.summary import SessionSummaryManager
-from src.memory.sessions.team import TeamSession
+from openagent_core.memory.sessions.agent import AgentSession
+from openagent_core.memory.sessions.summary import SessionSummaryManager
+from openagent_core.memory.sessions.team import TeamSession
 
 
 # WorkflowSession kept as a name-only stub: OpenAgent's workflow engine

@@ -17,10 +17,10 @@ from unittest.mock import AsyncMock, patch
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestServer, make_mocked_request
 
-from src.core.on_behalf_context import current_on_behalf_identity
-from src.gateway.collaboration import Collaboration, CommandReply
-from src.gateway.collaboration_access import authorize
-from src.memory.db import MemoryDB
+from openagent_core.core.on_behalf_context import current_on_behalf_identity
+from openagent_core.gateway.collaboration import Collaboration, CommandReply
+from openagent_core.gateway.collaboration_access import authorize
+from openagent_core.memory.db import MemoryDB
 
 
 class CollaborationTests(unittest.IsolatedAsyncioTestCase):
@@ -100,12 +100,12 @@ class CollaborationTests(unittest.IsolatedAsyncioTestCase):
         # runs. Avoid waiting for a projection that this fixture never writes;
         # ACLs and model-pin persistence still use the real SQLite database.
         parts = patch(
-            "src.memory.message_parts.persist_parts_for_latest_message", AsyncMock()
+            "openagent_core.memory.message_parts.persist_parts_for_latest_message", AsyncMock()
         )
         parts.start()
         self.addCleanup(parts.stop)
         for name in ("resolve_stt", "resolve_tts"):
-            patched = patch("src.stream.session." + name, AsyncMock(return_value=None))
+            patched = patch("openagent_core.stream.session." + name, AsyncMock(return_value=None))
             patched.start()
             self.addCleanup(patched.stop)
 
@@ -133,7 +133,7 @@ class CollaborationTests(unittest.IsolatedAsyncioTestCase):
         app.router.add_get(
             "/api/collaboration/{session_id}/commands", self.service.handle_commands
         )
-        from src.gateway.collaboration_members import handle_members
+        from openagent_core.gateway.collaboration_members import handle_members
 
         app.router.add_get("/api/collaboration/{session_id}/members", handle_members)
         app.router.add_put("/api/collaboration/{session_id}/members", handle_members)
@@ -197,8 +197,8 @@ class CollaborationTests(unittest.IsolatedAsyncioTestCase):
         return response.status, await response.json()
 
     async def test_attachment_refs_use_authenticated_artifact_acl(self):
-        from src.core.on_behalf_context import OnBehalfIdentity
-        from src.memory.artifacts import (
+        from openagent_core.core.on_behalf_context import OnBehalfIdentity
+        from openagent_core.memory.artifacts import (
             normalize_inbound_attachments,
             public_attachment_ref,
         )
@@ -624,7 +624,7 @@ class CollaborationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.seen), 1)
 
     async def test_native_transport_cannot_overlap_or_mutate_shared_turn(self):
-        from src.gateway.collaboration import guard_mutation
+        from openagent_core.gateway.collaboration import guard_mutation
 
         self.gateway._stream_sessions[("alice", "chat")] = SimpleNamespace(
             session=SimpleNamespace(has_active_turn=lambda: True)
@@ -646,7 +646,7 @@ class CollaborationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((await asyncio.wait_for(first, 3))[1]["interrupted"])
 
     async def test_nonterminal_cancellation_releases_collector_and_fences_zombie(self):
-        from src.stream.channel import BatchedChannel
+        from openagent_core.stream.channel import BatchedChannel
 
         started = asyncio.Event()
 

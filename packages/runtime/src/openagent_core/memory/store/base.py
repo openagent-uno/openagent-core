@@ -5,14 +5,14 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
 from uuid import uuid4
 
 if TYPE_CHECKING:
-    from src.core._runner._stubs import Span, Trace
+    from openagent_core.core._runner._stubs import Span, Trace
 
-from src.memory.store.schemas import UserMemory
-from src.memory.store.schemas.culture import CulturalKnowledge
-from src.memory.store.schemas.evals import EvalFilterType, EvalRunRecord, EvalType
-from src.memory.store.schemas.knowledge import KnowledgeRow
-from src.core._run_state.base import RunStatus
-from src.memory.sessions import Session
+from openagent_core.memory.store.schemas import UserMemory
+from openagent_core.memory.store.schemas.culture import CulturalKnowledge
+from openagent_core.memory.store.schemas.evals import EvalFilterType, EvalRunRecord, EvalType
+from openagent_core.memory.store.schemas.knowledge import KnowledgeRow
+from openagent_core.core._run_state.base import RunStatus
+from openagent_core.memory.sessions import Session
 
 
 class SessionType(str, Enum):

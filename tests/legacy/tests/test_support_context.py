@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from ._framework import TestContext, test
 from .test_local_support_controller import _Model, _Pool, _Toolkit
-from src.core import local_support_controller as c, support_context as sc
+from openagent_core.core import local_support_controller as c, support_context as sc
 
 
 @test("support_context", "live-sized policy stays complete; overflow queues review without a partial-policy reply")

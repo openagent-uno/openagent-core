@@ -16,7 +16,7 @@ from ._framework import TestContext, test
 
 @test("config_patch_merge", "le chiavi non citate sopravvivono")
 async def t_untouched_keys_survive(ctx: TestContext) -> None:
-    from src.gateway.api.config import _merge_section
+    from openagent_core.gateway.api.config import _merge_section
 
     before = {"enabled": True, "path": "/data/agent/skills-oa",
               "curator_enabled": False, "distiller_enabled": True}
@@ -29,7 +29,7 @@ async def t_untouched_keys_survive(ctx: TestContext) -> None:
 
 @test("config_patch_merge", "null cancella, ed e' l'unico modo")
 async def t_null_deletes(ctx: TestContext) -> None:
-    from src.gateway.api.config import _merge_section
+    from openagent_core.gateway.api.config import _merge_section
 
     after = _merge_section({"a": 1, "b": 2}, {"b": None})
     assert after == {"a": 1}
@@ -37,7 +37,7 @@ async def t_null_deletes(ctx: TestContext) -> None:
 
 @test("config_patch_merge", "i dizionari annidati si fondono invece di sostituirsi")
 async def t_nested_merge(ctx: TestContext) -> None:
-    from src.gateway.api.config import _merge_section
+    from openagent_core.gateway.api.config import _merge_section
 
     before = {"hub": {"enabled": True, "taps": ["a"]}, "enabled": True}
     after = _merge_section(before, {"hub": {"taps": ["b"]}})
@@ -48,7 +48,7 @@ async def t_nested_merge(ctx: TestContext) -> None:
 
 @test("config_patch_merge", "una sezione che non esisteva si crea, e un valore scalare sostituisce")
 async def t_edges(ctx: TestContext) -> None:
-    from src.gateway.api.config import _merge_section
+    from openagent_core.gateway.api.config import _merge_section
 
     assert _merge_section(None, {"a": 1}) == {"a": 1}
     assert _merge_section({"a": 1}, "scalare") == "scalare"

@@ -29,7 +29,7 @@ class _Pool:
 
 @test("task_directive", "a block is parsed, and a prompt without one stays untouched")
 async def t_parse(_ctx: TestContext) -> None:
-    from src.core import task_directive
+    from openagent_core.core import task_directive
 
     assert task_directive.parse("just a normal prompt") == []
     directives = task_directive.parse(
@@ -51,7 +51,7 @@ async def t_parse(_ctx: TestContext) -> None:
 
 @test("task_directive", "a malformed block is refused, never silently skipped")
 async def t_parse_errors(_ctx: TestContext) -> None:
-    from src.core.task_directive import DirectiveError, parse
+    from openagent_core.core.task_directive import DirectiveError, parse
 
     for body in (
         "[[execute]]\ntool: threads_respond\n[[/execute]]",          # no server
@@ -70,7 +70,7 @@ async def t_parse_errors(_ctx: TestContext) -> None:
 async def t_execute(_ctx: TestContext) -> None:
     import hashlib
 
-    from src.core.task_directive import Directive, execute
+    from openagent_core.core.task_directive import Directive, execute
 
     seen: list[dict[str, Any]] = []
 
@@ -113,7 +113,7 @@ async def t_execute(_ctx: TestContext) -> None:
 
 @test("task_directive", "an ok:false or bare 4xx receipt counts as a failure")
 async def t_failure_markers(_ctx: TestContext) -> None:
-    from src.core.reply_guard import _trace_result_succeeded as ok
+    from openagent_core.core.reply_guard import _trace_result_succeeded as ok
 
     # These four shapes all mean "the call did not do what it says". Only
     # success:false was recognised before, so an ok:false receipt was read as

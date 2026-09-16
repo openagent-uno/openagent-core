@@ -3,7 +3,7 @@ from __future__ import annotations
 import iroh
 
 from ._framework import TestContext, test
-from src.network.iroh_node import _discovery_config
+from openagent_core.network.iroh_node import _discovery_config
 
 
 @test("network", "Iroh discovery keeps its production default")

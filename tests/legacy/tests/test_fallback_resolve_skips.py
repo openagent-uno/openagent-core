@@ -19,7 +19,7 @@ from ._framework import TestContext, test
 
 @test("fallback_resolve", "una voce di provider non nativo si salta invece di sollevare")
 async def t_skips_operator_providers(_ctx: TestContext) -> None:
-    from src.models.providers.fallback import FallbackConfig
+    from openagent_core.models.providers.fallback import FallbackConfig
 
     cfg = FallbackConfig(
         on_rate_limit=["codex:gpt-5.6-luna", "local:claude-haiku-4-5"],
@@ -35,7 +35,7 @@ async def t_keeps_the_valid_one(_ctx: TestContext) -> None:
     """Saltare non deve diventare 'butto via tutto': se una riga e' risolvibile
     resta, altrimenti un errore di battitura in fondo alla lista disattiverebbe
     in silenzio anche i ripieghi buoni."""
-    from src.models.providers.fallback import FallbackConfig
+    from openagent_core.models.providers.fallback import FallbackConfig
 
     cfg = FallbackConfig(on_rate_limit=["codex:gpt-5.6-luna", "anthropic:claude-haiku-4-5"])
     cfg.resolve_models()
@@ -46,7 +46,7 @@ async def t_keeps_the_valid_one(_ctx: TestContext) -> None:
 
 @test("fallback_resolve", "una lista gia' risolta non viene svuotata")
 async def t_idempotent(_ctx: TestContext) -> None:
-    from src.models.providers.fallback import FallbackConfig
+    from openagent_core.models.providers.fallback import FallbackConfig
 
     cfg = FallbackConfig(on_rate_limit=["anthropic:claude-haiku-4-5"])
     cfg.resolve_models()

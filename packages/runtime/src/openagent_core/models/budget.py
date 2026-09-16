@@ -81,7 +81,7 @@ class BudgetTracker:
         ``cache_read_tokens`` (a subset of ``input_tokens``) is billed at the
         cheap prefix-cache-read rate; 0 reproduces the old flat pricing.
         """
-        from src.models.catalog import compute_cost
+        from openagent_core.models.catalog import compute_cost
 
         return compute_cost(
             model_ref=model,

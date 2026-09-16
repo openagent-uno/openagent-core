@@ -34,8 +34,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from src.models.providers.deepseek import DeepSeek
-from src.models.providers.message import Message
+from openagent_core.models.providers.deepseek import DeepSeek
+from openagent_core.models.providers.message import Message
 
 # ── Files ────────────────────────────────────────────────────────────
 

@@ -124,7 +124,7 @@ async def t_no_vault_maintenance_module(ctx: TestContext) -> None:
     """
     import importlib
 
-    for mod in ("src.learning.vault_maintenance", "src.learning._model"):
+    for mod in ("openagent_core.learning.vault_maintenance", "openagent_core.learning._model"):
         try:
             importlib.import_module(mod)
         except ImportError:
@@ -172,7 +172,7 @@ async def t_learning_holds_no_vault_loop(ctx: TestContext) -> None:
                 and node.func.attr == "maintenance"
             ):
                 offenders.append(f"{rel}: .maintenance() call")
-            # `from src.memory.vault.service import get_service` — the handle
+            # `from openagent_core.memory.vault.service import get_service` — the handle
             # you would need to reach it.
             elif isinstance(node, ast.ImportFrom) and "vault" in (node.module or ""):
                 offenders.append(f"{rel}: imports {node.module}")
@@ -243,7 +243,7 @@ async def t_old_config_still_boots(ctx: TestContext) -> None:
     """
     import yaml
 
-    from src.core.server import _build_agent
+    from openagent_core.core.server import _build_agent
 
     cfg = yaml.safe_load(_OLD_YAML)
     # Snapshot the WHOLE environment, not just ``_RETIRED_ENV``.

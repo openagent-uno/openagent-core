@@ -66,7 +66,7 @@ class _FakeScheduler:
 
 def _server_with(db):
     """Un'istanza di AgentServer abbastanza viva da eseguire il metodo."""
-    from src.core.server import AgentServer
+    from openagent_core.core.server import AgentServer
 
     srv = AgentServer.__new__(AgentServer)
 
@@ -89,7 +89,7 @@ class _CapturedEvents:
     def __enter__(self):
         import tempfile
         from pathlib import Path
-        from src.core import logging as core_logging
+        from openagent_core.core import logging as core_logging
 
         self._tmp = tempfile.TemporaryDirectory()
         self._target = Path(self._tmp.name) / "events.jsonl"
@@ -108,7 +108,7 @@ class _CapturedEvents:
         return self
 
     def __exit__(self, *exc):
-        from src.core import logging as core_logging
+        from openagent_core.core import logging as core_logging
 
         # Si torna al file di prima solo se esiste ancora una cartella dove
         # riaprirlo: se il precedente era la temporanea di un'altra prova,

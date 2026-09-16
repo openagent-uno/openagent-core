@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 # Dedup `catalog.pricing_resolved` events so each (runtime_id, source) pair only
 # logs once per process. Without this every call to compute_cost emits a row;
@@ -506,7 +506,7 @@ def openrouter_pricing_ready() -> bool:
     raises; a cold/missing cache simply reports "not ready".
     """
     try:
-        from src.models import discovery
+        from openagent_core.models import discovery
     except ImportError:
         return False
     cache = getattr(discovery, "_OPENROUTER_CACHE", None)
@@ -534,7 +534,7 @@ def cheapest_enabled_model(providers_config: Any) -> "CatalogModel | None":
     throwaway single-model call at the cheapest enabled row instead of routing
     the whole ~150k-token fold through the full Team leader.
     """
-    from src.core.execution_profile import _is_cloud_model_id
+    from openagent_core.core.execution_profile import _is_cloud_model_id
 
     best: CatalogModel | None = None
     best_key: tuple[float, int] | None = None
@@ -643,7 +643,7 @@ def _maybe_prime_openrouter_cache() -> None:
     try:
         import asyncio
 
-        from src.models import discovery
+        from openagent_core.models import discovery
     except ImportError:
         return
     cache = getattr(discovery, "_OPENROUTER_CACHE", None)
@@ -679,7 +679,7 @@ async def warm_pricing_cache() -> bool:
     existing lazy-prime fallback intact. Returns True when the cache is warm.
     """
     try:
-        from src.models import discovery
+        from openagent_core.models import discovery
     except ImportError:
         return False
     try:
@@ -746,7 +746,7 @@ def _openrouter_pricing_lookup(runtime_id: str) -> dict[str, float] | None:
     OpenRouter's catalog.
     """
     try:
-        from src.models import discovery
+        from openagent_core.models import discovery
     except ImportError:
         return None
     cache = getattr(discovery, "_OPENROUTER_CACHE", None)
@@ -792,7 +792,7 @@ def _openrouter_context_length_lookup(runtime_id: str) -> int | None:
     ``None`` on cache miss or when the model isn't in OpenRouter.
     """
     try:
-        from src.models import discovery
+        from openagent_core.models import discovery
     except ImportError:
         return None
     cache = getattr(discovery, "_OPENROUTER_CACHE", None)

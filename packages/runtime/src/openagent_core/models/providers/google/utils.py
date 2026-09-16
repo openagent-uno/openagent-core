@@ -3,8 +3,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-from src.stream.media import Audio, File, Image, Video
-from src.core._runner.utils.log import log_warning
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.core._runner.utils.log import log_warning
 
 # Common format -> MIME type mappings shared across Gemini model classes
 FORMAT_TO_MIME: Dict[str, str] = {

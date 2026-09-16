@@ -25,7 +25,7 @@ async def t_delete_lowers_max_updated(ctx: TestContext) -> None:
     """The premise the comparison depends on. If this ever stopped being
     true the ``!=`` below would be unnecessary — so assert it rather than
     assume it."""
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -75,7 +75,7 @@ def _probe_agent(status, *, mcp_reloads: list[int]):
 
 @test("registry_reload", "a deletion that lowers the stamp still reloads")
 async def t_reload_on_lowered_stamp(_ctx: TestContext) -> None:
-    from src.core.agent import Agent
+    from openagent_core.core.agent import Agent
 
     reloads: list[int] = []
     status = {"value": (200.0, 200.0, 1, 200.0)}
@@ -102,7 +102,7 @@ async def t_reload_on_lowered_stamp(_ctx: TestContext) -> None:
 async def t_models_stamp_not_high_water(_ctx: TestContext) -> None:
     """``max()`` could only ratchet up, so after one delete the models
     branch never fired again — not even for a later, legitimate edit."""
-    from src.core.agent import Agent
+    from openagent_core.core.agent import Agent
 
     reloads: list[int] = []
     status = {"value": (0.0, 500.0, 1, 0.0)}

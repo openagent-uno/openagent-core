@@ -31,7 +31,7 @@ async def _make_db() -> object:
             self._conn = conn
 
     conn = await aiosqlite.connect(":memory:")
-    from src.memory.db import SCHEMA_SQL
+    from openagent_core.memory.db import SCHEMA_SQL
     await conn.executescript(SCHEMA_SQL)
     return _Shim(conn)
 
@@ -43,10 +43,10 @@ async def t_shared_path_injects(ctx: TestContext) -> None:
     for k in ("OPENAGENT_VAULT_REMINDER_ENABLED", "OPENAGENT_VAULT_REMINDER_EVERY_N_TURNS"):
         os.environ.pop(k, None)
     import importlib
-    from src.learning import vault_reminder
+    from openagent_core.learning import vault_reminder
     importlib.reload(vault_reminder)
 
-    from src.core.agent import _with_vault_reminder
+    from openagent_core.core.agent import _with_vault_reminder
 
     db = await _make_db()
     out = await _with_vault_reminder(db, "sess-wired", "what is the deploy command?")
@@ -60,9 +60,9 @@ async def t_hook_noop(ctx: TestContext) -> None:
     os.environ["OPENAGENT_VAULT_REMINDER_ENABLED"] = "0"
     try:
         import importlib
-        from src.learning import vault_reminder
+        from openagent_core.learning import vault_reminder
         importlib.reload(vault_reminder)
-        from src.core.agent import _with_vault_reminder
+        from openagent_core.core.agent import _with_vault_reminder
 
         db = await _make_db()
         assert await _with_vault_reminder(db, "s", "hi") == "hi", "disabled must pass text through"
@@ -78,9 +78,9 @@ async def t_hook_never_raises(ctx: TestContext) -> None:
     for k in ("OPENAGENT_VAULT_REMINDER_ENABLED",):
         os.environ.pop(k, None)
     import importlib
-    from src.learning import vault_reminder
+    from openagent_core.learning import vault_reminder
     importlib.reload(vault_reminder)
-    from src.core.agent import _with_vault_reminder
+    from openagent_core.core.agent import _with_vault_reminder
 
     class _Exploding:
         @property

@@ -6,7 +6,7 @@ from ._framework import TestContext, test
 
 @test("scheduled_task_execution_policy", "validation is strict and canonical")
 async def t_policy_validation(_ctx: TestContext) -> None:
-    from src.core.execution_policy import (
+    from openagent_core.core.execution_policy import (
         narrow_execution_policy,
         normalize_execution_policy,
     )
@@ -56,8 +56,8 @@ async def t_policy_validation(_ctx: TestContext) -> None:
 
 @test("scheduled_task_execution_policy", "DB round-trip and clearing preserve defaults")
 async def t_policy_db_roundtrip(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.memory.schedule import decorate_scheduled_task
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.schedule import decorate_scheduled_task
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -93,7 +93,7 @@ async def t_policy_migration(ctx: TestContext) -> None:
     import uuid
     import aiosqlite
 
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     path = ctx.db_path.with_name(f"policy-migration-{uuid.uuid4().hex[:8]}.db")
     async with aiosqlite.connect(str(path)) as conn:
@@ -126,8 +126,8 @@ async def t_policy_migration(ctx: TestContext) -> None:
 
 @test("scheduled_task_execution_policy", "tool budget context overrides provider global")
 async def t_policy_runtime_context(_ctx: TestContext) -> None:
-    from src.core.execution_policy import reset_execution_policy, set_execution_policy
-    from src.models.native_provider import _max_tool_calls_per_run
+    from openagent_core.core.execution_policy import reset_execution_policy, set_execution_policy
+    from openagent_core.models.native_provider import _max_tool_calls_per_run
 
     before = _max_tool_calls_per_run()
     token = set_execution_policy({"max_tool_calls": 6})
@@ -140,9 +140,9 @@ async def t_policy_runtime_context(_ctx: TestContext) -> None:
 
 @test("scheduled_task_execution_policy", "runner cache separates capability envelopes")
 async def t_policy_cache_key(_ctx: TestContext) -> None:
-    from src.core.execution_policy import reset_execution_policy, set_execution_policy
-    from src.core.tool_scope import reset_tool_allowlist, set_tool_allowlist
-    from src.models.native_provider import _execution_cache_key
+    from openagent_core.core.execution_policy import reset_execution_policy, set_execution_policy
+    from openagent_core.core.tool_scope import reset_tool_allowlist, set_tool_allowlist
+    from openagent_core.models.native_provider import _execution_cache_key
 
     plain, system = _execution_cache_key("system")
     assert plain == system == "system"
@@ -164,10 +164,10 @@ async def t_scheduler_policy_scope(ctx: TestContext) -> None:
     import uuid
     from unittest.mock import AsyncMock, patch
 
-    from src.core.execution_policy import current_execution_policy
-    from src.core.scheduler import Scheduler
-    from src.core.tool_scope import current_tool_allowlist
-    from src.memory.db import MemoryDB
+    from openagent_core.core.execution_policy import current_execution_policy
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.core.tool_scope import current_tool_allowlist
+    from openagent_core.memory.db import MemoryDB
 
     class SpyAgent:
         name = "spy"
@@ -210,11 +210,11 @@ async def t_scheduler_policy_scope(ctx: TestContext) -> None:
         # not the word "replio") and must not intersect the grant down to zero.
         with (
             patch(
-                "src.core.execution_profile.should_use_lean_local_scheduled_task",
+                "openagent_core.core.execution_profile.should_use_lean_local_scheduled_task",
                 AsyncMock(return_value=True),
             ),
             patch(
-                "src.core.execution_profile.lean_local_tool_families",
+                "openagent_core.core.execution_profile.lean_local_tool_families",
                 return_value=["vault", "tool-search"],
             ),
         ):
@@ -247,11 +247,11 @@ async def t_lean_task_tool_budget(_ctx: TestContext) -> None:
     """
     import os as _os
 
-    from src.core.execution_profile import (
+    from openagent_core.core.execution_profile import (
         lean_local_event_scope,
         lean_local_task_scope,
     )
-    from src.models.native_provider import _max_tool_calls_per_run
+    from openagent_core.models.native_provider import _max_tool_calls_per_run
 
     for key in ("OPENAGENT_LEAN_EVENT_MAX_TOOL_CALLS",
                 "OPENAGENT_LEAN_TASK_MAX_TOOL_CALLS"):

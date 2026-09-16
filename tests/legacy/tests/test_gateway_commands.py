@@ -110,8 +110,8 @@ class _Harness:
     """Wire up SessionManager + fake agent + the real ``_handle_command``."""
 
     def __init__(self, *, known_ids: list[str] | None = None) -> None:
-        from src.gateway.sessions import SessionManager
-        from src.gateway.server import Gateway
+        from openagent_core.gateway.sessions import SessionManager
+        from openagent_core.gateway.server import Gateway
 
         self.sessions = SessionManager(agent_name="test-agent")
         self.agent = _FakeAgent(known_ids=known_ids)
@@ -182,7 +182,7 @@ async def t_stop_scoped_preserves_others(ctx: TestContext) -> None:
     """Two users on the same telegram bot. User B is mid-turn; user A
     issues /stop. A's stop must NOT interrupt B's running task.
     """
-    from src.gateway.sessions import _QueuedItem
+    from openagent_core.gateway.sessions import _QueuedItem
 
     h = _Harness()
     client = "bridge:telegram"
@@ -397,10 +397,10 @@ async def _attach_live_turn(h: "_Harness", client: str, raw_sid: str):
     the turn immediately (no debounce wait) so the turn is in flight by the
     time the agent engages.
     """
-    from src.stream.session import StreamSession
-    from src.stream.channel import RealtimeChannel
-    from src.stream.events import TextFinal, now_ms
-    from src.gateway.server import _StreamHolder
+    from openagent_core.stream.session import StreamSession
+    from openagent_core.stream.channel import RealtimeChannel
+    from openagent_core.stream.events import TextFinal, now_ms
+    from openagent_core.gateway.server import _StreamHolder
 
     sid = h.sessions.get_or_create_session(client, raw_sid)
     agent = _EngagedAgent()
@@ -534,12 +534,12 @@ async def t_compact_short_history(ctx: TestContext) -> None:
     returns None and we expect the 'nothing to compact' message.
     """
     import tempfile, os
-    from src.gateway.server import Gateway
-    from src.gateway.sessions import SessionManager
+    from openagent_core.gateway.server import Gateway
+    from openagent_core.gateway.sessions import SessionManager
 
     # Build a real MemoryDB in a temp dir so compact() can resolve a db_path.
     with tempfile.TemporaryDirectory() as tmp:
-        from src.memory.db import MemoryDB
+        from openagent_core.memory.db import MemoryDB
         db_path = os.path.join(tmp, "test.db")
         db = MemoryDB(db_path)
         await db.connect()
@@ -605,8 +605,8 @@ async def t_model_no_session_with_arg(ctx: TestContext) -> None:
     h = _Harness()
     # The _Harness.run_command doesn't thread arg through; call the server
     # directly.
-    from src.gateway.server import Gateway
-    from src.gateway.sessions import SessionManager
+    from openagent_core.gateway.server import Gateway
+    from openagent_core.gateway.sessions import SessionManager
 
     server = Gateway.__new__(Gateway)
     server.sessions = SessionManager(agent_name="test")
@@ -632,8 +632,8 @@ async def t_model_no_session_with_arg(ctx: TestContext) -> None:
 @test("gateway_commands", "/model with session_id but no db returns error")
 async def t_model_no_db(ctx: TestContext) -> None:
     """When memory_db is None (agent has no DB), /model must fail gracefully."""
-    from src.gateway.server import Gateway
-    from src.gateway.sessions import SessionManager
+    from openagent_core.gateway.server import Gateway
+    from openagent_core.gateway.sessions import SessionManager
 
     class _AgentNoDB:
         name = "test"
@@ -686,9 +686,9 @@ async def t_model_picker(ctx: TestContext) -> None:
     rows so the enriched query is exercised end-to-end; a fake returning
     pre-baked ``runtime_id`` would mask exactly this bug.
     """
-    from src.gateway.server import Gateway
-    from src.gateway.sessions import SessionManager
-    from src.memory.db import MemoryDB
+    from openagent_core.gateway.server import Gateway
+    from openagent_core.gateway.sessions import SessionManager
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -756,8 +756,8 @@ async def t_model_picker(ctx: TestContext) -> None:
 @test("gateway_commands", "GET /api/commands exposes specs incl. model.arg_source")
 async def t_commands_api(ctx: TestContext) -> None:
     import json
-    from src.gateway.commands import COMMAND_MAP
-    from src.gateway.api.commands import handle_list
+    from openagent_core.gateway.commands import COMMAND_MAP
+    from openagent_core.gateway.api.commands import handle_list
 
     assert COMMAND_MAP["model"].arg_source == "models", COMMAND_MAP["model"]
     assert COMMAND_MAP["stop"].arg_source is None, COMMAND_MAP["stop"]

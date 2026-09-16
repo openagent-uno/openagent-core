@@ -13,10 +13,10 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from src.core._runner.agent.agent import Agent
+    from openagent_core.core._runner.agent.agent import Agent
 
-from src.core._runner._stubs import FilterExpr
-from src.core._runner.utils.log import log_debug, log_error, log_warning
+from openagent_core.core._runner._stubs import FilterExpr
+from openagent_core.core._runner.utils.log import log_debug, log_error, log_warning
 
 
 def get_effective_filters(
@@ -167,9 +167,9 @@ def deep_copy_field(agent: Agent, field_name: str, field_value: Any) -> Any:
 
     # For tools, return callable factories by reference; share MCP tools but copy others
     if field_name == "tools" and field_value is not None:
-        from src.mcp._runtime import Toolkit
-        from src.mcp._runtime.function import Function
-        from src.core._runner.utils.callables import is_callable_factory
+        from openagent_core.mcp._runtime import Toolkit
+        from openagent_core.mcp._runtime.function import Function
+        from openagent_core.core._runner.utils.callables import is_callable_factory
 
         # Callable-factory tools are shared by reference and resolved per-run
         if is_callable_factory(field_value, excluded_types=(Toolkit, Function)):

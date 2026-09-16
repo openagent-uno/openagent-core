@@ -18,7 +18,7 @@ Two properties keep this from being reckless.
 
 **It proposes before it writes.** The default mode is ``propose``: the fork
 may not mutate the library at all — enforced in
-``src.mcp.servers.skills.provenance``, not asked for in a prompt. It writes
+``openagent_core.mcp.servers.skills.provenance``, not asked for in a prompt. It writes
 down what it would change and a person decides. Promotion to writing is a
 config change once its notes have been read for a while.
 
@@ -38,7 +38,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 # Only skills and memory. The reviewer's job is to notice a procedure worth
 # keeping — it has no business running shell commands or talking to anyone,
@@ -156,8 +156,8 @@ async def run_review(
     parent_model: str | None = None,
 ) -> dict[str, Any] | None:
     """Spawn the review fork and return its verdict, or None if it did not run."""
-    from src.core.child_session import run_child_session
-    from src.mcp.servers.skills.provenance import (
+    from openagent_core.core.child_session import run_child_session
+    from openagent_core.mcp.servers.skills.provenance import (
         BACKGROUND, PROPOSE, reset_write_origin, set_write_origin,
     )
 

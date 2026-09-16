@@ -12,7 +12,7 @@ Two defects, one file — they share a cause:
      this file, in its own module, because ``logging.py`` offered nothing
      usable. Two readers of one format is a drift we pay for elsewhere.
 
-So the reader moved into ``src.core.logging`` (which owns the format) and
+So the reader moved into ``openagent_core.core.logging`` (which owns the format) and
 ``read_tail`` was reimplemented on it. The whole risk of that move is a
 *silent* change to ``read_tail``'s observable contract, so most of this file is
 an equivalence proof against the implementation it replaced — including the
@@ -48,7 +48,7 @@ def _agent_dir(ctx: TestContext, name: str) -> Iterator[Path]:
     process and a leaked global would silently redirect every later test's
     vault/db/logs.
     """
-    from src.core.paths import get_agent_dir, log_dir, set_agent_dir
+    from openagent_core.core.paths import get_agent_dir, log_dir, set_agent_dir
 
     previous = get_agent_dir()
     target = ctx.test_dir / f"read-tail-{name}"
@@ -131,7 +131,7 @@ def _write(dir_: Path, entries: list[dict[str, Any]] | str) -> Path:
 
 @test("logs_read_tail", "read_tail matches the slurping implementation it replaced")
 async def t_contract_equivalence(ctx: TestContext) -> None:
-    from src.core.logging import read_tail
+    from openagent_core.core.logging import read_tail
 
     now = time.time()
     with _agent_dir(ctx, "equiv") as log_dir_:
@@ -170,7 +170,7 @@ async def t_contract_equivalence(ctx: TestContext) -> None:
 
 @test("logs_read_tail", "read_tail's edge cases are unchanged: corrupt, blank, missing, empty")
 async def t_contract_edges(ctx: TestContext) -> None:
-    from src.core.logging import read_tail
+    from openagent_core.core.logging import read_tail
 
     # Missing file → [] (not an exception).
     with _agent_dir(ctx, "missing") as log_dir_:
@@ -228,7 +228,7 @@ async def t_non_object_lines(ctx: TestContext) -> None:
     ``_JsonlFormatter`` always emits an object — so this is reachable only via
     a corrupt/hand-edited log, which is precisely when not crashing matters.
     """
-    from src.core.logging import read_tail
+    from openagent_core.core.logging import read_tail
 
     with _agent_dir(ctx, "nonobject") as log_dir_:
         path = _write(
@@ -269,7 +269,7 @@ async def t_block_boundaries(ctx: TestContext) -> None:
     """The reverse reader stitches 64 KB blocks back together; an off-by-one at
     a boundary would silently drop or merge an entry mid-file, which no small
     fixture would ever notice."""
-    from src.core.logging import _BLOCK_BYTES, read_tail
+    from openagent_core.core.logging import _BLOCK_BYTES, read_tail
 
     with _agent_dir(ctx, "blocks") as log_dir_:
         # ~250 KB — several blocks, with lines of varying length so boundaries
@@ -304,8 +304,8 @@ async def t_ancient_prefix_survives_unbounded(ctx: TestContext) -> None:
     MCP's reader — same file, same primitive, its own default — does not, which
     is what proves the cap is still opt-in rather than merely absent.
     """
-    from src.core.logging import read_tail
-    from src.mcp.servers.logs import reader
+    from openagent_core.core.logging import read_tail
+    from openagent_core.mcp.servers.logs import reader
 
     with _agent_dir(ctx, "ancient") as log_dir_:
         # Three ancient markers, then >2 MB of newer noise burying them.
@@ -360,8 +360,8 @@ async def t_ancient_prefix_survives_unbounded(ctx: TestContext) -> None:
 async def t_single_reader(ctx: TestContext) -> None:
     """Guards the de-duplication itself: if someone re-adds a private reader to
     the MCP, these stop being the same object and the two can drift again."""
-    from src.core import logging as core_logging
-    from src.mcp.servers.logs import reader
+    from openagent_core.core import logging as core_logging
+    from openagent_core.mcp.servers.logs import reader
 
     assert reader.iter_lines_reverse is core_logging.iter_lines_reverse
     assert reader.ScanStats is core_logging.ScanStats
@@ -390,8 +390,8 @@ async def t_endpoint_offloads_to_thread(ctx: TestContext) -> None:
     feel — a stalled loop is a stalled voice turn — and it fails loudly if the
     ``await asyncio.to_thread`` is ever "simplified" back to a direct call.
     """
-    from src.core import logging as core_logging
-    from src.gateway.api import logs as logs_api
+    from openagent_core.core import logging as core_logging
+    from openagent_core.gateway.api import logs as logs_api
 
     loop_thread = threading.get_ident()
     observed: dict[str, Any] = {}
@@ -451,7 +451,7 @@ async def t_endpoint_offloads_to_thread(ctx: TestContext) -> None:
 async def t_endpoint_end_to_end(ctx: TestContext) -> None:
     """The offload above uses a spy, so this drives the endpoint against a real
     file: same shape (a bare JSON array, oldest→newest), same filter."""
-    from src.gateway.api import logs as logs_api
+    from openagent_core.gateway.api import logs as logs_api
 
     now = time.time()
     with _agent_dir(ctx, "endpoint") as log_dir_:

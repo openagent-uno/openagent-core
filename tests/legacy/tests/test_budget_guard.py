@@ -43,8 +43,8 @@ async def _make(ctx: TestContext, providers_config: list[dict]):
     """Fresh isolated DB + a real ModelDispatcher wired to it (guard created in
     set_db). TTL pinned high so the sync hot path never spawns a background
     refresh mid-test — every test drives ``refresh()`` explicitly."""
-    from src.memory.db import MemoryDB
-    from src.models.dispatcher import ModelDispatcher
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     db = MemoryDB(str(ctx.test_dir / f"budget_guard_{uuid.uuid4().hex}.db"))
     await db.connect()
@@ -57,7 +57,7 @@ async def _make(ctx: TestContext, providers_config: list[dict]):
 @contextlib.contextmanager
 def _capture_elog():
     """Capture ``budget_guard``'s structured events as (name, kwargs) tuples."""
-    import src.core.budget_guard as bg
+    import openagent_core.core.budget_guard as bg
 
     events: list[tuple[str, dict]] = []
     orig = bg.elog
@@ -85,7 +85,7 @@ async def _rec(db, model: str, *, cost: float = 0.0, tokens: int = 0):
 
 @test("budget_guard", "off by default: no rules → catalog byte-identical")
 async def t_budget_off_by_default(ctx: TestContext) -> None:
-    from src.models.catalog import iter_configured_models
+    from openagent_core.models.catalog import iter_configured_models
 
     providers = _providers(("anthropic", ["claude-opus-4-8"]),
                            ("deepseek", ["deepseek-v4-pro"]))
@@ -238,7 +238,7 @@ async def t_budget_global_never_empty(ctx: TestContext) -> None:
 
 
 def _entries(disp):
-    from src.models.catalog import iter_configured_models
+    from openagent_core.models.catalog import iter_configured_models
     return [e for e in iter_configured_models(disp._providers_config) if not e.disabled]
 
 
@@ -327,7 +327,7 @@ async def t_budget_alerts_dedupe(ctx: TestContext) -> None:
 
 @test("budget_guard", "usage view reports spend vs limit; task/per_run not enforced")
 async def t_budget_usage_view(ctx: TestContext) -> None:
-    from src.core.budget_guard import compute_budget_usage
+    from openagent_core.core.budget_guard import compute_budget_usage
 
     db, disp = await _make(ctx, _providers(("deepseek", ["deepseek-v4-pro"])))
     try:
@@ -362,8 +362,8 @@ async def t_budget_usage_view(ctx: TestContext) -> None:
 
 @test("budget_guard", "yaml seed is additive and never clobbers an app edit")
 async def t_budget_seed_reconcile(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.models.dispatcher import ModelDispatcher
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     path = str(ctx.test_dir / f"budget_seed_{uuid.uuid4().hex}.db")
     seed = [{"scope_kind": "provider", "scope": "deepseek", "metric": "cost_usd",
@@ -405,7 +405,7 @@ async def t_budget_seed_reconcile(ctx: TestContext) -> None:
 @test("budget_guard", "_strict_scopes parses kind:value list + bare 'global'")
 async def t_strict_scopes_parse(ctx: TestContext) -> None:
     import os
-    from src.core.budget_guard import _strict_scopes
+    from openagent_core.core.budget_guard import _strict_scopes
     os.environ["OPENAGENT_BUDGET_STRICT_SCOPES"] = "provider:deepseek, model:x:y , global, junk, task:t"
     try:
         got = _strict_scopes()

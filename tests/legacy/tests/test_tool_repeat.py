@@ -25,7 +25,7 @@ from ._framework import TestContext, test
 
 @test("tool_repeat", "il giro viene riconosciuto e non pagato")
 async def t_the_loop_is_caught(ctx: TestContext) -> None:
-    from src.core.tool_repeat import begin_run, observe
+    from openagent_core.core.tool_repeat import begin_run, observe
 
     begin_run()
     args = {"path": "docs/architecture.md"}
@@ -41,7 +41,7 @@ async def t_the_loop_is_caught(ctx: TestContext) -> None:
 
 @test("tool_repeat", "argomenti diversi sono lavoro diverso")
 async def t_different_arguments_are_different_work(ctx: TestContext) -> None:
-    from src.core.tool_repeat import begin_run, observe
+    from openagent_core.core.tool_repeat import begin_run, observe
 
     begin_run()
     for i in range(10):
@@ -52,7 +52,7 @@ async def t_different_arguments_are_different_work(ctx: TestContext) -> None:
 
 @test("tool_repeat", "l'ordine delle chiavi non nasconde il giro")
 async def t_key_order_does_not_hide_it(ctx: TestContext) -> None:
-    from src.core.tool_repeat import begin_run, observe, signature
+    from openagent_core.core.tool_repeat import begin_run, observe, signature
 
     # Due chiamate identiche scritte in ordine diverso sono la stessa
     # chiamata; una firma che non canonicalizza non vedrebbe il giro proprio
@@ -67,7 +67,7 @@ async def t_key_order_does_not_hide_it(ctx: TestContext) -> None:
 
 @test("tool_repeat", "cio' che scrive non viene MAI intercettato")
 async def t_mutating_tools_are_never_blocked(ctx: TestContext) -> None:
-    from src.core.tool_repeat import begin_run, is_mutating, observe
+    from openagent_core.core.tool_repeat import begin_run, is_mutating, observe
 
     begin_run()
     for name in ("write_file", "send_message", "delete_note", "skill_manage",
@@ -86,7 +86,7 @@ async def t_mutating_tools_are_never_blocked(ctx: TestContext) -> None:
 
 @test("tool_repeat", "la risposta gia' avuta viene restituita, non rifatta")
 async def t_the_previous_answer_comes_back(ctx: TestContext) -> None:
-    from src.core.tool_repeat import begin_run, observe, remember_result
+    from openagent_core.core.tool_repeat import begin_run, observe, remember_result
 
     begin_run()
     args = {"query": "errori di ieri"}
@@ -103,7 +103,7 @@ async def t_the_previous_answer_comes_back(ctx: TestContext) -> None:
 
 @test("tool_repeat", "i contatori non attraversano le esecuzioni")
 async def t_counters_are_per_run(ctx: TestContext) -> None:
-    from src.core.tool_repeat import begin_run, observe
+    from openagent_core.core.tool_repeat import begin_run, observe
 
     args = {"path": "x.md"}
     begin_run()
@@ -123,7 +123,7 @@ async def t_counters_are_per_run(ctx: TestContext) -> None:
 async def t_no_run_no_verdict(ctx: TestContext) -> None:
     import contextvars
 
-    from src.core.tool_repeat import observe
+    from openagent_core.core.tool_repeat import observe
 
     # In un contesto pulito i contatori sono None: nessuna esecuzione aperta.
     # Indovinare qui vorrebbe dire contare chiamate che appartengono a un'altra
@@ -137,7 +137,7 @@ async def t_no_run_no_verdict(ctx: TestContext) -> None:
 
 @test("tool_repeat", "l'hook esegue davvero, e alla terza smette")
 async def t_the_hook_does_the_work(ctx: TestContext) -> None:
-    from src.core.tool_repeat import begin_run, repeat_guard
+    from openagent_core.core.tool_repeat import begin_run, repeat_guard
 
     esecuzioni = []
 
@@ -159,7 +159,7 @@ async def t_the_hook_does_the_work(ctx: TestContext) -> None:
 
 @test("tool_repeat", "anche la catena asincrona e' coperta")
 async def t_async_chain_too(ctx: TestContext) -> None:
-    from src.core.tool_repeat import begin_run, repeat_guard_async
+    from openagent_core.core.tool_repeat import begin_run, repeat_guard_async
 
     esecuzioni = []
 

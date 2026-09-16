@@ -56,9 +56,9 @@ _AI_GRAPH = {
     "run-now streams its ai-node child frames AND announces the run for the feed",
 )
 async def t_workflow_streams_and_announces(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.workflow.executor import WorkflowExecutor
-    from src.stream.child_stream import set_child_broadcast_sink
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.workflow.executor import WorkflowExecutor
+    from openagent_core.stream.child_stream import set_child_broadcast_sink
 
     tmp = ctx.db_path.with_name(f"wf-live-{uuid.uuid4().hex[:8]}.db")
     db = MemoryDB(str(tmp))

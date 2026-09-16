@@ -18,7 +18,7 @@ existing JSON wire format (see :mod:`openagent.gateway.protocol`) so older
 clients continue to work without changes.
 """
 
-from src.stream.events import (
+from openagent_core.stream.events import (
     Event,
     SessionOpen,
     SessionClose,

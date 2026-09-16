@@ -21,17 +21,17 @@ async def _run(ticket_str: str, password: str) -> int:
     import aiohttp
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-    from src.network.auth.device_cert import verify_cert
-    from src.network.client.login import (
+    from openagent_core.network.auth.device_cert import verify_cert
+    from openagent_core.network.client.login import (
         LoginError, login, register, list_agents as coord_list_agents,
     )
-    from src.network.client.session import (
+    from openagent_core.network.client.session import (
         LoopbackProxy, NetworkBinding, SessionDialer,
     )
-    from src.network.identity import Identity
-    from src.network.iroh_node import IrohNode
-    from src.network.peers import coordinator_node_id_to_pubkey_bytes
-    from src.network.ticket import InviteTicket
+    from openagent_core.network.identity import Identity
+    from openagent_core.network.iroh_node import IrohNode
+    from openagent_core.network.peers import coordinator_node_id_to_pubkey_bytes
+    from openagent_core.network.ticket import InviteTicket
 
     t = InviteTicket.decode(ticket_str)
     coord = t.coordinator_node_id

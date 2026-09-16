@@ -60,7 +60,7 @@ def _write_skill(root: Path, folder: str, *, name: str | None,
 
 @test("skills", "registry loads every SKILL.md; index groups by category")
 async def t_registry_loads_and_indexes(_ctx: TestContext) -> None:
-    from src.mcp.servers.skills.registry import SkillsRegistry
+    from openagent_core.mcp.servers.skills.registry import SkillsRegistry
 
     root = _mkskills()
     try:
@@ -109,7 +109,7 @@ async def t_index_byte_stable(_ctx: TestContext) -> None:
     — a silent per-session cache-write regression with no test symptom but
     the bill. Pin: two calls agree, a fresh registry over the same dir
     agrees, and the bytes carry no date/time/session token."""
-    from src.mcp.servers.skills.registry import SkillsRegistry
+    from openagent_core.mcp.servers.skills.registry import SkillsRegistry
 
     root = _mkskills()
     try:
@@ -146,8 +146,8 @@ async def t_index_byte_stable(_ctx: TestContext) -> None:
 @test("skills", "skill_view / skill_search / skill_manage round-trip")
 async def t_tools_round_trip(_ctx: TestContext) -> None:
     import os
-    from src.mcp.servers.skills import handlers
-    from src.mcp.servers.skills.registry import SkillsRegistry
+    from openagent_core.mcp.servers.skills import handlers
+    from openagent_core.mcp.servers.skills.registry import SkillsRegistry
 
     root = _mkskills()
     prev = os.environ.get("OPENAGENT_SKILLS_PATH")
@@ -208,9 +208,9 @@ async def t_tools_round_trip(_ctx: TestContext) -> None:
 
 @test("skills", "disabled by default: empty index render AND no MCP registration")
 async def t_disabled_path_is_inert(ctx: TestContext) -> None:
-    from src.core.config import skills_settings
-    from src.core.prompts import FRAMEWORK_SYSTEM_PROMPT, build_skills_index
-    from src.mcp.builtins import (
+    from openagent_core.core.config import skills_settings
+    from openagent_core.core.prompts import FRAMEWORK_SYSTEM_PROMPT, build_skills_index
+    from openagent_core.mcp.builtins import (
         BUILTIN_MCP_SPECS, DEFAULT_MCPS, config_gated_mcp_entries,
     )
 
@@ -251,8 +251,8 @@ async def t_disabled_path_is_inert(ctx: TestContext) -> None:
 
     # Bootstrap gate end-to-end: a fresh DB seeds NO skills row when disabled,
     # and exactly one when enabled.
-    from src.memory.bootstrap import ensure_builtin_mcps
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.bootstrap import ensure_builtin_mcps
+    from openagent_core.memory.db import MemoryDB
 
     off_db = MemoryDB(str(ctx.db_path.with_name(f"skills-off-{uuid.uuid4().hex[:8]}.db")))
     await off_db.connect()
@@ -278,7 +278,7 @@ async def t_disabled_path_is_inert(ctx: TestContext) -> None:
 
 @test("skills", "malformed / nameless SKILL.md is skipped gracefully")
 async def t_malformed_is_skipped(_ctx: TestContext) -> None:
-    from src.mcp.servers.skills.registry import SkillsRegistry
+    from openagent_core.mcp.servers.skills.registry import SkillsRegistry
 
     root = _mkskills()
     try:

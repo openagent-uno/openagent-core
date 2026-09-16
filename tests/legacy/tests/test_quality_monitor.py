@@ -42,7 +42,7 @@ def _env(**kw):
 @contextlib.contextmanager
 def _capture():
     """Capture quality_monitor's structured events as (name, kwargs) tuples."""
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     events: list[tuple[str, dict]] = []
     orig = qm.elog
@@ -73,7 +73,7 @@ def _agent(model):
 
 @test("quality", "OFF is a true no-op — no events, no judge call")
 async def t_disabled_noop(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     fm = _FakeModel('{"score":1.0}')
     with _env(OPENAGENT_QUALITY_MONITOR_ENABLED="0"), _capture() as ev:
@@ -86,7 +86,7 @@ async def t_disabled_noop(ctx: TestContext) -> None:
 
 @test("quality", "sampling is deterministic + rate-bounded (0 never, 1 always)")
 async def t_sampling(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     with _env(OPENAGENT_QUALITY_MONITOR_SAMPLE_RATE="0"):
         assert not qm.should_sample("s", "resp")
@@ -102,7 +102,7 @@ async def t_sampling(ctx: TestContext) -> None:
 
 @test("quality", "note_recall emits recall.metric with the outcome fields")
 async def t_note_recall(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     with _env(OPENAGENT_QUALITY_MONITOR_ENABLED="1"), _capture() as ev:
         qm.note_recall("sess", used=True, hits=3, top_score=0.812345)
@@ -114,7 +114,7 @@ async def t_note_recall(ctx: TestContext) -> None:
 
 @test("quality", "_parse_verdict is tolerant (fenced/prose/derived), rejects junk")
 async def t_parse_verdict(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     good = qm._parse_verdict('{"score":0.9,"verdict":"good","fabrication":false,"rationale":"ok"}')
     assert good and good["score"] == 0.9 and good["verdict"] == "good"
@@ -129,7 +129,7 @@ async def t_parse_verdict(ctx: TestContext) -> None:
 
 @test("quality", "the judge scores a turn and emits quality.score")
 async def t_judge_emits(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     fm = _FakeModel('{"score":0.9,"verdict":"good","fabrication":false,"rationale":"grounded"}')
     with _env(OPENAGENT_QUALITY_MONITOR_ENABLED="1",
@@ -146,7 +146,7 @@ async def t_judge_emits(ctx: TestContext) -> None:
 
 @test("quality", "gating skips short + unsampled turns, judges long+sampled")
 async def t_gating(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     with _env(OPENAGENT_QUALITY_MONITOR_ENABLED="1",
               OPENAGENT_QUALITY_MONITOR_SAMPLE_RATE="1",
@@ -162,7 +162,7 @@ async def t_gating(ctx: TestContext) -> None:
 
 @test("quality", "the judge unparseable case logs, never fabricates a score")
 async def t_judge_unparseable(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     fm = _FakeModel("I cannot produce JSON, sorry.")
     with _env(OPENAGENT_QUALITY_MONITOR_ENABLED="1",
@@ -175,7 +175,7 @@ async def t_judge_unparseable(ctx: TestContext) -> None:
 
 @test("quality", "aggregate sums quality + cost + recall over the window")
 async def t_aggregate(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     now = time.time()
     # events.jsonl is append-only and ts-ORDERED (oldest first); the reverse
@@ -211,7 +211,7 @@ async def t_aggregate(ctx: TestContext) -> None:
 
 @test("quality", "spawn_scoring off the loop is a no-op when disabled")
 async def t_spawn_disabled(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     with _env(OPENAGENT_QUALITY_MONITOR_ENABLED="0"):
         # Must not raise, must not schedule anything.
@@ -227,7 +227,7 @@ async def t_scoring_wired_on_both_paths(ctx: TestContext) -> None:
     judge — pin it structurally since the pure-unit fakes can't drive a real
     streaming turn."""
     import inspect
-    from src.core.agent import Agent
+    from openagent_core.core.agent import Agent
 
     for meth in ("run", "run_stream"):
         src = inspect.getsource(getattr(Agent, meth))
@@ -247,7 +247,7 @@ async def t_judge_grounded(ctx: TestContext) -> None:
     """A generic rubric can't tell 'followed the refund policy' from 'sounded
     reasonable'. When the agent has a system_prompt (its playbook), the judge
     prompt must carry those rules and the score event must mark itself grounded."""
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     model = _FakeModel('{"score":0.9,"verdict":"good","fabrication":false,"rationale":"ok"}')
     agent = _agent(model)
@@ -267,7 +267,7 @@ async def t_judge_grounded(ctx: TestContext) -> None:
 
 @test("quality", "judge falls back to the generic rubric when no rules are available")
 async def t_judge_generic_fallback(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     model = _FakeModel('{"score":0.7,"verdict":"warn","fabrication":false,"rationale":"x"}')
     agent = _agent(model)  # SimpleNamespace has no system_prompt
@@ -282,7 +282,7 @@ async def t_judge_generic_fallback(ctx: TestContext) -> None:
 
 @test("quality", "grounding rules are length-capped to bound judge cost")
 async def t_judge_rules_capped(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     agent = _agent(_FakeModel("{}"))
     agent.system_prompt = "R" * 5000
@@ -331,7 +331,7 @@ class _GroundingJudge:
 
 @test("quality", "a reply citing an id present in a tool RESULT is NOT flagged fabrication")
 async def t_judge_grounded_by_tool_trace(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     fm = _GroundingJudge("86cat39x8")
     # The id and user were returned by a tool — a Replio thread brief — so the
@@ -356,7 +356,7 @@ async def t_judge_grounded_by_tool_trace(ctx: TestContext) -> None:
 
 @test("quality", "a genuinely-absent id IS still flagged fabrication (trace lacks it)")
 async def t_judge_absent_id_still_flagged(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     fm = _GroundingJudge("ZZ999NOTREAL")
     # The tool trace is present but does NOT contain the cited id — so it really
@@ -376,7 +376,7 @@ async def t_judge_absent_id_still_flagged(ctx: TestContext) -> None:
 
 @test("quality", "the system rubric carries the tool-trace grounding rule")
 async def t_judge_system_rubric_grounding(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
+    import openagent_core.core.quality_monitor as qm
 
     sysrub = qm._JUDGE_SYSTEM.lower()
     assert "tool trace" in sysrub and "grounded" in sysrub, qm._JUDGE_SYSTEM[:200]
@@ -398,8 +398,8 @@ async def t_spawn_scoring_drains_trace(ctx: TestContext) -> None:
     completed run) → spawn_scoring drains it synchronously → the judge prompt
     carries it. Pins that the capture-and-handoff actually reaches the judge."""
     import asyncio
-    import src.core.quality_monitor as qm
-    from src.core import tool_trace
+    import openagent_core.core.quality_monitor as qm
+    from openagent_core.core import tool_trace
 
     fm = _GroundingJudge("86cat39x8")
     with _env(OPENAGENT_QUALITY_MONITOR_ENABLED="1",
@@ -444,8 +444,8 @@ def _providers(*entries):
 def _primed_pricing():
     """Prime OpenRouter pricing so deepseek is priced and local:* is $0."""
     import time as _t
-    from src.models import discovery
-    import src.models.catalog as catalog
+    from openagent_core.models import discovery
+    import openagent_core.models.catalog as catalog
 
     fake = [{"id": "deepseek/deepseek-v4-pro",
              "pricing": {"prompt": "0.000000435", "completion": "0.00000087"}}]
@@ -462,8 +462,8 @@ def _primed_pricing():
 
 @test("quality", "configured-but-unresolvable judge → cheapest NativeProvider, not the null router")
 async def t_judge_unresolved_resolves_cheap(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
-    from src.models.dispatcher import ModelDispatcher
+    import openagent_core.core.quality_monitor as qm
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     providers = _providers(("deepseek", ["deepseek-v4-pro"]), ("local", ["claude-sub"]))
     router = ModelDispatcher(providers)  # the OLD null-yielding fallback
@@ -498,8 +498,8 @@ def _primed_pricing_rows(rows):
     "pricing": {"prompt","completion"}}``). Ids absent from ``rows`` price as $0
     (the local sub-proxy / self-hosted case)."""
     import time as _t
-    from src.models import discovery
-    import src.models.catalog as catalog
+    from openagent_core.models import discovery
+    import openagent_core.models.catalog as catalog
 
     saved_cache = getattr(discovery, "_OPENROUTER_CACHE", None)
     saved_index = catalog._OPENROUTER_INDEX
@@ -521,8 +521,8 @@ _DEEPSEEK_PRICED = [{"id": "deepseek/deepseek-chat",
 
 @test("quality", "UNSET env defaults the judge to deepseek:deepseek-chat when enabled")
 async def t_default_judge_is_deepseek(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
-    from src.models.dispatcher import ModelDispatcher
+    import openagent_core.core.quality_monitor as qm
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     # local FIRST + $0 (so old cheapest-logic would pick it), an anthropic row
     # ALSO $0 (so 'never an Anthropic key' has teeth), deepseek LAST + priced.
@@ -547,8 +547,8 @@ async def t_default_judge_is_deepseek(ctx: TestContext) -> None:
 
 @test("quality", "env override wins over the deepseek default")
 async def t_env_override_beats_default(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
-    from src.models.dispatcher import ModelDispatcher
+    import openagent_core.core.quality_monitor as qm
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     providers = _providers(("local", ["claude-sub"]), ("deepseek", ["deepseek-chat"]))
     router = ModelDispatcher(providers)
@@ -566,8 +566,8 @@ async def t_env_override_beats_default(ctx: TestContext) -> None:
 
 @test("quality", "deepseek NOT enabled → default falls back to cheapest-enabled (never null)")
 async def t_default_falls_back_when_no_deepseek(ctx: TestContext) -> None:
-    import src.core.quality_monitor as qm
-    from src.models.dispatcher import ModelDispatcher
+    import openagent_core.core.quality_monitor as qm
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     # No deepseek row at all — the default must fall back to the prior
     # cheapest-enabled logic (local:claude-sub, $0), never null, never anthropic.
@@ -588,7 +588,7 @@ async def t_default_falls_back_when_no_deepseek(ctx: TestContext) -> None:
 @test("quality", "session_scope classifies the id shapes the runtime emits")
 async def t_session_scope_classifies(ctx: TestContext) -> None:
     """The four audiences, keyed off the ids production actually produced."""
-    from src.core import quality_monitor as qm
+    from openagent_core.core import quality_monitor as qm
     assert qm.session_scope(
         "event:fe4d5c37-ef40-410c-bfd8-03e3d022f084:f7e34886-1750") == qm.SCOPE_CUSTOMER
     assert qm.session_scope(
@@ -605,7 +605,7 @@ async def t_internal_scope_not_judged(ctx: TestContext) -> None:
     """The production failure this closes: the judge graded a sub-agent whose
     output was itself a grading rubric, then flagged it as a bad customer
     reply. Internal child sessions are out of scope unless asked for."""
-    from src.core import quality_monitor as qm
+    from openagent_core.core import quality_monitor as qm
     fm = _FakeModel('{"score":0.9,"verdict":"good"}')
     reply = "a sufficiently long assistant reply here to clear the min-len gate"
     with _env(OPENAGENT_QUALITY_MONITOR_ENABLED="1",
@@ -633,7 +633,7 @@ async def t_aggregate_by_scope(ctx: TestContext) -> None:
     """A blended average hides a customer regression behind healthy internal
     work. Also pins that events written before the scope stamp are classified
     from their session id, so a window spanning an upgrade still splits."""
-    from src.core import quality_monitor as qm
+    from openagent_core.core import quality_monitor as qm
     now = time.time()
     rows = [
         # Customer replies: bad. Stamped (post-upgrade).

@@ -19,7 +19,7 @@ from ._framework import TestContext, test, free_port
 
 @test("events", "prompt templates accept both raw webhook payloads and envelopes")
 async def t_prompt_template_payload_shapes(ctx: TestContext) -> None:
-    from src.core.event_dispatcher import render_prompt_template
+    from openagent_core.core.event_dispatcher import render_prompt_template
 
     # WebhookSite passes a raw JSON object, but production templates also use
     # the historical envelope spelling payload.payload.*. Both must render.
@@ -43,8 +43,8 @@ async def t_prompt_template_payload_shapes(ctx: TestContext) -> None:
 
 @test("events", "add_event round-trips; the secret is never stored in clear")
 async def t_event_db_roundtrip(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.core.event_secret import make_secret_material, slugify, decrypt_secret
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.event_secret import make_secret_material, slugify, decrypt_secret
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -90,8 +90,8 @@ async def t_event_db_roundtrip(ctx: TestContext) -> None:
 
 @test("events", "delivery de-dupe + rate-limit backstop counters")
 async def t_event_deliveries_db(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.core.event_secret import make_secret_material
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.event_secret import make_secret_material
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -120,9 +120,9 @@ async def t_event_deliveries_db(ctx: TestContext) -> None:
 
 @test("events", "github HMAC verifies; a tampered signature is rejected")
 async def t_webhook_auth_github(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.core.event_secret import make_secret_material
-    from src.gateway.webhook_auth import authenticate, WebhookAuthError, extract_external_id
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.event_secret import make_secret_material
+    from openagent_core.gateway.webhook_auth import authenticate, WebhookAuthError, extract_external_id
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -162,9 +162,9 @@ async def t_webhook_auth_github(ctx: TestContext) -> None:
 
 @test("events", "generic type verifies the bearer secret")
 async def t_webhook_auth_generic(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.core.event_secret import make_secret_material
-    from src.gateway.webhook_auth import authenticate, WebhookAuthError
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.event_secret import make_secret_material
+    from openagent_core.gateway.webhook_auth import authenticate, WebhookAuthError
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -197,9 +197,9 @@ async def t_webhook_listener_isolation(ctx: TestContext) -> None:
     import asyncio
     import urllib.request
     import urllib.error
-    from src.memory.db import MemoryDB
-    from src.core.event_secret import make_secret_material, slugify
-    from src.gateway.webhook_site import WebhookSite
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.event_secret import make_secret_material, slugify
+    from openagent_core.gateway.webhook_site import WebhookSite
 
     class _Agent:
         def __init__(self, db):
@@ -271,9 +271,9 @@ async def t_webhook_disabled_404(ctx: TestContext) -> None:
     import asyncio
     import urllib.request
     import urllib.error
-    from src.memory.db import MemoryDB
-    from src.core.event_secret import make_secret_material
-    from src.gateway.webhook_site import WebhookSite
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.event_secret import make_secret_material
+    from openagent_core.gateway.webhook_site import WebhookSite
 
     class _Agent:
         def __init__(self, db):
@@ -333,8 +333,8 @@ class _SpyAgent:
 
     async def run(self, *, message, user_id, session_id, model_override=None,
                   author=None, on_status=None):
-        from src.core.execution_policy import current_execution_policy
-        from src.core.tool_scope import current_tool_allowlist
+        from openagent_core.core.execution_policy import current_execution_policy
+        from openagent_core.core.tool_scope import current_tool_allowlist
 
         self.prompts.append(message)
         self.policies.append(current_execution_policy())
@@ -348,11 +348,11 @@ class _SpyAgent:
 @test("events", "prompt action renders the payload template into a visible child session")
 async def t_dispatch_prompt(ctx: TestContext) -> None:
     import os
-    from src.memory.db import MemoryDB
-    from src.core.scheduler import Scheduler
-    from src.core.event_dispatcher import dispatch_event
-    from src.core.event_secret import make_secret_material
-    from src.core.child_session import HIDDEN_CHILD_ORIGINS
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.core.event_dispatcher import dispatch_event
+    from openagent_core.core.event_secret import make_secret_material
+    from openagent_core.core.child_session import HIDDEN_CHILD_ORIGINS
 
     os.environ.pop("OPENAGENT_SCHEDULER_DURABLE_SESSIONS", None)
     db = MemoryDB(str(ctx.db_path))
@@ -396,10 +396,10 @@ async def t_dispatch_prompt(ctx: TestContext) -> None:
 @test("events", "prompt action can bind a payload id to one internal event run session")
 async def t_dispatch_prompt_session_binding(ctx: TestContext) -> None:
     import os
-    from src.memory.db import MemoryDB
-    from src.core.scheduler import Scheduler
-    from src.core.event_dispatcher import dispatch_event
-    from src.core.event_secret import make_secret_material
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.core.event_dispatcher import dispatch_event
+    from openagent_core.core.event_secret import make_secret_material
 
     os.environ.pop("OPENAGENT_SCHEDULER_DURABLE_SESSIONS", None)
     db = MemoryDB(str(ctx.db_path))
@@ -465,10 +465,10 @@ async def t_dispatch_prompt_session_binding(ctx: TestContext) -> None:
 @test("events", "scheduled-task action appends the payload as injection-guarded context")
 async def t_dispatch_task_context(ctx: TestContext) -> None:
     import os
-    from src.memory.db import MemoryDB
-    from src.core.scheduler import Scheduler
-    from src.core.event_dispatcher import dispatch_event
-    from src.core.event_secret import make_secret_material
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.core.event_dispatcher import dispatch_event
+    from openagent_core.core.event_secret import make_secret_material
 
     os.environ.pop("OPENAGENT_SCHEDULER_DURABLE_SESSIONS", None)
     db = MemoryDB(str(ctx.db_path))
@@ -520,8 +520,8 @@ async def t_dispatch_task_context(ctx: TestContext) -> None:
 @test("events", "run_task without context is unchanged (back-compat)")
 async def t_run_task_no_context(ctx: TestContext) -> None:
     import os
-    from src.memory.db import MemoryDB
-    from src.core.scheduler import Scheduler
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
 
     os.environ.pop("OPENAGENT_SCHEDULER_DURABLE_SESSIONS", None)
     db = MemoryDB(str(ctx.db_path))
@@ -542,11 +542,11 @@ async def t_run_task_no_context(ctx: TestContext) -> None:
 @test("events", "dispatch emits an 'event' resource event for the live UI")
 async def t_dispatch_emits_resource_event(ctx: TestContext) -> None:
     import os
-    from src.memory.db import MemoryDB
-    from src.core.scheduler import Scheduler
-    from src.core.event_dispatcher import dispatch_event
-    from src.core.event_secret import make_secret_material
-    from src.stream.resource_events import set_resource_event_sink
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.core.event_dispatcher import dispatch_event
+    from openagent_core.core.event_secret import make_secret_material
+    from openagent_core.stream.resource_events import set_resource_event_sink
 
     os.environ.pop("OPENAGENT_SCHEDULER_DURABLE_SESSIONS", None)
     seen: list[tuple] = []
@@ -587,7 +587,7 @@ async def t_event_cancel_not_failed(ctx: TestContext) -> None:
     """
     import asyncio
 
-    import src.core.event_dispatcher as ed
+    import openagent_core.core.event_dispatcher as ed
 
     recorded: dict = {}
 
@@ -637,7 +637,7 @@ async def t_event_cancel_not_failed(ctx: TestContext) -> None:
 async def t_event_real_failure_has_message(ctx: TestContext) -> None:
     """The other half: a genuine exception whose ``str()`` is blank must not be
     indistinguishable from the cancellation bug. It gets the type name."""
-    import src.core.event_dispatcher as ed
+    import openagent_core.core.event_dispatcher as ed
 
     class _Blank(Exception):
         def __str__(self): return ""

@@ -30,8 +30,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from src.memory.vault.model import GateReport, Note
-from src.memory.vault.parser import parse_note_text, split_frontmatter
+from openagent_core.memory.vault.model import GateReport, Note
+from openagent_core.memory.vault.parser import parse_note_text, split_frontmatter
 
 # Rules the doctor can fix mechanically (everything else is a suggestion).
 _FIXABLE_RULES = {"frontmatter_yaml", "wikilink_format", "date_format",
@@ -94,7 +94,7 @@ def _repair_frontmatter_yaml(raw_fm: str) -> tuple[str, bool]:
     it. Anything we cannot mechanically repair is left exactly as-is for the
     gate to keep reporting.
     """
-    from src.memory.vault.parser import FrontmatterSyntaxError, load_frontmatter_yaml
+    from openagent_core.memory.vault.parser import FrontmatterSyntaxError, load_frontmatter_yaml
 
     try:
         load_frontmatter_yaml(raw_fm)

@@ -43,10 +43,10 @@ async def t_handler_uses_wait(ctx: TestContext) -> None:
     """A source check, because the regression is invisible at runtime until it
     eats a long run: the endpoint answered 504 either way."""
     from pathlib import Path
-    import src.gateway.api.scheduled_tasks as mod
+    import openagent_core.gateway.api.scheduled_tasks as mod
 
     src = Path(mod.__file__).read_text()
-    handler = src[src.index("async def handle_run(request)"):]
+    handler = src[openagent_core.index("async def handle_run(request)"):]
     handler = handler[:handler.index("\nasync def ")]
     assert "wait_for(run_task" not in handler, (
         "handle_run is cancelling the firing again")

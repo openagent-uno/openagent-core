@@ -17,29 +17,29 @@ from typing import (
 
 from pydantic import BaseModel
 
-from src.memory.store.base import AsyncBaseDb
-from src.stream.media import Audio, File, Image, Video
-from src.core.metrics import RunMetrics, SessionMetrics
-from src.models.providers.message import Message
-from src.models.providers.response import ModelResponse
-from src.core._run_state import RunContext
-from src.core._run_state.agent import RunEvent, RunInput, RunOutput, RunOutputEvent
-from src.core._run_state.team import RunOutputEvent as TeamRunOutputEvent
-from src.core._run_state.team import TeamRunOutput
-from src.memory.sessions import AgentSession, TeamSession, WorkflowSession
-from src.core._runner.utils.common import is_typed_dict, validate_typed_dict
-from src.core._runner.utils.events import (
+from openagent_core.memory.store.base import AsyncBaseDb
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.core.metrics import RunMetrics, SessionMetrics
+from openagent_core.models.providers.message import Message
+from openagent_core.models.providers.response import ModelResponse
+from openagent_core.core._run_state import RunContext
+from openagent_core.core._run_state.agent import RunEvent, RunInput, RunOutput, RunOutputEvent
+from openagent_core.core._run_state.team import RunOutputEvent as TeamRunOutputEvent
+from openagent_core.core._run_state.team import TeamRunOutput
+from openagent_core.memory.sessions import AgentSession, TeamSession, WorkflowSession
+from openagent_core.core._runner.utils.common import is_typed_dict, validate_typed_dict
+from openagent_core.core._runner.utils.events import (
     create_memory_update_completed_event,
     create_memory_update_started_event,
     create_team_memory_update_completed_event,
     create_team_memory_update_started_event,
     handle_event,
 )
-from src.core._runner.utils.log import log_debug, log_warning
+from openagent_core.core._runner.utils.log import log_debug, log_warning
 
 if TYPE_CHECKING:
-    from src.core._runner.agent.agent import Agent
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.agent.agent import Agent
+    from openagent_core.core._runner.team.team import Team
 
 
 def _has_async_db(entity: Union["Agent", "Team"]) -> bool:
@@ -373,7 +373,7 @@ def collect_joint_files(
     run_input: Optional[RunInput] = None,
 ) -> Optional[Sequence[File]]:
     """Collect files from input and session history."""
-    from src.core._runner.utils.log import log_debug
+    from openagent_core.core._runner.utils.log import log_debug
 
     joint_files: List[File] = []
 
@@ -639,15 +639,15 @@ def _ensure_entity_id(entity: Union["Agent", "Team"]) -> None:
     Imports are local because ``Agent`` / ``Team`` would cause a circular
     import at module load time.
     """
-    from src.core._runner.agent.agent import Agent
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.agent.agent import Agent
+    from openagent_core.core._runner.team.team import Team
 
     if isinstance(entity, Team):
-        from src.core._runner.team._init import set_id as set_team_id
+        from openagent_core.core._runner.team._init import set_id as set_team_id
 
         set_team_id(entity)
     elif isinstance(entity, Agent):
-        from src.core._runner.agent._init import set_id as set_agent_id
+        from openagent_core.core._runner.agent._init import set_id as set_agent_id
 
         set_agent_id(entity)
 

@@ -13,8 +13,8 @@ from ._framework import TestContext, test
 
 @test("budget", "BudgetTracker.record + get_usage_summary")
 async def t_budget_record(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.models.budget import BudgetTracker
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.models.budget import BudgetTracker
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -43,8 +43,8 @@ async def t_budget_compute_cost(ctx: TestContext) -> None:
     """compute_cost reads pricing from the OpenRouter cache — prime it
     with a known shape so the test doesn't depend on the live fetch."""
     import time
-    from src.models import discovery
-    from src.models.budget import BudgetTracker
+    from openagent_core.models import discovery
+    from openagent_core.models.budget import BudgetTracker
 
     prev = discovery._OPENROUTER_CACHE
     try:
@@ -80,8 +80,8 @@ async def t_usage_row_survives_contention(ctx: TestContext) -> None:
 
     import aiosqlite
 
-    from src.memory.db import MemoryDB
-    from src.models.budget import BudgetTracker
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.models.budget import BudgetTracker
 
     path = ctx.db_path.with_name(f"usagelock-{_uuid.uuid4().hex[:8]}.db")
     _os.environ["OPENAGENT_SQLITE_BUSY_TIMEOUT_MS"] = "100"

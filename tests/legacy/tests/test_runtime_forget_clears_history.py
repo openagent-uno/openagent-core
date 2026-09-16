@@ -27,7 +27,7 @@ from ._framework import TestContext, TestSkip, test
 
 def _agno_available() -> bool:
     try:
-        from src.memory.store.sqlite import SqliteDb  # noqa: F401
+        from openagent_core.memory.store.sqlite import SqliteDb  # noqa: F401
         return True
     except ImportError:
         return False
@@ -96,7 +96,7 @@ async def t_forget_via_native_api(ctx: TestContext) -> None:
     if not _agno_available():
         raise TestSkip("API-based runtime not available")
 
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
 
     db_file = ctx.test_dir / "runtime-forget.db"
     _seed_sessions_table(str(db_file))
@@ -119,8 +119,8 @@ async def t_forget_fallback_sql(ctx: TestContext) -> None:
     if not _agno_available():
         raise TestSkip("API-based runtime not available")
 
-    from src.models.native_provider import NativeProvider
-    from src.memory.store.sqlite import SqliteDb
+    from openagent_core.models.native_provider import NativeProvider
+    from openagent_core.memory.store.sqlite import SqliteDb
 
     db_file = ctx.test_dir / "runtime-forget-fallback.db"
     _seed_sessions_table(str(db_file))
@@ -153,7 +153,7 @@ async def t_forget_nonexistent(ctx: TestContext) -> None:
     if not _agno_available():
         raise TestSkip("API-based runtime not available")
 
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
 
     db_file = ctx.test_dir / "runtime-forget-noop.db"
     # Brand-new DB file; schema not yet created — fallback must cope.

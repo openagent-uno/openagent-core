@@ -31,7 +31,7 @@ def _make_agent(frames=None, raises=None):
 
 
 async def _drain(agent_cls):
-    from src.stream.session import StreamSession, StreamTurnRunner
+    from openagent_core.stream.session import StreamSession, StreamTurnRunner
 
     session = StreamSession(
         agent_cls(), client_id="dev", session_id="s", coalesce_window_ms=0,
@@ -46,7 +46,7 @@ async def _drain(agent_cls):
 
 
 def _assert_single_error_before_turn_end(frames, label):
-    from src.stream.events import (
+    from openagent_core.stream.events import (
         OutError, TurnComplete, TURN_END_ERROR,
     )
 
@@ -96,7 +96,7 @@ async def t_raised_failure(_ctx: TestContext) -> None:
 
 @test("turn_error_frames", "a healthy turn emits no error frame")
 async def t_healthy_turn(_ctx: TestContext) -> None:
-    from src.stream.events import OutError, TURN_END_COMPLETED, TurnComplete
+    from openagent_core.stream.events import OutError, TURN_END_COMPLETED, TurnComplete
 
     agent = _make_agent(frames=[{"kind": "done", "text": "all good"}])
     result, frames = await _drain(agent)

@@ -6,9 +6,9 @@ from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from src.memory.store.schemas.culture import CulturalKnowledge
-from src.memory.store.sqlite.schemas import get_table_schema_definition
-from src.core._runner.utils.log import log_debug, log_error, log_warning
+from openagent_core.memory.store.schemas.culture import CulturalKnowledge
+from openagent_core.memory.store.sqlite.schemas import get_table_schema_definition
+from openagent_core.core._runner.utils.log import log_debug, log_error, log_warning
 
 try:
     from sqlalchemy import Table, func

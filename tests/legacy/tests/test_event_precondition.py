@@ -49,7 +49,7 @@ class _Fetch:
 
 
 def _with_fetch(fetch, fn):
-    from src.core import event_precondition as ep
+    from openagent_core.core import event_precondition as ep
     import os
     orig, os.environ["TEST_PRECOND_KEY"] = ep._fetch_json, "k-secret"
     ep._fetch_json = fetch
@@ -63,14 +63,14 @@ def _with_fetch(fetch, fn):
 
 @test("event-precondition", "no precondition configured → always runs")
 async def t_no_spec(_ctx: TestContext) -> None:
-    from src.core.event_precondition import should_skip
+    from openagent_core.core.event_precondition import should_skip
     assert await should_skip(_event(None), _PAYLOAD) == (False, "")
     assert await should_skip({"id": "e"}, _PAYLOAD) == (False, "")
 
 
 @test("event-precondition", "condition matches → skip, with the configured reason")
 async def t_skip_on_match(_ctx: TestContext) -> None:
-    from src.core import event_precondition as ep
+    from openagent_core.core import event_precondition as ep
     import os
     fetch = _Fetch(body={"waiting_for_team": False, "status": "open"})
     orig, ep._fetch_json = ep._fetch_json, fetch
@@ -91,7 +91,7 @@ async def t_skip_on_match(_ctx: TestContext) -> None:
 
 @test("event-precondition", "condition does not match → runs")
 async def t_run_on_mismatch(_ctx: TestContext) -> None:
-    from src.core import event_precondition as ep
+    from openagent_core.core import event_precondition as ep
     import os
     orig, ep._fetch_json = ep._fetch_json, _Fetch(body={"waiting_for_team": True})
     os.environ["TEST_PRECOND_KEY"] = "k"
@@ -107,7 +107,7 @@ async def t_fails_open(_ctx: TestContext) -> None:
     """The whole safety argument. Skipping a real customer message to save a
     model call is a far worse bug than the cost — so anything short of a clear
     match must run."""
-    from src.core import event_precondition as ep
+    from openagent_core.core import event_precondition as ep
     import os
     os.environ["TEST_PRECOND_KEY"] = "k"
     orig = ep._fetch_json
@@ -146,7 +146,7 @@ async def t_after_comparator(_ctx: TestContext) -> None:
     would have dropped 58% of real customer messages — the timestamps are the
     state that actually says what happened.
     """
-    from src.core import event_precondition as ep
+    from openagent_core.core import event_precondition as ep
     import os
     spec = _spec(skip_when={"path": "last_outbound_at", "after": "last_inbound_at"})
     cases = [
@@ -181,7 +181,7 @@ async def t_after_comparator(_ctx: TestContext) -> None:
 
 @test("event-precondition", "a missing credential does not leak an unauthenticated call")
 async def t_missing_env_does_not_call(_ctx: TestContext) -> None:
-    from src.core import event_precondition as ep
+    from openagent_core.core import event_precondition as ep
     import os
     os.environ.pop("TEST_PRECOND_KEY", None)
     fetch = _Fetch(body={"waiting_for_team": False})
@@ -197,8 +197,8 @@ async def t_missing_env_does_not_call(_ctx: TestContext) -> None:
 async def t_dispatcher_skips_without_a_turn(_ctx: TestContext) -> None:
     """End-to-end at the dispatcher: the delivery closes as `skipped`, and the
     agent is never invoked — which is the entire point of the feature."""
-    from src.core import event_dispatcher as ed
-    from src.core import event_precondition as ep
+    from openagent_core.core import event_dispatcher as ed
+    from openagent_core.core import event_precondition as ep
     import os
 
     updates: list[dict] = []

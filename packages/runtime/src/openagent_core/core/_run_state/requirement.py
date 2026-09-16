@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
-from src.models.providers.response import ToolExecution, UserFeedbackQuestion, UserInputField
+from openagent_core.models.providers.response import ToolExecution, UserFeedbackQuestion, UserInputField
 
 PauseType = Literal["confirmation", "user_input", "user_feedback", "external_execution"]
 

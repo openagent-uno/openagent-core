@@ -1,4 +1,4 @@
-from src.core._runner.agent.agent import (
+from openagent_core.core._runner.agent.agent import (
     Agent,
     AgentSession,
     Function,
@@ -7,8 +7,8 @@ from src.core._runner.agent.agent import (
     get_agent_by_id,
     get_agents,
 )
-from src.models.providers.fallback import FallbackConfig
-from src.core._run_state.agent import (
+from openagent_core.models.providers.fallback import FallbackConfig
+from openagent_core.core._run_state.agent import (
     Followups,
     FollowupsCompletedEvent,
     FollowupsStartedEvent,

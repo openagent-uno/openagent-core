@@ -3,12 +3,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Mapping, Optional, Union
 
-from src.models.providers.message import Message
-from src.core._run_state.agent import RunOutput
-from src.core._run_state.base import RunStatus
-from src.core._run_state.team import TeamRunOutput
-from src.memory.sessions.summary import SessionSummary
-from src.core._runner.utils.log import log_debug, log_warning
+from openagent_core.models.providers.message import Message
+from openagent_core.core._run_state.agent import RunOutput
+from openagent_core.core._run_state.base import RunStatus
+from openagent_core.core._run_state.team import TeamRunOutput
+from openagent_core.memory.sessions.summary import SessionSummary
+from openagent_core.core._runner.utils.log import log_debug, log_warning
 
 
 @dataclass
@@ -113,7 +113,7 @@ class AgentSession:
     def upsert_run(self, run: RunOutput):
         """Adds a RunOutput, together with some calculated data, to the runs list."""
         # Promote a stopped (CANCELLED) run so its turn survives history.
-        from src.memory.sessions._synth import promote_interrupted_run
+        from openagent_core.memory.sessions._synth import promote_interrupted_run
 
         promote_interrupted_run(run)
         messages = run.messages

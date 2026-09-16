@@ -19,7 +19,7 @@ class MessagePartsMigrationError(RuntimeError):
 
 
 def migration_sql() -> str:
-    return files("src.memory.operational.sql").joinpath("message_parts_v1.sql").read_text(
+    return files("openagent_core.memory.operational.sql").joinpath("message_parts_v1.sql").read_text(
         encoding="utf-8"
     )
 

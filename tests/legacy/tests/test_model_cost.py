@@ -96,7 +96,7 @@ class _FakeDb:
 
 
 class _FakeAgent:
-    """Minimal stand-in for ``src.core.agent.Agent`` — compaction only ever
+    """Minimal stand-in for ``openagent_core.core.agent.Agent`` — compaction only ever
     touches ``_providers_config`` and ``_db`` on it."""
 
     def __init__(self, providers_config: list | None = None) -> None:
@@ -154,7 +154,7 @@ def _system_prompt(session_id: str = "sess-abc") -> str:
 
 def _transcript(iterations: int, *, session_id: str = "sess-abc", question: str = "q1") -> list:
     """A conversation with ``iterations`` tool-use round trips, as stored."""
-    from src.models.providers.message import Message
+    from openagent_core.models.providers.message import Message
 
     messages = [
         Message(role="system", content=_system_prompt(session_id)),
@@ -171,7 +171,7 @@ def _transcript(iterations: int, *, session_id: str = "sess-abc", question: str 
 
 
 def _build_model(**kwargs):
-    from src.models.providers.anthropic import Claude
+    from openagent_core.models.providers.anthropic import Claude
 
     defaults = dict(
         id="claude-opus-4-8",
@@ -185,7 +185,7 @@ def _build_model(**kwargs):
 
 def _build_request(model, messages: list) -> tuple[list, dict]:
     """Run the exact assembly the four invoke paths run, minus the HTTP call."""
-    from src.core._runner.utils.models.claude import format_messages
+    from openagent_core.core._runner.utils.models.claude import format_messages
 
     chat_messages, system_message = format_messages(
         messages,
@@ -292,7 +292,7 @@ def _assert_cache_hit(earlier: tuple[list, dict], later: tuple[list, dict], *, w
 
 @test("model_cost", "anthropic runtime model is built with prompt caching enabled")
 async def t_anthropic_caching_enabled(ctx: TestContext) -> None:
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
 
     provider = NativeProvider(
         model="anthropic:claude-haiku-4-5", providers_config=_ANTHROPIC_CFG,
@@ -318,7 +318,7 @@ async def t_extended_cache_time_off(ctx: TestContext) -> None:
     Guard it at the build site too, so nobody flips it on in
     ``RUNTIME_PROVIDER_CLASSES`` without reading why it is off.
     """
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
 
     provider = NativeProvider(
         model="anthropic:claude-haiku-4-5", providers_config=_ANTHROPIC_CFG,
@@ -338,7 +338,7 @@ async def t_extended_cache_time_off(ctx: TestContext) -> None:
 
 @test("model_cost", "shipped cache flags emit a uniform 5m order the validator accepts")
 async def t_shipped_flags_ttl_safe(ctx: TestContext) -> None:
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
 
     provider = NativeProvider(
         model="anthropic:claude-haiku-4-5", providers_config=_ANTHROPIC_CFG,
@@ -381,7 +381,7 @@ async def t_ttl_hazard_is_real(ctx: TestContext) -> None:
     goes red and someone re-reads the comment in RUNTIME_PROVIDER_CLASSES and
     can then safely enable 1h caching.
     """
-    from src.models.providers.anthropic import Claude
+    from openagent_core.models.providers.anthropic import Claude
 
     model = Claude(
         id="claude-haiku-4-5",
@@ -413,7 +413,7 @@ async def t_ttl_hazard_is_real(ctx: TestContext) -> None:
 @test("model_cost", "_validate_cache_ttl_order still rejects 1h-after-5m within the system array")
 async def t_validator_still_guards_system_array(ctx: TestContext) -> None:
     """The validator is not useless — it guards the case it can see. Keep it honest."""
-    from src.core._runner.utils.models.claude import _validate_cache_ttl_order
+    from openagent_core.core._runner.utils.models.claude import _validate_cache_ttl_order
 
     ok = [
         {"text": "a", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
@@ -539,7 +539,7 @@ async def t_message_cache_hits_across_turns(ctx: TestContext) -> None:
     Between them the transcript gains the previous answer and the new question
     — the append-only growth the whole scheme depends on.
     """
-    from src.models.providers.message import Message
+    from openagent_core.models.providers.message import Message
 
     model = _build_model()
     turn_one_last_call = _transcript(iterations=1)
@@ -580,7 +580,7 @@ async def t_compaction_reprices_messages_only(ctx: TestContext) -> None:
     tools+system entry must SURVIVE it (compaction touches neither), and the
     post-compaction transcript must go straight back to hitting.
     """
-    from src.models.providers.message import Message
+    from openagent_core.models.providers.message import Message
 
     model = _build_model()
     pre = _build_request(model, _transcript(iterations=6))
@@ -625,7 +625,7 @@ async def t_message_breakpoint_respects_cap(ctx: TestContext) -> None:
     breakpoint is an optimisation this class chose on its own, so it stands
     down rather than push the request over the cap.
     """
-    from src.models.providers.anthropic.claude import SystemPromptBlock
+    from openagent_core.models.providers.anthropic.claude import SystemPromptBlock
 
     for user_blocks in range(0, 3):
         model = _build_model(
@@ -680,7 +680,7 @@ async def t_message_breakpoint_does_not_mutate_history(ctx: TestContext) -> None
     request blew the cap of 4 and started 400ing — a bug that would surface
     hours into a long session, far from this code.
     """
-    from src.models.providers.message import Message
+    from openagent_core.models.providers.message import Message
 
     live_turn = Message(role="user", content=[{"type": "text", "text": "the live question"}])
     stored_block = live_turn.content[0]
@@ -714,7 +714,7 @@ async def t_message_breakpoint_does_not_mutate_history(ctx: TestContext) -> None
 
 @test("model_cost", "_pick_summary_model returns the configured cheap model")
 async def t_pick_summary_model_configured(ctx: TestContext) -> None:
-    from src.core.compaction import _pick_summary_model
+    from openagent_core.core.compaction import _pick_summary_model
 
     previous = os.environ.get("OPENAGENT_COMPACTION_MODEL")
     _set_env("OPENAGENT_COMPACTION_MODEL", "anthropic:claude-haiku-4-5")
@@ -737,7 +737,7 @@ async def t_pick_summary_model_configured(ctx: TestContext) -> None:
 
 @test("model_cost", "_pick_summary_model falls back to the primary when unset")
 async def t_pick_summary_model_unset(ctx: TestContext) -> None:
-    from src.core.compaction import _pick_summary_model
+    from openagent_core.core.compaction import _pick_summary_model
 
     previous = os.environ.get("OPENAGENT_COMPACTION_MODEL")
     _set_env("OPENAGENT_COMPACTION_MODEL", None)
@@ -758,7 +758,7 @@ async def t_pick_summary_model_fallback_paths(ctx: TestContext) -> None:
     _pick_summary_model sits on the turn's critical path: an expensive
     summary is a cost bug, an exception is a broken chat.
     """
-    from src.core.compaction import _pick_summary_model
+    from openagent_core.core.compaction import _pick_summary_model
 
     previous = os.environ.get("OPENAGENT_COMPACTION_MODEL")
     cases = {
@@ -792,7 +792,7 @@ async def t_pick_summary_model_ignores_is_classifier(ctx: TestContext) -> None:
     that flag, it would pick the most expensive model available — the exact
     outcome this work exists to prevent.
     """
-    from src.core.compaction import _pick_summary_model
+    from openagent_core.core.compaction import _pick_summary_model
 
     previous = os.environ.get("OPENAGENT_COMPACTION_MODEL")
     _set_env("OPENAGENT_COMPACTION_MODEL", None)
@@ -820,7 +820,7 @@ async def t_pick_summary_model_ignores_is_classifier(ctx: TestContext) -> None:
 
 @test("model_cost", "extended thinking reaches Opus/Sonnet, skips Haiku")
 async def t_thinking_gate_per_model(ctx: TestContext) -> None:
-    from src.models.native_provider import _thinking_kwarg
+    from openagent_core.models.native_provider import _thinking_kwarg
 
     _set_env("OPENAGENT_EXTENDED_THINKING_TOKENS", "4096")
     try:
@@ -844,7 +844,7 @@ async def t_thinking_gate_per_model(ctx: TestContext) -> None:
 
 @test("model_cost", "thinking is off by default and below Anthropic's floor")
 async def t_thinking_defaults_off(ctx: TestContext) -> None:
-    from src.models.native_provider import _thinking_kwarg
+    from openagent_core.models.native_provider import _thinking_kwarg
 
     _set_env("OPENAGENT_EXTENDED_THINKING_TOKENS", None)
     assert _thinking_kwarg("anthropic", "claude-opus-4-8") == {}, (
@@ -871,7 +871,7 @@ async def t_supports_thinking_family(ctx: TestContext) -> None:
     """Gate on the family, not a hand-listed set that trails a generation
     behind — the exact drift-by-hand pattern this session keeps deleting.
     NON_THINKING_MODELS only lists Haiku 3/3.5, but no Haiku supports it."""
-    from src.models.providers.anthropic import Claude
+    from openagent_core.models.providers.anthropic import Claude
 
     assert Claude.supports_extended_thinking("claude-opus-4-8")
     assert Claude.supports_extended_thinking("claude-sonnet-4-6")
@@ -888,7 +888,7 @@ async def t_thinking_reaches_the_built_model(ctx: TestContext) -> None:
     constructor — which is exactly the write-only failure this fixes. Build a
     real Anthropic model through the real path and read ``.thinking`` off it.
     """
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
 
     def _build(runtime_id: str):
         p = NativeProvider.__new__(NativeProvider)
@@ -926,7 +926,7 @@ async def t_warm_pricing_cache_populates(ctx: TestContext) -> None:
     miss and only fires a background prime, so the FIRST DeepSeek call of each
     boot logs $0 and a cost cap undercounts it. ``warm_pricing_cache`` awaits
     the catalog fetch at boot to close that gap — prove it drives the fetch."""
-    from src.models import catalog, discovery
+    from openagent_core.models import catalog, discovery
 
     called = {"n": 0}
     orig = discovery._fetch_openrouter_catalog
@@ -949,7 +949,7 @@ async def t_warm_pricing_cache_non_fatal(ctx: TestContext) -> None:
     """Pricing is a convenience, not a boot dependency: if OpenRouter is down
     the agent must still come up. ``warm_pricing_cache`` swallows the error and
     returns False, leaving the existing lazy-prime fallback intact."""
-    from src.models import catalog, discovery
+    from openagent_core.models import catalog, discovery
 
     orig = discovery._fetch_openrouter_catalog
 
@@ -971,7 +971,7 @@ async def t_compute_cost_cache_aware(ctx: TestContext) -> None:
     split the prompt into miss + cache-read, or it over-charges ~10x and the
     daily DeepSeek cap silently shrinks. Also: cache_read=0 must reproduce the
     old flat cost exactly (a non-caching model is unchanged)."""
-    from src.models import catalog
+    from openagent_core.models import catalog
 
     orig = catalog.get_model_pricing
     # deepseek-v4-pro's real OpenRouter numbers ($/million).
@@ -1008,7 +1008,7 @@ async def t_compute_cost_cache_aware(ctx: TestContext) -> None:
 async def t_pricing_exposes_cache_read(ctx: TestContext) -> None:
     """``_openrouter_pricing_lookup`` must read OpenRouter's ``input_cache_read``
     into the returned dict, else compute_cost has no cheap rate to apply."""
-    from src.models import catalog, discovery
+    from openagent_core.models import catalog, discovery
 
     # Prime the OpenRouter cache with a fake deepseek entry carrying a cache price.
     import time as _t
@@ -1035,9 +1035,9 @@ async def t_cache_read_wired_through(ctx: TestContext) -> None:
     nor accepted by ``record_cost``. Guard both wiring points so a refactor that
     drops either re-opens the ~10x over-charge on DeepSeek tool loops."""
     import inspect
-    from src.models.base import ModelResponse
-    from src.models.dispatcher import TeamRouterProvider
-    from src.models.budget import BudgetTracker
+    from openagent_core.models.base import ModelResponse
+    from openagent_core.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.budget import BudgetTracker
 
     # 1. The response object carries the field (the single-model path sets it).
     r = ModelResponse(input_tokens=1000, cache_read_tokens=900)
@@ -1049,7 +1049,7 @@ async def t_cache_read_wired_through(ctx: TestContext) -> None:
         "record_cost lost its cache_read_tokens parameter — the ledger goes flat")
 
     # 3. BudgetTracker.compute_cost accepts it and applies a discount when priced.
-    from src.models import catalog
+    from openagent_core.models import catalog
     orig = catalog.get_model_pricing
     catalog.get_model_pricing = lambda ref, *a, **k: {
         "input_cost_per_million": 0.435, "output_cost_per_million": 0.87,

@@ -37,7 +37,7 @@ def _artifact_db(root: Path) -> tuple[_DiskDB, str]:
 
 
 def _access(tenant: str, handle: str):
-    from src.memory.operational.access import AccessContext
+    from openagent_core.memory.operational.access import AccessContext
 
     principal = f"user:{handle}"
     return AccessContext(
@@ -111,7 +111,7 @@ def _seed_message(
 
 @test("artifacts", "CAS deduplicates bytes while preserving attachment order and links")
 async def t_artifact_cas_dedup_and_order(ctx: TestContext) -> None:
-    from src.memory.artifacts import (
+    from openagent_core.memory.artifacts import (
         artifact_row,
         normalize_inbound_attachments,
         persist_output_attachments,
@@ -161,7 +161,7 @@ async def t_artifact_cas_dedup_and_order(ctx: TestContext) -> None:
 
 @test("artifacts", "artifact ACL is owner-only and fails closed across principals")
 async def t_artifact_acl(ctx: TestContext) -> None:
-    from src.memory.artifacts import (
+    from openagent_core.memory.artifacts import (
         ArtifactNotFound,
         artifact_is_visible,
         normalize_inbound_attachments,
@@ -235,7 +235,7 @@ async def t_artifact_acl(ctx: TestContext) -> None:
 
 @test("artifacts", "linked ACL changes, deletion, and cross-context dedup are immediate")
 async def t_artifact_link_acl_lifecycle(ctx: TestContext) -> None:
-    from src.memory.artifacts import (
+    from openagent_core.memory.artifacts import (
         artifact_is_visible,
         artifact_row,
         normalize_inbound_attachments,
@@ -369,7 +369,7 @@ async def t_artifact_link_acl_lifecycle(ctx: TestContext) -> None:
 async def t_artifact_acl_migration(ctx: TestContext) -> None:
     import aiosqlite
 
-    from src.memory.artifact_acl_migration import (
+    from openagent_core.memory.artifact_acl_migration import (
         MIGRATION_ID,
         ensure_artifact_acl_storage,
         migration_checksum,
@@ -495,10 +495,10 @@ async def t_artifact_acl_migration(ctx: TestContext) -> None:
 
 @test("artifacts", "gateway accepts local paths only from verified bridges")
 async def t_gateway_attachment_path_trust_boundary(ctx: TestContext) -> None:
-    from src.core.on_behalf_context import OnBehalfIdentity
-    from src.gateway.server import Gateway, _StreamHolder
-    from src.gateway.sessions import SessionManager
-    from src.stream.events import Attachment, TextFinal
+    from openagent_core.core.on_behalf_context import OnBehalfIdentity
+    from openagent_core.gateway.server import Gateway, _StreamHolder
+    from openagent_core.gateway.sessions import SessionManager
+    from openagent_core.stream.events import Attachment, TextFinal
 
     with tempfile.TemporaryDirectory(prefix="oa-artifacts-gateway-trust-") as raw:
         root = Path(raw)
@@ -655,7 +655,7 @@ async def t_gateway_attachment_path_trust_boundary(ctx: TestContext) -> None:
 
 @test("artifacts", "inbound byte cap rejects oversized files before CAS publication")
 async def t_artifact_size_limit(ctx: TestContext) -> None:
-    from src.memory.artifacts import AttachmentTooLarge, normalize_inbound_attachments
+    from openagent_core.memory.artifacts import AttachmentTooLarge, normalize_inbound_attachments
 
     old = os.environ.get("OPENAGENT_MAX_INBOUND_ATTACHMENT_MB")
     os.environ["OPENAGENT_MAX_INBOUND_ATTACHMENT_MB"] = "1"
@@ -690,7 +690,7 @@ async def t_artifact_size_limit(ctx: TestContext) -> None:
 async def t_artifact_message_link_projection_race(ctx: TestContext) -> None:
     import aiosqlite
 
-    from src.memory.artifacts import (
+    from openagent_core.memory.artifacts import (
         attachment_refs_for_messages_on_connection,
         link_attachments_to_latest_message,
         normalize_inbound_attachments,
@@ -746,8 +746,8 @@ async def t_artifact_endpoint_acl(ctx: TestContext) -> None:
     from aiohttp import FormData, web
     from aiohttp.test_utils import TestClient, TestServer
 
-    from src.gateway.api import artifacts as artifacts_api
-    from src.memory.artifacts import normalize_inbound_attachments
+    from openagent_core.gateway.api import artifacts as artifacts_api
+    from openagent_core.memory.artifacts import normalize_inbound_attachments
 
     with tempfile.TemporaryDirectory(prefix="oa-artifacts-http-") as raw:
         root = Path(raw)
@@ -794,7 +794,7 @@ async def t_artifact_endpoint_acl(ctx: TestContext) -> None:
             artifacts_api.handle_metadata,
         )
         app.router.add_post("/api/artifacts", artifacts_api.handle_upload)
-        from src.gateway.server import Gateway
+        from openagent_core.gateway.server import Gateway
 
         async def _legacy_file(request):
             return await Gateway._handle_files(app["gateway"], request)
@@ -894,7 +894,7 @@ async def t_artifact_endpoint_acl(ctx: TestContext) -> None:
             # Same-length tampering must not be masked by metadata size or a
             # stale ETag. The visible artifact remains distinguishable from an
             # inaccessible id, but its bytes fail closed.
-            from src.memory.artifacts import artifact_row
+            from openagent_core.memory.artifacts import artifact_row
 
             _row, cas_path = await artifact_row(db, ref["artifact_id"])
             cas_path.write_bytes(b"x" * len(payload))

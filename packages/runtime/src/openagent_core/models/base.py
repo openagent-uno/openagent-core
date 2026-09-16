@@ -183,8 +183,8 @@ class BaseModel(ABC):
         if not run_id:
             return False
         try:
-            from src.core._run_state.cancel import acancel_run
-            from src.core.logging import elog
+            from openagent_core.core._run_state.cancel import acancel_run
+            from openagent_core.core.logging import elog
 
             ok = bool(await acancel_run(run_id))
             if ok:

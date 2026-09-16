@@ -18,7 +18,7 @@ from ._framework import TestContext, test
 
 @test("skill_provenance", "in foreground non si rifiuta niente")
 async def t_foreground_is_free(ctx: TestContext) -> None:
-    from src.mcp.servers.skills.provenance import mutation_refusal
+    from openagent_core.mcp.servers.skills.provenance import mutation_refusal
 
     # Un umano che chiede di sistemare una skill sua e' padrone della sua
     # libreria: nessun cancello.
@@ -28,7 +28,7 @@ async def t_foreground_is_free(ctx: TestContext) -> None:
 
 @test("skill_provenance", "in background si tocca solo cio' che ha scritto l'agent")
 async def t_background_respects_authorship(ctx: TestContext) -> None:
-    from src.mcp.servers.skills.provenance import (
+    from openagent_core.mcp.servers.skills.provenance import (
         BACKGROUND, mutation_refusal, reset_write_origin, set_write_origin,
     )
 
@@ -51,7 +51,7 @@ async def t_background_respects_authorship(ctx: TestContext) -> None:
 
 @test("skill_provenance", "il pin blocca anche una skill che l'agent ha scritto")
 async def t_pin_blocks_the_author_too(ctx: TestContext) -> None:
-    from src.mcp.servers.skills.provenance import (
+    from openagent_core.mcp.servers.skills.provenance import (
         BACKGROUND, mutation_refusal, reset_write_origin, set_write_origin,
     )
 
@@ -72,8 +72,8 @@ async def t_pin_parses_and_survives(ctx: TestContext) -> None:
     import tempfile
     from pathlib import Path
 
-    from src.mcp.servers.skills.handlers import _preserved_provenance
-    from src.mcp.servers.skills.registry import parse_skill_file
+    from openagent_core.mcp.servers.skills.handlers import _preserved_provenance
+    from openagent_core.mcp.servers.skills.registry import parse_skill_file
 
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "SKILL.md"

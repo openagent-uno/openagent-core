@@ -17,7 +17,7 @@ import asyncio
 import time
 from typing import Any
 
-from src.memory.db import MemoryDB
+from openagent_core.memory.db import MemoryDB
 
 
 async def enqueue_run_request(

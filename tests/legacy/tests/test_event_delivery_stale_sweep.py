@@ -37,14 +37,14 @@ def _fresh_db_path(ctx: TestContext) -> "os.PathLike":
 
 
 async def _make_db(path):
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
     db = MemoryDB(str(path))
     await db.connect()
     return db
 
 
 async def _add_event(db, *, slug: str) -> str:
-    from src.core.event_secret import make_secret_material
+    from openagent_core.core.event_secret import make_secret_material
     _clear, enc, hint = make_secret_material(db_path=db.db_path)
     return await db.add_event(
         name=f"evt-{slug}", action_kind="prompt", slug=slug,

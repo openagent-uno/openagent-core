@@ -1,4 +1,4 @@
-"""``src.core.hooks`` — the shell-command hook registry + quick commands.
+"""``openagent_core.core.hooks`` — the shell-command hook registry + quick commands.
 
 This module had **no test at all** until now, which is exactly how its
 central defect survived: every ``elog`` call in it passed
@@ -38,7 +38,7 @@ async def t_elog_event_kwarg_collides(ctx: TestContext) -> None:
     being necessary and this test should be revisited deliberately,
     rather than the collision quietly becoming possible again.
     """
-    from src.core.logging import elog
+    from openagent_core.core.logging import elog
 
     params = list(inspect.signature(elog).parameters)
     assert params[0] == "event", (
@@ -91,8 +91,8 @@ async def t_no_event_kwarg_in_hooks(ctx: TestContext) -> None:
 
 @test("shell_hooks", "a fired hook logs hooks.fired with the hook's identity")
 async def t_hook_success_path_logs(ctx: TestContext) -> None:
-    from src.core import hooks as hooks_mod
-    from src.core.logging import elog as _real_elog
+    from openagent_core.core import hooks as hooks_mod
+    from openagent_core.core.logging import elog as _real_elog
 
     seen: list[tuple[str, dict]] = []
 
@@ -143,8 +143,8 @@ async def t_hook_error_path_logs(ctx: TestContext) -> None:
     binary is exit 127 on the SUCCESS path, not an exception. To drive
     the handler we make the spawn itself fail.
     """
-    from src.core import hooks as hooks_mod
-    from src.core.logging import elog as _real_elog
+    from openagent_core.core import hooks as hooks_mod
+    from openagent_core.core.logging import elog as _real_elog
 
     seen: list[tuple[str, dict]] = []
     hooks_mod.elog = lambda event, level="info", exc_info=False, **d: seen.append((event, d))
@@ -175,7 +175,7 @@ async def t_hook_error_path_logs(ctx: TestContext) -> None:
 
 @test("shell_hooks", "quick commands expand; normal text is left alone")
 async def t_quick_commands(ctx: TestContext) -> None:
-    from src.core import hooks as hooks_mod
+    from openagent_core.core import hooks as hooks_mod
 
     try:
         # Keys are stored slash-stripped and lowercased, so the yaml may

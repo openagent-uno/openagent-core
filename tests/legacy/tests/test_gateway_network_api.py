@@ -76,7 +76,7 @@ def _make_request(memory_db, *, method: str = "GET", path: str = "/x",
 
 
 async def _open_db(db_path: Path):
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
     db = MemoryDB(str(db_path))
     await db.connect()
     return db
@@ -87,8 +87,8 @@ async def _seed_coord(db_path: Path, *, users: list[str] | None = None,
                      invites: list[dict] | None = None,
                      network_name: str = "lyra-agent"):
     """Spin up a coordinator-mode network row + optional users/agents/invites."""
-    from src.network.coordinator.store import CoordinatorStore
-    from src.core import paths as core_paths
+    from openagent_core.network.coordinator.store import CoordinatorStore
+    from openagent_core.core import paths as core_paths
 
     db = await _open_db(db_path)
     try:
@@ -124,7 +124,7 @@ async def _seed_coord(db_path: Path, *, users: list[str] | None = None,
 
 @test("gateway_network", "GET /users returns the registered handles")
 async def t_list_users(ctx: TestContext) -> None:
-    from src.gateway.api.network import handle_list_users
+    from openagent_core.gateway.api.network import handle_list_users
 
     agent_dir = ctx.test_dir / f"gwnet-users-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -158,7 +158,7 @@ async def t_list_agents(ctx: TestContext) -> None:
     still come back. The underlying coordinator RPC list_agents
     is *not* filtered — it's still how new clients find the gateway
     target on first contact."""
-    from src.gateway.api.network import handle_list_agents
+    from openagent_core.gateway.api.network import handle_list_agents
 
     agent_dir = ctx.test_dir / f"gwnet-agents-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -197,7 +197,7 @@ async def t_list_agents_solo(ctx: TestContext) -> None:
     the only registered agent IS the coordinator's own. Filtering
     it out leaves an empty list — the UI uses that to render a
     "no other agents" empty state."""
-    from src.gateway.api.network import handle_list_agents
+    from openagent_core.gateway.api.network import handle_list_agents
 
     agent_dir = ctx.test_dir / f"gwnet-solo-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -218,7 +218,7 @@ async def t_list_agents_solo(ctx: TestContext) -> None:
 
 @test("gateway_network", "GET /invitations skips spent + expired entries")
 async def t_list_invitations(ctx: TestContext) -> None:
-    from src.gateway.api.network import handle_list_invitations
+    from openagent_core.gateway.api.network import handle_list_invitations
 
     agent_dir = ctx.test_dir / f"gwnet-invs-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -235,7 +235,7 @@ async def t_list_invitations(ctx: TestContext) -> None:
         # Also burn one of the live invites so we can check it's hidden.
         # ``list_invitations(include_expired=False)`` is what the handler
         # uses; matching its filter keeps the test honest.
-        from src.network.coordinator.store import CoordinatorStore
+        from openagent_core.network.coordinator.store import CoordinatorStore
         store = CoordinatorStore(db)
         live = await store.list_invitations(include_expired=False)
         assert len(live) == 2, f"setup wrong: expected 2 live, got {len(live)}"
@@ -256,7 +256,7 @@ async def t_list_invitations(ctx: TestContext) -> None:
 
 @test("gateway_network", "POST /invitations: new handle → user-role")
 async def t_mint_new_handle(ctx: TestContext) -> None:
-    from src.gateway.api.network import handle_mint_invitation
+    from openagent_core.gateway.api.network import handle_mint_invitation
 
     agent_dir = ctx.test_dir / f"gwnet-mintnew-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -284,7 +284,7 @@ async def t_mint_new_handle(ctx: TestContext) -> None:
 
 @test("gateway_network", "POST /invitations: existing handle → device-bound")
 async def t_mint_existing_handle(ctx: TestContext) -> None:
-    from src.gateway.api.network import handle_mint_invitation
+    from openagent_core.gateway.api.network import handle_mint_invitation
 
     agent_dir = ctx.test_dir / f"gwnet-mintexist-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -310,7 +310,7 @@ async def t_mint_existing_handle(ctx: TestContext) -> None:
 
 @test("gateway_network", "POST /invitations: explicit role overrides auto-detect")
 async def t_mint_explicit_role(ctx: TestContext) -> None:
-    from src.gateway.api.network import handle_mint_invitation
+    from openagent_core.gateway.api.network import handle_mint_invitation
 
     agent_dir = ctx.test_dir / f"gwnet-mintexp-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -335,7 +335,7 @@ async def t_mint_explicit_role(ctx: TestContext) -> None:
 
 @test("gateway_network", "POST /invitations: invalid role → 400")
 async def t_mint_invalid_role(ctx: TestContext) -> None:
-    from src.gateway.api.network import handle_mint_invitation
+    from openagent_core.gateway.api.network import handle_mint_invitation
 
     agent_dir = ctx.test_dir / f"gwnet-mintbad-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -356,7 +356,7 @@ async def t_mint_invalid_role(ctx: TestContext) -> None:
 
 @test("gateway_network", "DELETE /invitations/{code} is idempotent")
 async def t_revoke(ctx: TestContext) -> None:
-    from src.gateway.api.network import handle_mint_invitation, handle_revoke_invitation
+    from openagent_core.gateway.api.network import handle_mint_invitation, handle_revoke_invitation
 
     agent_dir = ctx.test_dir / f"gwnet-revoke-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -396,8 +396,8 @@ async def t_revoke(ctx: TestContext) -> None:
 
 @test("gateway_network", "PATCH /users/{handle} suspends + activates")
 async def t_patch_user_status(ctx: TestContext) -> None:
-    from src.gateway.api.network import handle_patch_user
-    from src.network.coordinator.store import CoordinatorStore
+    from openagent_core.gateway.api.network import handle_patch_user
+    from openagent_core.network.coordinator.store import CoordinatorStore
 
     agent_dir = ctx.test_dir / f"gwnet-patch-u-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -453,7 +453,7 @@ async def t_patch_user_status(ctx: TestContext) -> None:
 
 @test("gateway_network", "PATCH /users with bogus status → 400")
 async def t_patch_user_bad_status(ctx: TestContext) -> None:
-    from src.gateway.api.network import handle_patch_user
+    from openagent_core.gateway.api.network import handle_patch_user
 
     agent_dir = ctx.test_dir / f"gwnet-patch-bad-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -475,8 +475,8 @@ async def t_patch_user_bad_status(ctx: TestContext) -> None:
 
 @test("gateway_network", "DELETE /users/{handle} removes user + cascades devices")
 async def t_delete_user(ctx: TestContext) -> None:
-    from src.gateway.api.network import handle_delete_user
-    from src.network.coordinator.store import CoordinatorStore
+    from openagent_core.gateway.api.network import handle_delete_user
+    from openagent_core.network.coordinator.store import CoordinatorStore
 
     agent_dir = ctx.test_dir / f"gwnet-del-u-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -519,7 +519,7 @@ async def t_delete_user(ctx: TestContext) -> None:
 async def t_self_delete_blocked(ctx: TestContext) -> None:
     """Logged-in user can't delete their own account via the API —
     they'd race their own response and end up in a weird state."""
-    from src.gateway.api.network import handle_delete_user
+    from openagent_core.gateway.api.network import handle_delete_user
 
     agent_dir = ctx.test_dir / f"gwnet-self-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -541,8 +541,8 @@ async def t_self_delete_blocked(ctx: TestContext) -> None:
 
 @test("gateway_network", "PATCH /agents/{handle} edits label")
 async def t_patch_agent_label(ctx: TestContext) -> None:
-    from src.gateway.api.network import handle_patch_agent
-    from src.network.coordinator.store import CoordinatorStore
+    from openagent_core.gateway.api.network import handle_patch_agent
+    from openagent_core.network.coordinator.store import CoordinatorStore
 
     agent_dir = ctx.test_dir / f"gwnet-patch-a-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -573,7 +573,7 @@ async def t_delete_self_agent_blocked(ctx: TestContext) -> None:
     """Deleting the agent whose NodeId == coordinator's strands every
     client — the gateway pickable list goes empty. Block that path
     with a clear 409 + hint; foreign rows can still be removed."""
-    from src.gateway.api.network import handle_delete_agent
+    from openagent_core.gateway.api.network import handle_delete_agent
 
     agent_dir = ctx.test_dir / f"gwnet-del-self-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -611,9 +611,9 @@ async def t_member_mode_404(ctx: TestContext) -> None:
     surface must say so clearly instead of 500ing or returning empty.
     The desktop app uses the 404 to route the user back to the
     coordinator's own gateway for these operations."""
-    from src.gateway.api.network import handle_list_users
-    from src.memory.db import MemoryDB
-    from src.network.coordinator.store import CoordinatorStore
+    from openagent_core.gateway.api.network import handle_list_users
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.network.coordinator.store import CoordinatorStore
 
     agent_dir = ctx.test_dir / f"gwnet-member-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)

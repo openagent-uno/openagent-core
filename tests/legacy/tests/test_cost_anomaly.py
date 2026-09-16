@@ -34,7 +34,7 @@ def _env(**kw):
 
 @contextlib.contextmanager
 def _capture():
-    import src.core.cost_anomaly as ca
+    import openagent_core.core.cost_anomaly as ca
 
     events: list[tuple[str, dict]] = []
     orig = ca.elog
@@ -54,7 +54,7 @@ _CACHED_COST = 0.018
 
 @test("cost_anomaly", "a high-summed-token, mostly-cached, cheap run does NOT trip")
 async def t_cached_run_no_alarm(ctx: TestContext) -> None:
-    import src.core.cost_anomaly as ca
+    import openagent_core.core.cost_anomaly as ca
 
     # The exact shape that false-paged before: raw input_tokens is six figures,
     # but non-cached input is ~27k and real cost is under 2 cents.
@@ -69,7 +69,7 @@ async def t_cached_run_no_alarm(ctx: TestContext) -> None:
 
 @test("cost_anomaly", "a genuinely EXPENSIVE run trips (real cost over threshold)")
 async def t_expensive_run_trips(ctx: TestContext) -> None:
-    import src.core.cost_anomaly as ca
+    import openagent_core.core.cost_anomaly as ca
 
     got = ca.evaluate(cost_usd=2.50, input_tokens=120_000, cache_read_tokens=0)
     assert got is not None and "cost_usd" in got["reasons"], got
@@ -78,7 +78,7 @@ async def t_expensive_run_trips(ctx: TestContext) -> None:
 
 @test("cost_anomaly", "a genuinely UNCACHED large prompt trips on non-cached input")
 async def t_uncached_run_trips(ctx: TestContext) -> None:
-    import src.core.cost_anomaly as ca
+    import openagent_core.core.cost_anomaly as ca
 
     # Cheap per-token but a real 300k fresh prompt (no cache) — a genuine
     # oversized-context anomaly worth a look, unlike the cached case.
@@ -89,7 +89,7 @@ async def t_uncached_run_trips(ctx: TestContext) -> None:
 
 @test("cost_anomaly", "raw summed input_tokens alone never trips (the actual defect)")
 async def t_summed_input_alone_never_trips(ctx: TestContext) -> None:
-    import src.core.cost_anomaly as ca
+    import openagent_core.core.cost_anomaly as ca
 
     # A pathological 5M summed input tokens, but ALL of it cached and ~free:
     # the old signal would scream, the new one stays silent.
@@ -100,7 +100,7 @@ async def t_summed_input_alone_never_trips(ctx: TestContext) -> None:
 
 @test("cost_anomaly", "cache_read is clamped so non-cached can't go negative")
 async def t_cache_read_clamp(ctx: TestContext) -> None:
-    import src.core.cost_anomaly as ca
+    import openagent_core.core.cost_anomaly as ca
 
     # A mismatched counter reporting more cache reads than input must not
     # underflow non-cached input into a spurious trip (or a negative).
@@ -111,7 +111,7 @@ async def t_cache_read_clamp(ctx: TestContext) -> None:
 
 @test("cost_anomaly", "note_run: OFF is a no-op; ON emits router.cost_anomaly only when anomalous")
 async def t_note_run_gating(ctx: TestContext) -> None:
-    import src.core.cost_anomaly as ca
+    import openagent_core.core.cost_anomaly as ca
 
     # Disabled → nothing, even for a genuinely expensive run (§17 byte-identical).
     with _env(OPENAGENT_COST_ANOMALY_ENABLED="0"), _capture() as ev:
@@ -136,7 +136,7 @@ async def t_note_run_gating(ctx: TestContext) -> None:
 
 @test("cost_anomaly", "thresholds are configurable via env")
 async def t_thresholds_configurable(ctx: TestContext) -> None:
-    import src.core.cost_anomaly as ca
+    import openagent_core.core.cost_anomaly as ca
 
     # Tighten the cost floor to a cent — now the cached run's $0.018 DOES trip,
     # proving the knob is live (default 1.00 keeps it silent).
@@ -155,7 +155,7 @@ async def t_thresholds_configurable(ctx: TestContext) -> None:
 def _capture_webhook():
     """Capture the anomaly webhook POSTs as (url, payload) without touching the
     network — replaces the async ``_fire_webhook`` with a recording coroutine."""
-    import src.core.cost_anomaly as ca
+    import openagent_core.core.cost_anomaly as ca
 
     sent: list[tuple] = []
     orig = ca._fire_webhook
@@ -172,7 +172,7 @@ def _capture_webhook():
 
 @test("cost_anomaly", "ENABLED defaults ON — a genuine anomaly pages with no env set")
 async def t_default_on(ctx: TestContext) -> None:
-    import src.core.cost_anomaly as ca
+    import openagent_core.core.cost_anomaly as ca
 
     # No OPENAGENT_COST_ANOMALY_ENABLED in the environment at all.
     with _env(OPENAGENT_COST_ANOMALY_ENABLED=None):
@@ -197,7 +197,7 @@ async def t_default_on(ctx: TestContext) -> None:
 @test("cost_anomaly", "genuine anomaly + configured webhook → the webhook is POSTed")
 async def t_webhook_fires_on_anomaly(ctx: TestContext) -> None:
     import asyncio
-    import src.core.cost_anomaly as ca
+    import openagent_core.core.cost_anomaly as ca
 
     with _env(OPENAGENT_COST_ANOMALY_ENABLED="1",
               OPENAGENT_COST_ANOMALY_ALERT_WEBHOOK_URL="https://hook.example/paging",
@@ -217,7 +217,7 @@ async def t_webhook_fires_on_anomaly(ctx: TestContext) -> None:
 @test("cost_anomaly", "the false-alarm run never POSTs the webhook (even when configured)")
 async def t_webhook_silent_on_false_alarm(ctx: TestContext) -> None:
     import asyncio
-    import src.core.cost_anomaly as ca
+    import openagent_core.core.cost_anomaly as ca
 
     with _env(OPENAGENT_COST_ANOMALY_ENABLED="1",
               OPENAGENT_COST_ANOMALY_ALERT_WEBHOOK_URL="https://hook.example/paging"), \
@@ -231,7 +231,7 @@ async def t_webhook_silent_on_false_alarm(ctx: TestContext) -> None:
 @test("cost_anomaly", "the webhook is OPTIONAL — a genuine anomaly with no URL still elogs, no POST")
 async def t_webhook_optional(ctx: TestContext) -> None:
     import asyncio
-    import src.core.cost_anomaly as ca
+    import openagent_core.core.cost_anomaly as ca
 
     with _env(OPENAGENT_COST_ANOMALY_ENABLED="1",
               OPENAGENT_COST_ANOMALY_ALERT_WEBHOOK_URL=None,
@@ -246,7 +246,7 @@ async def t_webhook_optional(ctx: TestContext) -> None:
 
 @test("cost_anomaly", "the alert webhook reuses the shared quality-digest URL when unset")
 async def t_webhook_url_fallback(ctx: TestContext) -> None:
-    import src.core.cost_anomaly as ca
+    import openagent_core.core.cost_anomaly as ca
 
     # Neither set → None.
     with _env(OPENAGENT_COST_ANOMALY_ALERT_WEBHOOK_URL=None,

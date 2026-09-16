@@ -18,7 +18,7 @@ from ._framework import TestContext, test
 
 @test("db_metadata_parse", "_parse_metadata coerces non-dict JSON to empty dict")
 async def t_parse_metadata_coerces(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     # None and empty-ish inputs.
     assert MemoryDB._parse_metadata(None) == {}
@@ -50,7 +50,7 @@ async def t_parse_metadata_unwraps_double_encoded(ctx: TestContext) -> None:
     ``"{\\"client_id\\": \\"alessandro\\", ...}"`` caused every
     desktop-originated session to vanish from ``/api/sessions``.
     """
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
     import json as _json
 
     inner = {"client_id": "alessandro", "device_id": "deadbeef", "title": "hi"}
@@ -74,7 +74,7 @@ async def t_list_all_sessions_unwraps_double_encoded(ctx: TestContext) -> None:
     sees ``client_id == ""`` and drops the row."""
     import sqlite3
     import json as _json
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     inner = {"client_id": "alessandro", "device_id": "feedface", "title": "broken row"}
     double = _json.dumps(_json.dumps(inner))  # the corrupt shape on disk
@@ -138,7 +138,7 @@ async def t_list_all_sessions_limit_post_filter(ctx: TestContext) -> None:
     """
     import sqlite3
     import json as _json
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     conn = sqlite3.connect(str(ctx.db_path))
     try:
@@ -242,7 +242,7 @@ async def t_list_session_runs_unwraps(ctx: TestContext) -> None:
     """
     import sqlite3
     import json as _json
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     real_runs = [{
         "run_id": "r1",
@@ -312,7 +312,7 @@ async def t_upsert_survives_null_metadata(ctx: TestContext) -> None:
     ``TypeError: 'NoneType' object does not support item assignment``.
     """
     import sqlite3
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     # Create the legacy agno_sessions schema and seed a corrupt-metadata row.
     conn = sqlite3.connect(str(ctx.db_path))

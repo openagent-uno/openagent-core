@@ -18,10 +18,10 @@ from typing import Any
 
 import yaml
 
-from src.core import paths, reply_guard, tool_trace
-from src.core.dry_run import dry_run_scope
-from src.core.execution_profile import lean_local_event_scope
-from src.core.server import _build_agent
+from openagent_core.core import paths, reply_guard, tool_trace
+from openagent_core.core.dry_run import dry_run_scope
+from openagent_core.core.execution_profile import lean_local_event_scope
+from openagent_core.core.server import _build_agent
 
 
 @dataclass(frozen=True)
@@ -973,7 +973,7 @@ def _score(
     if not case.skip_policy_route:
         # The router lives at a different path per brand; assert the one this
         # case's tenant actually resolves to.
-        from src.core.local_support_controller import _TENANTS, _DEFAULT_TENANT
+        from openagent_core.core.local_support_controller import _TENANTS, _DEFAULT_TENANT
 
         tenant = _TENANTS.get((case.product or _DEFAULT_TENANT).lower(),
                               _TENANTS[_DEFAULT_TENANT])
@@ -1024,7 +1024,7 @@ def _clone_and_patch_db(
     src = sqlite3.connect(str(source))
     dst = sqlite3.connect(str(destination))
     try:
-        src.backup(dst)
+        openagent_core.backup(dst)
         now = time.time()
         simulator = Path(__file__).resolve().with_name("support_mcp_simulator.py")
         for name in (
@@ -1109,7 +1109,7 @@ def _clone_and_patch_db(
             )
         dst.commit()
     finally:
-        src.close()
+        openagent_core.close()
         dst.close()
 
 
@@ -1272,7 +1272,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                         try:
                             with lean_local_event_scope(True), dry_run_scope(True):
                                 if args.controller:
-                                    from src.core import local_support_controller
+                                    from openagent_core.core import local_support_controller
 
                                     sink, trace_token = tool_trace.maybe_open()
                                     try:

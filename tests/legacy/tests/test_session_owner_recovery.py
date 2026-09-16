@@ -67,8 +67,8 @@ def _gateway(db):
 
 
 async def _create(db, *, session_id="rest-chat", client_id="ios-rest", handle="marco", message=None):
-    from src.gateway.api import chat as chat_api
-    from src.stream import session as stream_module
+    from openagent_core.gateway.api import chat as chat_api
+    from openagent_core.stream import session as stream_module
 
     chat_api._sessions.clear()
     real = stream_module.StreamSession
@@ -111,7 +111,7 @@ async def t_existing_owner_is_kept(_ctx: TestContext) -> None:
 
 @test("session_owner_recovery", "the first meaningful REST message repairs an automatic title")
 async def t_rest_chat_gets_meaningful_title(_ctx: TestContext) -> None:
-    from src.gateway.api.chat import _record_session_owner
+    from openagent_core.gateway.api.chat import _record_session_owner
 
     db = _FakeDB({
         "rest-chat": {
@@ -135,9 +135,9 @@ async def t_rest_chat_gets_meaningful_title(_ctx: TestContext) -> None:
 
 @test("session_owner_recovery", "a runtime turn no longer erases the stored owner")
 async def t_runtime_write_keeps_metadata(_ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.memory.sessions import AgentSession
-    from src.memory.store.sqlite import SqliteDb
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.sessions import AgentSession
+    from openagent_core.memory.store.sqlite import SqliteDb
 
     with TemporaryDirectory(prefix="openagent-session-owner-") as directory:
         path = Path(directory) / "openagent.db"
@@ -197,7 +197,7 @@ def _seed_ownerless(path: Path, *owners: str) -> None:
 
 
 async def _reconnect_and_read(path: Path):
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(str(path))
     await db.connect()
@@ -217,7 +217,7 @@ async def _reconnect_and_read(path: Path):
 
 @test("session_owner_recovery", "sessions written before the stamp are claimed on connect")
 async def t_connect_claims_ownerless_rows(_ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     with TemporaryDirectory(prefix="openagent-session-claim-") as directory:
         path = Path(directory) / "openagent.db"
@@ -236,7 +236,7 @@ async def t_connect_claims_ownerless_rows(_ctx: TestContext) -> None:
 
 @test("session_owner_recovery", "with no owner on the deployment nothing is claimed")
 async def t_no_owner_claims_nothing(_ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     with TemporaryDirectory(prefix="openagent-session-noclaim-") as directory:
         path = Path(directory) / "openagent.db"
@@ -253,7 +253,7 @@ async def t_no_owner_claims_nothing(_ctx: TestContext) -> None:
 
 @test("session_owner_recovery", "a shared network is left alone rather than guessed at")
 async def t_several_users_claim_nothing(_ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     with TemporaryDirectory(prefix="openagent-session-shared-") as directory:
         path = Path(directory) / "openagent.db"
@@ -269,7 +269,7 @@ async def t_several_users_claim_nothing(_ctx: TestContext) -> None:
 
 @test("session_owner_recovery", "claiming twice changes nothing")
 async def t_claim_is_idempotent(_ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     with TemporaryDirectory(prefix="openagent-session-idem-") as directory:
         path = Path(directory) / "openagent.db"

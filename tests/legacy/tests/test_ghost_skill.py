@@ -32,7 +32,7 @@ def _run_with_skill(name: str) -> dict:
 
 @test("ghost_skill", "le skill lette nei run ripiegati vengono riconosciute")
 async def t_detects_loaded_skills(ctx: TestContext) -> None:
-    from src.core.compaction import _skills_loaded_in
+    from openagent_core.core.compaction import _skills_loaded_in
 
     runs = [
         _run_with_skill("delete-lyra-account"),
@@ -53,7 +53,7 @@ async def t_detects_loaded_skills(ctx: TestContext) -> None:
 
 @test("ghost_skill", "il riassunto dice che le istruzioni non ci sono piu'")
 async def t_reinjects_the_notice(ctx: TestContext) -> None:
-    from src.core.compaction import _reinject_skill_notice
+    from openagent_core.core.compaction import _reinject_skill_notice
 
     out = _reinject_skill_notice("L'utente ha chiesto un rimborso.", ["esound-refund"])
     assert "esound-refund" in out

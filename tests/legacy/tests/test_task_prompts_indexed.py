@@ -55,7 +55,7 @@ def _agent_db(tasks) -> Path:
 
 
 def _index(db: Path):
-    from src.memory.semantic_index import SemanticIndex
+    from openagent_core.memory.semantic_index import SemanticIndex
 
     return SemanticIndex(str(db), embedder=_FakeEmbedder())
 

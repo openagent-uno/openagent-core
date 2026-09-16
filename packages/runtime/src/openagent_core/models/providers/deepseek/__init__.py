@@ -1,4 +1,4 @@
-from src.models.providers.deepseek.deepseek import DeepSeek
+from openagent_core.models.providers.deepseek.deepseek import DeepSeek
 
 __all__ = [
     "DeepSeek",

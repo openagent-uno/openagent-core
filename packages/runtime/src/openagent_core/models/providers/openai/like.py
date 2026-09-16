@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from src.models.providers.openai.chat import OpenAIChat
+from openagent_core.models.providers.openai.chat import OpenAIChat
 
 
 @dataclass

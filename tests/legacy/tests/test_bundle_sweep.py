@@ -42,7 +42,7 @@ def _finta_estrazione(base: Path, nome: str, *, eta_s: float = 0,
 
 @test("bundle_sweep", "una estrazione IN USO non si tocca, per quanto vecchia sia")
 async def t_in_use_is_never_removed(ctx: TestContext) -> None:
-    from src.core.bundle_sweep import stale_bundles
+    from openagent_core.core.bundle_sweep import stale_bundles
 
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
@@ -59,7 +59,7 @@ async def t_in_use_is_never_removed(ctx: TestContext) -> None:
 
 @test("bundle_sweep", "una estrazione RECENTE non si tocca: puo' essere in corso")
 async def t_recent_is_never_removed(ctx: TestContext) -> None:
-    from src.core.bundle_sweep import stale_bundles
+    from openagent_core.core.bundle_sweep import stale_bundles
 
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
@@ -76,7 +76,7 @@ async def t_recent_is_never_removed(ctx: TestContext) -> None:
 
 @test("bundle_sweep", "toglie davvero, e dice quanto")
 async def t_sweep_removes_and_reports(ctx: TestContext) -> None:
-    from src.core.bundle_sweep import sweep
+    from openagent_core.core.bundle_sweep import sweep
 
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
@@ -94,7 +94,7 @@ async def t_sweep_removes_and_reports(ctx: TestContext) -> None:
 
 @test("bundle_sweep", "a secco non cancella niente ma conta lo stesso")
 async def t_dry_run(ctx: TestContext) -> None:
-    from src.core.bundle_sweep import sweep
+    from openagent_core.core.bundle_sweep import sweep
 
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
@@ -106,7 +106,7 @@ async def t_dry_run(ctx: TestContext) -> None:
 
 @test("bundle_sweep", "non tocca cio' che non e' un'estrazione")
 async def t_only_bundles(ctx: TestContext) -> None:
-    from src.core.bundle_sweep import sweep
+    from openagent_core.core.bundle_sweep import sweep
 
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
@@ -125,7 +125,7 @@ async def t_only_bundles(ctx: TestContext) -> None:
 
 @test("bundle_sweep", "una cartella illeggibile non fa fallire l'avvio")
 async def t_never_raises(ctx: TestContext) -> None:
-    from src.core.bundle_sweep import sweep
+    from openagent_core.core.bundle_sweep import sweep
 
     # La pulizia gira all'avvio del server: se esplode, l'agent non parte —
     # cioe' il rimedio sarebbe peggio del male.
@@ -142,6 +142,6 @@ async def t_wired_into_serve(ctx: TestContext) -> None:
     # La perdita e' strutturale: chiunque usi il CLI la alimenta. Una pulizia
     # che dipende da chi si ricorda di lanciarla non e' una soluzione.
     assert "bundle_sweep" in src
-    i = src.find("kill_stale_serve_processes(active_dir)")
+    i = openagent_core.find("kill_stale_serve_processes(active_dir)")
     assert i > 0
     assert "bundle_sweep" in src[i:i + 1200], "non e' accanto all'igiene dei processi"

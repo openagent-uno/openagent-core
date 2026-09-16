@@ -39,7 +39,7 @@ def _agent_dir(ctx: TestContext, name: str) -> Iterator[Path]:
     process and a leaked global would silently redirect every later test's
     vault/db/logs.
     """
-    from src.core.paths import get_agent_dir, log_dir, set_agent_dir
+    from openagent_core.core.paths import get_agent_dir, log_dir, set_agent_dir
 
     previous = get_agent_dir()
     target = ctx.test_dir / f"logs-mcp-{name}"
@@ -101,12 +101,12 @@ def _sample_entries(now: float | None = None) -> list[dict[str, Any]]:
 
 @test("logs_mcp", "logs MCP is registered as an in-process builtin")
 async def t_registered(_ctx: TestContext) -> None:
-    from src.mcp.builtins import BUILTIN_MCP_SPECS, resolve_builtin_entry
+    from openagent_core.mcp.builtins import BUILTIN_MCP_SPECS, resolve_builtin_entry
 
     assert "logs" in BUILTIN_MCP_SPECS, "logs missing from BUILTIN_MCP_SPECS"
     spec = BUILTIN_MCP_SPECS["logs"]
     assert spec.get("in_process") is True, "logs must be in-process (log_dir resolves per-agent)"
-    assert spec["adapter_module"] == "src.mcp.servers.logs.adapters"
+    assert spec["adapter_module"] == "openagent_core.mcp.servers.logs.adapters"
     assert spec.get("description"), "logs needs a description — tool-search shows it"
 
     resolved = resolve_builtin_entry("logs")
@@ -119,7 +119,7 @@ async def t_registered(_ctx: TestContext) -> None:
 
 @test("logs_mcp", "logs MCP is enabled by default")
 async def t_default_on(_ctx: TestContext) -> None:
-    from src.mcp.builtins import DEFAULT_MCPS
+    from openagent_core.mcp.builtins import DEFAULT_MCPS
 
     names = [e.get("builtin") for e in DEFAULT_MCPS]
     assert "logs" in names, f"logs not in DEFAULT_MCPS: {names}"
@@ -127,7 +127,7 @@ async def t_default_on(_ctx: TestContext) -> None:
 
 @test("logs_mcp", "toolkit builds and exposes exactly the three logs_* tools")
 async def t_toolkit_shape(_ctx: TestContext) -> None:
-    from src.mcp.servers.logs.adapters import build_runtime_toolkit
+    from openagent_core.mcp.servers.logs.adapters import build_runtime_toolkit
 
     tk = build_runtime_toolkit()
     assert tk.name == "logs"
@@ -160,7 +160,7 @@ async def t_tool_docs(_ctx: TestContext) -> None:
     it at registration, so we do the same here rather than asserting against
     an un-processed Function.
     """
-    from src.mcp.servers.logs.adapters import build_runtime_toolkit
+    from openagent_core.mcp.servers.logs.adapters import build_runtime_toolkit
 
     tk = build_runtime_toolkit()
     fns = {
@@ -201,7 +201,7 @@ async def t_real_schema_assumptions(_ctx: TestContext) -> None:
     """
     import logging as stdlib_logging
 
-    from src.core.logging import _JsonlFormatter
+    from openagent_core.core.logging import _JsonlFormatter
 
     def emit(level: int, **data: Any) -> dict:
         record = stdlib_logging.LogRecord(
@@ -239,7 +239,7 @@ async def t_level_cannot_collide(_ctx: TestContext) -> None:
     import logging as stdlib_logging
     from unittest.mock import patch
 
-    from src.core.logging import EVENT_LOGGER, elog
+    from openagent_core.core.logging import EVENT_LOGGER, elog
 
     captured: list[stdlib_logging.LogRecord] = []
 
@@ -255,7 +255,7 @@ async def t_level_cannot_collide(_ctx: TestContext) -> None:
     propagate = logger.propagate
     logger.propagate = False
     try:
-        with patch("src.core.logging._configured", True):
+        with patch("openagent_core.core.logging._configured", True):
             elog("t.collide", level="error", note="hi")
     finally:
         logger.removeHandler(handler)
@@ -274,7 +274,7 @@ async def t_level_cannot_collide(_ctx: TestContext) -> None:
 
 @test("logs_mcp", "logs_query returns the tail as structured, chronological rows")
 async def t_query_tail(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     with _agent_dir(ctx, "tail") as d:
         _write_log(d, _sample_entries())
@@ -293,7 +293,7 @@ async def t_query_tail(ctx: TestContext) -> None:
 
 @test("logs_mcp", "logs_query filters by event, session_id, errors_only, and time window")
 async def t_query_filters(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     with _agent_dir(ctx, "filters") as d:
         _write_log(d, _sample_entries())
@@ -329,7 +329,7 @@ async def t_query_filters(ctx: TestContext) -> None:
 
 @test("logs_mcp", "logs_query/summary accept time_window_minutes as a since= alias")
 async def t_query_time_window_minutes(ctx: TestContext) -> None:
-    from src.mcp.servers.logs.adapters import build_runtime_toolkit
+    from openagent_core.mcp.servers.logs.adapters import build_runtime_toolkit
 
     tk = build_runtime_toolkit()
     fns = {
@@ -359,7 +359,7 @@ async def t_query_time_window_minutes(ctx: TestContext) -> None:
 
 @test("logs_mcp", "logs_query pages with limit/offset and reports what it withheld")
 async def t_query_paging(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     with _agent_dir(ctx, "paging") as d:
         _write_log(d, _sample_entries())
@@ -379,8 +379,8 @@ async def t_query_paging(ctx: TestContext) -> None:
 
 @test("logs_mcp", "logs_query clamps limit to the hard cap")
 async def t_limit_capped(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
-    from src.mcp.servers.logs.handlers import _MAX_LIMIT
+    from openagent_core.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs.handlers import _MAX_LIMIT
 
     now = time.time()
     many = [
@@ -400,8 +400,8 @@ async def t_limit_capped(ctx: TestContext) -> None:
 
 @test("logs_mcp", "a single fat field cannot dominate a result")
 async def t_value_truncation(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
-    from src.mcp.servers.logs.reader import _MAX_VALUE_CHARS
+    from openagent_core.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs.reader import _MAX_VALUE_CHARS
 
     now = time.time()
     with _agent_dir(ctx, "fatfield") as d:
@@ -428,8 +428,8 @@ async def t_value_truncation(ctx: TestContext) -> None:
 
 @test("logs_mcp", "whole-payload budget holds even when every row is reasonable")
 async def t_payload_budget(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
-    from src.mcp.servers.logs.handlers import _MAX_RESULT_CHARS
+    from openagent_core.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs.handlers import _MAX_RESULT_CHARS
 
     now = time.time()
     # 200 rows that each pass the per-value cap but together blow the budget.
@@ -458,7 +458,7 @@ async def t_payload_budget(ctx: TestContext) -> None:
 
 @test("logs_mcp", "reader stops at the byte cap and says so")
 async def t_scan_cap(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import reader
+    from openagent_core.mcp.servers.logs import reader
 
     now = time.time()
     with _agent_dir(ctx, "scancap") as d:
@@ -490,7 +490,7 @@ async def t_reverse_reader_exact(ctx: TestContext) -> None:
     boundary is the thing most likely to be silently dropped or duplicated.
     Only a file spanning many blocks exercises it.
     """
-    from src.mcp.servers.logs import reader
+    from openagent_core.mcp.servers.logs import reader
 
     now = time.time()
     entries = [
@@ -514,7 +514,7 @@ async def t_since_short_circuits(ctx: TestContext) -> None:
     means every remaining byte is older. 'What broke in the last hour?' must
     not touch six days of history.
     """
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     now = time.time()
     entries = [{"ts": now - 86_400 * 5 + i, "event": "old.noise", "pad": "q" * 300}
@@ -537,7 +537,7 @@ async def t_since_short_circuits(ctx: TestContext) -> None:
 
 @test("logs_mcp", "parse_time accepts relative ages, ISO dates, and epochs")
 async def t_parse_time(_ctx: TestContext) -> None:
-    from src.mcp.servers.logs.reader import parse_time
+    from openagent_core.mcp.servers.logs.reader import parse_time
 
     now = 1_800_000_000.0
     assert parse_time("24h", now=now) == now - 86_400
@@ -565,7 +565,7 @@ async def t_parse_time(_ctx: TestContext) -> None:
 
 @test("logs_mcp", "logs_summary answers 'what went wrong yesterday?' in one call")
 async def t_summary(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     with _agent_dir(ctx, "summary") as d:
         _write_log(d, _sample_entries())
@@ -593,7 +593,7 @@ async def t_summary(ctx: TestContext) -> None:
 
 @test("logs_mcp", "logs_summary aggregates mirrored cost and ignores skipped cost")
 async def t_summary_cost(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     with _agent_dir(ctx, "cost") as d:
         _write_log(d, _sample_entries())
@@ -613,8 +613,8 @@ async def t_summary_cost(ctx: TestContext) -> None:
 
 @test("logs_mcp", "logs_summary output stays small over a large log")
 async def t_summary_bounded(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
-    from src.mcp.servers.logs.handlers import _MAX_RESULT_CHARS
+    from openagent_core.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs.handlers import _MAX_RESULT_CHARS
 
     now = time.time()
     # 6k events across 3k distinct names and 3k sessions — every ranked list
@@ -669,7 +669,7 @@ def _new_schema_entries(now: float | None = None) -> list[dict[str, Any]]:
 
 @test("logs_mcp", "post-fix entries get authoritative severity, not a guess")
 async def t_authoritative_severity(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     with _agent_dir(ctx, "authoritative") as d:
         _write_log(d, _new_schema_entries())
@@ -705,7 +705,7 @@ async def t_barge_in_not_a_failure(_ctx: TestContext) -> None:
     which §2 calls first-class behaviour. Counting them made barge-ins the
     single largest contributor to "what went wrong yesterday".
     """
-    from src.mcp.servers.logs.reader import classify
+    from openagent_core.mcp.servers.logs.reader import classify
 
     barge_in = {"event": "stream.turn.end", "errored": True, "cancelled": True}
     real_fail = {"event": "stream.turn.end", "errored": True, "cancelled": False}
@@ -723,7 +723,7 @@ async def t_mixed_schema(ctx: TestContext) -> None:
     """The real transition state: dream mode keeps ~6 days, so a log spans
     the fix. The count must never blend the two silently.
     """
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     now = time.time()
     old = [
@@ -749,7 +749,7 @@ async def t_mixed_schema(ctx: TestContext) -> None:
 
 @test("logs_mcp", "level filter matches real levels and never hides what it can't judge")
 async def t_level_filter(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     now = time.time()
     old = [{"ts": now - 7200, "event": "mcp.error", "error": "old, level-less"}]
@@ -782,7 +782,7 @@ async def t_level_filter_validation(ctx: TestContext) -> None:
     wrong. `critical` is the trap: a real logging level, but elog's _LEVELS
     map cannot emit it, so it would match nothing forever.
     """
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     with _agent_dir(ctx, "levelbad") as d:
         _write_log(d, _new_schema_entries())
@@ -802,7 +802,7 @@ async def t_level_filter_validation(ctx: TestContext) -> None:
 
 @test("logs_mcp", "logs_context explains a failure with its surrounding events")
 async def t_context(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     entries = _sample_entries()
     failure_ts = next(e["ts"] for e in entries if e["event"] == "task.error")
@@ -826,8 +826,8 @@ async def t_context(ctx: TestContext) -> None:
 
 @test("logs_mcp", "logs_context clamps its window and handles a missing anchor")
 async def t_context_edges(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
-    from src.mcp.servers.logs.handlers import _MAX_CONTEXT
+    from openagent_core.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs.handlers import _MAX_CONTEXT
 
     entries = _sample_entries()
     now = time.time()
@@ -852,7 +852,7 @@ async def t_context_edges(ctx: TestContext) -> None:
 
 @test("logs_mcp", "logs_context rejects a non-numeric anchor with an actionable error")
 async def t_context_bad_anchor(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     with _agent_dir(ctx, "ctxbad") as d:
         _write_log(d, _sample_entries())
@@ -870,7 +870,7 @@ async def t_context_bad_anchor(ctx: TestContext) -> None:
 
 @test("logs_mcp", "every tool degrades cleanly when the log is missing")
 async def t_missing_log(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     with _agent_dir(ctx, "missing") as d:
         assert not (d / "events.jsonl").exists()
@@ -889,7 +889,7 @@ async def t_missing_log(ctx: TestContext) -> None:
 
 @test("logs_mcp", "every tool degrades cleanly on an empty log")
 async def t_empty_log(ctx: TestContext) -> None:
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     with _agent_dir(ctx, "empty") as d:
         _write_log(d, "")
@@ -904,7 +904,7 @@ async def t_corrupt_log(ctx: TestContext) -> None:
     """A half-written tail line is NORMAL for an append-only log killed
     mid-write — and right after a crash is exactly when you read the log.
     """
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     now = time.time()
     raw = "\n".join([
@@ -934,7 +934,7 @@ async def t_missing_ts(ctx: TestContext) -> None:
     """`_JsonlFormatter` always writes ts, but the file is plain text a human
     may have edited, and a ts-less line must not poison the window logic.
     """
-    from src.mcp.servers.logs import handlers
+    from openagent_core.mcp.servers.logs import handlers
 
     now = time.time()
     with _agent_dir(ctx, "nots") as d:
@@ -964,8 +964,8 @@ async def t_media_gen_description(_ctx: TestContext) -> None:
     """
     import inspect
 
-    from src.mcp.builtins import BUILTIN_MCP_SPECS
-    from src.mcp.servers.media_gen import server
+    from openagent_core.mcp.builtins import BUILTIN_MCP_SPECS
+    from openagent_core.mcp.servers.media_gen import server
 
     tools = {
         name for name, _ in inspect.getmembers(server, inspect.isfunction)

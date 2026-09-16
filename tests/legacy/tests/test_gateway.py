@@ -19,9 +19,9 @@ from ._framework import (
 
 @test("gateway", "gateway starts + /api/health works")
 async def t_gateway_health(ctx: TestContext) -> None:
-    from src.gateway.server import Gateway
-    from src.core.agent import Agent
-    from src.models.runtime import create_model_from_config
+    from openagent_core.gateway.server import Gateway
+    from openagent_core.core.agent import Agent
+    from openagent_core.models.runtime import create_model_from_config
 
     # Two gates: a live API key AND the Iroh-based Gateway boot path.
     # The constructor on this branch requires a NetworkState (Iroh node +

@@ -49,7 +49,7 @@ from ._framework import TestContext, test
 
 
 class _FakeToolkit:
-    """Stand-in for ``src.mcp._runtime.mcp.MCPTools``.
+    """Stand-in for ``openagent_core.mcp._runtime.mcp.MCPTools``.
 
     Supports injection of:
 
@@ -207,7 +207,7 @@ def _install_pool_fakes(
     of importing the runtime. This keeps the test independent from the runtime's
     current API and gives each test a deterministic per-spec toolkit.
     """
-    from src.mcp.pool import MCPPool, _ServerSpec
+    from openagent_core.mcp.pool import MCPPool, _ServerSpec
 
     specs = [_ServerSpec(name=name, command=["/bin/true"]) for name, _ in monkey_specs]
     pool = MCPPool(specs)
@@ -319,7 +319,7 @@ async def t_handshake_hang_times_out(ctx: TestContext) -> None:
     The test overrides the timeout on the pool instance to 0.2s so we
     don't pay the production default in the suite.
     """
-    from src.mcp import pool as pool_mod
+    from openagent_core.mcp import pool as pool_mod
 
     good = _FakeToolkit("good", tool_count=1)
     hung = _FakeToolkit("hung", enter_hang=True)
@@ -383,7 +383,7 @@ async def t_stealth_fail_recovers(ctx: TestContext) -> None:
 async def t_stealth_fail_gives_up(ctx: TestContext) -> None:
     """Pool retries are bounded — a permanently-broken MCP must end up
     dormant within a couple seconds, not loop forever."""
-    from src.mcp import pool as pool_mod
+    from openagent_core.mcp import pool as pool_mod
 
     good = _FakeToolkit("good", tool_count=1)
     # ``recover_after=None`` means initialize() never restores functions.
@@ -434,7 +434,7 @@ async def t_dead_session_respawns(ctx: TestContext) -> None:
     toolkit ALSO comes up dead-session, it stays dormant rather than
     looping forever.
     """
-    from src.mcp import pool as pool_mod
+    from openagent_core.mcp import pool as pool_mod
 
     good = _FakeToolkit("good", tool_count=2)
     dead = _DeadSessionStealthFailToolkit("workflow-manager", tool_count=18)
@@ -486,7 +486,7 @@ async def t_dead_session_respawn_capped(ctx: TestContext) -> None:
     The re-spawn loop is not allowed to recurse — that would let a
     truly broken MCP block every ``connect_all`` indefinitely.
     """
-    from src.mcp import pool as pool_mod
+    from openagent_core.mcp import pool as pool_mod
 
     dead_a = _DeadSessionStealthFailToolkit("broken", tool_count=3)
     dead_b = _DeadSessionStealthFailToolkit("broken", tool_count=3)
@@ -530,7 +530,7 @@ async def t_startup_stagger(ctx: TestContext) -> None:
     /tmp. We verify the spacing rather than the wall-time absolute, so
     the test stays robust to CI scheduling jitter.
     """
-    from src.mcp import pool as pool_mod
+    from openagent_core.mcp import pool as pool_mod
 
     a = _FakeToolkit("a", tool_count=1)
     b = _FakeToolkit("b", tool_count=1)
@@ -569,7 +569,7 @@ async def t_stagger_only_subprocess(ctx: TestContext) -> None:
     a single subprocess MCP after several in-process ones doesn't get an
     unexpected delay (and a single subprocess at all costs nothing).
     """
-    from src.mcp import pool as pool_mod
+    from openagent_core.mcp import pool as pool_mod
 
     a = _FakeToolkit("a", tool_count=1)
     pool = _install_pool_fakes([("a", a)])

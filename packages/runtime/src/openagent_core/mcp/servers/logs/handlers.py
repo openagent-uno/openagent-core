@@ -2,7 +2,7 @@
 
 READ-ONLY, DELIBERATELY
 -----------------------
-``src.core.logging`` also exposes ``clear(older_than_days)``, and the REST
+``openagent_core.core.logging`` also exposes ``clear(older_than_days)``, and the REST
 surface wires it to ``DELETE /api/logs``. It is **not** exposed here:
 
 * §14 gives the agent one job with the log — *diagnose*. Nothing in that job
@@ -21,7 +21,7 @@ Both are the right holders of a destructive, irreversible operation.
 
 TOKEN BUDGET
 ------------
-There IS a global backstop — ``src.core.tool_output.cap_tool_output``, applied
+There IS a global backstop — ``openagent_core.core.tool_output.cap_tool_output``, applied
 in ``Model.create_function_call_result``, the one point every provider funnels
 through. A dict return does not evade it: the runtime ``str()``s any
 non-``ToolResult`` result first (``models/providers/base.py:2254``), so it
@@ -54,8 +54,8 @@ import asyncio
 import json
 from typing import Any
 
-from src.mcp.servers.logs import reader
-from src.mcp.servers.logs.reader import ScanStats
+from openagent_core.mcp.servers.logs import reader
+from openagent_core.mcp.servers.logs.reader import ScanStats
 
 # Row caps. The default returns a page a model can actually reason about;
 # the hard cap is what a determined `limit=100000` collapses to.

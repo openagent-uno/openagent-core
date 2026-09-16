@@ -84,7 +84,7 @@ async def _dial(method: str, path: str, headers: dict, *,
     from aiohttp.test_utils import make_mocked_request
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    from src.network.auth.middleware import NetworkAuthState, make_auth_middleware
+    from openagent_core.network.auth.middleware import NetworkAuthState, make_auth_middleware
 
     with _token_env(http_token=http_token, llm_token=llm_token):
         state = NetworkAuthState(

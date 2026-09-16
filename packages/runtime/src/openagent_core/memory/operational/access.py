@@ -61,7 +61,7 @@ class AccessContext:
 
         The operational-search MCP deliberately exposes no identity fields in
         its tool schema.  Its in-process adapter reads an
-        :class:`~src.core.on_behalf_context.OnBehalfIdentity` that the gateway
+        :class:`~openagent_core.core.on_behalf_context.OnBehalfIdentity` that the gateway
         copied from the verified certificate and converts it here, preserving
         exact parity with REST authorization.
         """

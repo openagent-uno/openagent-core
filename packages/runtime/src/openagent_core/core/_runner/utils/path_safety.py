@@ -3,8 +3,8 @@ import unicodedata
 from pathlib import Path, PureWindowsPath
 from typing import Union
 
-from src.core.runtime_errors import PathSecurityError
-from src.core._runner.utils.log import log_debug
+from openagent_core.core.runtime_errors import PathSecurityError
+from openagent_core.core._runner.utils.log import log_debug
 
 # CON, PRN, NUL, etc. create device handles on Windows — block cross-platform for consistency
 _WINDOWS_RESERVED_NAMES_RE = re.compile(r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|$)", re.IGNORECASE)

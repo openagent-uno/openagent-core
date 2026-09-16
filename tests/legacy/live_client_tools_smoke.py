@@ -64,11 +64,11 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
     from openagent_host_tools.local_broker import LocalBrokerServer
     from openagent_host_tools.types import HostError
 
-    from src.core.agent import Agent
-    from src.core.execution_origin import execution_origin_scope
-    from src.gateway.capabilities import CapabilityRegistry
-    from src.mcp.pool import MCPPool
-    from src.models.native_provider import NativeProvider
+    from openagent_core.core.agent import Agent
+    from openagent_core.core.execution_origin import execution_origin_scope
+    from openagent_core.gateway.capabilities import CapabilityRegistry
+    from openagent_core.mcp.pool import MCPPool
+    from openagent_core.models.native_provider import NativeProvider
 
     api_key = os.environ.get(args.api_key_env) or "local"
     provider_name = args.model.split(":", 1)[0]

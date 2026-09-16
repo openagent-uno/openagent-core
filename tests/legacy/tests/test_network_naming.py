@@ -25,9 +25,9 @@ from ._framework import TestContext, test
 @test("network_naming",
       "auto_init_if_standalone names the network <agent_name> (no -personal suffix)")
 async def t_auto_init_no_suffix(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.network.cli_commands import auto_init_if_standalone
-    from src.network.coordinator.store import CoordinatorStore
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.network.cli_commands import auto_init_if_standalone
+    from openagent_core.network.coordinator.store import CoordinatorStore
 
     tmp_dir = ctx.test_dir / f"netname-{uuid.uuid4().hex[:8]}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -63,9 +63,9 @@ async def t_auto_init_idempotent(ctx: TestContext) -> None:
     (``<agent>-personal``), a second call must NOT silently rename it
     to ``<agent>`` — that would change the label out from under any
     device whose UI shows the cached network name."""
-    from src.memory.db import MemoryDB
-    from src.network.cli_commands import auto_init_if_standalone
-    from src.network.coordinator.store import CoordinatorStore
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.network.cli_commands import auto_init_if_standalone
+    from openagent_core.network.coordinator.store import CoordinatorStore
 
     tmp_dir = ctx.test_dir / f"netidem-{uuid.uuid4().hex[:8]}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -101,8 +101,8 @@ async def t_auto_init_idempotent(ctx: TestContext) -> None:
 @test("network_naming",
       "rename_network updates ``name`` only — network_id and identity preserved")
 async def t_rename_preserves_identity(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.network.coordinator.store import CoordinatorStore
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.network.coordinator.store import CoordinatorStore
 
     tmp_db = ctx.db_path.with_name(f"rename-{uuid.uuid4().hex[:8]}.db")
     db = MemoryDB(str(tmp_db))
@@ -153,8 +153,8 @@ async def t_rename_no_network(ctx: TestContext) -> None:
     """The CLI catches this case with a friendly error before calling
     the store, but the store itself must also signal cleanly so a
     direct caller (e.g. an API endpoint) can do the same check."""
-    from src.memory.db import MemoryDB
-    from src.network.coordinator.store import CoordinatorStore
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.network.coordinator.store import CoordinatorStore
 
     tmp_db = ctx.db_path.with_name(f"rename-empty-{uuid.uuid4().hex[:8]}.db")
     db = MemoryDB(str(tmp_db))

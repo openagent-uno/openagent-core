@@ -1,6 +1,6 @@
-from src.mcp._runtime.decorator import tool
-from src.mcp._runtime.function import Function, FunctionCall
-from src.mcp._runtime.toolkit import Toolkit
+from openagent_core.mcp._runtime.decorator import tool
+from openagent_core.mcp._runtime.function import Function, FunctionCall
+from openagent_core.mcp._runtime.toolkit import Toolkit
 
 __all__ = [
     "tool",

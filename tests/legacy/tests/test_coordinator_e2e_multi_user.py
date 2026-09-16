@@ -59,7 +59,7 @@ async def _write_frame(stream, obj: dict) -> None:
 async def _client_rpc(conn, method: str, params: dict) -> dict:
     """Open a new bi-stream, send one RPC, return the result.
 
-    Mirrors ``src.network.client.login._rpc`` but talks to the
+    Mirrors ``openagent_core.network.client.login._rpc`` but talks to the
     coordinator over an in-proc conn rather than an iroh stream.
     Raises ``RuntimeError`` on RPC-level error responses so test
     assertions can pin specific failure codes.
@@ -80,7 +80,7 @@ async def _do_register_and_login(
     conn, *, handle: str, password: str, invite_code: str, device_pubkey: bytes,
 ) -> bytes:
     """Full SRP-6a register + login round-trip; returns the cert wire."""
-    from src.network.coordinator.pake import (
+    from openagent_core.network.coordinator.pake import (
         Srp6aClientLogin,
         srp6a_make_registration,
     )
@@ -113,7 +113,7 @@ async def _do_login(
     The invite is only sent on first-device pairings; subsequent
     logins for the same (handle, device_pubkey) pair omit it.
     """
-    from src.network.coordinator.pake import Srp6aClientLogin
+    from openagent_core.network.coordinator.pake import Srp6aClientLogin
 
     client = Srp6aClientLogin.start(handle, password)
     init = await _client_rpc(conn, "login_init", {
@@ -137,11 +137,11 @@ async def _do_login(
 async def _stand_up_coordinator(ctx: TestContext, network_name: str = "e2e-net"):
     """Boot a coordinator backed by a fresh MemoryDB; return everything
     the test needs to drive client RPCs and assert end-state."""
-    from src.memory.db import MemoryDB
-    from src.network.coordinator.service import CoordinatorService
-    from src.network.coordinator.store import CoordinatorStore
-    from src.network.identity import Identity
-    from src.network.transport.inproc import InProcConnection
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.network.coordinator.service import CoordinatorService
+    from openagent_core.network.coordinator.store import CoordinatorStore
+    from openagent_core.network.identity import Identity
+    from openagent_core.network.transport.inproc import InProcConnection
 
     tmp_db = ctx.db_path.with_name(f"coord-e2e-{uuid.uuid4().hex[:8]}.db")
     db = MemoryDB(str(tmp_db))
@@ -223,7 +223,7 @@ async def _stand_up_coordinator(ctx: TestContext, network_name: str = "e2e-net")
 
 @test("coord_e2e_multi_user", "member device-status RPC observes revocation on the wire")
 async def t_member_device_status_revocation(ctx: TestContext) -> None:
-    from src.network.identity import Identity
+    from openagent_core.network.identity import Identity
 
     env = await _stand_up_coordinator(ctx)
     try:
@@ -257,8 +257,8 @@ async def t_member_device_status_revocation(ctx: TestContext) -> None:
 
 @test("coord_e2e_multi_user", "3 users with distinct invites each get a verifiable cert")
 async def t_three_users_register_login(ctx: TestContext) -> None:
-    from src.network.auth.device_cert import verify_cert
-    from src.network.identity import Identity
+    from openagent_core.network.auth.device_cert import verify_cert
+    from openagent_core.network.identity import Identity
 
     env = await _stand_up_coordinator(ctx)
     try:
@@ -318,8 +318,8 @@ async def t_three_users_register_login(ctx: TestContext) -> None:
 
 @test("coord_e2e_multi_user", "returning device hits touch_device path & re-logins cleanly")
 async def t_returning_device_relogins(ctx: TestContext) -> None:
-    from src.network.auth.device_cert import verify_cert
-    from src.network.identity import Identity
+    from openagent_core.network.auth.device_cert import verify_cert
+    from openagent_core.network.identity import Identity
 
     env = await _stand_up_coordinator(ctx)
     try:
@@ -366,8 +366,8 @@ async def t_touch_device_lock_e2e(ctx: TestContext) -> None:
     """Same regression as the unit test, but driven over real CBOR
     framing against the real CoordinatorService. After v0.13.14 the
     transient lock no longer blocks the cert response."""
-    from src.network.auth.device_cert import verify_cert
-    from src.network.identity import Identity
+    from openagent_core.network.auth.device_cert import verify_cert
+    from openagent_core.network.identity import Identity
 
     env = await _stand_up_coordinator(ctx)
     try:
@@ -416,7 +416,7 @@ async def t_touch_device_lock_e2e(ctx: TestContext) -> None:
 
 @test("coord_e2e_multi_user", "spent invite can't be reused; wrong invite is rejected")
 async def t_invite_negative_paths(ctx: TestContext) -> None:
-    from src.network.identity import Identity
+    from openagent_core.network.identity import Identity
 
     env = await _stand_up_coordinator(ctx)
     try:

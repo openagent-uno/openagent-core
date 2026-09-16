@@ -24,7 +24,7 @@ async def t_tool_search_freeform_args_schema(_ctx: TestContext) -> None:
     """
     from types import SimpleNamespace
 
-    from src.mcp.servers.tool_search.adapters import build_runtime_toolkit
+    from openagent_core.mcp.servers.tool_search.adapters import build_runtime_toolkit
 
     received: list[dict[str, Any]] = []
 
@@ -103,7 +103,7 @@ async def t_tool_search_filters_read_only_argument_drift(_ctx: TestContext) -> N
     """
     from types import SimpleNamespace
 
-    from src.mcp.servers.tool_search.adapters import build_runtime_toolkit
+    from openagent_core.mcp.servers.tool_search.adapters import build_runtime_toolkit
 
     reads: list[dict[str, str]] = []
     mutations: list[dict[str, str]] = []
@@ -170,7 +170,7 @@ async def t_tool_search_filters_read_only_argument_drift(_ctx: TestContext) -> N
 async def t_agno_generate(ctx: TestContext) -> None:
     if not have_openai_key(ctx.config):
         raise TestSkip("no OpenAI API key in user config")
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
 
     pool = ctx.extras["pool"]
     provider = NativeProvider(
@@ -198,7 +198,7 @@ async def t_agno_compaction_flags(ctx: TestContext) -> None:
     DELIBERATELY OFF (see src/models/native_provider.py): OpenAgent uses the vault
     for user-scoped persistence and we don't want the ``runtime_memories``
     table created. Bumped ``num_history_runs`` default to 20."""
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
     pool = ctx.extras["pool"]
     provider = NativeProvider(
         model="openai:gpt-4o-mini",
@@ -222,7 +222,7 @@ async def t_agno_compaction_flags(ctx: TestContext) -> None:
 async def t_agno_tool_families(ctx: TestContext) -> None:
     """_tool_families() must return one entry per connected MCP server,
     keyed by that server's tool_name_prefix."""
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
     pool = ctx.extras["pool"]
     provider = NativeProvider(
         model="openai:gpt-4o-mini",
@@ -247,7 +247,7 @@ async def t_agno_tool_families(ctx: TestContext) -> None:
 async def t_agno_team_classifier_fallback(ctx: TestContext) -> None:
     """Empty system prompt (classifier) must NOT trigger Team — the
     routing round-trip would waste tokens on simple tier classification."""
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
     pool = ctx.extras["pool"]
     provider = NativeProvider(
         model="openai:gpt-4o-mini",
@@ -266,7 +266,7 @@ async def t_agno_team_classifier_fallback(ctx: TestContext) -> None:
 async def t_agno_team_few_families_fallback(ctx: TestContext) -> None:
     """With 0 or 1 tool families, Team has nothing to route between;
     _ensure_team must return None so the caller uses single Agent."""
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
     provider = NativeProvider(
         model="openai:gpt-4o-mini",
         api_key=ctx.config.get("providers", {}).get("openai", {}).get("api_key", "x"),
@@ -290,7 +290,7 @@ async def t_agno_team_build(ctx: TestContext) -> None:
     """With ≥2 tool families, _ensure_team must return a Team in route
     mode with one specialist member per family, and the team itself
     must have the compaction flags enabled."""
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
     pool = ctx.extras["pool"]
     if len(pool.runtime_toolkits) < 2:
         raise TestSkip(f"test pool only has {len(pool.runtime_toolkits)} toolkit(s)")
@@ -340,7 +340,7 @@ async def t_agno_generate_run_status_error(_ctx: TestContext) -> None:
     must inspect ``response.status`` and raise ``NativeProviderError`` so
     the bridge formats a clean ``⚠️`` message instead.
     """
-    from src.models.native_provider import NativeProvider, NativeProviderError
+    from openagent_core.models.native_provider import NativeProvider, NativeProviderError
 
     provider = NativeProvider(
         model="deepseek:deepseek-v4-pro",

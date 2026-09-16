@@ -13,7 +13,7 @@ from ._framework import TestContext, test
 
 
 def _access(tenant: str, handle: str):
-    from src.memory.operational.access import AccessContext
+    from openagent_core.memory.operational.access import AccessContext
 
     principal = f"user:{handle}"
     return AccessContext(
@@ -77,7 +77,7 @@ def _spec(text: str = "Hello") -> dict:
 
 
 async def _db(root: Path):
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(str(root / "agent.db"))
     await db.connect()
@@ -86,7 +86,7 @@ async def _db(root: Path):
 
 @test("custom_views", "OA-UI v1 compiles bindings and rejects executable or remote media")
 async def t_oaui_compiler(ctx: TestContext) -> None:
-    from src.custom_views.compiler import OAUIValidationError, compile_oaui
+    from openagent_core.custom_views.compiler import OAUIValidationError, compile_oaui
 
     compiled = compile_oaui(spec=_spec())
     input_node = compiled["root"]["children"][1]["children"][0]
@@ -129,8 +129,8 @@ async def t_oaui_compiler(ctx: TestContext) -> None:
 
 @test("custom_views", "checksummed migration and immutable bundle layout are idempotent")
 async def t_custom_view_migration_bundle(ctx: TestContext) -> None:
-    from src.custom_views.migration import MIGRATION_ID, ensure_custom_views_storage, migration_checksum
-    from src.custom_views.repository import CustomViewRepository
+    from openagent_core.custom_views.migration import MIGRATION_ID, ensure_custom_views_storage, migration_checksum
+    from openagent_core.custom_views.repository import CustomViewRepository
 
     with tempfile.TemporaryDirectory(prefix="oa-ui-schema-") as raw:
         root = Path(raw)
@@ -178,7 +178,7 @@ async def t_custom_view_migration_bundle(ctx: TestContext) -> None:
                     (view["id"],),
                 )
             ).fetchone()
-            from src.custom_views.bundles import BundleEvidence
+            from openagent_core.custom_views.bundles import BundleEvidence
 
             evidence = BundleEvidence(
                 evidence_row["bundle_path"], evidence_row["bundle_sha256"],
@@ -209,7 +209,7 @@ async def t_custom_view_migration_bundle(ctx: TestContext) -> None:
 
 @test("custom_views", "failed Custom Views DDL rolls back atomically")
 async def t_custom_view_migration_rollback(ctx: TestContext) -> None:
-    import src.custom_views.migration as migration
+    import openagent_core.custom_views.migration as migration
 
     with tempfile.TemporaryDirectory(prefix="oa-ui-schema-rollback-") as raw:
         root = Path(raw)
@@ -272,7 +272,7 @@ async def t_custom_view_migration_backwards_clock(ctx: TestContext) -> None:
     and every later startup hit the same wall until real time caught up.
     Observed twice in one CI-equivalent run on a clock-syncing VM.
     """
-    import src.custom_views.migration as migration
+    import openagent_core.custom_views.migration as migration
 
     with tempfile.TemporaryDirectory(prefix="oa-ui-schema-clock-") as raw:
         root = Path(raw)
@@ -307,7 +307,7 @@ async def t_custom_view_migration_backwards_clock(ctx: TestContext) -> None:
 
 @test("custom_views", "repository pins revisions, enforces ACL, and bounds append data")
 async def t_custom_view_repository(ctx: TestContext) -> None:
-    from src.custom_views.repository import CustomViewNotFound, CustomViewRepository
+    from openagent_core.custom_views.repository import CustomViewNotFound, CustomViewRepository
 
     with tempfile.TemporaryDirectory(prefix="oa-ui-repo-") as raw:
         db = await _db(Path(raw))
@@ -407,7 +407,7 @@ async def t_custom_view_repository(ctx: TestContext) -> None:
 
 @test("custom_views", "inactive inline Views freeze stale and reactivate at the same revision")
 async def t_custom_view_freeze(ctx: TestContext) -> None:
-    from src.custom_views.repository import CustomViewRepository
+    from openagent_core.custom_views.repository import CustomViewRepository
 
     with tempfile.TemporaryDirectory(prefix="oa-ui-freeze-") as raw:
         db = await _db(Path(raw))
@@ -444,7 +444,7 @@ async def t_custom_view_freeze(ctx: TestContext) -> None:
 
 @test("custom_views", "runtime starts while-visible sources on demand and actions are idempotent")
 async def t_custom_view_runtime_action(ctx: TestContext) -> None:
-    from src.custom_views.service import CustomViewService
+    from openagent_core.custom_views.service import CustomViewService
 
     class _WS:
         closed = False
@@ -563,8 +563,8 @@ async def t_custom_view_runtime_action(ctx: TestContext) -> None:
 
 @test("custom_views", "frozen and expired Views cannot mutate data or execute work")
 async def t_custom_view_lifecycle_blocks_work(ctx: TestContext) -> None:
-    from src.custom_views.repository import CustomViewImmutable
-    from src.custom_views.service import CustomViewService
+    from openagent_core.custom_views.repository import CustomViewImmutable
+    from openagent_core.custom_views.service import CustomViewService
 
     async def expect_blocked(awaitable) -> None:
         try:
@@ -649,7 +649,7 @@ async def t_custom_view_lifecycle_blocks_work(ctx: TestContext) -> None:
 
 @test("custom_views", "local E2E startup never resumes persistent sources")
 async def t_custom_view_local_e2e_does_not_resume_always(ctx: TestContext) -> None:
-    from src.custom_views.service import CustomViewService
+    from openagent_core.custom_views.service import CustomViewService
 
     with tempfile.TemporaryDirectory(prefix="oa-ui-e2e-runtime-") as raw:
         db = await _db(Path(raw))
@@ -686,9 +686,9 @@ async def t_custom_view_local_e2e_does_not_resume_always(ctx: TestContext) -> No
 
 @test("custom_views", "subscriptions are snapshot-first, bounded, and cleaned after send failure")
 async def t_custom_view_subscription_boundaries(ctx: TestContext) -> None:
-    from src.custom_views.repository import CustomViewRateLimited, CustomViewRepository
-    from src.custom_views.runtime import CustomViewRuntime
-    from src.custom_views.service import CustomViewService
+    from openagent_core.custom_views.repository import CustomViewRateLimited, CustomViewRepository
+    from openagent_core.custom_views.runtime import CustomViewRuntime
+    from openagent_core.custom_views.service import CustomViewService
 
     class _WS:
         closed = False
@@ -803,8 +803,8 @@ async def t_custom_view_subscription_boundaries(ctx: TestContext) -> None:
 async def t_custom_view_action_process_cleanup(ctx: TestContext) -> None:
     import psutil
 
-    from src.custom_views.repository import CustomViewError
-    from src.custom_views.service import CustomViewService
+    from openagent_core.custom_views.repository import CustomViewError
+    from openagent_core.custom_views.service import CustomViewService
 
     async def wait_for_file(path: Path) -> tuple[int, int]:
         for _ in range(200):
@@ -914,7 +914,7 @@ async def t_custom_view_action_process_cleanup(ctx: TestContext) -> None:
 
 @test("custom_views", "live ACL revocation invalidates the subscribed client cache")
 async def t_custom_view_live_acl_revoke(ctx: TestContext) -> None:
-    from src.custom_views.service import CustomViewService
+    from openagent_core.custom_views.service import CustomViewService
 
     class _WS:
         closed = False
@@ -987,8 +987,8 @@ async def t_custom_view_live_acl_revoke(ctx: TestContext) -> None:
 
 @test("custom_views", "historical sidebar layouts are renderable but actions are revoked")
 async def t_custom_view_revision_runtime(ctx: TestContext) -> None:
-    from src.custom_views.repository import CustomViewNotFound
-    from src.custom_views.service import CustomViewService
+    from openagent_core.custom_views.repository import CustomViewNotFound
+    from openagent_core.custom_views.service import CustomViewService
 
     class _WS:
         closed = False
@@ -1149,7 +1149,7 @@ async def t_custom_view_revision_runtime(ctx: TestContext) -> None:
 
 @test("custom_views", "checkpoint serialization persists manual writes and source generations")
 async def t_custom_view_checkpoint_generation(ctx: TestContext) -> None:
-    from src.custom_views.service import CustomViewService
+    from openagent_core.custom_views.service import CustomViewService
 
     with tempfile.TemporaryDirectory(prefix="oa-ui-checkpoint-") as raw:
         db = await _db(Path(raw))
@@ -1212,8 +1212,8 @@ async def t_custom_view_checkpoint_generation(ctx: TestContext) -> None:
 
 @test("custom_views", "source outputSchema rejects invalid static, push, and runtime values")
 async def t_custom_view_output_schema(ctx: TestContext) -> None:
-    from src.custom_views.repository import CustomViewInputError
-    from src.custom_views.service import CustomViewService
+    from openagent_core.custom_views.repository import CustomViewInputError
+    from openagent_core.custom_views.service import CustomViewService
 
     with tempfile.TemporaryDirectory(prefix="oa-ui-output-schema-") as raw:
         db = await _db(Path(raw))
@@ -1296,7 +1296,7 @@ async def t_custom_view_output_schema(ctx: TestContext) -> None:
 
 @test("custom_views", "command actions treat clicked input as JSON data, never shell source")
 async def t_custom_view_action_injection(ctx: TestContext) -> None:
-    from src.custom_views.service import CustomViewService
+    from openagent_core.custom_views.service import CustomViewService
 
     with tempfile.TemporaryDirectory(prefix="oa-ui-action-") as raw:
         root = Path(raw)
@@ -1344,7 +1344,7 @@ async def t_custom_view_action_injection(ctx: TestContext) -> None:
 async def t_ui_manager_bundle_preflight(ctx: TestContext) -> None:
     from types import SimpleNamespace
 
-    from src.mcp.servers.ui_manager import adapters
+    from openagent_core.mcp.servers.ui_manager import adapters
 
     with tempfile.TemporaryDirectory(prefix="oa-ui-toolkit-") as raw:
         db = await _db(Path(raw))
@@ -1413,7 +1413,7 @@ async def t_custom_view_rest(ctx: TestContext) -> None:
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 
-    from src.gateway.api import custom_views as api
+    from openagent_core.gateway.api import custom_views as api
 
     class _Gateway:
         def __init__(self, db) -> None:
@@ -1692,7 +1692,7 @@ async def t_migration_fk_check_is_scoped(ctx: TestContext) -> None:
     migration, `connect()` raised, and the process died inside `_serve` before
     the HTTP server came up: the agent could not boot at all.
     """
-    from src.custom_views.migration import (
+    from openagent_core.custom_views.migration import (
         CustomViewMigrationError,
         REQUIRED_TABLES,
         ensure_custom_views_storage,
@@ -1750,7 +1750,7 @@ async def t_message_parts_fk_check_is_scoped(ctx: TestContext) -> None:
     down: the Lyra agent then died on `message-parts-v1 foreign key
     verification failed`, from the identical whole-database PRAGMA.
     """
-    from src.memory.message_parts_migration import (
+    from openagent_core.memory.message_parts_migration import (
         MessagePartsMigrationError,
         REQUIRED_TABLE,
         ensure_message_parts_storage,

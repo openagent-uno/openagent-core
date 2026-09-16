@@ -4,12 +4,12 @@ from typing import Any, Dict, List, Optional, Type, Union
 
 from pydantic import BaseModel
 
-from src.core._runner._stubs import FilterExpr
-from src.stream.media import Audio, File, Image, Video
-from src.models.providers.message import Citations, Message, MessageReferences
-from src.models.providers.metrics import RunMetrics
-from src.core._runner._stubs import ReasoningStep
-from src.core._runner.utils.log import log_error
+from openagent_core.core._runner._stubs import FilterExpr
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.models.providers.message import Citations, Message, MessageReferences
+from openagent_core.models.providers.metrics import RunMetrics
+from openagent_core.core._runner._stubs import ReasoningStep
+from openagent_core.core._runner.utils.log import log_error
 
 
 @dataclass
@@ -142,7 +142,7 @@ class BaseRunOutputEvent:
             _dict["content"] = self.content.model_dump(exclude_none=True)
 
         if hasattr(self, "tools") and self.tools is not None:
-            from src.models.providers.response import ToolExecution
+            from openagent_core.models.providers.response import ToolExecution
 
             _dict["tools"] = []
             for tool in self.tools:
@@ -152,7 +152,7 @@ class BaseRunOutputEvent:
                     _dict["tools"].append(tool)
 
         if hasattr(self, "tool") and self.tool is not None:
-            from src.models.providers.response import ToolExecution
+            from openagent_core.models.providers.response import ToolExecution
 
             if isinstance(self.tool, ToolExecution):
                 _dict["tool"] = self.tool.to_dict()
@@ -182,7 +182,7 @@ class BaseRunOutputEvent:
     def to_json(self, separators=(", ", ": "), indent: Optional[int] = 2) -> str:
         import json
 
-        from src.core._runner.utils.serialize import json_serializer
+        from openagent_core.core._runner.utils.serialize import json_serializer
 
         try:
             _dict = self.to_dict()
@@ -199,13 +199,13 @@ class BaseRunOutputEvent:
     def from_dict(cls, data: Dict[str, Any]):
         tool = data.pop("tool", None)
         if tool:
-            from src.models.providers.response import ToolExecution
+            from openagent_core.models.providers.response import ToolExecution
 
             data["tool"] = ToolExecution.from_dict(tool)
 
         tools = data.pop("tools", None)
         if tools:
-            from src.models.providers.response import ToolExecution
+            from openagent_core.models.providers.response import ToolExecution
 
             data["tools"] = [ToolExecution.from_dict(t) for t in tools]
 
@@ -223,7 +223,7 @@ class BaseRunOutputEvent:
 
         files = data.pop("files", None)
         if files:
-            from src.core._runner.utils.media import reconstruct_files
+            from openagent_core.core._runner.utils.media import reconstruct_files
 
             data["files"] = reconstruct_files(files)
 
@@ -253,27 +253,27 @@ class BaseRunOutputEvent:
 
         session_summary = data.pop("session_summary", None)
         if session_summary:
-            from src.memory.sessions.summary import SessionSummary
+            from openagent_core.memory.sessions.summary import SessionSummary
 
             data["session_summary"] = SessionSummary.from_dict(session_summary)
 
         run_input = data.pop("run_input", None)
         if run_input:
-            from src.core._run_state.team import BaseTeamRunEvent
+            from openagent_core.core._run_state.team import BaseTeamRunEvent
 
             if issubclass(cls, BaseTeamRunEvent):
-                from src.core._run_state.team import TeamRunInput
+                from openagent_core.core._run_state.team import TeamRunInput
 
                 data["run_input"] = TeamRunInput.from_dict(run_input)
             else:
-                from src.core._run_state.agent import RunInput
+                from openagent_core.core._run_state.agent import RunInput
 
                 data["run_input"] = RunInput.from_dict(run_input)
 
         # Handle requirements
         requirements_data = data.pop("requirements", None)
         if requirements_data is not None:
-            from src.core._run_state.requirement import RunRequirement
+            from openagent_core.core._run_state.requirement import RunRequirement
 
             requirements_list: List[RunRequirement] = []
             for item in requirements_data:
@@ -286,7 +286,7 @@ class BaseRunOutputEvent:
         # Handle tasks (TaskData objects in TaskStateUpdatedEvent)
         tasks_data = data.pop("tasks", None)
         if tasks_data is not None:
-            from src.core._run_state.team import TaskData
+            from openagent_core.core._run_state.team import TaskData
 
             data["tasks"] = [TaskData.from_dict(t) if isinstance(t, dict) else t for t in tasks_data]
 

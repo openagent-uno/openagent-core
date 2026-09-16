@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from src.core._runner.utils.dttm import now_epoch_s, to_epoch_s
+from openagent_core.core._runner.utils.dttm import now_epoch_s, to_epoch_s
 
 
 @dataclass

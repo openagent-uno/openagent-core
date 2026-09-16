@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team.team import Team
 
 from copy import copy, deepcopy
 from typing import (
@@ -21,29 +21,29 @@ from typing import (
 
 from pydantic import BaseModel
 
-from src.core._runner.agent import Agent
-from src.stream.media import Audio, File, Image, Video
-from src.models.providers.base import Model
-from src.models.providers.message import Message
-from src.core._run_state import RunContext
-from src.core._run_state.agent import RunOutput
-from src.core._run_state.team import (
+from openagent_core.core._runner.agent import Agent
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.message import Message
+from openagent_core.core._run_state import RunContext
+from openagent_core.core._run_state.agent import RunOutput
+from openagent_core.core._run_state.team import (
     TeamRunOutput,
 )
-from src.memory.sessions import TeamSession
-from src.mcp._runtime import Toolkit
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.agent import (
+from openagent_core.memory.sessions import TeamSession
+from openagent_core.mcp._runtime import Toolkit
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.agent import (
     collect_joint_audios,
     collect_joint_files,
     collect_joint_images,
     collect_joint_videos,
 )
-from src.core._runner.utils.log import (
+from openagent_core.core._runner.utils.log import (
     log_debug,
     log_warning,
 )
-from src.core._runner.utils.team import (
+from openagent_core.core._runner.utils.team import (
     get_member_id,
     get_team_member_interactions_str,
     get_team_run_context_audio,
@@ -55,7 +55,7 @@ from src.core._runner.utils.team import (
 
 async def _aresolve_callable_resources(team: "Team", run_context: "RunContext") -> None:
     """Resolve all callable factories (tools, knowledge, members) asynchronously."""
-    from src.core._runner.utils.callables import aresolve_callable_knowledge, aresolve_callable_members, aresolve_callable_tools
+    from openagent_core.core._runner.utils.callables import aresolve_callable_knowledge, aresolve_callable_members, aresolve_callable_tools
 
     await aresolve_callable_tools(team, run_context)
     await aresolve_callable_knowledge(team, run_context)
@@ -79,7 +79,7 @@ async def _aget_learning_tools(
 
 async def _check_and_refresh_mcp_tools(team: "Team") -> None:
     # Connect MCP tools
-    from src.core._runner.team._init import _connect_mcp_tools
+    from openagent_core.core._runner.team._init import _connect_mcp_tools
 
     await _connect_mcp_tools(
         team,
@@ -134,7 +134,7 @@ def _determine_tools_for_model(
     # Connect tools that require connection management
     from functools import partial
 
-    from src.core._runner.team._default_tools import (
+    from openagent_core.core._runner.team._default_tools import (
         _get_chat_history_function,
         _get_delegate_task_function,
         _get_update_user_memory_function,
@@ -143,9 +143,9 @@ def _determine_tools_for_model(
         _update_session_state_tool,
         create_knowledge_search_tool,
     )
-    from src.core._runner.team._init import _connect_connectable_tools
-    from src.core._runner.team._messages import _get_user_message
-    from src.core._runner.utils.callables import (
+    from openagent_core.core._runner.team._init import _connect_connectable_tools
+    from openagent_core.core._runner.team._messages import _get_user_message
+    from openagent_core.core._runner.utils.callables import (
         get_resolved_knowledge,
         get_resolved_members,
         get_resolved_tools,
@@ -246,12 +246,12 @@ def _determine_tools_for_model(
     if team.skills is not None:
         _tools.extend(team.skills.get_tools())
 
-    from src.core._runner.team.mode import TeamMode
+    from openagent_core.core._runner.team.mode import TeamMode
 
     if team.mode == TeamMode.tasks:
         # Tasks mode: provide task management tools instead of delegation tools
-        from src.core._runner.team._task_tools import _get_task_management_tools
-        from src.core._runner.team.task import load_task_list
+        from openagent_core.core._runner.team._task_tools import _get_task_management_tools
+        from openagent_core.core._runner.team.task import load_task_list
 
         _task_list = load_task_list(run_context.session_state)
         task_tools = _get_task_management_tools(
@@ -457,7 +457,7 @@ def get_member_information(team: "Team", run_context: Optional["RunContext"] = N
 def _get_history_for_member_agent(
     team: "Team", session: TeamSession, member_agent: Union[Agent, "Team"]
 ) -> List[Message]:
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team.team import Team
 
     log_debug(f"Adding messages from history for {member_agent.name}")
 
@@ -529,8 +529,8 @@ def _find_member_by_id(
             - Index of the member in its immediate parent's members list
             - The matched member (Agent or Team)
     """
-    from src.core._runner.team.team import Team
-    from src.core._runner.utils.callables import get_resolved_members
+    from openagent_core.core._runner.team.team import Team
+    from openagent_core.core._runner.utils.callables import get_resolved_members
 
     resolved_members = get_resolved_members(team, run_context)
     if resolved_members is None:
@@ -569,8 +569,8 @@ def _find_member_route_by_id(
             - Index of the member in its immediate parent's members list
             - The direct member (or parent sub-team for nested matches)
     """
-    from src.core._runner.team.team import Team
-    from src.core._runner.utils.callables import get_resolved_members
+    from openagent_core.core._runner.team.team import Team
+    from openagent_core.core._runner.utils.callables import get_resolved_members
 
     resolved_members = get_resolved_members(team, run_context)
     if resolved_members is None:

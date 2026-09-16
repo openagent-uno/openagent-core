@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 from ._framework import TestContext, test
 from .test_local_support_controller import _Doubles
-from src.core import local_support_controller as controller, support_attachments
-from src.core.tool_scope import current_tool_allowlist
+from openagent_core.core import local_support_controller as controller, support_attachments
+from openagent_core.core.tool_scope import current_tool_allowlist
 
 
 def _receipt():

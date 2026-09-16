@@ -61,7 +61,7 @@ class _StubDB:
 
 @test("workflow_forget", "ai-prompt ephemeral node = durable per-node session (release, not forget)")
 async def t_ephemeral_durable(ctx: TestContext) -> None:
-    from src.workflow.executor import WorkflowExecutor, _RunCtx, _h_ai_prompt
+    from openagent_core.workflow.executor import WorkflowExecutor, _RunCtx, _h_ai_prompt
 
     agent = _SpyAgent()
     executor = WorkflowExecutor(agent=agent, db=_StubDB())  # type: ignore[arg-type]
@@ -81,7 +81,7 @@ async def t_ephemeral_durable(ctx: TestContext) -> None:
 
 @test("workflow_forget", "ai-prompt shared nodes chain one durable session; finalize releases it")
 async def t_shared_durable(ctx: TestContext) -> None:
-    from src.workflow.executor import WorkflowExecutor, _RunCtx, _h_ai_prompt
+    from openagent_core.workflow.executor import WorkflowExecutor, _RunCtx, _h_ai_prompt
 
     agent = _SpyAgent()
     executor = WorkflowExecutor(agent=agent, db=_StubDB())  # type: ignore[arg-type]
@@ -109,7 +109,7 @@ async def t_shared_durable(ctx: TestContext) -> None:
 
 @test("workflow_forget", "_finalize_run releases (not forgets) the shared session on failure")
 async def t_finalize_release_on_failure(ctx: TestContext) -> None:
-    from src.workflow.executor import WorkflowExecutor, _RunCtx
+    from openagent_core.workflow.executor import WorkflowExecutor, _RunCtx
 
     agent = _SpyAgent()
     executor = WorkflowExecutor(agent=agent, db=_StubDB())  # type: ignore[arg-type]

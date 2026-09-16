@@ -20,7 +20,7 @@ def _inside_temp(path: Path) -> bool:
 
 
 def _access(tenant: str, handle: str):
-    from src.memory.operational.access import AccessContext
+    from openagent_core.memory.operational.access import AccessContext
 
     principal = f"user:{handle}"
     device = f"local-e2e-{handle}"
@@ -107,9 +107,9 @@ def _dashboard_spec() -> dict:
 
 
 async def seed(agent_dir: Path, handle: str) -> dict:
-    from src.custom_views.repository import CustomViewRepository
-    from src.memory.db import MemoryDB
-    from src.memory.message_parts import persist_parts_for_latest_message
+    from openagent_core.custom_views.repository import CustomViewRepository
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.message_parts import persist_parts_for_latest_message
 
     marker = agent_dir / "openagent.yaml"
     if not _inside_temp(agent_dir) or agent_dir.is_symlink() or not marker.is_file():
@@ -352,7 +352,7 @@ async def seed(agent_dir: Path, handle: str) -> dict:
         # Build the derived search sidecar explicitly so the packaged-client
         # scenario can prove that message text and static View text are
         # searchable without weakening that hermetic server contract.
-        from src.memory.operational.search import warm_operational_search
+        from openagent_core.memory.operational.search import warm_operational_search
 
         await warm_operational_search(db)
         return {

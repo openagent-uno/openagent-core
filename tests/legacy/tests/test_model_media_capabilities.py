@@ -49,7 +49,7 @@ class _CaptureModel:
         self.stream_calls: list[dict[str, Any]] = []
 
     async def generate(self, messages, **kwargs):
-        from src.models.base import ModelResponse
+        from openagent_core.models.base import ModelResponse
 
         self.generate_calls.append({"messages": messages, **kwargs})
         return ModelResponse(content=f"handled:{self.runtime_id}", model=self.runtime_id)
@@ -60,7 +60,7 @@ class _CaptureModel:
 
 
 def _dispatcher(config: list[dict[str, Any]]):
-    from src.models.dispatcher import ModelDispatcher
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     dispatcher = ModelDispatcher(config)
     captures = {
@@ -98,8 +98,8 @@ def _pdf_with_text(text: str) -> bytes:
 
 @test("model_media_capabilities", "metadata persists, hydrates, and legacy rows backfill")
 async def t_metadata_roundtrip_and_backfill(_ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.models.catalog import iter_configured_models
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.models.catalog import iter_configured_models
 
     with tempfile.TemporaryDirectory(prefix="oa-media-meta-") as tmp:
         path = Path(tmp) / "agent.db"
@@ -142,7 +142,7 @@ async def t_metadata_roundtrip_and_backfill(_ctx: TestContext) -> None:
 
 @test("model_media_capabilities", "generate falls back from pinned text model to vision model")
 async def t_generate_media_fallback(_ctx: TestContext) -> None:
-    from src.stream.media import Image
+    from openagent_core.stream.media import Image
 
     dispatcher, captures = _dispatcher(_providers())
 
@@ -169,7 +169,7 @@ async def t_generate_media_fallback(_ctx: TestContext) -> None:
 
 @test("model_media_capabilities", "stream uses the same compatible-model fallback")
 async def t_stream_media_fallback(_ctx: TestContext) -> None:
-    from src.stream.media import Image
+    from openagent_core.stream.media import Image
 
     dispatcher, captures = _dispatcher(_providers())
     image = Image(content=b"image", mime_type="image/png")
@@ -187,8 +187,8 @@ async def t_stream_media_fallback(_ctx: TestContext) -> None:
 
 @test("model_media_capabilities", "incompatible binary modality returns an explicit error")
 async def t_explicit_incompatible_error(_ctx: TestContext) -> None:
-    from src.core.agent import take_run_failure
-    from src.stream.media import Audio
+    from openagent_core.core.agent import take_run_failure
+    from openagent_core.stream.media import Audio
 
     dispatcher, captures = _dispatcher(_providers(include_image=False))
     audio = Audio(content=b"RIFF", mime_type="audio/wav", format="wav")
@@ -206,8 +206,8 @@ async def t_explicit_incompatible_error(_ctx: TestContext) -> None:
 
 @test("model_media_capabilities", "non-extractable Telegram-style PDF fails explicitly")
 async def t_explicit_incompatible_file_error(_ctx: TestContext) -> None:
-    from src.core.agent import take_run_failure
-    from src.stream.media import File
+    from openagent_core.core.agent import take_run_failure
+    from openagent_core.stream.media import File
     from pypdf import PdfWriter
 
     dispatcher, captures = _dispatcher(_providers(include_image=False))
@@ -235,7 +235,7 @@ async def t_explicit_incompatible_file_error(_ctx: TestContext) -> None:
 
 @test("model_media_capabilities", "text file is bounded-extracted into text-only model input")
 async def t_text_extraction_reaches_model(_ctx: TestContext) -> None:
-    from src.stream.media import File
+    from openagent_core.stream.media import File
 
     dispatcher, captures = _dispatcher(_providers(include_image=False))
     file = File(
@@ -258,7 +258,7 @@ async def t_text_extraction_reaches_model(_ctx: TestContext) -> None:
 
 @test("model_media_capabilities", "PDF extraction reaches generate and stream model input")
 async def t_pdf_extraction_reaches_both_paths(_ctx: TestContext) -> None:
-    from src.stream.media import File
+    from openagent_core.stream.media import File
 
     dispatcher, captures = _dispatcher(_providers(include_image=False))
     pdf = File(
@@ -290,7 +290,7 @@ async def t_pdf_extraction_reaches_both_paths(_ctx: TestContext) -> None:
 
 @test("model_media_capabilities", "media Team catalog excludes incompatible members")
 async def t_team_member_filter(_ctx: TestContext) -> None:
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     provider = TeamRouterProvider(
         entry_runtime_id="beta:vision", providers_config=_providers(),
@@ -304,9 +304,9 @@ async def t_team_member_filter(_ctx: TestContext) -> None:
 
 @test("model_media_capabilities", "model-pinned Team lane also falls back for media")
 async def t_pinned_team_media_fallback(_ctx: TestContext) -> None:
-    from src.models.base import BaseModel, ModelResponse
-    from src.models.dispatcher import TeamRouterProvider
-    from src.stream.media import Image
+    from openagent_core.models.base import BaseModel, ModelResponse
+    from openagent_core.models.dispatcher import TeamRouterProvider
+    from openagent_core.stream.media import Image
 
     class _Runtime(BaseModel):
         def __init__(self):
@@ -362,9 +362,9 @@ async def t_typed_runtime_output_carriers(_ctx: TestContext) -> None:
     import os
     import stat
 
-    import src.models.native_provider as native_provider
-    from src.core._run_state.agent import ToolCallCompletedEvent
-    from src.stream.media import Audio, File, Image, Video
+    import openagent_core.models.native_provider as native_provider
+    from openagent_core.core._run_state.agent import ToolCallCompletedEvent
+    from openagent_core.stream.media import Audio, File, Image, Video
 
     media = SimpleNamespace(
         images=[Image(id="image-one", content=b"image-bytes", mime_type="image/png")],
@@ -458,7 +458,7 @@ async def t_mcp_typed_media_resources(_ctx: TestContext) -> None:
         TextResourceContents,
         Tool,
     )
-    from src.core._runner.utils.mcp import get_entrypoint_for_tool
+    from openagent_core.core._runner.utils.mcp import get_entrypoint_for_tool
 
     def b64(value: bytes) -> str:
         return base64.b64encode(value).decode("ascii")
@@ -519,7 +519,7 @@ async def t_mcp_payload_limits(_ctx: TestContext) -> None:
         TextResourceContents,
         Tool,
     )
-    import src.core._runner.utils.mcp as mcp_utils
+    import openagent_core.core._runner.utils.mcp as mcp_utils
 
     class _Session:
         async def send_ping(self):
@@ -593,10 +593,10 @@ async def t_mcp_payload_limits(_ctx: TestContext) -> None:
 
 @test("model_media_capabilities", "Team collect and stream propagate typed output media")
 async def t_team_runtime_output_media_both_paths(_ctx: TestContext) -> None:
-    import src.models.native_provider as native_provider
-    from src.core._run_state.agent import RunCompletedEvent
-    from src.models.dispatcher import _arun_runtime_collect, _arun_runtime_stream
-    from src.stream.media import Audio, File, Video
+    import openagent_core.models.native_provider as native_provider
+    from openagent_core.core._run_state.agent import RunCompletedEvent
+    from openagent_core.models.dispatcher import _arun_runtime_collect, _arun_runtime_stream
+    from openagent_core.stream.media import Audio, File, Video
 
     def _outputs():
         return {

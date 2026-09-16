@@ -48,7 +48,7 @@ class _Env:
 
 @test("sqlite_busy_timeout", "the shared budget is 60s and env-tunable")
 async def t_shared_budget(ctx: TestContext) -> None:
-    from src.memory.db import sqlite_busy_timeout_ms, sqlite_busy_timeout_s
+    from openagent_core.memory.db import sqlite_busy_timeout_ms, sqlite_busy_timeout_s
 
     with _Env(OPENAGENT_SQLITE_BUSY_TIMEOUT_MS=None):
         assert sqlite_busy_timeout_ms() == 60_000
@@ -63,7 +63,7 @@ async def t_shared_budget(ctx: TestContext) -> None:
 async def t_no_instant_failure(ctx: TestContext) -> None:
     # "Fail instantly" is the bug this constant exists to remove, so neither a
     # typo nor a literal 0 may reintroduce it.
-    from src.memory.db import sqlite_busy_timeout_ms
+    from openagent_core.memory.db import sqlite_busy_timeout_ms
 
     for bad in ("0", "-1", "abc", ""):
         with _Env(OPENAGENT_SQLITE_BUSY_TIMEOUT_MS=bad):
@@ -72,7 +72,7 @@ async def t_no_instant_failure(ctx: TestContext) -> None:
 
 @test("sqlite_busy_timeout", "MemoryDB's connection carries the shared budget")
 async def t_memorydb_pragma(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB, sqlite_busy_timeout_ms
+    from openagent_core.memory.db import MemoryDB, sqlite_busy_timeout_ms
 
     tmp = ctx.db_path.with_name(f"busy-{uuid.uuid4().hex[:8]}.db")
     db = MemoryDB(str(tmp))
@@ -102,10 +102,10 @@ async def t_session_store_default_on(ctx: TestContext) -> None:
     # This is the regression that matters: the pragma hook shipped OFF, nobody
     # opted in, and the busiest writer on the file ran with SQLite's stock
     # settings — busy_timeout 0, i.e. give up on the first contended commit.
-    from src.memory.store.sqlite.sqlite import (
+    from openagent_core.memory.store.sqlite.sqlite import (
         _make_session_store_engine, _session_store_pragma_enabled,
     )
-    from src.memory.db import sqlite_busy_timeout_ms
+    from openagent_core.memory.db import sqlite_busy_timeout_ms
 
     with _Env(
         OPENAGENT_SESSION_STORE_PRAGMA_ENABLED=None,
@@ -152,7 +152,7 @@ async def t_runtime_store_single_row_read_releases_reader(ctx: TestContext) -> N
     a sibling write to prove the read mark itself has already been released.
     """
     from sqlalchemy import text
-    from src.memory.store.sqlite import SqliteDb
+    from openagent_core.memory.store.sqlite import SqliteDb
 
     tmp = ctx.db_path.with_name(f"wal-reader-{uuid.uuid4().hex[:8]}.db")
     seed = sqlite3.connect(tmp)
@@ -193,7 +193,7 @@ async def t_runtime_store_single_row_read_releases_reader(ctx: TestContext) -> N
 
 @test("sqlite_busy_timeout", "an operator can still switch the store hook off")
 async def t_session_store_opt_out(ctx: TestContext) -> None:
-    from src.memory.store.sqlite.sqlite import _session_store_pragma_enabled
+    from openagent_core.memory.store.sqlite.sqlite import _session_store_pragma_enabled
 
     for off in ("0", "false", "no", "off", ""):
         with _Env(OPENAGENT_SESSION_STORE_PRAGMA_ENABLED=off):

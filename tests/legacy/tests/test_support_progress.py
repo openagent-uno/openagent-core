@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from ._framework import test
 from .test_local_support_controller import _Doubles, _drive
-from src.core import local_support_controller as c, support_progress as p, support_turn as t, support_guidance as g, reply_guard
+from openagent_core.core import local_support_controller as c, support_progress as p, support_turn as t, support_guidance as g, reply_guard
 
 
 @test("support_progress", "a pending payment cannot become refund consent")

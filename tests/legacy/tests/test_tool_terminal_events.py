@@ -19,7 +19,7 @@ from ._framework import TestContext, test
 
 
 def _tool(*, failed: bool, result: str | None = None):
-    from src.models.providers.response import ToolExecution
+    from openagent_core.models.providers.response import ToolExecution
 
     return ToolExecution(
         tool_call_id="call-terminal-1",
@@ -41,7 +41,7 @@ def _agent_stub(model: Any | None = None):
 
 
 def _assert_agent_terminal(events: list[Any], *, failed: bool) -> None:
-    from src.core._run_state.agent import ToolCallCompletedEvent, ToolCallErrorEvent
+    from openagent_core.core._run_state.agent import ToolCallCompletedEvent, ToolCallErrorEvent
 
     terminals = [e for e in events if isinstance(e, (ToolCallCompletedEvent, ToolCallErrorEvent))]
     assert len(terminals) == 1, f"expected one agent terminal event, got {terminals!r}"
@@ -56,7 +56,7 @@ def _assert_agent_terminal(events: list[Any], *, failed: bool) -> None:
 
 
 def _assert_team_terminal(events: list[Any], *, failed: bool) -> None:
-    from src.core._run_state.team import ToolCallCompletedEvent, ToolCallErrorEvent
+    from openagent_core.core._run_state.team import ToolCallCompletedEvent, ToolCallErrorEvent
 
     terminals = [e for e in events if isinstance(e, (ToolCallCompletedEvent, ToolCallErrorEvent))]
     assert len(terminals) == 1, f"expected one team terminal event, got {terminals!r}"
@@ -74,15 +74,15 @@ def _assert_team_terminal(events: list[Any], *, failed: bool) -> None:
 async def t_response_handlers_emit_one_terminal(_ctx: TestContext) -> None:
     # Error is now a first-class (and potentially the only) terminal frame;
     # keep it on the runner's public import surface alongside Completed.
-    from src.core._runner.agent import ToolCallErrorEvent as PublicAgentToolCallErrorEvent
-    from src.core._runner.team import ToolCallErrorEvent as PublicTeamToolCallErrorEvent
-    from src.core._run_state.agent import RunOutput
-    from src.core._run_state.team import TeamRunOutput
-    from src.core._runner.agent._response import handle_model_response_chunk
-    from src.core._runner.team._response import _handle_model_response_chunk
-    from src.memory.sessions.agent import AgentSession
-    from src.memory.sessions.team import TeamSession
-    from src.models.providers.response import ModelResponse, ModelResponseEvent, ToolExecution
+    from openagent_core.core._runner.agent import ToolCallErrorEvent as PublicAgentToolCallErrorEvent
+    from openagent_core.core._runner.team import ToolCallErrorEvent as PublicTeamToolCallErrorEvent
+    from openagent_core.core._run_state.agent import RunOutput
+    from openagent_core.core._run_state.team import TeamRunOutput
+    from openagent_core.core._runner.agent._response import handle_model_response_chunk
+    from openagent_core.core._runner.team._response import _handle_model_response_chunk
+    from openagent_core.memory.sessions.agent import AgentSession
+    from openagent_core.memory.sessions.team import TeamSession
+    from openagent_core.models.providers.response import ModelResponse, ModelResponseEvent, ToolExecution
 
     assert PublicAgentToolCallErrorEvent.__name__ == "ToolCallErrorEvent"
     assert PublicTeamToolCallErrorEvent.__name__ == "ToolCallErrorEvent"
@@ -175,7 +175,7 @@ class _SyncToolModel:
         return object()
 
     def run_function_call(self, *, function_call, function_call_results):
-        from src.models.providers.response import ModelResponse, ModelResponseEvent
+        from openagent_core.models.providers.response import ModelResponse, ModelResponseEvent
 
         yield ModelResponse(event=ModelResponseEvent.tool_call_started.value)
         yield ModelResponse(
@@ -199,7 +199,7 @@ class _AsyncToolModel:
         function_call_results,
         skip_pause_check,
     ):
-        from src.models.providers.response import ModelResponse, ModelResponseEvent
+        from openagent_core.models.providers.response import ModelResponse, ModelResponseEvent
 
         yield ModelResponse(event=ModelResponseEvent.tool_call_started.value)
         yield ModelResponse(
@@ -211,7 +211,7 @@ class _AsyncToolModel:
 
 def _execution_run(*, team_mode: bool):
     if team_mode:
-        from src.core._run_state.team import TeamRunOutput
+        from openagent_core.core._run_state.team import TeamRunOutput
 
         return TeamRunOutput(
             run_id="team-tool-run",
@@ -220,7 +220,7 @@ def _execution_run(*, team_mode: bool):
             session_id="team-tool-session",
         )
 
-    from src.core._run_state.agent import RunOutput
+    from openagent_core.core._run_state.agent import RunOutput
 
     return RunOutput(
         run_id="agent-tool-run",
@@ -232,8 +232,8 @@ def _execution_run(*, team_mode: bool):
 
 @test("tool_terminal_events", "sync continued tools emit started + one terminal state")
 async def t_sync_tool_emits_one_terminal(_ctx: TestContext) -> None:
-    from src.core._run_state.messages import RunMessages
-    from src.core._runner.agent._tools import run_tool
+    from openagent_core.core._run_state.messages import RunMessages
+    from openagent_core.core._runner.agent._tools import run_tool
 
     for team_mode in (False, True):
         for failed in (False, True):
@@ -261,8 +261,8 @@ async def t_sync_tool_emits_one_terminal(_ctx: TestContext) -> None:
 
 @test("tool_terminal_events", "async continued tools emit started + one terminal state")
 async def t_async_tool_emits_one_terminal(_ctx: TestContext) -> None:
-    from src.core._run_state.messages import RunMessages
-    from src.core._runner.agent._tools import arun_tool
+    from openagent_core.core._run_state.messages import RunMessages
+    from openagent_core.core._runner.agent._tools import arun_tool
 
     for team_mode in (False, True):
         for failed in (False, True):

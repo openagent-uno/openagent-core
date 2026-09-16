@@ -41,7 +41,7 @@ def _restore_env(saved: dict[str, str | None]) -> None:
 
 @test("tool_output_offload", "disabled (default): byte-identical truncation, no file written")
 async def t_disabled_byte_identical(ctx: TestContext) -> None:
-    from src.core.tool_output import (
+    from openagent_core.core.tool_output import (
         _cap_text,
         cap_tool_output,
         max_tool_result_chars,
@@ -72,7 +72,7 @@ async def t_disabled_byte_identical(ctx: TestContext) -> None:
 
 @test("tool_output_offload", "enabled: over-threshold result is offloaded losslessly (full file + preview + path)")
 async def t_enabled_lossless(ctx: TestContext) -> None:
-    from src.core.tool_output import OFFLOAD_PREVIEW_CHARS, cap_tool_output
+    from openagent_core.core.tool_output import OFFLOAD_PREVIEW_CHARS, cap_tool_output
 
     saved = _snapshot_env()
     offload_dir = ctx.test_dir / "offload_enabled"
@@ -108,7 +108,7 @@ async def t_enabled_lossless(ctx: TestContext) -> None:
 
 @test("tool_output_offload", "retention: the offload dir is pruned to the keep cap (bounded growth)")
 async def t_retention_prune(ctx: TestContext) -> None:
-    from src.core.tool_output import cap_tool_output
+    from openagent_core.core.tool_output import cap_tool_output
 
     saved = _snapshot_env()
     offload_dir = ctx.test_dir / "offload_retention"
@@ -135,7 +135,7 @@ async def t_retention_prune(ctx: TestContext) -> None:
 
 @test("tool_output_offload", "under-threshold: small results pass through inline, on or off, no file")
 async def t_under_threshold_inline(ctx: TestContext) -> None:
-    from src.core.tool_output import cap_tool_output
+    from openagent_core.core.tool_output import cap_tool_output
 
     saved = _snapshot_env()
     offload_dir = ctx.test_dir / "offload_small"

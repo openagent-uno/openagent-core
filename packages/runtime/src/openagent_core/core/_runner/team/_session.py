@@ -12,16 +12,16 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team.team import Team
 
-from src.memory.store.base import SessionType
-from src.core.metrics import SessionMetrics
-from src.models.providers.message import Message
-from src.core._run_state import RunStatus
-from src.core._run_state.team import TeamRunOutput
-from src.memory.sessions import TeamSession, WorkflowSession
-from src.memory.sessions.summary import SessionSummary
-from src.core._runner.utils.agent import (
+from openagent_core.memory.store.base import SessionType
+from openagent_core.core.metrics import SessionMetrics
+from openagent_core.models.providers.message import Message
+from openagent_core.core._run_state import RunStatus
+from openagent_core.core._run_state.team import TeamRunOutput
+from openagent_core.memory.sessions import TeamSession, WorkflowSession
+from openagent_core.memory.sessions.summary import SessionSummary
+from openagent_core.core._runner.utils.agent import (
     aget_session_metrics_util,
     aget_session_name_util,
     aget_session_state_util,
@@ -33,7 +33,7 @@ from src.core._runner.utils.agent import (
     set_session_name_util,
     update_session_state_util,
 )
-from src.core._runner.utils.log import log_debug, log_warning
+from openagent_core.core._runner.utils.log import log_debug, log_warning
 
 # ---------------------------------------------------------------------------
 # Session read / write
@@ -54,8 +54,8 @@ def get_session(
     Returns:
         TeamSession: The TeamSession loaded from the database or created if it does not exist.
     """
-    from src.core._runner.team._init import _has_async_db
-    from src.core._runner.team._storage import _read_session
+    from openagent_core.core._runner.team._init import _has_async_db
+    from openagent_core.core._runner.team._storage import _read_session
 
     if not session_id and not team.session_id:
         raise Exception("No session_id provided")
@@ -114,8 +114,8 @@ async def aget_session(
     Returns:
         TeamSession: The TeamSession loaded from the database or created if it does not exist.
     """
-    from src.core._runner.team._init import _has_async_db
-    from src.core._runner.team._storage import _aread_session, _read_session
+    from openagent_core.core._runner.team._init import _has_async_db
+    from openagent_core.core._runner.team._storage import _aread_session, _read_session
 
     if not session_id and not team.session_id:
         raise Exception("No session_id provided")
@@ -180,9 +180,9 @@ def save_session(team: "Team", session: TeamSession) -> None:
     Args:
         session: The TeamSession to save.
     """
-    from src.core._runner.team._init import _has_async_db
-    from src.core._runner.team._run import _scrub_member_responses
-    from src.core._runner.team._storage import _upsert_session
+    from openagent_core.core._runner.team._init import _has_async_db
+    from openagent_core.core._runner.team._run import _scrub_member_responses
+    from openagent_core.core._runner.team._storage import _upsert_session
 
     if _has_async_db(team):
         raise ValueError("Cannot use sync save_session() with an async database. Use asave_session() instead.")
@@ -214,9 +214,9 @@ async def asave_session(team: "Team", session: TeamSession) -> None:
     Args:
         session: The TeamSession to save.
     """
-    from src.core._runner.team._init import _has_async_db
-    from src.core._runner.team._run import _scrub_member_responses
-    from src.core._runner.team._storage import _aupsert_session, _upsert_session
+    from openagent_core.core._runner.team._init import _has_async_db
+    from openagent_core.core._runner.team._run import _scrub_member_responses
+    from openagent_core.core._runner.team._storage import _aupsert_session, _upsert_session
 
     if team.db is not None and team.parent_team_id is None and team.workflow_id is None:
         if session.session_data is not None and isinstance(session.session_data.get("session_state"), dict):
@@ -285,21 +285,21 @@ def generate_session_name(team: "Team", session: TeamSession, _retries: int = 0)
     content = generated_name.content
     if content is None:
         if _retries < max_retries:
-            from src.core._runner.utils.log import log_error
+            from openagent_core.core._runner.utils.log import log_error
 
             log_error("Generated name is None. Trying again.")
             return generate_session_name(team, session=session, _retries=_retries + 1)
-        from src.core._runner.utils.log import log_error
+        from openagent_core.core._runner.utils.log import log_error
 
         log_error("Generated name is None after max retries. Using fallback.")
         return "Team Session"
     if len(content.split()) > 15:
         if _retries < max_retries:
-            from src.core._runner.utils.log import log_error
+            from openagent_core.core._runner.utils.log import log_error
 
             log_error("Generated name is too long. Trying again.")
             return generate_session_name(team, session=session, _retries=_retries + 1)
-        from src.core._runner.utils.log import log_error
+        from openagent_core.core._runner.utils.log import log_error
 
         log_error("Generated name is too long after max retries. Using fallback.")
         return "Team Session"
@@ -510,7 +510,7 @@ def update_session_metrics(team: "Team", session: TeamSession, run_response: Tea
     Accumulates metrics from the team leader's own model calls as well as
     all member agent/team responses (recursively for nested teams).
     """
-    from src.core._runner.team._storage import get_session_metrics_internal
+    from openagent_core.core._runner.team._storage import get_session_metrics_internal
 
     session_metrics = get_session_metrics_internal(team, session=session)
     if session_metrics is None:
@@ -553,7 +553,7 @@ def delete_session(team: "Team", session_id: str, user_id: Optional[str] = None)
 
 async def adelete_session(team: "Team", session_id: str, user_id: Optional[str] = None):
     """Delete the current session and save to storage"""
-    from src.core._runner.team._init import _has_async_db
+    from openagent_core.core._runner.team._init import _has_async_db
 
     if team.db is None:
         return

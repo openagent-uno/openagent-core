@@ -1,12 +1,12 @@
 from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
-from src.core.metrics import MessageMetrics
-from src.models.providers.message import Message
-from src.core._runner._stubs import ReasoningStep
+from openagent_core.core.metrics import MessageMetrics
+from openagent_core.models.providers.message import Message
+from openagent_core.core._runner._stubs import ReasoningStep
 
 if TYPE_CHECKING:
-    from src.core._run_state.agent import RunOutput
-    from src.core._runner.team.team import TeamRunOutput
+    from openagent_core.core._run_state.agent import RunOutput
+    from openagent_core.core._runner.team.team import TeamRunOutput
 
 
 def extract_thinking_content(content: str) -> Tuple[Optional[str], str]:
@@ -66,7 +66,7 @@ def add_reasoning_metrics_to_metadata(
 
     except Exception as e:
         # Log the error but don't crash
-        from src.core._runner.utils.log import log_error
+        from openagent_core.core._runner.utils.log import log_error
 
         log_error(f"Failed to add reasoning metrics to metadata: {str(e)}")
 

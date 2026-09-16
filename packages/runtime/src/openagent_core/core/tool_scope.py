@@ -27,7 +27,7 @@ production ``support-coverage`` fan-out is completely unaffected.
 Family names are normalised through :func:`normalize_family` so a caller can
 name a server the human way (``computer-control``) and it still matches the
 runtime's ``tool_name_prefix`` (``computer_control``). The normalisation matches
-``src.mcp.pool._safe_prefix`` exactly, and is idempotent, so wrapping an
+``openagent_core.mcp.pool._safe_prefix`` exactly, and is idempotent, so wrapping an
 already-normalised name is a no-op.
 """
 
@@ -40,7 +40,7 @@ from typing import FrozenSet, Iterable, Optional
 def normalize_family(name: object) -> str:
     """Coerce a server/family name into the runtime's tool-name prefix form.
 
-    Mirrors ``src.mcp.pool._safe_prefix``: every char that is not alphanumeric
+    Mirrors ``openagent_core.mcp.pool._safe_prefix``: every char that is not alphanumeric
     or ``_`` becomes ``_`` (so ``computer-control`` → ``computer_control``).
     Idempotent — normalising an already-normalised name returns it unchanged.
     """

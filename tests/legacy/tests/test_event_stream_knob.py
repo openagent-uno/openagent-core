@@ -45,7 +45,7 @@ def _restore(previous: str | None) -> None:
 @test("event_stream_knob",
       "default (env assente) → la lane eventi continua a streammare")
 async def test_default_is_streaming(ctx: TestContext) -> None:
-    from src.core.event_dispatcher import _event_stream_enabled
+    from openagent_core.core.event_dispatcher import _event_stream_enabled
 
     previous = _with_env(None)
     try:
@@ -60,7 +60,7 @@ async def test_default_is_streaming(ctx: TestContext) -> None:
 @test("event_stream_knob",
       "0/false/no/off → niente stream (e maiuscole/spazi non contano)")
 async def test_falsy_values_disable(ctx: TestContext) -> None:
-    from src.core.event_dispatcher import _event_stream_enabled
+    from openagent_core.core.event_dispatcher import _event_stream_enabled
 
     previous = _with_env(None)
     try:
@@ -81,7 +81,7 @@ async def test_falsy_values_disable(ctx: TestContext) -> None:
 @test("event_stream_knob",
       "il knob si rilegge a ogni turno (reload del processo, non rilascio)")
 async def test_read_at_call_time(ctx: TestContext) -> None:
-    from src.core.event_dispatcher import _event_stream_enabled
+    from openagent_core.core.event_dispatcher import _event_stream_enabled
 
     previous = _with_env("1")
     try:

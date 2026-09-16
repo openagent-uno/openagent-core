@@ -64,7 +64,7 @@ def _walk(expr: str, start: float, count: int, tz: str | None) -> list[float]:
     """Step a schedule the way the Scheduler does — each next_run computed
     from the previous fire — so the sequence reflects real advancement
     rather than a croniter iterator held open across the transition."""
-    from src.memory.schedule import next_run_for_expression
+    from openagent_core.memory.schedule import next_run_for_expression
 
     out: list[float] = []
     base = start
@@ -80,7 +80,7 @@ def _walk(expr: str, start: float, count: int, tz: str | None) -> list[float]:
 
 @test("cron_timezone", "default path is identical to the pre-timezone implementation")
 async def t_default_matches_legacy(_ctx: TestContext) -> None:
-    from src.memory.schedule import next_run_for_expression
+    from openagent_core.memory.schedule import next_run_for_expression
 
     exprs = [
         "0 9 * * *", "23 11 * * 1-5", "*/30 * * * *", "0 * * * *",
@@ -113,7 +113,7 @@ async def t_default_matches_legacy(_ctx: TestContext) -> None:
 
 @test("cron_timezone", "empty-string timezone means the default, not a crash")
 async def t_empty_tz_is_default(_ctx: TestContext) -> None:
-    from src.memory.schedule import next_run_for_expression, validate_timezone
+    from openagent_core.memory.schedule import next_run_for_expression, validate_timezone
 
     base = _rome(2026, 1, 15, 0, 0)
     # "" is what a REST/JSON caller sends to mean "unset"; it must land on
@@ -132,7 +132,7 @@ async def t_default_is_utc(_ctx: TestContext) -> None:
     # cron is read in UTC no matter what the machine's timezone is. This
     # assertion is written in absolute UTC terms, so it holds on a UTC CI
     # box and on a CEST laptop alike.
-    from src.memory.schedule import next_run_for_expression
+    from openagent_core.memory.schedule import next_run_for_expression
 
     base = dt.datetime(2026, 7, 15, 0, 0, tzinfo=UTC).timestamp()
     fired = next_run_for_expression("0 9 * * *", base)
@@ -150,7 +150,7 @@ async def t_utc_equals_default(_ctx: TestContext) -> None:
     # a hand-converted cron 'UTC' — and provably not move it, before later
     # re-aiming it at a real zone. If this ever diverges, that safe first
     # step stops being safe.
-    from src.memory.schedule import next_run_for_expression
+    from openagent_core.memory.schedule import next_run_for_expression
 
     exprs = ["0 9 * * *", "23 11 * * 1-5", "*/30 * * * *", "0 2 * * *",
              "0 */2 * * *", "@daily", "* 2 * * *", "0 0 1 * *"]
@@ -193,7 +193,7 @@ async def t_utc_cron_drifts_in_rome(_ctx: TestContext) -> None:
     # is doing a lot of work, because that same expression is 12:23 in Rome
     # for the other half of the year. Nothing about the cron changes; the
     # hour the human sees does.
-    from src.memory.schedule import next_run_for_expression
+    from openagent_core.memory.schedule import next_run_for_expression
 
     seen = []
     base = _rome(2026, 3, 27, 12, 0)
@@ -317,7 +317,7 @@ async def t_next_run_strictly_advances(_ctx: TestContext) -> None:
     # The Scheduler writes next_run = _next_run(expr, now) right after
     # firing. If that ever returned <= now the row stays due and re-fires
     # every CHECK_INTERVAL. Walk both transitions minute-by-minute.
-    from src.memory.schedule import next_run_for_expression
+    from openagent_core.memory.schedule import next_run_for_expression
 
     for expr in ("0 2 * * *", "*/30 * * * *", "0 9 * * *", "* 2 * * *"):
         for start, label in ((SPRING_2026, "spring"), (FALL_2026, "fall")):
@@ -337,8 +337,8 @@ async def t_tick_simulation_no_double_fire(_ctx: TestContext) -> None:
     # End-to-end-ish: replay the scheduler's own loop shape (poll every
     # CHECK_INTERVAL, fire when next_run <= now, then recompute) across
     # each transition and count real firings.
-    from src.core.scheduler import CHECK_INTERVAL
-    from src.memory.schedule import next_run_for_expression
+    from openagent_core.core.scheduler import CHECK_INTERVAL
+    from openagent_core.memory.schedule import next_run_for_expression
 
     for start in (SPRING_2026, FALL_2026):
         now = (start - dt.timedelta(hours=6)).timestamp()
@@ -365,7 +365,7 @@ async def t_tick_simulation_no_double_fire(_ctx: TestContext) -> None:
 
 @test("cron_timezone", "@once: epoch is identical with and without a timezone")
 async def t_one_shot_untouched(_ctx: TestContext) -> None:
-    from src.memory.schedule import (
+    from openagent_core.memory.schedule import (
         build_one_shot_expression,
         next_run_for_expression,
     )
@@ -393,8 +393,8 @@ async def t_one_shot_untouched(_ctx: TestContext) -> None:
 
 @test("cron_timezone", "one-shot rows keep their epoch when tz-tagged in the DB")
 async def t_one_shot_db_roundtrip(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.memory.schedule import build_one_shot_expression, decorate_scheduled_task
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.schedule import build_one_shot_expression, decorate_scheduled_task
 
     run_at = _rome(2026, 10, 25, 2, 0, fold=1)
     tmp = ctx.db_path.with_name(f"tz-once-{uuid.uuid4().hex[:8]}.db")
@@ -425,7 +425,7 @@ async def t_one_shot_db_roundtrip(ctx: TestContext) -> None:
 
 @test("cron_timezone", "bad timezone raises everywhere instead of silently degrading")
 async def t_bad_tz_is_loud(_ctx: TestContext) -> None:
-    from src.memory.schedule import (
+    from openagent_core.memory.schedule import (
         next_run_for_expression,
         validate_schedule_expression,
         validate_timezone,
@@ -457,7 +457,7 @@ async def t_bad_tz_is_loud(_ctx: TestContext) -> None:
 
 @test("cron_timezone", "DB layer rejects a bad timezone on write")
 async def t_bad_tz_rejected_by_db(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp = ctx.db_path.with_name(f"tz-bad-{uuid.uuid4().hex[:8]}.db")
     db = MemoryDB(str(tmp))
@@ -497,7 +497,7 @@ async def t_bad_tz_rejected_by_db(ctx: TestContext) -> None:
 
 @test("cron_timezone", "timezone column round-trips and defaults to NULL")
 async def t_db_roundtrip(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp = ctx.db_path.with_name(f"tz-rt-{uuid.uuid4().hex[:8]}.db")
     db = MemoryDB(str(tmp))
@@ -530,7 +530,7 @@ async def t_db_roundtrip(ctx: TestContext) -> None:
 async def t_migration_no_backfill(ctx: TestContext) -> None:
     import aiosqlite
 
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp = ctx.db_path.with_name(f"tz-mig-{uuid.uuid4().hex[:8]}.db")
     # Build a pre-timezone scheduled_tasks table by hand and put a row in
@@ -575,8 +575,8 @@ async def t_migration_no_backfill(ctx: TestContext) -> None:
 
 @test("cron_timezone", "Scheduler._next_run reads the task's zone")
 async def t_scheduler_uses_row_tz(_ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
-    from src.memory.schedule import next_run_for_expression
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.memory.schedule import next_run_for_expression
 
     sched = Scheduler.__new__(Scheduler)  # no DB/agent needed for the calc
     base = _rome(2026, 7, 15, 0, 0)
@@ -598,7 +598,7 @@ async def t_scheduler_uses_row_tz(_ctx: TestContext) -> None:
 
 @test("cron_timezone", "decorate/ISO render on the task's own clock")
 async def t_surfacing(_ctx: TestContext) -> None:
-    from src.memory.schedule import decorate_scheduled_task, epoch_to_iso
+    from openagent_core.memory.schedule import decorate_scheduled_task, epoch_to_iso
 
     epoch = _rome(2026, 7, 15, 9, 0)
     # Default rendering stays host-local and naive (workflow surfaces rely
@@ -634,8 +634,8 @@ async def t_mcp_surface(ctx: TestContext) -> None:
     # _reset_mcp_conn) so the module-global connection can't leak.
     import os
 
-    import src.mcp.servers.scheduler.server as mcp_server
-    from src.memory.schedule import DEFAULT_TZ_ENV
+    import openagent_core.mcp.servers.scheduler.server as mcp_server
+    from openagent_core.memory.schedule import DEFAULT_TZ_ENV
 
     def _call(tool):
         return getattr(tool, "fn", tool)
@@ -739,7 +739,7 @@ async def t_mcp_surface(ctx: TestContext) -> None:
 async def t_default_tz_env(_ctx: TestContext) -> None:
     import os
 
-    from src.memory.schedule import DEFAULT_TZ_ENV, default_timezone_name
+    from openagent_core.memory.schedule import DEFAULT_TZ_ENV, default_timezone_name
 
     prior = os.environ.get(DEFAULT_TZ_ENV)
     try:
@@ -779,7 +779,7 @@ async def t_sync_updates_existing_timezone(ctx: TestContext) -> None:
     Drives the real ``AgentServer._sync_scheduled_task`` against a fake db +
     scheduler, so it pins the method's logic, not a reimplementation.
     """
-    from src.core.server import AgentServer
+    from openagent_core.core.server import AgentServer
 
     # Fake db holding one existing, enabled, timezone-less task.
     class _Db:
@@ -840,7 +840,7 @@ async def t_sync_timezone_idempotent(ctx: TestContext) -> None:
     """No spurious update/reschedule when the config already matches the DB —
     a needless reschedule on every boot would move next_run around for nothing.
     """
-    from src.core.server import AgentServer
+    from openagent_core.core.server import AgentServer
 
     class _Db:
         def __init__(self):

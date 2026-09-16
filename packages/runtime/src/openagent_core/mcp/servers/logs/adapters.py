@@ -45,11 +45,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.mcp.servers.logs import handlers
+from openagent_core.mcp.servers.logs import handlers
 
 
 def build_runtime_toolkit() -> Any:
-    from src.mcp._runtime import Toolkit
+    from openagent_core.mcp._runtime import Toolkit
 
     async def logs_query(
         event: str | None = None,

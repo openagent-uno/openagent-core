@@ -37,7 +37,7 @@ def _request(db, path: str, *, method: str = "GET", match_info: dict | None = No
 
 
 async def _seed(ctx: TestContext):
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     db_path = ctx.db_path.with_name(
         f"local-e2e-automation-reads-{uuid.uuid4().hex[:8]}.db",
@@ -84,7 +84,7 @@ async def _seed(ctx: TestContext):
 
 @test("local_e2e_automation_reads", "automation definitions and history stay readable with Scheduler parked")
 async def test_read_only_deep_links_without_scheduler(ctx: TestContext) -> None:
-    from src.gateway.api import events, scheduled_tasks, workflow_tasks
+    from openagent_core.gateway.api import events, scheduled_tasks, workflow_tasks
 
     seeded = await _seed(ctx)
     db, db_path, workflow_id, workflow_run_id, task_id, task_run_id, event_id, delivery_id = seeded
@@ -131,7 +131,7 @@ async def test_read_only_deep_links_without_scheduler(ctx: TestContext) -> None:
             return row
 
         with patch(
-            "src.gateway.api.operational.decorate_workflow_run_detail",
+            "openagent_core.gateway.api.operational.decorate_workflow_run_detail",
             new=_identity_detail,
         ):
             workflow_run = await workflow_tasks.handle_run_get(
@@ -206,7 +206,7 @@ async def test_read_only_deep_links_without_scheduler(ctx: TestContext) -> None:
 
 @test("local_e2e_automation_reads", "scheduler-coordinated writes and execution stay parked")
 async def test_mutations_still_require_scheduler(ctx: TestContext) -> None:
-    from src.gateway.api import events, scheduled_tasks, workflow_tasks
+    from openagent_core.gateway.api import events, scheduled_tasks, workflow_tasks
 
     seeded = await _seed(ctx)
     db, db_path, workflow_id, _workflow_run_id, task_id, _task_run_id, event_id, _delivery_id = seeded

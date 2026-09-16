@@ -31,7 +31,7 @@ from pathlib import Path
 
 from ._framework import TestContext, test
 
-from src.memory.vault.index import VaultIndex, _fts_query, _quote
+from openagent_core.memory.vault.index import VaultIndex, _fts_query, _quote
 
 
 # ── helpers ───────────────────────────────────────────────────────────
@@ -394,7 +394,7 @@ async def t_builder_unit(_ctx: TestContext) -> None:
 
 @test("vault_search", "lean support ranking promotes canonical evidence over receipts")
 async def t_canonical_first_ranking(_ctx: TestContext) -> None:
-    from src.mcp.servers.vault_gate.handlers import _canonical_first
+    from openagent_core.mcp.servers.vault_gate.handlers import _canonical_first
 
     raw = [
         {"path": "esound/receipts/support-triage-a.md", "title": "receipt A"},

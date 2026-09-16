@@ -21,7 +21,7 @@ async def _make_db() -> object:
 
     conn = await aiosqlite.connect(":memory:")
     # Bootstrap the schema so vault_save_reminders exists.
-    from src.memory.db import SCHEMA_SQL
+    from openagent_core.memory.db import SCHEMA_SQL
     await conn.executescript(SCHEMA_SQL)
     return _Shim(conn)
 
@@ -30,7 +30,7 @@ async def _make_db() -> object:
 async def t_explicit_off(ctx: TestContext) -> None:
     os.environ["OPENAGENT_VAULT_REMINDER_ENABLED"] = "0"
     try:
-        from src.learning import vault_reminder
+        from openagent_core.learning import vault_reminder
         import importlib
         importlib.reload(vault_reminder)
         db = await _make_db()
@@ -45,7 +45,7 @@ async def t_default_on_first_turn(ctx: TestContext) -> None:
     # No env set → default ON. The first prompt must get a reminder.
     for k in ("OPENAGENT_VAULT_REMINDER_ENABLED", "OPENAGENT_VAULT_REMINDER_EVERY_N_TURNS"):
         os.environ.pop(k, None)
-    from src.learning import vault_reminder
+    from openagent_core.learning import vault_reminder
     import importlib
     importlib.reload(vault_reminder)
     db = await _make_db()
@@ -58,7 +58,7 @@ async def t_fires_first_and_every_n(ctx: TestContext) -> None:
     os.environ["OPENAGENT_VAULT_REMINDER_ENABLED"] = "1"
     os.environ["OPENAGENT_VAULT_REMINDER_EVERY_N_TURNS"] = "3"
     try:
-        from src.learning import vault_reminder
+        from openagent_core.learning import vault_reminder
         import importlib
         importlib.reload(vault_reminder)
         db = await _make_db()
@@ -77,7 +77,7 @@ async def t_fires_first_and_every_n(ctx: TestContext) -> None:
 async def t_reminder_text_content(ctx: TestContext) -> None:
     os.environ["OPENAGENT_VAULT_REMINDER_ENABLED"] = "1"
     try:
-        from src.learning import vault_reminder
+        from openagent_core.learning import vault_reminder
         import importlib
         importlib.reload(vault_reminder)
         db = await _make_db()

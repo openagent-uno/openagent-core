@@ -5,7 +5,7 @@ from enum import Enum
 from time import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
-from src.core._runner.utils.timer import Timer
+from openagent_core.core._runner.utils.timer import Timer
 
 
 # ── Per-turn cache-read capture ────────────────────────────────────────
@@ -69,8 +69,8 @@ class ModelType(str, Enum):
 
 
 if TYPE_CHECKING:
-    from src.models.providers.base import Model
-    from src.models.providers.response import ModelResponse
+    from openagent_core.models.providers.base import Model
+    from openagent_core.models.providers.response import ModelResponse
 
 
 # ---------------------------------------------------------------------------

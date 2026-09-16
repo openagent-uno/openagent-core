@@ -11,8 +11,8 @@ from ._framework import TestContext, test
 
 @test("model_fallback", "rate-limit error selects the on_rate_limit list")
 async def t_rate_limit_uses_on_rate_limit(_ctx: TestContext) -> None:
-    from src.core.runtime_errors import ModelRateLimitError
-    from src.models.providers.fallback import FallbackConfig, get_fallback_models
+    from openagent_core.core.runtime_errors import ModelRateLimitError
+    from openagent_core.models.providers.fallback import FallbackConfig, get_fallback_models
 
     fc = FallbackConfig(on_rate_limit=["deepseek:deepseek-v4-pro"])
     assert fc.has_fallbacks  # property, not a method
@@ -22,15 +22,15 @@ async def t_rate_limit_uses_on_rate_limit(_ctx: TestContext) -> None:
 
 @test("model_fallback", "no fallback config keeps today's no-fallback behaviour")
 async def t_none_config_no_fallback(_ctx: TestContext) -> None:
-    from src.core.runtime_errors import ModelRateLimitError
-    from src.models.providers.fallback import get_fallback_models
+    from openagent_core.core.runtime_errors import ModelRateLimitError
+    from openagent_core.models.providers.fallback import get_fallback_models
 
     assert get_fallback_models(None, ModelRateLimitError("rate limited")) is None
 
 
 @test("model_fallback", "_build_agent accepts and wires fallback config")
 async def t_build_agent_wires_fallback_config(ctx: TestContext) -> None:
-    from src.core.server import _build_agent
+    from openagent_core.core.server import _build_agent
 
     agent = _build_agent({
         "name": "fallback-test",
@@ -59,8 +59,8 @@ async def t_account_exhaustion_falls_back(_ctx: TestContext) -> None:
     4xx client error → return None" branch, so the run hard-failed (the
     skill-distiller ``failed`` with exactly this message) instead of falling
     back, and Claude-account saturation could take out live support turns."""
-    from src.core.runtime_errors import ModelProviderError, ModelRateLimitError
-    from src.models.providers.fallback import FallbackConfig, get_fallback_models
+    from openagent_core.core.runtime_errors import ModelProviderError, ModelRateLimitError
+    from openagent_core.models.providers.fallback import FallbackConfig, get_fallback_models
 
     fc = FallbackConfig(on_rate_limit=["deepseek:deepseek-v4-pro"])
     exhausted = ModelProviderError(
@@ -85,8 +85,8 @@ async def t_account_exhaustion_falls_back(_ctx: TestContext) -> None:
 @test("model_fallback",
       "codex-sub-proxy no-account error classifies as rate-limit")
 async def t_chatgpt_account_exhaustion_falls_back(_ctx: TestContext) -> None:
-    from src.core.runtime_errors import ModelProviderError, ModelRateLimitError
-    from src.models.providers.fallback import FallbackConfig, get_fallback_models
+    from openagent_core.core.runtime_errors import ModelProviderError, ModelRateLimitError
+    from openagent_core.models.providers.fallback import FallbackConfig, get_fallback_models
 
     fc = FallbackConfig(on_rate_limit=["windows-local:qwen3-moe-local"])
     exhausted = ModelProviderError(

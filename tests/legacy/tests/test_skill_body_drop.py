@@ -39,14 +39,14 @@ def _write(root: Path, slug: str, body: str, *, created_by: str = "agent") -> Pa
 
 async def _in_temp_root(ctx: TestContext, fn):
     """Esegue fn(root) con la radice delle skill puntata su una cartella usa-e-getta."""
-    from src.mcp.servers.skills import handlers
+    from openagent_core.mcp.servers.skills import handlers
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         original_root, original_reg = handlers._skills_root, handlers._registry
         handlers._skills_root = lambda: root
 
-        from src.mcp.servers.skills.registry import SkillsRegistry
+        from openagent_core.mcp.servers.skills.registry import SkillsRegistry
         handlers._registry = lambda: SkillsRegistry(str(root))
         try:
             return await fn(root)
@@ -56,7 +56,7 @@ async def _in_temp_root(ctx: TestContext, fn):
 
 @test("skill_body_drop", "creare senza corpo si rifiuta, non si scrive a vuoto")
 async def t_create_without_body_is_refused(ctx: TestContext) -> None:
-    from src.mcp.servers.skills.handlers import skill_manage
+    from openagent_core.mcp.servers.skills.handlers import skill_manage
 
     async def check(root: Path):
         res = await skill_manage("create", "playbook-fantasma",
@@ -78,8 +78,8 @@ async def t_create_without_body_is_refused(ctx: TestContext) -> None:
 
 @test("skill_body_drop", "aggiornare la sola descrizione NON cancella le istruzioni")
 async def t_update_without_body_keeps_it(ctx: TestContext) -> None:
-    from src.mcp.servers.skills.handlers import skill_manage
-    from src.memory.vault.parser import split_frontmatter
+    from openagent_core.mcp.servers.skills.handlers import skill_manage
+    from openagent_core.memory.vault.parser import split_frontmatter
 
     async def check(root: Path):
         corpo = "## Passi\n\n1. Leggi la fattura\n2. Concilia con l'estratto conto\n"
@@ -99,8 +99,8 @@ async def t_update_without_body_keeps_it(ctx: TestContext) -> None:
 
 @test("skill_body_drop", "svuotare di proposito si rifiuta: per ritirare c'e' archive")
 async def t_explicit_empty_is_refused(ctx: TestContext) -> None:
-    from src.mcp.servers.skills.handlers import skill_manage
-    from src.memory.vault.parser import split_frontmatter
+    from openagent_core.mcp.servers.skills.handlers import skill_manage
+    from openagent_core.memory.vault.parser import split_frontmatter
 
     async def check(root: Path):
         path = _write(root, "spicy-invoicing", "## Coda\n\nControlla i doppioni.\n")
@@ -114,7 +114,7 @@ async def t_explicit_empty_is_refused(ctx: TestContext) -> None:
 
 @test("skill_body_drop", "'ok' adesso vuol dire che il corpo e' arrivato sul disco")
 async def t_ok_means_the_body_landed(ctx: TestContext) -> None:
-    from src.mcp.servers.skills.handlers import skill_manage
+    from openagent_core.mcp.servers.skills.handlers import skill_manage
 
     async def check(root: Path):
         res = await skill_manage("create", "triage-mcp-dormanti",
@@ -131,8 +131,8 @@ async def t_ok_means_the_body_landed(ctx: TestContext) -> None:
 
 @test("skill_body_drop", "un corpo aggiornato sostituisce quello vecchio, per intero")
 async def t_supplied_body_replaces(ctx: TestContext) -> None:
-    from src.mcp.servers.skills.handlers import skill_manage
-    from src.memory.vault.parser import split_frontmatter
+    from openagent_core.mcp.servers.skills.handlers import skill_manage
+    from openagent_core.memory.vault.parser import split_frontmatter
 
     async def check(root: Path):
         path = _write(root, "appstore-analytics", "vecchio\n")

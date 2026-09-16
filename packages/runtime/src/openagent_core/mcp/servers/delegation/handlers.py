@@ -26,8 +26,8 @@ import contextvars
 import logging
 from typing import Any, Optional
 
-from src.core.logging import elog
-from src.core.tool_scope import current_tool_allowlist, normalize_family
+from openagent_core.core.logging import elog
+from openagent_core.core.tool_scope import current_tool_allowlist, normalize_family
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ def current_parent_session_id() -> Optional[str]:
     """The chat session driving the current turn (the session whose stream a
     spawned child's card lives on). Set for the whole turn by the main agent's
     ``install_context``; ``None`` in a headless / autonomous run with no chat
-    turn. Used by ``src.stream.card_link`` to target the in-flight card."""
+    turn. Used by ``openagent_core.stream.card_link`` to target the in-flight card."""
     return _session_id_var.get()
 
 
@@ -218,7 +218,7 @@ async def delegate_task(
     # the parent (vision §15 — the old ``run_delegated`` path passed
     # ``system=None`` and persisted nothing), linked back to the parent and
     # surfaced as a clickable card in the leader's transcript.
-    from src.core.child_session import DelegationDepthExceeded, run_child_session
+    from openagent_core.core.child_session import DelegationDepthExceeded, run_child_session
 
     try:
         result = await run_child_session(
@@ -306,11 +306,11 @@ async def run_dream_mode() -> dict[str, Any]:
             ),
         }
 
-    from src.core.builtin_tasks import DREAM_MODE_TASK_NAME
-    from src.core.child_session import mint_child_session_id, run_child_session
-    from src.core.identity_context import agent_author
-    from src.core.server import DREAM_MODE_PROMPT
-    from src.stream.resource_events import emit_resource_event
+    from openagent_core.core.builtin_tasks import DREAM_MODE_TASK_NAME
+    from openagent_core.core.child_session import mint_child_session_id, run_child_session
+    from openagent_core.core.identity_context import agent_author
+    from openagent_core.core.server import DREAM_MODE_PROMPT
+    from openagent_core.stream.resource_events import emit_resource_event
 
     run_id = _uuid.uuid4().hex[:8]
     child_sid = mint_child_session_id(

@@ -5,14 +5,14 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from uuid import UUID
 
-from src.core.metrics import ModelMetrics, RunMetrics, SessionMetrics
-from src.models.providers.message import Message
-from src.core._runner.utils.log import log_error, log_warning
+from openagent_core.core.metrics import ModelMetrics, RunMetrics, SessionMetrics
+from openagent_core.models.providers.message import Message
+from openagent_core.core._runner.utils.log import log_error, log_warning
 
 if TYPE_CHECKING:
-    from src.memory.store.base import AsyncBaseDb, BaseDb, SessionType
-    from src.core._runner._stubs import Registry
-    from src.memory.sessions import Session
+    from openagent_core.memory.store.base import AsyncBaseDb, BaseDb, SessionType
+    from openagent_core.core._runner._stubs import Registry
+    from openagent_core.memory.sessions import Session
 
 
 # Keys in a serialized db dict that correspond to table-name overrides.
@@ -71,7 +71,7 @@ def deserialize_session_by_type(record: Dict[str, Any]) -> "Session":
     Returns:
         Session subclass instance (AgentSession, TeamSession, or WorkflowSession).
     """
-    from src.memory.sessions import AgentSession, TeamSession, WorkflowSession
+    from openagent_core.memory.sessions import AgentSession, TeamSession, WorkflowSession
 
     st = detect_session_type(record)
     if st == "agent":
@@ -96,8 +96,8 @@ def deserialize_session(session_type: Optional["SessionType"], record: Dict[str,
     Raises:
         ValueError: If session_type is not a valid SessionType.
     """
-    from src.memory.store.base import SessionType
-    from src.memory.sessions import AgentSession, TeamSession, WorkflowSession
+    from openagent_core.memory.store.base import SessionType
+    from openagent_core.memory.sessions import AgentSession, TeamSession, WorkflowSession
 
     if session_type is None:
         return deserialize_session_by_type(record)
@@ -146,7 +146,7 @@ async def resolve_session_type(
     if session_type is not None:
         return session_type, None
 
-    from src.memory.store.base import AsyncBaseDb, SessionType
+    from openagent_core.memory.store.base import AsyncBaseDb, SessionType
 
     if isinstance(db, AsyncBaseDb):
         raw = await db.get_session(session_id=session_id, user_id=user_id, deserialize=False)
@@ -257,7 +257,7 @@ def deserialize_session_json_fields(session: dict) -> dict:
     Returns:
         dict: The dictionary with JSON string fields deserialized to objects.
     """
-    from src.core._runner.utils.log import log_warning
+    from openagent_core.core._runner.utils.log import log_warning
 
     if session.get("agent_data") is not None and isinstance(session["agent_data"], str):
         try:
@@ -327,7 +327,7 @@ def db_from_dict(db_data: Dict[str, Any]) -> Optional[Union["BaseDb"]]:
     # migrate them, but don't crash.
     if db_type == "sqlite":
         try:
-            from src.memory.store.sqlite import SqliteDb
+            from openagent_core.memory.store.sqlite import SqliteDb
 
             return SqliteDb.from_dict(db_data)
         except Exception as e:
@@ -366,7 +366,7 @@ def _clone_db_with_table_overrides(
     overrides: Dict[str, Any] = {key: db_data[key] for key in DB_TABLE_NAME_KEYS if key in db_data}
 
     try:
-        from src.memory.store.sqlite import SqliteDb
+        from openagent_core.memory.store.sqlite import SqliteDb
 
         if isinstance(source_db, SqliteDb):
             return SqliteDb(

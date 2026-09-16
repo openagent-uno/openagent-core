@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from src.stream.content_parts import (
+from openagent_core.stream.content_parts import (
     ContentMarkerStreamFilter,
     UiMarkerStreamFilter,
     parse_response_content,

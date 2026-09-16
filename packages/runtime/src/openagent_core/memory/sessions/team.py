@@ -5,11 +5,11 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 from pydantic import BaseModel
 
-from src.models.providers.message import Message
-from src.core._run_state.agent import RunOutput, RunStatus
-from src.core._run_state.team import TeamRunOutput
-from src.memory.sessions.summary import SessionSummary
-from src.core._runner.utils.log import log_debug, log_warning
+from openagent_core.models.providers.message import Message
+from openagent_core.core._run_state.agent import RunOutput, RunStatus
+from openagent_core.core._run_state.team import TeamRunOutput
+from openagent_core.memory.sessions.summary import SessionSummary
+from openagent_core.core._runner.utils.log import log_debug, log_warning
 
 
 @dataclass
@@ -106,7 +106,7 @@ class TeamSession:
     def upsert_run(self, run_response: Union[TeamRunOutput, RunOutput]):
         """Adds a RunOutput, together with some calculated data, to the runs list."""
         # Promote a stopped (CANCELLED) run so its turn survives history.
-        from src.memory.sessions._synth import promote_interrupted_run
+        from openagent_core.memory.sessions._synth import promote_interrupted_run
 
         promote_interrupted_run(run_response)
         messages = run_response.messages
@@ -312,7 +312,7 @@ class TeamSession:
         if not self.runs:
             return []
 
-        from src.core._run_state.base import RunStatus
+        from openagent_core.core._run_state.base import RunStatus
 
         # Get completed runs only (exclude current/pending run)
         completed_runs = [run for run in self.runs if run.status == RunStatus.completed and run.parent_run_id is None]

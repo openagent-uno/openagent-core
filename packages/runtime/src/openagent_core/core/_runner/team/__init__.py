@@ -1,5 +1,5 @@
-from src.models.providers.fallback import FallbackConfig
-from src.core._run_state.team import (
+from openagent_core.models.providers.fallback import FallbackConfig
+from openagent_core.core._run_state.team import (
     FollowupsCompletedEvent,
     FollowupsStartedEvent,
     MemoryUpdateCompletedEvent,
@@ -19,8 +19,8 @@ from src.core._run_state.team import (
     ToolCallErrorEvent,
     ToolCallStartedEvent,
 )
-from src.core._runner.team.mode import TeamMode
-from src.core._runner.team.team import Team, get_team_by_id, get_teams
+from openagent_core.core._runner.team.mode import TeamMode
+from openagent_core.core._runner.team.team import Team, get_team_by_id, get_teams
 
 __all__ = [
     "FallbackConfig",

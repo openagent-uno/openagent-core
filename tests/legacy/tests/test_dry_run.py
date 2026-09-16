@@ -11,7 +11,7 @@ from ._framework import TestContext, test
 
 @test("dry_run", "scope sets/resets the flag; default is live")
 async def t_scope(_ctx: TestContext) -> None:
-    from src.core.dry_run import is_dry_run, call_meta, dry_run_scope
+    from openagent_core.core.dry_run import is_dry_run, call_meta, dry_run_scope
 
     assert is_dry_run() is False
     assert call_meta() is None
@@ -41,8 +41,8 @@ class _FakeSession:
 
 @test("dry_run", "entrypoint stamps dry-run meta only inside a dry_run_scope")
 async def t_entrypoint_meta(_ctx: TestContext) -> None:
-    from src.core._runner.utils.mcp import get_entrypoint_for_tool
-    from src.core.dry_run import dry_run_scope
+    from openagent_core.core._runner.utils.mcp import get_entrypoint_for_tool
+    from openagent_core.core.dry_run import dry_run_scope
 
     fake = _FakeSession()
     tool = SimpleNamespace(name="threads_respond")
@@ -62,7 +62,7 @@ async def t_entrypoint_meta(_ctx: TestContext) -> None:
 @test("dry_run", "event turn has a wall-clock cap so it can't zombie")
 async def t_run_wallclock_cap(_ctx: TestContext) -> None:
     import asyncio
-    import src.core.event_dispatcher as ed
+    import openagent_core.core.event_dispatcher as ed
 
     # A finite, positive cap must exist — otherwise a rate-limited turn blocking
     # on backoff would stay "running" for hours (the jam this guards against).

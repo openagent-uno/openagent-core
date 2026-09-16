@@ -40,7 +40,7 @@ class _Pool:
 
 
 async def _call(pool, server, tool):
-    from src.mcp.servers.tool_search import adapters
+    from openagent_core.mcp.servers.tool_search import adapters
 
     try:
         await adapters._call_tool_impl(pool, server, tool, {})
@@ -51,7 +51,7 @@ async def _call(pool, server, tool):
 
 @test("tool_search_repeat_miss", "the first misses stay quiet, the repeat shouts")
 async def t_escalates_only_on_repeat(ctx: TestContext) -> None:
-    from src.mcp.servers.tool_search import adapters
+    from openagent_core.mcp.servers.tool_search import adapters
 
     adapters._clear_misses()
     pool = _EmptyPool()
@@ -72,7 +72,7 @@ async def t_escalates_only_on_repeat(ctx: TestContext) -> None:
 
 @test("tool_search_repeat_miss", "a different invented name is counted on its own")
 async def t_per_call_counter(ctx: TestContext) -> None:
-    from src.mcp.servers.tool_search import adapters
+    from openagent_core.mcp.servers.tool_search import adapters
 
     adapters._clear_misses()
     pool = _EmptyPool()
@@ -88,7 +88,7 @@ async def t_per_call_counter(ctx: TestContext) -> None:
 
 @test("tool_search_repeat_miss", "a resolved call clears the history")
 async def t_success_resets(ctx: TestContext) -> None:
-    from src.mcp.servers.tool_search import adapters
+    from openagent_core.mcp.servers.tool_search import adapters
 
     adapters._clear_misses()
     empty = _EmptyPool()
@@ -118,7 +118,7 @@ async def t_nested_tool_runtime_context_wins(_ctx: TestContext) -> None:
     argument 'run_context'``.  The runtime value must win without exposing the
     reserved key to the underlying MCP payload.
     """
-    from src.mcp._runtime.function import Function, FunctionCall
+    from openagent_core.mcp._runtime.function import Function, FunctionCall
     from types import SimpleNamespace
 
     authoritative = SimpleNamespace(session_state=None)
@@ -146,7 +146,7 @@ async def t_nested_tool_runtime_context_wins(_ctx: TestContext) -> None:
 
 @test("tool_search_repeat_miss", "vault keyword search compatibility alias is read-only and exact")
 async def t_vault_search_compatibility_alias(_ctx: TestContext) -> None:
-    from src.mcp.servers.tool_search import adapters
+    from openagent_core.mcp.servers.tool_search import adapters
 
     calls: list[dict] = []
 
@@ -170,8 +170,8 @@ async def t_vault_search_compatibility_alias(_ctx: TestContext) -> None:
 
 @test("tool_search_repeat_miss", "execution scope filters discovery and invocation")
 async def t_execution_scope_enforced(_ctx: TestContext) -> None:
-    from src.core import tool_scope
-    from src.mcp.servers.tool_search import adapters
+    from openagent_core.core import tool_scope
+    from openagent_core.mcp.servers.tool_search import adapters
 
     async def _ok(**_kwargs):
         return "done"
@@ -208,7 +208,7 @@ async def t_execution_scope_enforced(_ctx: TestContext) -> None:
 
 @test("tool_search_repeat_miss", "the miss table cannot grow without bound")
 async def t_bounded(ctx: TestContext) -> None:
-    from src.mcp.servers.tool_search import adapters
+    from openagent_core.mcp.servers.tool_search import adapters
 
     adapters._clear_misses()
     for i in range(adapters._MISS_COUNTS_MAX + 10):

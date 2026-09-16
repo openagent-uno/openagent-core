@@ -3,7 +3,7 @@ from typing import Type, Union
 
 from pydantic import BaseModel
 
-from src.core._runner.utils.log import log_warning
+from openagent_core.core._runner.utils.log import log_warning
 
 
 def get_json_output_prompt(output_schema: Union[str, list, dict, BaseModel]) -> str:

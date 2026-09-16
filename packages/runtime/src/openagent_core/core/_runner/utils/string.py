@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
 
-from src.core._runner.utils.log import log_warning, logger
+from openagent_core.core._runner.utils.log import log_warning, logger
 
 POSTGRES_INVALID_CHARS_REGEX = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
 
@@ -169,7 +169,7 @@ def parse_response_model_str(content: str, output_schema: Type[BaseModel]) -> Op
         return None
 
     # Extract thinking content first to prevent <think> tags from corrupting JSON
-    from src.core._runner.utils.reasoning import extract_thinking_content
+    from openagent_core.core._runner.utils.reasoning import extract_thinking_content
 
     # handle thinking content b/w <think> tags
     if "</think>" in content:
@@ -224,7 +224,7 @@ def parse_response_model_str(content: str, output_schema: Type[BaseModel]) -> Op
 
 def parse_response_dict_str(content: str) -> Optional[dict]:
     """Parse dict from string content, extracting JSON if needed"""
-    from src.core._runner.utils.reasoning import extract_thinking_content
+    from openagent_core.core._runner.utils.reasoning import extract_thinking_content
 
     # Handle thinking content b/w <think> tags
     if "</think>" in content:
@@ -300,7 +300,7 @@ def generate_id_from_name(name: Optional[str] = None) -> str:
     if name:
         return name.lower().replace(" ", "-").replace("_", "-")
     else:
-        from src.core._runner.utils.names import generate_human_readable_id
+        from openagent_core.core._runner.utils.names import generate_human_readable_id
 
         return generate_human_readable_id()
 

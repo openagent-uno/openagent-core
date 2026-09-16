@@ -14,25 +14,25 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from src.core._runner.agent.agent import Agent
+    from openagent_core.core._runner.agent.agent import Agent
 
-from src.core._runner._stubs import CultureManager
-from src.memory.store.base import BaseDb, SessionType
-from src.core._runner._stubs import FilterExpr
-from src.core._runner._stubs import KnowledgeFilter
-from src.core._runner._stubs import MemoryManager
-from src.models.providers.message import Message, MessageReferences
-from src.core._run_state import RunContext
-from src.core._run_state.agent import RunOutput
-from src.memory.sessions import AgentSession
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.knowledge import get_agentic_or_user_search_filters
-from src.core._runner.utils.log import (
+from openagent_core.core._runner._stubs import CultureManager
+from openagent_core.memory.store.base import BaseDb, SessionType
+from openagent_core.core._runner._stubs import FilterExpr
+from openagent_core.core._runner._stubs import KnowledgeFilter
+from openagent_core.core._runner._stubs import MemoryManager
+from openagent_core.models.providers.message import Message, MessageReferences
+from openagent_core.core._run_state import RunContext
+from openagent_core.core._run_state.agent import RunOutput
+from openagent_core.memory.sessions import AgentSession
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.knowledge import get_agentic_or_user_search_filters
+from openagent_core.core._runner.utils.log import (
     log_debug,
     log_info,
     log_warning,
 )
-from src.core._runner.utils.timer import Timer
+from openagent_core.core._runner.utils.timer import Timer
 
 
 def get_update_user_memory_function(agent: Agent, user_id: Optional[str] = None, async_mode: bool = False) -> Function:
@@ -166,7 +166,7 @@ def create_knowledge_search_tool(
             retrieval_timer = Timer()
             retrieval_timer.start()
             try:
-                from src.core._runner.agent import _messages
+                from openagent_core.core._runner.agent import _messages
 
                 docs = _messages.get_relevant_docs_from_knowledge(
                     agent,
@@ -198,7 +198,7 @@ def create_knowledge_search_tool(
             retrieval_timer = Timer()
             retrieval_timer.start()
             try:
-                from src.core._runner.agent import _messages
+                from openagent_core.core._runner.agent import _messages
 
                 docs = await _messages.aget_relevant_docs_from_knowledge(
                     agent,
@@ -233,7 +233,7 @@ def create_knowledge_search_tool(
             retrieval_timer = Timer()
             retrieval_timer.start()
             try:
-                from src.core._runner.agent import _messages
+                from openagent_core.core._runner.agent import _messages
 
                 docs = _messages.get_relevant_docs_from_knowledge(
                     agent,
@@ -261,7 +261,7 @@ def create_knowledge_search_tool(
             retrieval_timer = Timer()
             retrieval_timer.start()
             try:
-                from src.core._runner.agent import _messages
+                from openagent_core.core._runner.agent import _messages
 
                 docs = await _messages.aget_relevant_docs_from_knowledge(
                     agent,
@@ -402,7 +402,7 @@ def add_to_knowledge(agent: Agent, query: str, result: str) -> str:
     document_name = query.replace(" ", "_").replace("?", "").replace("!", "").replace(".", "")
     document_content = json.dumps({"query": query, "result": result})
     log_info(f"Adding document to Knowledge: {document_name}: {document_content}")
-    from src.core._runner._stubs import TextReader
+    from openagent_core.core._runner._stubs import TextReader
 
     insert_fn(name=document_name, text_content=document_content, reader=TextReader())
     return "Successfully added to knowledge base"
@@ -510,7 +510,7 @@ async def aget_search_past_sessions_function(
     current_session_id: Optional[str] = None,
 ) -> Function:
     """Async factory for search_past_sessions tool."""
-    from src.core._runner.agent import _init
+    from openagent_core.core._runner.agent import _init
 
     _limit = num_past_sessions_to_search if num_past_sessions_to_search is not None else 20
     _num_runs = num_past_session_runs_in_search if num_past_session_runs_in_search is not None else 3
@@ -614,7 +614,7 @@ async def aget_read_past_session_function(
     user_id: Optional[str] = None,
 ) -> Function:
     """Async factory for read_past_session tool."""
-    from src.core._runner.agent import _init
+    from openagent_core.core._runner.agent import _init
 
     async def read_past_session(session_id: str, num_runs: Optional[int] = None) -> str:
         """Read the full conversation from a previous session.

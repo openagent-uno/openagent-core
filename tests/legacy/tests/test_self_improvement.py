@@ -37,7 +37,7 @@ async def _bare_server(config: dict, db):
     ``_sync_quality_scorer`` / ``_sync_quality_digest``: it reads
     ``self.config`` and ``self.agent._db``. ``__new__`` skips the heavy
     ``__init__`` (no pool, gateway, or model)."""
-    from src.core.server import AgentServer
+    from openagent_core.core.server import AgentServer
 
     srv = AgentServer.__new__(AgentServer)
     srv.config = config
@@ -57,27 +57,27 @@ async def _row(db, name: str):
 
 
 async def _scorer_row(db):
-    from src.core.builtin_tasks import QUALITY_SCORER_TASK_NAME
+    from openagent_core.core.builtin_tasks import QUALITY_SCORER_TASK_NAME
     return await _row(db, QUALITY_SCORER_TASK_NAME)
 
 
 async def _digest_row(db):
-    from src.core.builtin_tasks import QUALITY_DIGEST_TASK_NAME
+    from openagent_core.core.builtin_tasks import QUALITY_DIGEST_TASK_NAME
     return await _row(db, QUALITY_DIGEST_TASK_NAME)
 
 
 async def _cost_row(db):
-    from src.core.builtin_tasks import COST_OBSERVABILITY_TASK_NAME
+    from openagent_core.core.builtin_tasks import COST_OBSERVABILITY_TASK_NAME
     return await _row(db, COST_OBSERVABILITY_TASK_NAME)
 
 
 async def _audit_row(db):
-    from src.core.builtin_tasks import ESCALATION_AUDIT_TASK_NAME
+    from openagent_core.core.builtin_tasks import ESCALATION_AUDIT_TASK_NAME
     return await _row(db, ESCALATION_AUDIT_TASK_NAME)
 
 
 def _fresh_db(ctx: TestContext, tag: str):
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
     return MemoryDB(str(ctx.db_path.with_name(f"selfimp-{tag}-{uuid.uuid4().hex[:8]}.db")))
 
 
@@ -92,7 +92,7 @@ def _set_env(key: str, value):
 
 @test("self_improvement", "settings are OFF by default and explicit opt-in parses")
 async def t_settings_defaults(_ctx: TestContext) -> None:
-    from src.core.config import SelfImprovementSettings, self_improvement_settings
+    from openagent_core.core.config import SelfImprovementSettings, self_improvement_settings
 
     # Empty / missing stanza → no unsolicited model-driven maintenance.
     d = self_improvement_settings({})
@@ -154,7 +154,7 @@ async def t_builtin_default_schedules_do_not_collide(_ctx: TestContext) -> None:
 
     from croniter import croniter
 
-    from src.core.server import (
+    from openagent_core.core.server import (
         COST_OBSERVABILITY_DEFAULT_CRON,
         DREAM_MODE_DEFAULT_TIME,
         ESCALATION_AUDIT_DEFAULT_CRON,
@@ -193,7 +193,7 @@ async def t_builtin_default_schedules_do_not_collide(_ctx: TestContext) -> None:
 
 @test("self_improvement", "OFF by default: explicit opt-in enables; toggles park tasks")
 async def t_gating(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
+    from openagent_core.core.scheduler import Scheduler
 
     # (a) DEFAULT config → no model-driven task is enabled.
     on_db = _fresh_db(ctx, "on")
@@ -255,8 +255,8 @@ async def t_gating(ctx: TestContext) -> None:
 
 @test("self_improvement", "DEDUP: a custom non-builtin scorer/digest suppresses the builtin")
 async def t_dedup(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
-    from src.core.builtin_tasks import QUALITY_SCORER_TASK_NAME, QUALITY_DIGEST_TASK_NAME
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.core.builtin_tasks import QUALITY_SCORER_TASK_NAME, QUALITY_DIGEST_TASK_NAME
 
     # (a) A tuned custom task already exists (eSound/Lyra shape) → the builtin
     #     is NOT seeded; the agent keeps its own.
@@ -309,7 +309,7 @@ async def t_dedup(ctx: TestContext) -> None:
 
 @test("self_improvement", "dedup name-matchers: correct scope, no false positives")
 async def t_dedup_name_matcher(_ctx: TestContext) -> None:
-    from src.core.server import (
+    from openagent_core.core.server import (
         _is_custom_quality_scorer_name, _is_custom_quality_digest_name,
     )
 
@@ -332,7 +332,7 @@ async def t_dedup_name_matcher(_ctx: TestContext) -> None:
 
 @test("self_improvement", "scorer/digest prompts encode the steps, dimensions, and cadence")
 async def t_prompts(_ctx: TestContext) -> None:
-    from src.core.server import (
+    from openagent_core.core.server import (
         QUALITY_SCORER_DEFAULT_CRON, QUALITY_SCORER_PROMPT,
         QUALITY_DIGEST_DEFAULT_CRON, QUALITY_DIGEST_PROMPT,
     )
@@ -373,7 +373,7 @@ async def t_prompts(_ctx: TestContext) -> None:
 
 @test("self_improvement", "quality-scorer/digest are built-ins in the self_improvement section")
 async def t_is_builtin(_ctx: TestContext) -> None:
-    from src.core.builtin_tasks import (
+    from openagent_core.core.builtin_tasks import (
         BUILTIN_TASK_NAMES, CONFIG_SECTION_BY_TASK,
         QUALITY_SCORER_TASK_NAME, QUALITY_DIGEST_TASK_NAME,
         COST_OBSERVABILITY_TASK_NAME, ESCALATION_AUDIT_TASK_NAME,
@@ -397,7 +397,7 @@ async def t_is_builtin(_ctx: TestContext) -> None:
 
 @test("self_improvement", "cost-observability: opt-in; its own gate parks it")
 async def t_cost_gating(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
+    from openagent_core.core.scheduler import Scheduler
 
     # (a) Explicit master opt-in → the cost watcher seeds and enables, hourly.
     on_db = _fresh_db(ctx, "cost-on")
@@ -451,7 +451,7 @@ async def t_cost_gating(ctx: TestContext) -> None:
 
 @test("self_improvement", "cost-observability DEDUP: a custom cost watcher suppresses the builtin")
 async def t_cost_dedup(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
+    from openagent_core.core.scheduler import Scheduler
 
     # (a) eSound/Lyra ship `*-cost-observability` → the builtin must NOT seed.
     db = _fresh_db(ctx, "cost-dedup")
@@ -490,7 +490,7 @@ async def t_cost_dedup(ctx: TestContext) -> None:
 
 @test("self_improvement", "cost dedup name-matcher: correct scope, no false positives")
 async def t_cost_dedup_name_matcher(_ctx: TestContext) -> None:
-    from src.core.server import _is_custom_cost_observability_name
+    from openagent_core.core.server import _is_custom_cost_observability_name
 
     assert _is_custom_cost_observability_name("esound-cost-observability")
     assert _is_custom_cost_observability_name("lyra-cost-observability")
@@ -503,7 +503,7 @@ async def t_cost_dedup_name_matcher(_ctx: TestContext) -> None:
 
 @test("self_improvement", "cost-observability prompt is CACHE-AWARE and hourly")
 async def t_cost_prompt(_ctx: TestContext) -> None:
-    from src.core.server import (
+    from openagent_core.core.server import (
         COST_OBSERVABILITY_DEFAULT_CRON, COST_OBSERVABILITY_PROMPT,
     )
 
@@ -531,7 +531,7 @@ async def t_cost_prompt(_ctx: TestContext) -> None:
 
 @test("self_improvement", "escalation-audit: opt-in; its own gate parks it")
 async def t_audit_gating(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
+    from openagent_core.core.scheduler import Scheduler
 
     on_db = _fresh_db(ctx, "audit-on")
     await on_db.connect()
@@ -568,7 +568,7 @@ async def t_audit_gating(ctx: TestContext) -> None:
 
 @test("self_improvement", "escalation-audit DEDUP: a custom auditor suppresses the builtin")
 async def t_audit_dedup(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
+    from openagent_core.core.scheduler import Scheduler
 
     db = _fresh_db(ctx, "audit-dedup")
     await db.connect()
@@ -589,7 +589,7 @@ async def t_audit_dedup(ctx: TestContext) -> None:
 
 @test("self_improvement", "escalation dedup name-matcher: correct scope, no false positives")
 async def t_audit_name_matcher(_ctx: TestContext) -> None:
-    from src.core.server import _is_custom_escalation_audit_name
+    from openagent_core.core.server import _is_custom_escalation_audit_name
 
     assert _is_custom_escalation_audit_name("support-escalation-audit")
     assert _is_custom_escalation_audit_name("Handoff Audit")
@@ -602,7 +602,7 @@ async def t_audit_name_matcher(_ctx: TestContext) -> None:
 
 @test("self_improvement", "escalation-audit prompt is ROLE/TOOL-agnostic and window-aware")
 async def t_audit_prompt(_ctx: TestContext) -> None:
-    from src.core.server import (
+    from openagent_core.core.server import (
         ESCALATION_AUDIT_DEFAULT_CRON, ESCALATION_AUDIT_PROMPT,
     )
 
@@ -627,7 +627,7 @@ async def t_audit_prompt(_ctx: TestContext) -> None:
 
 @test("model_timeout", "_construct_model applies a per-read timeout with the right precedence")
 async def t_construct_model_timeout(_ctx: TestContext) -> None:
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
 
     class WithTimeout:
         def __init__(self, id=None, timeout=None, api_key=None):
@@ -669,7 +669,7 @@ async def t_construct_model_timeout(_ctx: TestContext) -> None:
 
 @test("model_timeout", "_build_agent wires model.timeout_seconds → the env override")
 async def t_build_agent_wires_timeout(ctx: TestContext) -> None:
-    from src.core.server import _build_agent
+    from openagent_core.core.server import _build_agent
 
     prev = os.environ.get("OPENAGENT_MODEL_TIMEOUT_SECONDS")
     _set_env("OPENAGENT_MODEL_TIMEOUT_SECONDS", None)

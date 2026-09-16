@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from ._framework import TestContext, test
-from src.core import local_support_controller as c
+from openagent_core.core import local_support_controller as c
 
 
 # Byte-for-byte the shape the eSound web form appends to every report: a

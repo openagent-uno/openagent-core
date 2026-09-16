@@ -1,8 +1,8 @@
 import json
 from typing import Any, Callable, Dict, Optional, TypeVar
 
-from src.mcp._runtime.function import Function, FunctionCall
-from src.core._runner.utils.log import log_debug, log_error
+from openagent_core.mcp._runtime.function import Function, FunctionCall
+from openagent_core.core._runner.utils.log import log_debug, log_error
 
 T = TypeVar("T")
 

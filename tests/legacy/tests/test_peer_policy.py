@@ -72,8 +72,8 @@ async def _dial_as_agent(method: str, path: str, *, node_id: str = PEER_A):
     from aiohttp.test_utils import make_mocked_request
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    from src.network.auth.middleware import NetworkAuthState, make_auth_middleware
-    from src.network.transport.aiohttp_iroh_site import (
+    from openagent_core.network.auth.middleware import NetworkAuthState, make_auth_middleware
+    from openagent_core.network.transport.aiohttp_iroh_site import (
         _current_peer_node_id,
         _is_authenticated_agent,
     )
@@ -346,7 +346,7 @@ async def t_cert_path_untouched(ctx: TestContext) -> None:
     from aiohttp.test_utils import make_mocked_request
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    from src.network.auth.middleware import NetworkAuthState, make_auth_middleware
+    from openagent_core.network.auth.middleware import NetworkAuthState, make_auth_middleware
 
     async def _dial_without_agent_alpn():
         state = NetworkAuthState(
@@ -453,7 +453,7 @@ async def t_config_is_wired(ctx: TestContext) -> None:
     nothing behind it). So this drives the real parser and then the real
     middleware: yaml in, 403 out.
     """
-    from src.core.server import _build_agent
+    from openagent_core.core.server import _build_agent
 
     keys = (
         "OPENAGENT_NETWORK_PEER_ALLOWLIST_ENABLED",

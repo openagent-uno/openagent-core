@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from src.core._run_state.base import RunStatus
-from src.core._runner.utils.dttm import now_epoch_s
-from src.core._runner.utils.log import log_debug, log_warning
+from openagent_core.core._run_state.base import RunStatus
+from openagent_core.core._runner.utils.dttm import now_epoch_s
+from openagent_core.core._runner.utils.log import log_debug, log_warning
 
 
 def _get_pause_type(tool_execution: Any) -> str:

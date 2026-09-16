@@ -39,7 +39,7 @@ async def _mkdb(path):
 
 @test("events_manager", "trigger_events inserts every payload in one call")
 async def test_bulk_insert(ctx: TestContext) -> None:
-    from src.mcp.servers.events_manager import server as S
+    from openagent_core.mcp.servers.events_manager import server as S
 
     conn = await _mkdb(ctx.test_dir / "bulk.db")
     orig = S._get_conn
@@ -67,7 +67,7 @@ async def test_bulk_insert(ctx: TestContext) -> None:
 
 @test("events_manager", "trigger_events with an empty list writes nothing")
 async def test_empty_is_noop(ctx: TestContext) -> None:
-    from src.mcp.servers.events_manager import server as S
+    from openagent_core.mcp.servers.events_manager import server as S
 
     conn = await _mkdb(ctx.test_dir / "empty.db")
     orig = S._get_conn

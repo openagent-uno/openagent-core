@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from src.memory.db import MemoryDB
+from openagent_core.memory.db import MemoryDB
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ async def ensure_builtin_mcps(db: MemoryDB, config: dict | None = None) -> int:
     compat for future defaults + safety net for manual deletions).
     Returns the number of rows added this boot (zero is steady state).
     """
-    from src.mcp.builtins import DEFAULT_MCPS, config_gated_mcp_entries
+    from openagent_core.mcp.builtins import DEFAULT_MCPS, config_gated_mcp_entries
 
     rows = await db.list_mcps()
 

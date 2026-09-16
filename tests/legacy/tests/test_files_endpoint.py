@@ -48,7 +48,7 @@ def _database(root: Path) -> tuple[_DiskDB, str]:
 
 
 def _access(tenant: str, handle: str):
-    from src.memory.operational.access import AccessContext
+    from openagent_core.memory.operational.access import AccessContext
 
     return AccessContext(
         tenant_id=tenant,
@@ -68,8 +68,8 @@ async def _legacy_server(root: Path):
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer
 
-    from src.gateway.server import Gateway
-    from src.memory.artifacts import normalize_inbound_attachments
+    from openagent_core.gateway.server import Gateway
+    from openagent_core.memory.artifacts import normalize_inbound_attachments
 
     db, tenant = _database(root)
     source = root / "agent-report.txt"

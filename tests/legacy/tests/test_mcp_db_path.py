@@ -20,7 +20,7 @@ from ._framework import TestContext, test
 
 @test("mcp_db_path", "every builtin is told where the database is")
 async def t_all_builtins_get_db_path(ctx: TestContext) -> None:
-    from src.mcp.builtins import BUILTIN_MCP_SPECS, resolve_default_entry
+    from openagent_core.mcp.builtins import BUILTIN_MCP_SPECS, resolve_default_entry
 
     db = "/tmp/some-agent/openagent.db"
     checked, missing = 0, []
@@ -47,7 +47,7 @@ async def t_all_builtins_get_db_path(ctx: TestContext) -> None:
 
 @test("mcp_db_path", "the fallback is the agent's DB, never the CWD")
 async def t_fallback_is_not_cwd(ctx: TestContext) -> None:
-    from src.mcp.servers import _common
+    from openagent_core.mcp.servers import _common
 
     saved = os.environ.get("OPENAGENT_DB_PATH")
     try:

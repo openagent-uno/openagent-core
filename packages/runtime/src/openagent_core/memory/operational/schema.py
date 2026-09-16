@@ -55,7 +55,7 @@ class BackupEvidence:
 
 
 def _resource_text(name: str) -> str:
-    return files("src.memory.operational.sql").joinpath(name).read_text(encoding="utf-8")
+    return files("openagent_core.memory.operational.sql").joinpath(name).read_text(encoding="utf-8")
 
 
 def operational_schema_sql() -> str:

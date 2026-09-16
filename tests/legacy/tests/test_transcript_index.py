@@ -69,7 +69,7 @@ def _run(pairs: list[tuple[str, str]], *, ts: int | None = None,
 
 
 async def _open_db(db_path: Path):
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(str(db_path))
     await db.connect()
@@ -99,7 +99,7 @@ def _fresh_tool(db_path: Path, index_path: Path):
     each test drives the real tool against its own DB."""
     os.environ["OPENAGENT_DB_PATH"] = str(db_path)
     os.environ["OPENAGENT_TRANSCRIPT_INDEX_PATH"] = str(index_path)
-    from src.mcp.servers.memory_search import server
+    from openagent_core.mcp.servers.memory_search import server
 
     if server._index is not None:
         try:
@@ -262,7 +262,7 @@ async def t_compaction_rewrite(ctx: TestContext) -> None:
     would keep serving the folded-away text forever — quoting back to the user
     paragraphs the system already decided to drop. Drives the real
     ``compaction._save_runs``, so this test tracks the actual writer."""
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     db_path, idx_path = _paths(ctx, "compact")
     try:
@@ -351,7 +351,7 @@ async def t_incremental(ctx: TestContext) -> None:
     ``(updated_at, length(runs))``. A quiet agent must not re-parse
     transcripts on every query — that is what makes sync-before-query
     affordable enough to be correct."""
-    from src.memory.transcript_index import TranscriptIndex
+    from openagent_core.memory.transcript_index import TranscriptIndex
 
     db_path, idx_path = _paths(ctx, "incr")
     try:
@@ -387,7 +387,7 @@ async def t_bounded_sync(ctx: TestContext) -> None:
     """A first query on a large existing agent must not slurp every transcript
     in one call. Newest first, cap the rest, and SAY so — an incomplete index
     that reports itself complete is how "no hits" becomes a lie."""
-    from src.memory.transcript_index import TranscriptIndex
+    from openagent_core.memory.transcript_index import TranscriptIndex
 
     db_path, idx_path = _paths(ctx, "bound")
     try:
@@ -537,7 +537,7 @@ async def t_source_db_rebinds(ctx: TestContext) -> None:
     """The index is keyed to the DB it was built from. Pointed at a different
     one it wipes rather than blending — mixing two agents' conversations is
     the worst failure this component could have."""
-    from src.memory.transcript_index import TranscriptIndex
+    from openagent_core.memory.transcript_index import TranscriptIndex
 
     db_a, idx_path = _paths(ctx, "srca")
     db_b = ctx.db_path.with_name(f"ti-srcb-{uuid.uuid4().hex[:8]}.db")
@@ -571,7 +571,7 @@ async def t_index_path_keyed_to_db(ctx: TestContext) -> None:
     """A subprocess MCP that re-resolves platform defaults can land on another
     agent's data — the bug that forced ``OPENAGENT_DB_PATH`` injection. The
     cache location is derived from the injected db path so it cannot."""
-    from src.memory.transcript_index import default_index_path
+    from openagent_core.memory.transcript_index import default_index_path
 
     root = ctx.db_path.parent
     a = default_index_path(root / "agent-one" / "openagent.db")

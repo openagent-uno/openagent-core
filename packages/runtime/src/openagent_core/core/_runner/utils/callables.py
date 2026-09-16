@@ -20,9 +20,9 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from src.core._run_state import RunContext
+    from openagent_core.core._run_state import RunContext
 
-from src.core._runner.utils.log import log_debug, log_warning
+from openagent_core.core._runner.utils.log import log_debug, log_warning
 
 
 def _get_or_create_cache(entity: Any, attr: str) -> Dict[str, Any]:
@@ -212,8 +212,8 @@ async def _acompute_cache_key(
 
 def resolve_callable_tools(entity: Any, run_context: "RunContext") -> None:
     """Resolve callable tools factory and populate run_context.tools (sync)."""
-    from src.mcp._runtime import Toolkit
-    from src.mcp._runtime.function import Function
+    from openagent_core.mcp._runtime import Toolkit
+    from openagent_core.mcp._runtime.function import Function
 
     if not is_callable_factory(entity.tools, excluded_types=(Toolkit, Function)):
         return
@@ -250,8 +250,8 @@ def resolve_callable_tools(entity: Any, run_context: "RunContext") -> None:
 
 async def aresolve_callable_tools(entity: Any, run_context: "RunContext") -> None:
     """Resolve callable tools factory and populate run_context.tools (async)."""
-    from src.mcp._runtime import Toolkit
-    from src.mcp._runtime.function import Function
+    from openagent_core.mcp._runtime import Toolkit
+    from openagent_core.mcp._runtime.function import Function
 
     if not is_callable_factory(entity.tools, excluded_types=(Toolkit, Function)):
         return
@@ -293,7 +293,7 @@ async def aresolve_callable_tools(entity: Any, run_context: "RunContext") -> Non
 
 def resolve_callable_knowledge(entity: Any, run_context: "RunContext") -> None:
     """Resolve callable knowledge factory and populate run_context.knowledge (sync)."""
-    from src.core._runner._stubs import KnowledgeProtocol
+    from openagent_core.core._runner._stubs import KnowledgeProtocol
 
     knowledge = entity.knowledge
     if not is_callable_factory(knowledge, excluded_types=(KnowledgeProtocol,)):
@@ -331,7 +331,7 @@ def resolve_callable_knowledge(entity: Any, run_context: "RunContext") -> None:
 
 async def aresolve_callable_knowledge(entity: Any, run_context: "RunContext") -> None:
     """Resolve callable knowledge factory and populate run_context.knowledge (async)."""
-    from src.core._runner._stubs import KnowledgeProtocol
+    from openagent_core.core._runner._stubs import KnowledgeProtocol
 
     knowledge = entity.knowledge
     if not is_callable_factory(knowledge, excluded_types=(KnowledgeProtocol,)):
@@ -582,7 +582,7 @@ async def _aclose_cached_resources(entity: Any, cache_names: List[str]) -> None:
 
 def get_resolved_knowledge(entity: Any, run_context: Optional["RunContext"] = None) -> Any:
     """Get the resolved knowledge: run_context.knowledge > entity.knowledge (if static)."""
-    from src.core._runner._stubs import KnowledgeProtocol
+    from openagent_core.core._runner._stubs import KnowledgeProtocol
 
     if run_context is not None and run_context.knowledge is not None:
         return run_context.knowledge

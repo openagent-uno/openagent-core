@@ -35,7 +35,7 @@ class _Settings:
 
 @test("skill_review", "in modalita' proposta NIENTE si puo' scrivere")
 async def t_propose_refuses_everything(ctx: TestContext) -> None:
-    from src.mcp.servers.skills.provenance import (
+    from openagent_core.mcp.servers.skills.provenance import (
         PROPOSE, mutation_refusal, reset_write_origin, set_write_origin,
     )
 
@@ -61,7 +61,7 @@ async def t_propose_refuses_everything(ctx: TestContext) -> None:
 
 @test("skill_review", "in modalita' scrittura torna a valere il confine normale")
 async def t_write_mode_keeps_the_ordinary_boundary(ctx: TestContext) -> None:
-    from src.mcp.servers.skills.provenance import (
+    from openagent_core.mcp.servers.skills.provenance import (
         BACKGROUND, mutation_refusal, reset_write_origin, set_write_origin,
     )
 
@@ -82,7 +82,7 @@ async def t_write_mode_keeps_the_ordinary_boundary(ctx: TestContext) -> None:
 
 @test("skill_review", "si rivedono solo i turni finiti bene")
 async def t_only_completed_turns(ctx: TestContext) -> None:
-    from src.core.skill_review import should_review
+    from openagent_core.core.skill_review import should_review
 
     on = _Settings()
     assert should_review(on, reason="completed") is True
@@ -98,7 +98,7 @@ async def t_only_completed_turns(ctx: TestContext) -> None:
 
 @test("skill_review", "sul modello del padre la trascrizione va intera")
 async def t_same_model_sends_everything(ctx: TestContext) -> None:
-    from src.core.skill_review import review_payload
+    from openagent_core.core.skill_review import review_payload
 
     long_transcript = "UTENTE: ciao\n\n" + ("AGENT: " + "x" * 200 + "\n\n") * 200
     assert len(long_transcript) > 20_000
@@ -120,7 +120,7 @@ async def t_same_model_sends_everything(ctx: TestContext) -> None:
 
 @test("skill_review", "su un altro modello va un digest, e il digest lo dichiara")
 async def t_other_model_gets_a_digest(ctx: TestContext) -> None:
-    from src.core.skill_review import DIGEST_CHAR_BUDGET, review_payload
+    from openagent_core.core.skill_review import DIGEST_CHAR_BUDGET, review_payload
 
     head = "UTENTE: come si rigenera il certificato?\n\n"
     tail = "\n\nAGENT: fatto, il comando giusto era `openagent network renew`."
@@ -152,7 +152,7 @@ async def t_other_model_gets_a_digest(ctx: TestContext) -> None:
 
 @test("skill_review", "il fork vede solo skill e memoria")
 async def t_tool_whitelist_is_narrow(ctx: TestContext) -> None:
-    from src.core.skill_review import REVIEW_TOOL_FAMILIES
+    from openagent_core.core.skill_review import REVIEW_TOOL_FAMILIES
 
     # Il revisore deve accorgersi di una procedura da tenere. Non ha motivo di
     # eseguire comandi o di scrivere a qualcuno, e la differenza fra un
@@ -165,7 +165,7 @@ async def t_tool_whitelist_is_narrow(ctx: TestContext) -> None:
 
 @test("skill_review", "la missione dice al revisore che 'niente' e' una risposta giusta")
 async def t_mission_permits_the_empty_verdict(ctx: TestContext) -> None:
-    from src.core.skill_review import MODE_PROPOSE, MODE_WRITE, _mission
+    from openagent_core.core.skill_review import MODE_PROPOSE, MODE_WRITE, _mission
 
     proposing = _mission(MODE_PROPOSE)
     # Un revisore che sente di dover produrre qualcosa produce comunque
@@ -187,7 +187,7 @@ async def t_mission_permits_the_empty_verdict(ctx: TestContext) -> None:
 async def t_failure_never_breaks_the_turn(ctx: TestContext) -> None:
     import asyncio
 
-    from src.core.skill_review import schedule_review
+    from openagent_core.core.skill_review import schedule_review
 
     # Il turno e' finito, l'utente sta leggendo la risposta. Un revisore che
     # esplode deve sparire in silenzio nel log, non portarsi dietro la chat.
@@ -218,7 +218,7 @@ def _ev(seq, typ, text=""):
 
 def _session_with(agent):
     """Uno StreamSession abbastanza vivo da eseguire i due metodi."""
-    from src.stream.session import StreamSession
+    from openagent_core.stream.session import StreamSession
 
     ss = StreamSession.__new__(StreamSession)
     ss._agent = agent
@@ -262,7 +262,7 @@ async def t_gate_off_costs_nothing(ctx: TestContext) -> None:
         config = {"skills": {"enabled": True}}  # review_enabled assente = off
         memory_db = _JournalDB([_ev(1, "user/message", "x")])
 
-    import src.core.skill_review as review_mod
+    import openagent_core.core.skill_review as review_mod
     original = review_mod.schedule_review
     review_mod.schedule_review = lambda **kw: calls.append(kw)
     try:

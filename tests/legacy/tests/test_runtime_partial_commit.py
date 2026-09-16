@@ -16,12 +16,12 @@ from ._framework import TestContext, TestSkip, test
 
 
 def _imports():
-    from src.memory.sessions.agent import AgentSession
-    from src.memory.sessions.team import TeamSession
-    from src.core._run_state.agent import RunOutput, RunInput
-    from src.core._run_state.team import TeamRunOutput
-    from src.core._run_state.base import RunStatus
-    from src.models.providers.message import Message
+    from openagent_core.memory.sessions.agent import AgentSession
+    from openagent_core.memory.sessions.team import TeamSession
+    from openagent_core.core._run_state.agent import RunOutput, RunInput
+    from openagent_core.core._run_state.team import TeamRunOutput
+    from openagent_core.core._run_state.base import RunStatus
+    from openagent_core.models.providers.message import Message
     return AgentSession, TeamSession, RunOutput, RunInput, TeamRunOutput, RunStatus, Message
 
 
@@ -88,7 +88,7 @@ async def t_completed_untouched(_ctx: TestContext) -> None:
 async def t_synth_noop(_ctx: TestContext) -> None:
     try:
         _A, _T, RunOutput, _RI, _TR, RunStatus, _M = _imports()
-        from src.memory.sessions._synth import synth_interrupted_messages
+        from openagent_core.memory.sessions._synth import synth_interrupted_messages
     except ImportError as e:
         raise TestSkip(f"runtime not available: {e}")
 
@@ -96,8 +96,8 @@ async def t_synth_noop(_ctx: TestContext) -> None:
     # left exactly as-is.
     assert synth_interrupted_messages(RunOutput(run_id="x", status=RunStatus.cancelled)) is None
 
-    from src.memory.sessions.agent import AgentSession
-    from src.core._run_state.agent import RunInput
+    from openagent_core.memory.sessions.agent import AgentSession
+    from openagent_core.core._run_state.agent import RunInput
     now = int(time.time())
     s = AgentSession(session_id="sid", agent_id="a", user_id="u", created_at=now, updated_at=now)
     # RUNNING (in-flight) with input but no messages must NOT be backfilled/promoted.
@@ -134,7 +134,7 @@ async def t_cancelled_with_messages_promoted(_ctx: TestContext) -> None:
 async def t_synth_partial_and_sentinels(_ctx: TestContext) -> None:
     try:
         _A, _T, RunOutput, RunInput, _TR, RunStatus, _M = _imports()
-        from src.memory.sessions._synth import synth_interrupted_messages
+        from openagent_core.memory.sessions._synth import synth_interrupted_messages
     except ImportError as e:
         raise TestSkip(f"runtime not available: {e}")
 
@@ -153,7 +153,7 @@ async def t_synth_partial_and_sentinels(_ctx: TestContext) -> None:
 
 @test("runtime_partial_commit", "stale RUNNING input and partial are recovered into history")
 async def t_recover_stale_running_dict(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"stale-session-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -219,7 +219,7 @@ async def t_recover_stale_running_dict(ctx: TestContext) -> None:
 
 @test("runtime_partial_commit", "startup recovery finds projected running sessions")
 async def t_recover_all_stale_running(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"stale-startup-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -257,7 +257,7 @@ async def t_recover_all_stale_running(ctx: TestContext) -> None:
 
 @test("runtime_partial_commit", "journal witness restores history lost after compaction")
 async def t_recover_missing_journal_history(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"journal-recovery-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -372,7 +372,7 @@ async def t_recover_missing_journal_history(ctx: TestContext) -> None:
 
 @test("runtime_partial_commit", "journal recovery reads the newest bounded event window")
 async def t_recover_latest_journal_window(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"journal-window-{uuid.uuid4().hex[:8]}.db")
     try:

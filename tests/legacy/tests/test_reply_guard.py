@@ -1,4 +1,4 @@
-"""Anti-fabrication reply guard — ``src.core.reply_guard``.
+"""Anti-fabrication reply guard — ``openagent_core.core.reply_guard``.
 
 The guard rewrites a reply that promises human/team follow-up when NO backing
 action tool ran this turn, and is fail-open everywhere else: disabled, no
@@ -60,7 +60,7 @@ class _Trace:
         self._rows = rows
 
     def __enter__(self):
-        from src.core import tool_trace
+        from openagent_core.core import tool_trace
         self._mod = tool_trace
         self._oe = tool_trace._enabled
         self._op = tool_trace.peek
@@ -80,7 +80,7 @@ class _Trace:
 
 @test("reply_guard", "promises_followup matches real handoff-promise phrasings")
 async def t_promise_positive(ctx: TestContext) -> None:
-    from src.core.reply_guard import promises_followup
+    from openagent_core.core.reply_guard import promises_followup
 
     positives = [
         "Thanks! A teammate will personally verify your case and update you.",
@@ -98,7 +98,7 @@ async def t_promise_positive(ctx: TestContext) -> None:
 
 @test("reply_guard", "promises_followup ignores benign / self-serve replies")
 async def t_promise_negative(ctx: TestContext) -> None:
-    from src.core.reply_guard import promises_followup
+    from openagent_core.core.reply_guard import promises_followup
 
     negatives = [
         "You can re-enable Premium by updating to version 5.0.18 in the App Store.",
@@ -117,7 +117,7 @@ async def t_promise_negative(ctx: TestContext) -> None:
 
 @test("reply_guard", "guard is a no-op when disabled")
 async def t_guard_disabled(ctx: TestContext) -> None:
-    from src.core import reply_guard
+    from openagent_core.core import reply_guard
 
     _guard_on(False)
     model = _FakeModel()
@@ -129,7 +129,7 @@ async def t_guard_disabled(ctx: TestContext) -> None:
 
 @test("reply_guard", "guard rewrites an unbacked human-follow-up promise")
 async def t_guard_rewrites_unbacked(ctx: TestContext) -> None:
-    from src.core import reply_guard
+    from openagent_core.core import reply_guard
 
     _guard_on(True)
     model = _FakeModel(revised="You can restore Premium yourself by updating to 5.0.18.")
@@ -148,7 +148,7 @@ async def t_guard_rewrites_unbacked(ctx: TestContext) -> None:
 
 @test("reply_guard", "guard keeps the reply when the promise IS backed by a handoff tool")
 async def t_guard_backed_promise(ctx: TestContext) -> None:
-    from src.core import reply_guard
+    from openagent_core.core import reply_guard
 
     _guard_on(True)
     model = _FakeModel()
@@ -161,7 +161,7 @@ async def t_guard_backed_promise(ctx: TestContext) -> None:
 
 @test("reply_guard", "guard no-ops without tool visibility (cannot judge grounding)")
 async def t_guard_no_visibility(ctx: TestContext) -> None:
-    from src.core import reply_guard
+    from openagent_core.core import reply_guard
 
     _guard_on(True)
     model = _FakeModel()
@@ -174,7 +174,7 @@ async def t_guard_no_visibility(ctx: TestContext) -> None:
 
 @test("reply_guard", "guard is a no-op when the reply makes no promise")
 async def t_guard_no_promise(ctx: TestContext) -> None:
-    from src.core import reply_guard
+    from openagent_core.core import reply_guard
 
     _guard_on(True)
     model = _FakeModel()
@@ -187,7 +187,7 @@ async def t_guard_no_promise(ctx: TestContext) -> None:
 
 @test("reply_guard", "guard fails open when regeneration raises")
 async def t_guard_regen_raises(ctx: TestContext) -> None:
-    from src.core import reply_guard
+    from openagent_core.core import reply_guard
 
     _guard_on(True)
     model = _RaisingModel()
@@ -200,7 +200,7 @@ async def t_guard_regen_raises(ctx: TestContext) -> None:
 
 @test("reply_guard", "guard keeps the original when the rewrite still promises follow-up")
 async def t_guard_regen_still_promises(ctx: TestContext) -> None:
-    from src.core import reply_guard
+    from openagent_core.core import reply_guard
 
     _guard_on(True)
     model = _FakeModel(revised="Our team will get back to you.")  # still a promise
@@ -212,7 +212,7 @@ async def t_guard_regen_still_promises(ctx: TestContext) -> None:
 
 @test("reply_guard", "guard keeps original when the rewrite is empty")
 async def t_guard_regen_empty(ctx: TestContext) -> None:
-    from src.core import reply_guard
+    from openagent_core.core import reply_guard
 
     _guard_on(True)
     model = _FakeModel(revised="   ")  # empty after strip
@@ -224,7 +224,7 @@ async def t_guard_regen_empty(ctx: TestContext) -> None:
 
 @test("reply_guard", "backing-tool set is configurable via env")
 async def t_backing_tools_env(ctx: TestContext) -> None:
-    from src.core import reply_guard
+    from openagent_core.core import reply_guard
 
     _guard_on(True)
     os.environ["OPENAGENT_REPLY_GUARD_BACKING_TOOLS"] = "my_custom_escalate,zzz"
@@ -242,7 +242,7 @@ async def t_backing_tools_env(ctx: TestContext) -> None:
 
 @test("reply_guard", "enabled() is off by default")
 async def t_enabled_default_off(ctx: TestContext) -> None:
-    from src.core import reply_guard
+    from openagent_core.core import reply_guard
 
     os.environ.pop("OPENAGENT_REPLY_GUARD_ENABLED", None)
     assert reply_guard.enabled() is False
@@ -250,7 +250,7 @@ async def t_enabled_default_off(ctx: TestContext) -> None:
 
 @test("reply_guard", "future release detector matches F11 commitments precisely")
 async def t_future_release_detector(ctx: TestContext) -> None:
-    from src.core.reply_guard import promises_future_release
+    from openagent_core.core.reply_guard import promises_future_release
 
     positives = [
         "Both fixes will be included in the next app update.",
@@ -272,8 +272,8 @@ async def t_future_release_detector(ctx: TestContext) -> None:
 
 @test("reply_guard", "lean local event rewrites a next-update promise")
 async def t_local_future_release_rewrite(ctx: TestContext) -> None:
-    from src.core import reply_guard
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import reply_guard
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     _guard_on(False)  # strict local profile enables the F11 net itself
     model = _FakeModel(revised="The issue is verified and currently tracked.")
@@ -288,8 +288,8 @@ async def t_local_future_release_rewrite(ctx: TestContext) -> None:
 
 @test("reply_guard", "lean local event strips a forbidden sentence if rewrite fails")
 async def t_local_future_release_fail_closed(ctx: TestContext) -> None:
-    from src.core import reply_guard
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import reply_guard
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     _guard_on(False)
     model = _RaisingModel()
@@ -307,9 +307,9 @@ async def t_local_future_release_fail_closed(ctx: TestContext) -> None:
 
 @test("reply_guard", "lean dry-run removes fabricated completed actions (F9)")
 async def t_local_dry_run_action_claim(ctx: TestContext) -> None:
-    from src.core import reply_guard
-    from src.core.dry_run import dry_run_scope
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import reply_guard
+    from openagent_core.core.dry_run import dry_run_scope
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     assert reply_guard.claims_completed_action(
         "I've linked your report to the existing tracking tasks."
@@ -326,9 +326,9 @@ async def t_local_dry_run_action_claim(ctx: TestContext) -> None:
 
 @test("reply_guard", "lean dry-run rejects unverified account state")
 async def t_local_dry_run_account_state(ctx: TestContext) -> None:
-    from src.core import reply_guard
-    from src.core.dry_run import dry_run_scope
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import reply_guard
+    from openagent_core.core.dry_run import dry_run_scope
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     draft = (
         "```json\n"
@@ -350,8 +350,8 @@ async def t_local_dry_run_account_state(ctx: TestContext) -> None:
 
 @test("reply_guard", "lean live turn removes an unbacked completed action")
 async def t_local_live_action_requires_receipt(ctx: TestContext) -> None:
-    from src.core import reply_guard
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import reply_guard
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     model = _FakeModel(revised="I found the duplicate charge, but no refund was completed.")
     with lean_local_event_scope(True), _Trace(enabled=True, rows=[
@@ -367,8 +367,8 @@ async def t_local_live_action_requires_receipt(ctx: TestContext) -> None:
 
 @test("reply_guard", "lean live turn keeps an action backed by a success receipt")
 async def t_local_live_action_with_receipt(ctx: TestContext) -> None:
-    from src.core import reply_guard
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import reply_guard
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     draft = "I've refunded the duplicate charge."
     model = _FakeModel()
@@ -384,8 +384,8 @@ async def t_local_live_action_with_receipt(ctx: TestContext) -> None:
 
 @test("reply_guard", "lean live account state requires a same-turn BillingBear read")
 async def t_local_live_account_state_grounding(ctx: TestContext) -> None:
-    from src.core import reply_guard
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import reply_guard
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     draft = "Your Premium subscription is active."
     with lean_local_event_scope(True), _Trace(enabled=True, rows=None):
@@ -408,8 +408,8 @@ async def t_local_live_account_state_grounding(ctx: TestContext) -> None:
 
 @test("reply_guard", "failed handoff tool does not back a human promise")
 async def t_failed_handoff_is_not_backing(ctx: TestContext) -> None:
-    from src.core import reply_guard
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import reply_guard
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     model = _FakeModel(revised="Please send the account email and order ID.")
     with lean_local_event_scope(True), _Trace(enabled=True, rows=[
@@ -424,8 +424,8 @@ async def t_failed_handoff_is_not_backing(ctx: TestContext) -> None:
 
 @test("reply_guard", "lean event removes commercial commitments (F12)")
 async def t_local_commercial_commitment(ctx: TestContext) -> None:
-    from src.core import reply_guard
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import reply_guard
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     assert reply_guard.promises_commercial_value(
         "We can refund the purchase and give you free Premium."
@@ -440,8 +440,8 @@ async def t_local_commercial_commitment(ctx: TestContext) -> None:
 
 @test("reply_guard", "lean event rejects completed-fix status contradicted by evidence (F10)")
 async def t_local_fix_status_contradiction(ctx: TestContext) -> None:
-    from src.core import reply_guard
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import reply_guard
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     draft = (
         "This is a known issue. The correction has already been implemented "
@@ -466,8 +466,8 @@ async def t_local_fix_status_contradiction(ctx: TestContext) -> None:
 
 @test("reply_guard", "lean rewrite cannot introduce a different policy violation")
 async def t_local_rewrite_cross_violation(ctx: TestContext) -> None:
-    from src.core import reply_guard
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import reply_guard
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     draft = "The correction has already been implemented. The issue is tracked."
     evidence = "DRY RUN only - no code modified; status: analysis"
@@ -488,7 +488,7 @@ async def t_local_rewrite_cross_violation(ctx: TestContext) -> None:
 
 @test("reply_guard", "strict fallback preserves valid fenced JSON")
 async def t_local_stripper_preserves_json(ctx: TestContext) -> None:
-    from src.core import reply_guard
+    from openagent_core.core import reply_guard
 
     draft = (
         "This is a known issue. The correction has already been implemented "
@@ -515,8 +515,8 @@ async def t_local_stripper_preserves_json(ctx: TestContext) -> None:
 
 @test("reply_guard", "lean event never promotes a historical receipt to current fix status")
 async def t_local_receipt_fix_status(ctx: TestContext) -> None:
-    from src.core import reply_guard
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import reply_guard
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     draft = (
         "```json\n"
@@ -540,8 +540,8 @@ async def t_local_receipt_fix_status(ctx: TestContext) -> None:
 
 @test("reply_guard", "tool trace capture is automatically enabled for lean events")
 async def t_local_trace_enabled(ctx: TestContext) -> None:
-    from src.core import tool_trace
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import tool_trace
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     os.environ.pop("OPENAGENT_QUALITY_MONITOR_ENABLED", None)
     assert not tool_trace._enabled()
@@ -551,8 +551,8 @@ async def t_local_trace_enabled(ctx: TestContext) -> None:
 
 @test("reply_guard", "tool trace records nested tool-search args with secrets redacted")
 async def t_local_trace_nested_tool_args(ctx: TestContext) -> None:
-    from src.core import tool_trace
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import tool_trace
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     with lean_local_event_scope(True):
         sink, token = tool_trace.maybe_open()
@@ -584,8 +584,8 @@ async def t_local_trace_nested_tool_args(ctx: TestContext) -> None:
 
 @test("reply_guard", "an invented task id or amount never survives the guard")
 async def t_ungrounded_identifiers(_ctx: TestContext) -> None:
-    from src.core import reply_guard
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import reply_guard
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     rows = [("tool_search_call_tool", 'result={"id": "86-local-created-esound"}')]
 
@@ -664,8 +664,8 @@ async def t_ungrounded_identifiers(_ctx: TestContext) -> None:
 
 @test("reply_guard", "a tracking claim needs a task receipt, id or no id")
 async def t_unbacked_tracking(_ctx: TestContext) -> None:
-    from src.core import reply_guard
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core import reply_guard
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     # Stripping the invented id alone was not enough: the model then makes the
     # same promise without one.
@@ -710,7 +710,7 @@ async def t_diagnostics_claim_detected(_ctx: TestContext) -> None:
     No capture had ever been switched on and no log existed; the customer
     performed the reproduction ritual twice for nothing.
     """
-    from src.core import reply_guard
+    from openagent_core.core import reply_guard
 
     for claimed in (
         "I've enabled diagnostic logging on your account.",

@@ -85,9 +85,9 @@ class _SkillsEnv:
 
 @test("skill_hub", "pull round-trip: hub provenance, lockfile, curator-safe")
 async def t_pull_round_trip(_ctx: TestContext) -> None:
-    from src.mcp.servers.skills import hub
-    from src.mcp.servers.skills.registry import SkillsRegistry
-    from src.memory.vault.parser import split_frontmatter
+    from openagent_core.mcp.servers.skills import hub
+    from openagent_core.mcp.servers.skills.registry import SkillsRegistry
+    from openagent_core.memory.vault.parser import split_frontmatter
 
     src = Path(tempfile.mkdtemp(prefix="skillhub-src-"))
     try:
@@ -148,7 +148,7 @@ async def t_pull_round_trip(_ctx: TestContext) -> None:
 
 @test("skill_hub", "scanner refuses curl-exfil and symlink-escape skills")
 async def t_scanner_refuses_malicious(_ctx: TestContext) -> None:
-    from src.mcp.servers.skills import hub, hub_guard
+    from openagent_core.mcp.servers.skills import hub, hub_guard
 
     src = Path(tempfile.mkdtemp(prefix="skillhub-evil-"))
     try:
@@ -197,10 +197,10 @@ async def t_scanner_refuses_malicious(_ctx: TestContext) -> None:
 
 @test("skill_hub", "disabled by default: hub tools not exposed; toolkit byte-identical")
 async def t_disabled_by_default(_ctx: TestContext) -> None:
-    import src.core.config as cfg
-    from src.core.config import skills_settings
-    from src.mcp.builtins import config_gated_mcp_entries
-    from src.mcp.servers.skills import adapters
+    import openagent_core.core.config as cfg
+    from openagent_core.core.config import skills_settings
+    from openagent_core.mcp.builtins import config_gated_mcp_entries
+    from openagent_core.mcp.servers.skills import adapters
 
     # Config parse: OFF by default, second gate flips only on skills.hub.enabled,
     # and taps parse into a tuple.

@@ -5,17 +5,17 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
 
 from pydantic import BaseModel, Field
 
-from src.models.providers.base import Model
-from src.models.providers.utils import get_model
-from src.core._run_state.agent import Message
-from src.core._runner.utils.log import log_debug, log_warning
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.utils import get_model
+from openagent_core.core._run_state.agent import Message
+from openagent_core.core._runner.utils.log import log_debug, log_warning
 
 # TODO: Look into moving all managers into a separate dir
 if TYPE_CHECKING:
-    from src.core.metrics import RunMetrics
-    from src.memory.sessions import Session
-    from src.memory.sessions.agent import AgentSession
-    from src.memory.sessions.team import TeamSession
+    from openagent_core.core.metrics import RunMetrics
+    from openagent_core.memory.sessions import Session
+    from openagent_core.memory.sessions.agent import AgentSession
+    from openagent_core.memory.sessions.team import TeamSession
 
 
 @dataclass
@@ -142,7 +142,7 @@ class SessionSummaryManager:
         system_prompt += "</conversation>"
 
         if response_format == {"type": "json_object"}:
-            from src.core._runner.utils.prompts import get_json_output_prompt
+            from openagent_core.core._runner.utils.prompts import get_json_output_prompt
 
             system_prompt += "\n" + get_json_output_prompt(SessionSummaryResponse)  # type: ignore
 
@@ -203,7 +203,7 @@ class SessionSummaryManager:
         # Handle string responses
         if isinstance(summary_response.content, str):
             try:
-                from src.core._runner.utils.string import parse_response_model_str
+                from openagent_core.core._runner.utils.string import parse_response_model_str
 
                 parsed_summary: SessionSummaryResponse = parse_response_model_str(  # type: ignore
                     summary_response.content, SessionSummaryResponse
@@ -248,7 +248,7 @@ class SessionSummaryManager:
 
         # Accumulate session summary model metrics
         if run_metrics is not None:
-            from src.core.metrics import ModelType, accumulate_model_metrics
+            from openagent_core.core.metrics import ModelType, accumulate_model_metrics
 
             accumulate_model_metrics(summary_response, self.model, ModelType.SESSION_SUMMARY_MODEL, run_metrics)
 
@@ -284,7 +284,7 @@ class SessionSummaryManager:
 
         # Accumulate session summary model metrics
         if run_metrics is not None:
-            from src.core.metrics import ModelType, accumulate_model_metrics
+            from openagent_core.core.metrics import ModelType, accumulate_model_metrics
 
             accumulate_model_metrics(summary_response, self.model, ModelType.SESSION_SUMMARY_MODEL, run_metrics)
 

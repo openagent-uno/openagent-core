@@ -17,7 +17,7 @@ from ._framework import TestContext, test
 
 @test("channel_attachments", "BaseBridge sends inbound attachments and author on TextFinal")
 async def t_bridge_inbound_wire(ctx: TestContext) -> None:
-    from src.bridges.base import BaseBridge
+    from openagent_core.bridges.base import BaseBridge
 
     bridge = BaseBridge.__new__(BaseBridge)
     bridge.name = "probe"
@@ -56,7 +56,7 @@ async def t_bridge_inbound_wire(ctx: TestContext) -> None:
 
 @test("channel_attachments", "live bridge replies still deliver native AttachmentRefs")
 async def t_bridge_live_outbound_attachment(ctx: TestContext) -> None:
-    from src.bridges.base import BaseBridge
+    from openagent_core.bridges.base import BaseBridge
 
     delivered = []
     chunks: list[str] = []
@@ -104,7 +104,7 @@ async def t_bridge_live_outbound_attachment(ctx: TestContext) -> None:
 
 @test("channel_attachments", "non-live bridge replies deliver native AttachmentRefs once")
 async def t_bridge_non_live_outbound_attachment(ctx: TestContext) -> None:
-    from src.bridges.base import BaseBridge
+    from openagent_core.bridges.base import BaseBridge
 
     delivered = []
     chunks: list[str] = []
@@ -149,7 +149,7 @@ async def t_bridge_non_live_outbound_attachment(ctx: TestContext) -> None:
 
 @test("channel_attachments", "Telegram extracts typed photo and image-document refs safely")
 async def t_telegram_extract_structured(ctx: TestContext) -> None:
-    from src.bridges.telegram import TelegramBridge
+    from openagent_core.bridges.telegram import TelegramBridge
 
     class _Media:
         def __init__(self, unique_id, payload, **fields):
@@ -192,8 +192,8 @@ async def t_telegram_extract_structured(ctx: TestContext) -> None:
 
 @test("channel_attachments", "Telegram PDF and JSON captions reach durable CAS refs, not path text")
 async def t_telegram_documents_reach_cas(ctx: TestContext) -> None:
-    from src.bridges.telegram import TelegramBridge
-    from src.memory.artifacts import (
+    from openagent_core.bridges.telegram import TelegramBridge
+    from openagent_core.memory.artifacts import (
         artifact_row,
         normalize_inbound_attachments,
         public_attachment_ref,
@@ -314,8 +314,8 @@ async def t_telegram_documents_reach_cas(ctx: TestContext) -> None:
 
 @test("channel_attachments", "Telegram missing and duplicate document names stay distinct and CAS-linked")
 async def t_telegram_document_names_and_cas(ctx: TestContext) -> None:
-    from src.bridges.telegram import TelegramBridge
-    from src.memory.artifacts import normalize_inbound_attachments, public_attachment_ref
+    from openagent_core.bridges.telegram import TelegramBridge
+    from openagent_core.memory.artifacts import normalize_inbound_attachments, public_attachment_ref
 
     from .test_artifacts import _access, _artifact_db, _seed_session
 
@@ -402,7 +402,7 @@ async def t_telegram_document_names_and_cas(ctx: TestContext) -> None:
 
 @test("channel_attachments", "Telegram album keeps group session and all typed attachments")
 async def t_telegram_album_group_session(ctx: TestContext) -> None:
-    from src.bridges.telegram import TelegramBridge, _Extracted
+    from openagent_core.bridges.telegram import TelegramBridge, _Extracted
 
     class _User:
         id = 7
@@ -451,7 +451,7 @@ async def t_telegram_album_group_session(ctx: TestContext) -> None:
 
 @test("channel_attachments", "Telegram shutdown cancels and awaits every album timer")
 async def t_telegram_album_timer_shutdown(ctx: TestContext) -> None:
-    from src.bridges.telegram import TelegramBridge
+    from openagent_core.bridges.telegram import TelegramBridge
 
     bridge = TelegramBridge.__new__(TelegramBridge)
     bridge._media_group_lock = asyncio.Lock()
@@ -482,8 +482,8 @@ async def t_telegram_album_timer_shutdown(ctx: TestContext) -> None:
 
 @test("channel_attachments", "Telegram rejects pre/post-download oversize and uses NAME_MAX-safe staging")
 async def t_telegram_post_download_limit_and_staging(ctx: TestContext) -> None:
-    import src.bridges.telegram as telegram_mod
-    from src.bridges.telegram import TelegramBridge
+    import openagent_core.bridges.telegram as telegram_mod
+    from openagent_core.bridges.telegram import TelegramBridge
 
     class _Media:
         file_unique_id = "📎" * 200
@@ -573,7 +573,7 @@ async def t_telegram_post_download_limit_and_staging(ctx: TestContext) -> None:
 
 @test("channel_attachments", "Slack is an activatable bridge")
 async def t_slack_selected(ctx: TestContext) -> None:
-    from src.core.server import _selected_bridge_names
+    from openagent_core.core.server import _selected_bridge_names
 
     config = {"channels": {"slack": {"bot_token": "x", "app_token": "y"}}}
     assert _selected_bridge_names(config, None) == ["slack"]
@@ -582,7 +582,7 @@ async def t_slack_selected(ctx: TestContext) -> None:
 
 @test("channel_attachments", "Slack scopes channels jointly and DMs per user")
 async def t_slack_session_scope(ctx: TestContext) -> None:
-    from src.bridges.slack import SlackBridge
+    from openagent_core.bridges.slack import SlackBridge
 
     assert SlackBridge._session_id("U1", "C42") == "sl:channel:C42"
     assert SlackBridge._session_id("U2", "C42") == "sl:channel:C42"
@@ -592,8 +592,8 @@ async def t_slack_session_scope(ctx: TestContext) -> None:
 
 @test("channel_attachments", "Slack downloader reports limits and keeps staging basename safe")
 async def t_slack_download_outcome_and_staging(ctx: TestContext) -> None:
-    import src.bridges.slack as slack_mod
-    from src.bridges.slack import SlackBridge
+    import openagent_core.bridges.slack as slack_mod
+    from openagent_core.bridges.slack import SlackBridge
 
     bridge = SlackBridge.__new__(SlackBridge)
     bridge.bot_token = "xoxb-test"
@@ -644,7 +644,7 @@ async def t_slack_download_outcome_and_staging(ctx: TestContext) -> None:
 
 @test("channel_attachments", "Slack inbound, slash and picker keep scope and report oversize")
 async def t_slack_handlers_scope_and_notifications(ctx: TestContext) -> None:
-    from src.bridges.slack import SlackBridge, _SlackDownloadOutcome
+    from openagent_core.bridges.slack import SlackBridge, _SlackDownloadOutcome
 
     handlers: dict[str, object] = {}
     notices: list[dict] = []
@@ -808,7 +808,7 @@ async def t_slack_handlers_scope_and_notifications(ctx: TestContext) -> None:
 
 @test("channel_attachments", "WhatsApp audio preserves source filename and MIME")
 async def t_whatsapp_audio_metadata(ctx: TestContext) -> None:
-    from src.bridges.whatsapp import WhatsAppBridge
+    from openagent_core.bridges.whatsapp import WhatsAppBridge
 
     bridge = WhatsAppBridge.__new__(WhatsAppBridge)
     bridge.name = "whatsapp"
@@ -857,7 +857,7 @@ async def t_whatsapp_audio_metadata(ctx: TestContext) -> None:
 @test("channel_attachments", "WhatsApp blocks SSRF literals, DNS and redirects")
 async def t_whatsapp_download_ssrf_guards(ctx: TestContext) -> None:
     import aiohttp
-    from src.bridges.whatsapp import (
+    from openagent_core.bridges.whatsapp import (
         WhatsAppBridge,
         _PublicAddressResolver,
         _WhatsAppDownloadError,
@@ -927,7 +927,7 @@ async def t_whatsapp_download_ssrf_guards(ctx: TestContext) -> None:
 
 @test("channel_attachments", "WhatsApp notifies download and post-size failures")
 async def t_whatsapp_download_failure_notices(ctx: TestContext) -> None:
-    from src.bridges.whatsapp import (
+    from openagent_core.bridges.whatsapp import (
         WhatsAppBridge,
         _WhatsAppAttachmentTooLarge,
         _WhatsAppDownloadError,
@@ -964,7 +964,7 @@ async def t_mcp_typed_media(ctx: TestContext) -> None:
         EmbeddedResource,
         Tool,
     )
-    from src.core._runner.utils.mcp import get_entrypoint_for_tool
+    from openagent_core.core._runner.utils.mcp import get_entrypoint_for_tool
 
     class _Session:
         async def send_ping(self):

@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Union
 
 from pydantic import BaseModel
 
-from src.models.providers.message import Message
+from openagent_core.models.providers.message import Message
 
 
 def serialize_input(

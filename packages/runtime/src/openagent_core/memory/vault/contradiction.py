@@ -121,10 +121,10 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from src.memory.vault import taxonomy
-from src.memory.vault.index import VaultIndex
-from src.memory.vault.model import Note
-from src.memory.vault.parser import parse_note_text, split_frontmatter
+from openagent_core.memory.vault import taxonomy
+from openagent_core.memory.vault.index import VaultIndex
+from openagent_core.memory.vault.model import Note
+from openagent_core.memory.vault.parser import parse_note_text, split_frontmatter
 
 # ── eligibility: durable state vs event record ────────────────────────
 # A note that records an event at a point in time cannot contradict another

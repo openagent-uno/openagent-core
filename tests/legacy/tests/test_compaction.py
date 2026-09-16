@@ -1,6 +1,6 @@
 """In-session compaction — vision §2 ("the session compacts in place").
 
-Covers the five contracts of ``src.core.compaction``:
+Covers the five contracts of ``openagent_core.core.compaction``:
 
 1. ``should_compact`` returns ``True`` past the threshold and ``False``
    when stored history is small.
@@ -168,7 +168,7 @@ class _BlockingModel(_FakeModel):
 
 @test("compaction", "start-of-turn repairs stale history before measuring it")
 async def t_start_of_turn_recovers_before_compaction(ctx: TestContext) -> None:
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     class _RecoveringDB:
         db_path = str(ctx.test_dir / "missing-recovery.db")
@@ -203,7 +203,7 @@ async def t_start_of_turn_recovers_before_compaction(ctx: TestContext) -> None:
 
 @test("compaction", "an overlapping live turn is never mistaken for stale")
 async def t_start_of_turn_does_not_recover_live_overlap(ctx: TestContext) -> None:
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     class _RecoveringDB:
         db_path = str(ctx.test_dir / "missing-overlap.db")
@@ -237,7 +237,7 @@ async def t_start_of_turn_does_not_recover_live_overlap(ctx: TestContext) -> Non
 
 @test("compaction", "should_compact returns False when history fits")
 async def t_should_compact_false_below_threshold(ctx: TestContext) -> None:
-    from src.core.compaction import should_compact
+    from openagent_core.core.compaction import should_compact
 
     os.environ.pop("OPENAGENT_COMPACTION_THRESHOLD", None)
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
@@ -259,7 +259,7 @@ async def t_should_compact_false_below_threshold(ctx: TestContext) -> None:
 
 @test("compaction", "should_compact returns True past the threshold")
 async def t_should_compact_true_past_threshold(ctx: TestContext) -> None:
-    from src.core.compaction import should_compact
+    from openagent_core.core.compaction import should_compact
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     # Tiny synthetic context so a few runs of plain text trip the
@@ -284,7 +284,7 @@ async def t_should_compact_true_past_threshold(ctx: TestContext) -> None:
 
 @test("compaction", "compact rewrites oldest runs into a tagged recap")
 async def t_compact_rewrites_runs(ctx: TestContext) -> None:
-    from src.core.compaction import compact
+    from openagent_core.core.compaction import compact
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     os.environ["OPENAGENT_COMPACTION_KEEP_RUNS"] = "2"
@@ -334,7 +334,7 @@ async def t_compact_rewrites_runs(ctx: TestContext) -> None:
 
 @test("compaction", "summary transcript excludes system and copied history")
 async def t_extracts_only_current_turn(_ctx: TestContext) -> None:
-    from src.core.compaction import _extract_run_text
+    from openagent_core.core.compaction import _extract_run_text
 
     system_prompt = "FRAMEWORK INSTRUCTIONS " * 200
     text = _extract_run_text({
@@ -358,8 +358,8 @@ async def t_extracts_only_current_turn(_ctx: TestContext) -> None:
 
 @test("compaction", "compaction refreshes the normalized client transcript")
 async def t_compaction_projects_operational_history(ctx: TestContext) -> None:
-    from src.core.compaction import compact
-    from src.memory.db import MemoryDB
+    from openagent_core.core.compaction import compact
+    from openagent_core.memory.db import MemoryDB
 
     db_path = str(ctx.test_dir / "compact-project-v2.db")
     db = MemoryDB(db_path)
@@ -416,7 +416,7 @@ async def t_compaction_projects_operational_history(ctx: TestContext) -> None:
 
 @test("compaction", "compact is a no-op when history is within keep window")
 async def t_compact_noop_below_keep(ctx: TestContext) -> None:
-    from src.core.compaction import compact
+    from openagent_core.core.compaction import compact
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     os.environ["OPENAGENT_COMPACTION_KEEP_RUNS"] = "4"
@@ -448,8 +448,8 @@ async def t_run_inner_invokes_compact(ctx: TestContext) -> None:
     reports True. We don't need a real model — a stub that returns a
     minimal ModelResponse is enough to drive one loop iteration.
     """
-    from src.models.base import BaseModel, ModelResponse
-    from src.core import compaction as compaction_module
+    from openagent_core.models.base import BaseModel, ModelResponse
+    from openagent_core.core import compaction as compaction_module
 
     # Stand-in model used as the agent's primary AND its summariser.
     # ``context_window`` makes the threshold math deterministic — the
@@ -505,7 +505,7 @@ async def t_run_inner_invokes_compact(ctx: TestContext) -> None:
 
 @test("compaction", "OPENAGENT_COMPACTION_ENABLED=false disables everything")
 async def t_flag_disables(ctx: TestContext) -> None:
-    from src.core.compaction import should_compact, compact
+    from openagent_core.core.compaction import should_compact, compact
 
     db_path = str(ctx.test_dir / "compact-disabled.db")
     long_text = "the quick brown fox " * 50
@@ -543,8 +543,8 @@ async def t_session_compacted_wire_roundtrip(_ctx: TestContext) -> None:
     the wire codec so bridges and the desktop UI see a consistent
     payload. Pure-unit — no DB, no model.
     """
-    from src.stream.events import SessionCompacted
-    from src.stream.wire import event_to_wire, SESSION_COMPACTED
+    from openagent_core.stream.events import SessionCompacted
+    from openagent_core.stream.wire import event_to_wire, SESSION_COMPACTED
 
     evt = SessionCompacted(
         session_id="sid", seq=42, ts_ms=12345,
@@ -570,8 +570,8 @@ async def t_compact_status_envelopes(ctx: TestContext) -> None:
     stats must persist in the recap row's metadata so a reopened session
     rebuilds the identical card.
     """
-    from src.core.compaction import compact
-    from src.channels.base import parse_compaction_status
+    from openagent_core.core.compaction import compact
+    from openagent_core.channels.base import parse_compaction_status
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     os.environ["OPENAGENT_COMPACTION_KEEP_RUNS"] = "2"
@@ -628,8 +628,8 @@ async def t_compact_status_error(ctx: TestContext) -> None:
     ``running``. The terminal ``error`` hint must fire so a client that
     showed "Compacting…" doesn't hang on it. The runs stay untouched.
     """
-    from src.core.compaction import compact
-    from src.channels.base import parse_compaction_status
+    from openagent_core.core.compaction import compact
+    from openagent_core.channels.base import parse_compaction_status
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     os.environ["OPENAGENT_COMPACTION_KEEP_RUNS"] = "2"
@@ -656,8 +656,8 @@ async def t_compact_status_error(ctx: TestContext) -> None:
 
 @test("compaction", "a failed DB rewrite cannot report compaction done")
 async def t_compact_save_failure_is_error(ctx: TestContext) -> None:
-    from src.core import compaction
-    from src.channels.base import parse_compaction_status
+    from openagent_core.core import compaction
+    from openagent_core.channels.base import parse_compaction_status
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     os.environ["OPENAGENT_COMPACTION_KEEP_RUNS"] = "2"
@@ -692,7 +692,7 @@ async def t_parse_compaction_status(_ctx: TestContext) -> None:
     phase to ``done`` (legacy pre-phase envelopes), and reject anything
     that isn't a compaction envelope.
     """
-    from src.channels.base import parse_compaction_status
+    from openagent_core.channels.base import parse_compaction_status
 
     full = parse_compaction_status(json.dumps({
         "kind": "session.compacted", "phase": "done",
@@ -732,8 +732,8 @@ async def t_session_compacted_full_roundtrip(_ctx: TestContext) -> None:
     counts) must survive both directions of the wire codec — the CLI and
     bridge listeners parse the frame back via ``wire_to_event``.
     """
-    from src.stream.events import SessionCompacted
-    from src.stream.wire import event_to_wire, wire_to_event, SESSION_COMPACTED
+    from openagent_core.stream.events import SessionCompacted
+    from openagent_core.stream.wire import event_to_wire, wire_to_event, SESSION_COMPACTED
 
     evt = SessionCompacted(
         session_id="sid", seq=7, ts_ms=999,
@@ -772,7 +772,7 @@ async def t_recap_rehydrates_as_compaction(_ctx: TestContext) -> None:
     assistant bubble leaking the recap paragraph. Exercises the gateway's
     ``_expand_run_messages`` directly.
     """
-    from src.gateway.api.sessions import _expand_run_messages
+    from openagent_core.gateway.api.sessions import _expand_run_messages
 
     recap = {
         "run_id": "compaction-1",
@@ -810,8 +810,8 @@ async def t_compact_noop_emits_feedback(ctx: TestContext) -> None:
     ``folded_runs=0`` (rendered as "Already compact — nothing to fold")
     while still doing no summariser work.
     """
-    from src.core.compaction import compact
-    from src.channels.base import parse_compaction_status
+    from openagent_core.core.compaction import compact
+    from openagent_core.channels.base import parse_compaction_status
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     os.environ["OPENAGENT_COMPACTION_KEEP_RUNS"] = "4"
@@ -851,7 +851,7 @@ async def t_compact_keep_zero_folds_all(ctx: TestContext) -> None:
     nothing verbatim, even when the chat is far shorter than the automatic
     keep window (which would otherwise no-op).
     """
-    from src.core.compaction import compact
+    from openagent_core.core.compaction import compact
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     # A keep window that WOULD no-op the automatic path on 2 runs...
@@ -886,7 +886,7 @@ async def t_compact_keep_zero_noop_on_recap(ctx: TestContext) -> None:
     recap gains nothing, so keep=0 must no-op rather than loop — otherwise
     a repeated /compact would summarise the summary forever.
     """
-    from src.core.compaction import compact
+    from openagent_core.core.compaction import compact
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
 
@@ -922,7 +922,7 @@ async def t_cost_ceiling_bites_before_the_window(ctx: TestContext) -> None:
     ceiling. Same session, same model: unbounded ceiling → no compaction;
     realistic ceiling → compaction.
     """
-    from src.core.compaction import should_compact
+    from openagent_core.core.compaction import should_compact
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     os.environ["OPENAGENT_COMPACTION_THRESHOLD"] = "0.75"
@@ -952,7 +952,7 @@ async def t_cost_ceiling_bites_before_the_window(ctx: TestContext) -> None:
 
 @test("compaction", "history tool-result elision is OFF by default (byte-identical)")
 async def t_history_elide_off_by_default(ctx: TestContext) -> None:
-    from src.core.compaction import _trim_kept_tool_results
+    from openagent_core.core.compaction import _trim_kept_tool_results
 
     os.environ.pop("OPENAGENT_COMPACTION_HISTORY_TOOL_RESULT_CHARS", None)
     kept = [
@@ -967,7 +967,7 @@ async def t_history_elide_off_by_default(ctx: TestContext) -> None:
 
 @test("compaction", "history tool-result elision trims OLD kept runs, spares the most recent")
 async def t_history_elide_trims_old_keeps_recent(ctx: TestContext) -> None:
-    from src.core.compaction import _trim_kept_tool_results
+    from openagent_core.core.compaction import _trim_kept_tool_results
 
     os.environ["OPENAGENT_COMPACTION_HISTORY_TOOL_RESULT_CHARS"] = "1000"
     try:
@@ -1000,7 +1000,7 @@ async def t_history_elide_trims_old_keeps_recent(ctx: TestContext) -> None:
 
 @test("compaction", "history tool-result elision keeps normal results + non-text blocks")
 async def t_history_elide_preserves_normal_and_blocks(ctx: TestContext) -> None:
-    from src.core.compaction import _trim_kept_tool_results, _elide_tool_content
+    from openagent_core.core.compaction import _trim_kept_tool_results, _elide_tool_content
 
     os.environ["OPENAGENT_COMPACTION_HISTORY_TOOL_RESULT_CHARS"] = "1000"
     try:
@@ -1061,7 +1061,7 @@ class _SlotAgent(_FakeAgent):
 
 @test("compaction", "proactive: compact_after_turn folds in the background when breached")
 async def t_compact_after_turn_folds(ctx: TestContext) -> None:
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     os.environ["OPENAGENT_COMPACTION_THRESHOLD"] = "0.5"
@@ -1093,7 +1093,7 @@ async def t_compact_after_turn_folds(ctx: TestContext) -> None:
 
 @test("compaction", "proactive: compact_after_turn no-ops when disabled or session-less")
 async def t_compact_after_turn_noops(ctx: TestContext) -> None:
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     db_path = str(ctx.test_dir / "proactive-noop.db")
     _seed_breaching(db_path, "sid")
@@ -1118,7 +1118,7 @@ async def t_background_skips_active_turn(ctx: TestContext) -> None:
     session is reading/writing history — that turn will fire its own post-turn
     pass. We simulate an in-progress turn with ``mark_turn_active`` and prove
     the scheduled pass observes it and leaves the runs byte-identical."""
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     os.environ["OPENAGENT_COMPACTION_THRESHOLD"] = "0.5"
@@ -1146,7 +1146,7 @@ async def t_background_skips_active_turn(ctx: TestContext) -> None:
 
 @test("compaction", "proactive: only one background compaction per session at a time")
 async def t_background_dedup(ctx: TestContext) -> None:
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     os.environ["OPENAGENT_COMPACTION_THRESHOLD"] = "0.5"
@@ -1173,7 +1173,7 @@ async def t_background_dedup(ctx: TestContext) -> None:
 async def t_incoming_turn_preempts_background_fold(ctx: TestContext) -> None:
     """Regression: provider Retry-After used to hold the session lock for
     minutes, making Telegram appear frozen on "Compacting conversation"."""
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     os.environ["OPENAGENT_COMPACTION_THRESHOLD"] = "0.5"
@@ -1211,7 +1211,7 @@ async def t_incoming_turn_preempts_background_fold(ctx: TestContext) -> None:
 
 @test("compaction", "summary provider calls stop at the maintenance timeout")
 async def t_summary_provider_timeout(ctx: TestContext) -> None:
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     primary = _BlockingModel(max_context=200)
     agent = _FakeAgent(str(ctx.test_dir / "summary-timeout.db"), primary)
@@ -1237,7 +1237,7 @@ async def t_summary_provider_timeout(ctx: TestContext) -> None:
 
 @test("compaction", "proactive: mark_turn_done balances the count and prunes the idle lock")
 async def t_mark_turn_done_prunes_lock(_ctx: TestContext) -> None:
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     sid = "proactive-prune"
     # A turn registers (creating the lock on first acquire, which the turn loop
@@ -1256,7 +1256,7 @@ async def t_mark_turn_done_prunes_lock(_ctx: TestContext) -> None:
 
 @test("compaction", "proactive: background pass acquires and releases the model slot")
 async def t_background_uses_model_slot(ctx: TestContext) -> None:
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     os.environ["OPENAGENT_COMPACTION_THRESHOLD"] = "0.5"
@@ -1291,7 +1291,7 @@ def _phase_recorder():
     """Return ``(recorder_list, on_status)`` where on_status parses each
     session.compacted envelope and appends its phase — a stand-in for the
     bridge collector that would render "🗜 Compacting…" → "🗜 Compacted…"."""
-    from src.channels.base import parse_compaction_status
+    from openagent_core.channels.base import parse_compaction_status
 
     phases: list[str] = []
 
@@ -1309,7 +1309,7 @@ async def t_contended_turn_emits_one_notice(ctx: TestContext) -> None:
     surface exactly one notice bracketing its wait: a single ``running`` then a
     single ``done``, and nothing more (compact()'s own envelopes are suppressed
     so a contended turn never doubles up)."""
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     os.environ["OPENAGENT_COMPACTION_THRESHOLD"] = "0.5"
@@ -1350,7 +1350,7 @@ async def t_contended_turn_emits_one_notice(ctx: TestContext) -> None:
 async def t_uncontended_turn_is_silent(ctx: TestContext) -> None:
     """The common proactive case: the lock is free and nothing is over
     threshold, so the turn emits no channel notice at all."""
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     os.environ["OPENAGENT_COMPACTION_KEEP_RUNS"] = "4"
@@ -1379,7 +1379,7 @@ async def t_background_fold_is_silent(ctx: TestContext) -> None:
     the turn loop does — with NO on_status) folds without ever routing a status
     to a channel. We spy on the envelope emitter and prove every emission during
     the fold carried a None channel, so nothing could reach the user."""
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     os.environ.pop("OPENAGENT_COMPACTION_ENABLED", None)
     os.environ["OPENAGENT_COMPACTION_THRESHOLD"] = "0.5"
@@ -1441,7 +1441,7 @@ _FOLD_RUNS = [
 
 @test("compaction", "summarise retries with fallback when the primary summariser fails")
 async def t_summary_fallback_on_primary_failure(ctx: TestContext) -> None:
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     primary = _FailModel()
     fallback = _FakeModel(model="deepseek:deepseek-chat", summary="Fallback recap.")
@@ -1469,7 +1469,7 @@ async def t_summary_fallback_on_primary_failure(ctx: TestContext) -> None:
 
 @test("compaction", "summarise returns '' when the primary fails and no fallback exists")
 async def t_summary_no_fallback_available(ctx: TestContext) -> None:
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     primary = _FailModel()
     agent = _FakeAgent(str(ctx.test_dir / "fb2.db"), primary)
@@ -1490,7 +1490,7 @@ async def t_summary_no_fallback_available(ctx: TestContext) -> None:
 
 @test("compaction", "summarise returns '' when both primary and fallback fail")
 async def t_summary_fallback_also_fails(ctx: TestContext) -> None:
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     primary = _FailModel(model="anthropic:claude-proxy")
     fallback = _FailModel(model="deepseek:deepseek-chat")
@@ -1513,7 +1513,7 @@ async def t_summary_fallback_also_fails(ctx: TestContext) -> None:
 
 @test("compaction", "_provider_of extracts the provider from a runtime id")
 async def t_provider_of(ctx: TestContext) -> None:
-    from src.core.compaction import _provider_of
+    from openagent_core.core.compaction import _provider_of
 
     class _M:
         pass
@@ -1529,8 +1529,8 @@ async def t_provider_of(ctx: TestContext) -> None:
 
 @test("compaction", "summary fallback picks a distinct-provider row and never the failed one")
 async def t_summary_fallback_picker(ctx: TestContext) -> None:
-    from src.core import compaction
-    import src.models.native_provider as np_mod
+    from openagent_core.core import compaction
+    import openagent_core.models.native_provider as np_mod
 
     providers_config = [
         {"id": 1, "name": "anthropic", "framework": "api-based", "enabled": True,
@@ -1588,7 +1588,7 @@ async def t_summary_transcript_clamped_to_summariser_window(ctx: TestContext) ->
     the call with ``prompt is too long: 213760 tokens > 200000 maximum`` and
     every long session silently stopped compacting.
     """
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     # 40 turns of ~400 chars each: comfortably past a 1000-token window.
     runs = [
@@ -1625,7 +1625,7 @@ async def t_summary_transcript_clamped_to_summariser_window(ctx: TestContext) ->
 
 @test("compaction", "no clamp when the transcript already fits the summariser")
 async def t_summary_transcript_untouched_when_it_fits(ctx: TestContext) -> None:
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     runs = [{"content": "", "messages": [
         {"role": "user", "content": "short turn about a billing charge"}]}]
@@ -1655,7 +1655,7 @@ async def t_summary_transcript_absolute_ceiling(ctx: TestContext) -> None:
     live Telegram turn then had no provider. One run alone was larger than the
     desired clamp, so the fitter must suffix-trim that boundary run too.
     """
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     runs = [
         {"content": "", "messages": [{
@@ -1709,7 +1709,7 @@ async def t_summary_transcript_absolute_ceiling(ctx: TestContext) -> None:
 
 @test("compaction", "the context window is per-model, not one fallback for all")
 async def t_context_window_is_per_model(_ctx: TestContext) -> None:
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     class _Bare:
         """A provider row that exposes only its id — the proxy-served shape."""
@@ -1741,7 +1741,7 @@ async def t_token_estimate_margins_a_foreign_tokenizer(_ctx: TestContext) -> Non
     at Anthropic's tokenizer. Measured on a real fold, that guess was 2.5x low
     and every fold overflowed.
     """
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     # A transcript-shaped sample: JSON, ids, paths, non-English — not prose.
     text = json.dumps({
@@ -1767,7 +1767,7 @@ async def t_token_estimate_margins_a_foreign_tokenizer(_ctx: TestContext) -> Non
 
 @test("compaction", "the provider's own count replaces our guess, for good")
 async def t_learned_density_overrides_the_margin(_ctx: TestContext) -> None:
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     model = "local:claude-test-density"
     text = "some transcript content " * 500
@@ -1790,7 +1790,7 @@ async def t_learned_density_overrides_the_margin(_ctx: TestContext) -> None:
 
 @test("compaction", "a provider's size rejection is parsed; other failures are not")
 async def t_parse_too_long(_ctx: TestContext) -> None:
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     anthropic = RuntimeError(
         "{'type': 'error', 'error': {'type': 'invalid_request_error', "
@@ -1847,7 +1847,7 @@ async def t_summary_refits_after_too_long(ctx: TestContext) -> None:
     threshold again, and burned another oversized attempt. Four days of that
     is what exhausted a weekly model quota.
     """
-    from src.core import compaction
+    from openagent_core.core import compaction
 
     runs = [
         {"content": "", "messages": [

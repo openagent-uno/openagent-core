@@ -20,7 +20,7 @@ Public surface:
 """
 from __future__ import annotations
 
-from src.memory.vault.model import (
+from openagent_core.memory.vault.model import (
     GateConfig,
     GateReport,
     Note,

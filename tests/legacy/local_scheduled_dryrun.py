@@ -36,8 +36,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from local_support_operational_dryrun import (  # noqa: E402
     SAMPLING_PROFILES, _clone_and_patch_db,
 )
-from src.core import paths, reply_guard, tool_trace  # noqa: E402
-from src.core.server import _build_agent
+from openagent_core.core import paths, reply_guard, tool_trace  # noqa: E402
+from openagent_core.core.server import _build_agent
 
 
 LOCAL_MODEL = "windows-local:qwen3-moe-local"
@@ -375,7 +375,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         try:
             await agent.initialize()
             db = agent._db
-            from src.core.scheduler import Scheduler
+            from openagent_core.core.scheduler import Scheduler
 
             scheduler = Scheduler(db, agent)
             for repetition in range(1, args.repeat + 1):

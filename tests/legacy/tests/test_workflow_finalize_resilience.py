@@ -66,7 +66,7 @@ class _FakeDB:
 def _patch_sleep_to_noop():
     """Replace asyncio.sleep inside the executor with an awaitable
     no-op so the test isn't gated by real wall-clock backoff."""
-    import src.workflow.executor as ex
+    import openagent_core.workflow.executor as ex
 
     orig = ex.asyncio.sleep
 
@@ -78,7 +78,7 @@ def _patch_sleep_to_noop():
 
 
 def _restore_sleep(orig):
-    import src.workflow.executor as ex
+    import openagent_core.workflow.executor as ex
 
     ex.asyncio.sleep = orig  # type: ignore[assignment]
 
@@ -86,7 +86,7 @@ def _restore_sleep(orig):
 @test("workflow_finalize_resilience",
       "_finalize_run retries through 2 transient DB locks and lands clean")
 async def t_finalize_retries(ctx: TestContext) -> None:
-    from src.workflow.executor import WorkflowExecutor
+    from openagent_core.workflow.executor import WorkflowExecutor
 
     db = _FakeDB(raise_on_run_updates=2)
     exe = WorkflowExecutor(agent=None, db=db)  # agent unused by finalize
@@ -108,7 +108,7 @@ async def t_finalize_retries(ctx: TestContext) -> None:
 @test("workflow_finalize_resilience",
       "_finalize_run gives up after 4 attempts and logs (no stuck retry loop)")
 async def t_finalize_gives_up(ctx: TestContext) -> None:
-    from src.workflow.executor import WorkflowExecutor
+    from openagent_core.workflow.executor import WorkflowExecutor
 
     # Always fail — we want to confirm the retry is BOUNDED, not infinite.
     db = _FakeDB(raise_on_run_updates=99)
@@ -128,11 +128,11 @@ async def t_finalize_gives_up(ctx: TestContext) -> None:
                 captured.append(rec.getMessage())
 
     capture = _Capture(level=logging.ERROR)
-    logging.getLogger("src.workflow.executor").addHandler(capture)
+    logging.getLogger("openagent_core.workflow.executor").addHandler(capture)
     try:
         await exe._finalize_run(rc, status="failed", error="HTTP 402")
     finally:
-        logging.getLogger("src.workflow.executor").removeHandler(capture)
+        logging.getLogger("openagent_core.workflow.executor").removeHandler(capture)
         _restore_sleep(orig_sleep)
 
     assert db.run_update_calls == 4, \
@@ -146,7 +146,7 @@ async def t_finalize_gives_up(ctx: TestContext) -> None:
 async def t_finalize_skips_workflow_row_on_lock(ctx: TestContext) -> None:
     """The ``last_run_at`` write is purely UI cosmetic; a lock there
     must not propagate and abort finalize. Run-row already landed."""
-    from src.workflow.executor import WorkflowExecutor
+    from openagent_core.workflow.executor import WorkflowExecutor
 
     db = _FakeDB(raise_on_run_updates=0, raise_on_workflow_updates=99)
     exe = WorkflowExecutor(agent=None, db=db)

@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
 
 from pydantic import BaseModel
 
-from src.core._runner._stubs import FilterExpr
+from openagent_core.core._runner._stubs import FilterExpr
 
 if TYPE_CHECKING:
-    from src.core._runner.agent.agent import Agent
-    from src.core._run_state import RunContext
+    from openagent_core.core._runner.agent.agent import Agent
+    from openagent_core.core._run_state import RunContext
 
 
 @dataclass(frozen=True)
@@ -85,8 +85,8 @@ def resolve_run_options(
 
     Reads from ``agent`` but does not mutate it.
     """
-    from src.core._runner.agent._utils import get_effective_filters
-    from src.core._runner.utils.merge_dict import merge_dictionaries
+    from openagent_core.core._runner.agent._utils import get_effective_filters
+    from openagent_core.core._runner.utils.merge_dict import merge_dictionaries
 
     # stream: call-site > agent.stream > False
     resolved_stream: bool

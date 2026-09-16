@@ -27,7 +27,7 @@ from ._framework import TestContext, test
 
 
 async def _open_db(db_path: Path):
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(str(db_path))
     await db.connect()
@@ -223,7 +223,7 @@ async def t_purge(ctx: TestContext) -> None:
 
 @test("session_delete", "handle_delete rejects run / sub-agent sessions (403)")
 async def t_guard(ctx: TestContext) -> None:
-    from src.gateway.api import sessions as sessions_api
+    from openagent_core.gateway.api import sessions as sessions_api
 
     tmp = ctx.db_path.with_name(f"sd-guard-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -257,7 +257,7 @@ async def t_guard(ctx: TestContext) -> None:
 
 @test("session_delete", "handle_delete cascades a chat to its sub-agents")
 async def t_cascade(ctx: TestContext) -> None:
-    from src.gateway.api import sessions as sessions_api
+    from openagent_core.gateway.api import sessions as sessions_api
 
     tmp = ctx.db_path.with_name(f"sd-cascade-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -341,7 +341,7 @@ async def t_double_encoded(ctx: TestContext) -> None:
 
 @test("session_delete", "handle_delete authorizes by owner handle")
 async def t_authz(ctx: TestContext) -> None:
-    from src.gateway.api import sessions as sessions_api
+    from openagent_core.gateway.api import sessions as sessions_api
 
     tmp = ctx.db_path.with_name(f"sd-authz-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -387,7 +387,7 @@ async def t_authz(ctx: TestContext) -> None:
 
 @test("session_delete", "cascade cannot delete a foreign-owned descendant")
 async def t_cascade_rechecks_each_child_acl(ctx: TestContext) -> None:
-    from src.gateway.api import sessions as sessions_api
+    from openagent_core.gateway.api import sessions as sessions_api
 
     tmp = ctx.db_path.with_name(f"sd-child-acl-{uuid.uuid4().hex[:8]}.db")
     try:

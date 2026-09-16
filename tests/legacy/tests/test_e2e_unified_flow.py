@@ -40,7 +40,7 @@ stack that no single existing test module exercises end-to-end:
    delegates to a specialist who then fires its OWN tools, the live
    wire and rehydrated transcript must both render the nested tools as
    their own chips in the same order. the runtime emits these as
-   ``src.core._run_state.agent.ToolCallStartedEvent`` / ``ToolCallCompletedEvent``
+   ``openagent_core.core._run_state.agent.ToolCallStartedEvent`` / ``ToolCallCompletedEvent``
    (member is an Agent, NOT a Team), passed through unchanged by the
    team's iterator when ``stream_member_events`` is True (default).
 
@@ -65,7 +65,7 @@ from ._framework import TestContext, test
 class _FakeToolExec:
     """Minimal stand-in for the runtime's ``ToolExecution`` dataclass.
 
-    Mirrors the shape ``src.models._tool_status`` reads. Tests that
+    Mirrors the shape ``openagent_core.models._tool_status`` reads. Tests that
     need a delegate-tool call set ``tool_name='delegate_task_to_member'``
     and stash the member_id inside ``tool_args``. ``tool_call_error``
     defaults to ``False`` so the UI's local phase derivation flags
@@ -134,12 +134,12 @@ async def t_multi_member_delegation_emits_parallel_envelopes(ctx: TestContext) -
     The runtime surface is faked at the ``_arun_runtime_stream`` seam so we
     don't depend on a real Team's classifier or LLM round-trip.
     """
-    from src.core._run_state.team import (
+    from openagent_core.core._run_state.team import (
         RunContentEvent as TeamRunContentEvent,
         ToolCallCompletedEvent as TeamToolCallCompletedEvent,
         ToolCallStartedEvent as TeamToolCallStartedEvent,
     )
-    from src.models.dispatcher import _arun_runtime_stream
+    from openagent_core.models.dispatcher import _arun_runtime_stream
 
     # Three delegations to three distinct specialists, each with its own
     # tool_call_id so the wire's tool_call_id field disambiguates them.
@@ -295,15 +295,15 @@ async def t_live_rehydration_parity_for_synthetic_run(ctx: TestContext) -> None:
     member's assistant content must surface with the specialist's
     model badge.
     """
-    from src.core._run_state.team import (
+    from openagent_core.core._run_state.team import (
         IntermediateRunContentEvent as TeamIRCE,
         RunContentEvent as TeamRunContentEvent,
         ToolCallCompletedEvent as TeamToolCallCompletedEvent,
         ToolCallStartedEvent as TeamToolCallStartedEvent,
     )
-    from src.gateway.api.sessions import _expand_run_messages
-    from src.memory.db import MemoryDB
-    from src.models.dispatcher import _arun_runtime_stream
+    from openagent_core.gateway.api.sessions import _expand_run_messages
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.models.dispatcher import _arun_runtime_stream
 
     leader_model = "openai:gpt-4o-mini"
     specialist_model = "anthropic:claude-opus-4-7"
@@ -569,9 +569,9 @@ async def t_coordinate_mode_wired_and_agno_still_gathers(ctx: TestContext) -> No
     """
     import inspect
 
-    from src.core._runner.team import Team, TeamMode
+    from openagent_core.core._runner.team import Team, TeamMode
 
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     # (1) TeamRouterProvider wires the Team in coordinate mode.
     providers = [
@@ -605,16 +605,16 @@ async def t_coordinate_mode_wired_and_agno_still_gathers(ctx: TestContext) -> No
     # inspect the source rather than calling it (calling would require a
     # real Model + function executor; the source-level check is what
     # locks the contract).
-    import src.models.providers.base as providers_base
+    import openagent_core.models.providers.base as providers_base
 
     assert hasattr(providers_base.Model, "arun_function_calls"), (
-        "src.models.providers.base.Model.arun_function_calls disappeared — the "
+        "openagent_core.models.providers.base.Model.arun_function_calls disappeared — the "
         "parallel-delegation architecture has lost its underlying "
         "primitive. Re-evaluate the coordinate-mode wiring."
     )
     src = inspect.getsource(providers_base.Model.arun_function_calls)
     assert "asyncio.gather" in src, (
-        "src.models.providers.base.Model.arun_function_calls no longer uses "
+        "openagent_core.models.providers.base.Model.arun_function_calls no longer uses "
         "asyncio.gather — parallel ``delegate_task_to_member`` calls "
         "would now serialise, defeating coordinate-mode's multi-member "
         "decomposition. Pin the runtime or rebuild parallelism in OpenAgent."
@@ -638,7 +638,7 @@ async def t_no_models_short_circuit_intact(ctx: TestContext) -> None:
         contains 'no model')``.
       - ``stream`` yields chunks whose joined text contains 'no model'.
     """
-    from src.models.dispatcher import ModelDispatcher
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     # Both paths share the same ``_resolve_entry_model`` short-circuit;
     # exercise each so a half-fix that only patches one is caught.
@@ -677,7 +677,7 @@ async def t_generate_emits_symmetric_started_completed_per_tool(ctx: TestContext
     ``_arun_runtime_stream`` filter set. Hermetic — we drive the provider's
     inner ``runner.arun`` with a fake response carrying one ToolExecution.
     """
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
 
     # Bypass __init__: it pulls heavy runtime/MCP wiring. We just need
     # _emit_agno_tool_status's bound logic + a fake runner.
@@ -763,7 +763,7 @@ async def t_delegation_parity_with_nested_tools(ctx: TestContext) -> None:
 
     Audit finding: the runtime's ``Team`` yields member events through its
     iterator when ``stream_member_events=True`` (default). A member
-    Agent's tool call fires ``src.core._run_state.agent.ToolCallStartedEvent`` /
+    Agent's tool call fires ``openagent_core.core._run_state.agent.ToolCallStartedEvent`` /
     ``ToolCallCompletedEvent`` — exactly the types the dispatcher
     already includes in ``tool_start_event_types`` /
     ``tool_complete_event_types``. So the live path SHOULD already
@@ -772,19 +772,19 @@ async def t_delegation_parity_with_nested_tools(ctx: TestContext) -> None:
     Hermetic: a fake team runtime yields the leader's delegate +
     nested member tool events in the same order the runtime would.
     """
-    from src.core._run_state.agent import (
+    from openagent_core.core._run_state.agent import (
         ToolCallCompletedEvent as AgentToolCallCompletedEvent,
         ToolCallStartedEvent as AgentToolCallStartedEvent,
     )
-    from src.core._run_state.team import (
+    from openagent_core.core._run_state.team import (
         IntermediateRunContentEvent as TeamIRCE,
         RunContentEvent as TeamRunContentEvent,
         ToolCallCompletedEvent as TeamToolCallCompletedEvent,
         ToolCallStartedEvent as TeamToolCallStartedEvent,
     )
-    from src.gateway.api.sessions import _expand_run_messages
-    from src.memory.db import MemoryDB
-    from src.models.dispatcher import _arun_runtime_stream
+    from openagent_core.gateway.api.sessions import _expand_run_messages
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.models.dispatcher import _arun_runtime_stream
 
     leader_model = "openai:gpt-4o-mini"
     specialist_model = "anthropic:claude-opus-4-7"
@@ -1061,10 +1061,10 @@ async def t_attachments_native_files(ctx: TestContext) -> None:
     bare user text survived (no synthetic prepend) and that the
     ``files`` sequence carries one runtime ``File`` per non-image upload.
     """
-    from src.stream.media import File as RuntimeFile
+    from openagent_core.stream.media import File as RuntimeFile
 
-    from src.core.agent import _build_runtime_media
-    from src.models.dispatcher import _arun_runtime_stream
+    from openagent_core.core.agent import _build_runtime_media
+    from openagent_core.models.dispatcher import _arun_runtime_stream
 
     def _files_only(attachments):
         """Pluck the files element from the (images, audios, videos, files) tuple."""
@@ -1108,7 +1108,7 @@ async def t_attachments_native_files(ctx: TestContext) -> None:
             captured["files"] = files
             captured["session_id"] = session_id
             async def _iter():
-                from src.core._run_state.agent import RunContentEvent
+                from openagent_core.core._run_state.agent import RunContentEvent
                 yield RunContentEvent(
                     content="ok", run_id="r", session_id=session_id,
                 )

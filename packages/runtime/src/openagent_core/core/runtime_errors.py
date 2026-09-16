@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
-from src.models.providers.message import Message
+from openagent_core.models.providers.message import Message
 
 
 class AgentRunException(Exception):

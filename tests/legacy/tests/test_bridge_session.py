@@ -30,7 +30,7 @@ from ._framework import TestContext, test
 
 @test("bridge_session", "InProcConnection round-trips bytes through bi-stream")
 async def t_inproc_roundtrip(ctx: TestContext) -> None:
-    from src.network.transport.inproc import (
+    from openagent_core.network.transport.inproc import (
         InProcConnection,
         InProcDialer,
     )
@@ -61,7 +61,7 @@ async def t_inproc_roundtrip(ctx: TestContext) -> None:
 
 @test("bridge_session", "InProcConnection.close wakes pending accept_bi")
 async def t_inproc_close_wakes_accept(ctx: TestContext) -> None:
-    from src.network.transport.inproc import InProcConnection
+    from openagent_core.network.transport.inproc import InProcConnection
 
     conn = InProcConnection()
     accepted = asyncio.create_task(conn.accept_bi())
@@ -123,7 +123,7 @@ class _ReconnectNode:
 
 
 def _reconnect_dialer(node):
-    from src.network.client.session import NetworkBinding, SessionDialer
+    from openagent_core.network.client.session import NetworkBinding, SessionDialer
 
     return SessionDialer(
         node=node,
@@ -181,7 +181,7 @@ async def t_session_dialer_bounds_failed_replacement(ctx: TestContext) -> None:
 
 @test("bridge_session", "BridgeSession rejects member-mode")
 async def t_bridge_rejects_member(ctx: TestContext) -> None:
-    from src.network.bridge_session import (
+    from openagent_core.network.bridge_session import (
         BridgeSession,
         BridgeSessionUnavailable,
     )
@@ -207,7 +207,7 @@ async def t_bridge_rejects_member(ctx: TestContext) -> None:
 
 @test("bridge_session", "BridgeSession rejects missing coordinator key")
 async def t_bridge_rejects_no_coord_key(ctx: TestContext) -> None:
-    from src.network.bridge_session import (
+    from openagent_core.network.bridge_session import (
         BridgeSession,
         BridgeSessionUnavailable,
     )
@@ -271,11 +271,11 @@ def _make_fake_site(streams_received):
 
 @test("bridge_session", "BridgeSession happy path mints a verifiable cert + working LoopbackProxy")
 async def t_bridge_happy_path(ctx: TestContext) -> None:
-    from src.network.bridge_session import (
+    from openagent_core.network.bridge_session import (
         BridgeSession,
         bridge_handle_for,
     )
-    from src.network.auth.device_cert import verify_cert
+    from openagent_core.network.auth.device_cert import verify_cert
 
     coord_key = Ed25519PrivateKey.generate()
     network_id = "test-network-uuid"
@@ -344,12 +344,12 @@ async def t_bridge_distinct_per_bridge(ctx: TestContext) -> None:
     distinct device key, distinct cert handle, distinct LoopbackProxy
     bound port — so the gateway sees them as independent clients.
     """
-    from src.network.bridge_session import (
+    from openagent_core.network.bridge_session import (
         BridgeSession,
         bridge_handle_for,
         bridge_device_key_filename,
     )
-    from src.network.auth.device_cert import verify_cert
+    from openagent_core.network.auth.device_cert import verify_cert
 
     coord_key = Ed25519PrivateKey.generate()
     network_state = _make_network_state_for_test(coord_key)
@@ -412,7 +412,7 @@ async def t_bridge_distinct_per_bridge(ctx: TestContext) -> None:
 
 @test("bridge_session", "BridgeSession persists device key across restarts (per-bridge)")
 async def t_bridge_persists_device_key(ctx: TestContext) -> None:
-    from src.network.bridge_session import (
+    from openagent_core.network.bridge_session import (
         bridge_device_key_filename,
         _load_or_create_bridge_device_key,
     )
@@ -446,7 +446,7 @@ async def t_bridge_persists_device_key(ctx: TestContext) -> None:
 
 @test("bridge_session", "BridgeSession rejects invalid bridge_name")
 async def t_bridge_rejects_bad_name(ctx: TestContext) -> None:
-    from src.network.bridge_session import BridgeSession
+    from openagent_core.network.bridge_session import BridgeSession
 
     for bad in ("", "has space", "../escape", "name/with/slash"):
         try:
@@ -458,7 +458,7 @@ async def t_bridge_rejects_bad_name(ctx: TestContext) -> None:
 
 @test("bridge_session", "IrohSite stream lifetime is not capped by handshake timeout")
 async def t_iroh_site_stream_lifetime_not_capped(ctx: TestContext) -> None:
-    import src.network.transport.aiohttp_iroh_site as iroh_site
+    import openagent_core.network.transport.aiohttp_iroh_site as iroh_site
 
     completed = asyncio.Event()
 

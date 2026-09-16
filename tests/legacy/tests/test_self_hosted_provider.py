@@ -25,7 +25,7 @@ from ._framework import TestContext, test
 
 
 def _provider(name: str, base_url: str | None) -> object:
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
 
     entries = [{"name": name, "framework": "api-based", "kind": "llm",
                 "enabled": True, **({"base_url": base_url} if base_url else {})}]
@@ -52,7 +52,7 @@ async def test_named_server_with_base_url_builds(ctx: TestContext) -> None:
 @test("self_hosted_provider",
       "'local' resta esattamente com'era (nessuna regressione sullo slot storico)")
 async def test_local_still_uses_its_own_entry(ctx: TestContext) -> None:
-    from src.models.native_provider import RUNTIME_PROVIDER_CLASSES
+    from openagent_core.models.native_provider import RUNTIME_PROVIDER_CLASSES
     assert RUNTIME_PROVIDER_CLASSES["local"][2].get("name") == "Local", (
         "la voce storica deve restare: e' quella che vince per il nome 'local'")
 
@@ -82,8 +82,8 @@ async def test_unknown_without_base_url_refuses(ctx: TestContext) -> None:
 @test("self_hosted_provider",
       "Qwen locale usa il template non-thinking soltanto nel profilo event lean")
 async def test_qwen_lean_event_disables_thinking(ctx: TestContext) -> None:
-    from src.core.execution_profile import lean_local_event_scope
-    from src.models.native_provider import NativeProvider
+    from openagent_core.core.execution_profile import lean_local_event_scope
+    from openagent_core.models.native_provider import NativeProvider
 
     entries = [{
         "name": "windows-local", "framework": "api-based", "kind": "llm",

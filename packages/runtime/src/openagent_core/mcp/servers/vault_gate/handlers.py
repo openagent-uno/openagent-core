@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import dataclasses
 
-from src.memory.vault.model import GateReport
-from src.memory.vault.service import get_service
-from src.memory.vault.vault_origin import recent_origin
+from openagent_core.memory.vault.model import GateReport
+from openagent_core.memory.vault.service import get_service
+from openagent_core.memory.vault.vault_origin import recent_origin
 
 
 _CANONICAL_PATH_MARKERS = (
@@ -225,7 +225,7 @@ async def vault_search(query: str, limit: int = 20,
         return {"query": query, "count": len(matches), "results": matches,
                 "search_type": "regex", "file_path": file_path}
     # Default: full-text content search
-    from src.core.execution_profile import lean_local_event_active
+    from openagent_core.core.execution_profile import lean_local_event_active
 
     if lean_local_event_active():
         # A cold clone has no FTS rows yet. The first sync builds the disposable

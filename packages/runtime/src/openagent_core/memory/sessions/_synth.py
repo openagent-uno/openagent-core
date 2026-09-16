@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.core._run_state.base import RunStatus
-from src.models.providers.message import Message
+from openagent_core.core._run_state.base import RunStatus
+from openagent_core.models.providers.message import Message
 
 
 def synth_interrupted_messages(run: Any) -> list[Message] | None:

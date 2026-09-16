@@ -16,35 +16,35 @@ from typing import (
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from src.core._runner.agent.agent import Agent
+    from openagent_core.core._runner.agent.agent import Agent
 
-from src.core._runner.agent._utils import convert_dependencies_to_string, convert_documents_to_string
-from src.core._runner._stubs import FilterExpr
-from src.stream.media import Audio, File, Image, Video
-from src.models.providers.message import Message, MessageReferences
-from src.models.providers.response import ModelResponse
-from src.core._run_state import RunContext
-from src.core.identity_context import current_author
-from src.core._run_state.agent import RunOutput
-from src.core._run_state.messages import RunMessages
-from src.memory.sessions import AgentSession
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.agent import (
+from openagent_core.core._runner.agent._utils import convert_dependencies_to_string, convert_documents_to_string
+from openagent_core.core._runner._stubs import FilterExpr
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.models.providers.message import Message, MessageReferences
+from openagent_core.models.providers.response import ModelResponse
+from openagent_core.core._run_state import RunContext
+from openagent_core.core.identity_context import current_author
+from openagent_core.core._run_state.agent import RunOutput
+from openagent_core.core._run_state.messages import RunMessages
+from openagent_core.memory.sessions import AgentSession
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.agent import (
     aexecute_instructions,
     aexecute_system_message,
     execute_instructions,
     execute_system_message,
 )
-from src.core._runner.utils.common import is_typed_dict
-from src.core._runner.utils.log import log_debug, log_warning
-from src.core._runner.utils.message import filter_tool_calls, get_text_from_message
-from src.core._runner.utils.prompts import get_json_output_prompt, get_response_model_format_prompt
-from src.core._runner.utils.timer import Timer
+from openagent_core.core._runner.utils.common import is_typed_dict
+from openagent_core.core._runner.utils.log import log_debug, log_warning
+from openagent_core.core._runner.utils.message import filter_tool_calls, get_text_from_message
+from openagent_core.core._runner.utils.prompts import get_json_output_prompt, get_response_model_format_prompt
+from openagent_core.core._runner.utils.timer import Timer
 
 
 def _get_resolved_knowledge(agent: "Agent", run_context: Optional[RunContext] = None) -> Any:
     """Get the resolved knowledge, preferring run_context over agent.knowledge."""
-    from src.core._runner.utils.callables import get_resolved_knowledge
+    from openagent_core.core._runner.utils.callables import get_resolved_knowledge
 
     return get_resolved_knowledge(agent, run_context)
 
@@ -119,7 +119,7 @@ def get_system_message(
     """
 
     # Extract values from run_context
-    from src.core._runner.agent._init import set_culture_manager, set_memory_manager
+    from openagent_core.core._runner.agent._init import set_culture_manager, set_memory_manager
 
     session_state = run_context.session_state if run_context else None
     user_id = run_context.user_id if run_context else None
@@ -209,7 +209,7 @@ def get_system_message(
 
     # 3.2.3 Add the current location
     if agent.add_location_to_context:
-        from src.core._runner.utils.location import get_location
+        from openagent_core.core._runner.utils.location import get_location
 
         location = get_location()
         if location:
@@ -466,7 +466,7 @@ async def aget_system_message(
     """
 
     # Extract values from run_context
-    from src.core._runner.agent._init import has_async_db, set_culture_manager, set_memory_manager
+    from openagent_core.core._runner.agent._init import has_async_db, set_culture_manager, set_memory_manager
 
     session_state = run_context.session_state if run_context else None
     user_id = run_context.user_id if run_context else None
@@ -557,7 +557,7 @@ async def aget_system_message(
 
     # 3.2.3 Add the current location
     if agent.add_location_to_context:
-        from src.core._runner.utils.location import get_location
+        from openagent_core.core._runner.utils.location import get_location
 
         location = get_location()
         if location:
@@ -1353,7 +1353,7 @@ def get_run_messages(
         # Stamp authorship from the current turn's bound author (the human
         # handle, or an agent-self seed for delegated/scheduled/workflow
         # runs) when the caller hasn't already set one. Server-only field;
-        # never sent to the provider. See src.core.identity_context.
+        # never sent to the provider. See openagent_core.core.identity_context.
         if user_message.author is None:
             _author = current_author()
             if _author is not None:
@@ -1776,7 +1776,7 @@ def get_relevant_docs_from_knowledge(
     Returns:
         Optional[List[Dict[str, Any]]]: List of relevant document dicts.
     """
-    from src.core._runner._stubs import Document
+    from openagent_core.core._runner._stubs import Document
 
     # Extract dependencies from run_context if available
     dependencies = run_context.dependencies if run_context else None
@@ -1862,7 +1862,7 @@ async def aget_relevant_docs_from_knowledge(
     **kwargs: Any,
 ) -> Optional[List[Union[Dict[str, Any], str]]]:
     """Get relevant documents from knowledge base asynchronously."""
-    from src.core._runner._stubs import Document
+    from openagent_core.core._runner._stubs import Document
 
     # Extract dependencies from run_context if available
     dependencies = run_context.dependencies if run_context else None

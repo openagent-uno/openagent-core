@@ -36,7 +36,7 @@ def _mock_urlopen(sink: list, *, raise_exc: Exception | None = None):
     """Patch the module's ``urlopen`` seam. Records each request into ``sink``
     (url / decoded payload / method / timeout) or raises to simulate a dead
     endpoint."""
-    import src.core.quality_digest as qd
+    import openagent_core.core.quality_digest as qd
 
     orig = qd._urllib_request.urlopen
 
@@ -61,7 +61,7 @@ def _mock_urlopen(sink: list, *, raise_exc: Exception | None = None):
 
 @test("quality", "webhook set → alert POSTs the expected payload + still elogs")
 async def t_webhook_posts(ctx: TestContext) -> None:
-    import src.core.quality_digest as qd
+    import openagent_core.core.quality_digest as qd
 
     now = time.time()
     posts: list = []
@@ -102,7 +102,7 @@ async def t_webhook_posts(ctx: TestContext) -> None:
 
 @test("quality", "webhook unset → no POST, elog unchanged")
 async def t_webhook_unset(ctx: TestContext) -> None:
-    import src.core.quality_digest as qd
+    import openagent_core.core.quality_digest as qd
 
     now = time.time()
     posts: list = []
@@ -121,7 +121,7 @@ async def t_webhook_unset(ctx: TestContext) -> None:
 
 @test("quality", "webhook exception is swallowed + logged, never propagates")
 async def t_webhook_error_contained(ctx: TestContext) -> None:
-    import src.core.quality_digest as qd
+    import openagent_core.core.quality_digest as qd
 
     now = time.time()
     posts: list = []
@@ -140,7 +140,7 @@ async def t_webhook_error_contained(ctx: TestContext) -> None:
 
 @test("quality", "webhook is edge-triggered — a persisting alert isn't re-POSTed")
 async def t_webhook_dedupe(ctx: TestContext) -> None:
-    import src.core.quality_digest as qd
+    import openagent_core.core.quality_digest as qd
 
     now = time.time()
     posts: list = []

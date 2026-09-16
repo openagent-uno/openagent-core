@@ -1,14 +1,14 @@
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from src.core._runner.agent import Agent
-from src.stream.media import Audio, File, Image, Video
-from src.core._run_state.agent import RunOutput
-from src.core._run_state.team import TeamRunOutput
-from src.core._runner.utils.log import log_debug
-from src.core._runner.utils.string import is_valid_uuid, url_safe_string
+from openagent_core.core._runner.agent import Agent
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.core._run_state.agent import RunOutput
+from openagent_core.core._run_state.team import TeamRunOutput
+from openagent_core.core._runner.utils.log import log_debug
+from openagent_core.core._runner.utils.string import is_valid_uuid, url_safe_string
 
 if TYPE_CHECKING:
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team.team import Team
 
 
 def format_member_agent_task(
@@ -38,7 +38,7 @@ def get_member_id(member: Union[Agent, "Team"]) -> Optional[str]:
     2. If the member has a name, convert that to a URL safe string
     3. Otherwise, return None
     """
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team.team import Team
 
     # First priority: Use the ID if explicitly provided
     if isinstance(member, Agent) and member.id is not None:

@@ -59,7 +59,7 @@ def _indice_con(n_note: int) -> Path:
 def _avviso(svc, results) -> str:
     """Cattura cio' che la CLI stamperebbe su stderr."""
     import click
-    from src.memory.vault import cli as vault_cli
+    from openagent_core.memory.vault import cli as vault_cli
 
     detto: list[str] = []
     originale = click.echo

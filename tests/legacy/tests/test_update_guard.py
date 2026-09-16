@@ -6,7 +6,7 @@ boots, roll back to the previous binary after the threshold, and confirm
 a healthy update so normal restarts are never mistaken for failures.
 
 The guard is a no-op unless running frozen, so every test patches
-``src._frozen.is_frozen`` → True and ``executable_path`` → a sandbox
+``openagent_core._frozen.is_frozen`` → True and ``executable_path`` → a sandbox
 binary it fully controls.
 """
 from __future__ import annotations
@@ -31,8 +31,8 @@ def _bare_binary(tmp: Path) -> Path:
 
 def _patches(target: Path):
     return (
-        patch("src._frozen.is_frozen", return_value=True),
-        patch("src._frozen.executable_path", return_value=target),
+        patch("openagent_core._frozen.is_frozen", return_value=True),
+        patch("openagent_core._frozen.executable_path", return_value=target),
     )
 
 
@@ -40,7 +40,7 @@ def _patches(target: Path):
 async def t_record_pending(ctx: TestContext) -> None:
     import json
     import tempfile
-    import src.update_guard as g
+    import openagent_core.update_guard as g
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -60,7 +60,7 @@ async def t_record_pending(ctx: TestContext) -> None:
 async def t_mark_healthy(ctx: TestContext) -> None:
     import json
     import tempfile
-    import src.update_guard as g
+    import openagent_core.update_guard as g
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -82,7 +82,7 @@ async def t_mark_healthy(ctx: TestContext) -> None:
 async def t_boot_guard_rollback(ctx: TestContext) -> None:
     import json
     import tempfile
-    import src.update_guard as g
+    import openagent_core.update_guard as g
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -109,7 +109,7 @@ async def t_boot_guard_rollback(ctx: TestContext) -> None:
 @test("update_guard", "after rollback the guard is a no-op (no re-counting the restored binary)")
 async def t_boot_guard_noop_after_rollback(ctx: TestContext) -> None:
     import tempfile
-    import src.update_guard as g
+    import openagent_core.update_guard as g
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -128,7 +128,7 @@ async def t_boot_guard_noop_after_rollback(ctx: TestContext) -> None:
 @test("update_guard", "rolled_back_versions exposes the recorded bad versions")
 async def t_rolled_back_versions(ctx: TestContext) -> None:
     import tempfile
-    import src.update_guard as g
+    import openagent_core.update_guard as g
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -147,7 +147,7 @@ async def t_boot_guard_no_rollback_target(ctx: TestContext) -> None:
     current binary alive rather than wedging the box."""
     import json
     import tempfile
-    import src.update_guard as g
+    import openagent_core.update_guard as g
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -170,7 +170,7 @@ async def t_boot_guard_bundle_rollback(ctx: TestContext) -> None:
     openagent.app and the rollback target is the sibling openagent.app.old
     bundle. Rollback must swap whole bundles, not the inner binary."""
     import tempfile
-    import src.update_guard as g
+    import openagent_core.update_guard as g
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -197,9 +197,9 @@ async def t_boot_guard_bundle_rollback(ctx: TestContext) -> None:
 
 @test("update_guard", "guard is a no-op when not running frozen")
 async def t_guard_noop_unfrozen(ctx: TestContext) -> None:
-    import src.update_guard as g
+    import openagent_core.update_guard as g
 
-    with patch("src._frozen.is_frozen", return_value=False):
+    with patch("openagent_core._frozen.is_frozen", return_value=False):
         assert g.boot_guard() is None
         g.record_pending("1.2.3")  # must not raise
         g.mark_healthy()           # must not raise

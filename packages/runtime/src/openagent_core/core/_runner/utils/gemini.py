@@ -3,8 +3,8 @@ from typing import Any, Dict, List, Optional, Type, Union
 
 from pydantic import BaseModel
 
-from src.stream.media import Image
-from src.core._runner.utils.log import log_error, log_warning
+from openagent_core.stream.media import Image
+from openagent_core.core._runner.utils.log import log_error, log_warning
 
 try:
     from google.genai.types import (

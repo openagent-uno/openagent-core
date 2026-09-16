@@ -10,7 +10,7 @@ from ._framework import TestContext, test
 
 @test("wal_monitor", "a moving checkpoint frontier is not a pinned WAL")
 async def t_moving_frontier_is_healthy(ctx: TestContext) -> None:
-    from src.core import wal_monitor
+    from openagent_core.core import wal_monitor
 
     samples = iter((
         wal_monitor.WalSample(0, 100, 10),
@@ -52,7 +52,7 @@ async def t_moving_frontier_is_healthy(ctx: TestContext) -> None:
 
 @test("wal_monitor", "a stationary checkpoint frontier is pinned above the floor")
 async def t_stationary_frontier_is_pinned(ctx: TestContext) -> None:
-    from src.core import wal_monitor
+    from openagent_core.core import wal_monitor
 
     original_checkpoint = wal_monitor._checkpoint
     original_path = wal_monitor.DB_PATH
@@ -86,7 +86,7 @@ async def t_stationary_frontier_is_pinned(ctx: TestContext) -> None:
 
 @test("wal_monitor", "restart is deferred for active work and persisted cooldown")
 async def t_restart_guards(ctx: TestContext) -> None:
-    from src.core import wal_monitor
+    from openagent_core.core import wal_monitor
 
     original_active = wal_monitor.recent_active_work
     original_load = wal_monitor._load_state

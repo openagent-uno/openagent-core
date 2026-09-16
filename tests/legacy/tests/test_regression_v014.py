@@ -22,7 +22,7 @@ undo them:
       * TOKENIZERS_PARALLELISM=false set before downstream imports.
 
 Tests are hermetic: no live API calls, no live subprocess MCPs. The
-subprocess-leak test spawns ``python -m src.cli --help`` (which runs
+subprocess-leak test spawns ``python -m openagent_core.cli --help`` (which runs
 import-only path) and inspects stderr for the warning.
 """
 from __future__ import annotations
@@ -51,7 +51,7 @@ async def t_catalog_constants(ctx: TestContext) -> None:
     callers don't crash; new code should reference FRAMEWORK_API_BASED
     directly.
     """
-    from src.models.catalog import (
+    from openagent_core.models.catalog import (
         FRAMEWORK_AGNO,
         FRAMEWORK_API_BASED,
         FRAMEWORK_LITELLM,
@@ -78,7 +78,7 @@ async def t_framework_migration(ctx: TestContext) -> None:
     boot AND be idempotent on subsequent boots. Tested against a
     hand-built legacy DB that mirrors the pre-v0.14 layout.
     """
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"mig-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -169,7 +169,7 @@ async def t_upsert_provider_legacy_compat(ctx: TestContext) -> None:
     must keep working — the upsert helper rewrites the value at the
     boundary so they don't need to be updated synchronously.
     """
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"ups-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -209,8 +209,8 @@ async def t_smart_router_uses_team(ctx: TestContext) -> None:
     Was written against the ``SmartRouter`` alias, which is gone as of
     the e8f5d68 follow-up pass — ``ModelDispatcher`` is the only name.
     """
-    from src.models.dispatcher import ModelDispatcher
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import ModelDispatcher
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     providers = [
         {"id": 1, "name": "openai", "framework": "api-based",
@@ -281,7 +281,7 @@ async def t_entry_resolution_makes_no_llm_call(ctx: TestContext) -> None:
     model_manager tool descriptions: re-add an inference step here and
     all of them become false at once, so fail loudly instead.
     """
-    from src.models.dispatcher import ModelDispatcher
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     providers = [
         {"id": 1, "name": "openai", "framework": "api-based",
@@ -321,7 +321,7 @@ async def t_resolve_prefers_router_flag(ctx: TestContext) -> None:
     dispatcher must honour it instead of falling through to catalog
     order.
     """
-    from src.models.dispatcher import ModelDispatcher
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     providers = [
         {"id": 1, "name": "openai", "framework": "api-based",
@@ -343,7 +343,7 @@ async def t_resolve_fallback_first_enabled(ctx: TestContext) -> None:
     catalog order — keeps single-model deployments working without
     forcing the user to flip a flag.
     """
-    from src.models.dispatcher import ModelDispatcher
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     providers = [
         {"id": 1, "name": "openai", "framework": "api-based",
@@ -366,7 +366,7 @@ async def t_resolve_no_models(ctx: TestContext) -> None:
     ``generate``/``stream`` surface a clear error in chat instead of
     crashing on a None lookup.
     """
-    from src.models.dispatcher import ModelDispatcher
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     router = ModelDispatcher(providers_config=[])
     decision = await router._resolve_entry_model(session_id="sess-x")
@@ -381,7 +381,7 @@ async def t_generate_no_models_returns_error(ctx: TestContext) -> None:
     ``generate`` short-circuits BEFORE invoking any provider so the
     user sees a readable error in the chat rather than a stack trace.
     """
-    from src.models.dispatcher import ModelDispatcher
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     router = ModelDispatcher(providers_config=[])
     resp = await router.generate(
@@ -414,8 +414,8 @@ async def t_stream_handles_team_events(ctx: TestContext) -> None:
     """
     import os
 
-    from src.core._run_state.agent import RunContentEvent as AgentRCE
-    from src.core._run_state.team import (
+    from openagent_core.core._run_state.agent import RunContentEvent as AgentRCE
+    from openagent_core.core._run_state.team import (
         IntermediateRunContentEvent as TeamIRCE,
         RunContentEvent as TeamRCE,
     )
@@ -425,7 +425,7 @@ async def t_stream_handles_team_events(ctx: TestContext) -> None:
         "classes; revisit dispatcher's union."
     )
 
-    from src.models.dispatcher import _arun_runtime_stream
+    from openagent_core.models.dispatcher import _arun_runtime_stream
 
     PARENT = "sess-x"
     CHILD = "sess-x::member::opus::abcd1234"
@@ -481,7 +481,7 @@ async def t_stream_no_models_returns_error(ctx: TestContext) -> None:
     """Streaming variant of the no-models safety net — must yield text
     (not raise) so the WS / SSE drain emits a readable line.
     """
-    from src.models.dispatcher import ModelDispatcher
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     router = ModelDispatcher(providers_config=[])
     chunks: list[str] = []
@@ -503,7 +503,7 @@ async def t_db_helpers_deleted(ctx: TestContext) -> None:
     duplicated what the runtime's SqliteDb does for free) must not be
     re-added by mistake.
     """
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     deleted = [
         "_ensure_agno_session_row",
@@ -541,7 +541,7 @@ async def t_wire_defers_all_mcps(ctx: TestContext) -> None:
     via ``tool-search.call_tool``. wire_model_runtime must not attach
     any other toolkits / sdk servers upfront.
     """
-    from src.models.runtime import wire_model_runtime
+    from openagent_core.models.runtime import wire_model_runtime
 
     class _StubModel:
         def __init__(self) -> None:
@@ -572,7 +572,7 @@ async def t_wire_defers_all_mcps(ctx: TestContext) -> None:
 
 @test("regression_v014", "MCPPool exposes the tool-search-only accessors")
 async def t_pool_tool_search_only(ctx: TestContext) -> None:
-    from src.mcp.pool import MCPPool
+    from openagent_core.mcp.pool import MCPPool
 
     assert callable(getattr(MCPPool, "runtime_toolkits_tool_search_only", None)), (
         "MCPPool.runtime_toolkits_tool_search_only is required by "
@@ -588,7 +588,7 @@ async def t_pool_tool_search_only(ctx: TestContext) -> None:
 
 @test("regression_v014", "FRAMEWORK_SYSTEM_PROMPT carries the catalog placeholder + vault block")
 async def t_framework_prompt_blocks(ctx: TestContext) -> None:
-    from src.core.prompts import FRAMEWORK_SYSTEM_PROMPT
+    from openagent_core.core.prompts import FRAMEWORK_SYSTEM_PROMPT
 
     assert "{{MCP_CATALOG_SUMMARY}}" in FRAMEWORK_SYSTEM_PROMPT, (
         "The per-session catalog must be injected via this placeholder"
@@ -619,7 +619,7 @@ async def t_subagent_delegation_block(ctx: TestContext) -> None:
     independent → sequence dependent → synthesize) introduced when the
     Team mode flipped from ``route`` to ``coordinate``.
     """
-    from src.core.prompts import FRAMEWORK_SYSTEM_PROMPT
+    from openagent_core.core.prompts import FRAMEWORK_SYSTEM_PROMPT
 
     assert "Sub-agents — ALWAYS break the task down and delegate" in FRAMEWORK_SYSTEM_PROMPT, (
         "Sub-agent delegation policy block missing — leaders won't "
@@ -653,7 +653,7 @@ async def t_prompt_multi_member(ctx: TestContext) -> None:
     softens any of these phrases would silently push the leader back to
     single-specialist-per-turn behaviour.
     """
-    from src.core.prompts import FRAMEWORK_SYSTEM_PROMPT
+    from openagent_core.core.prompts import FRAMEWORK_SYSTEM_PROMPT
 
     text = FRAMEWORK_SYSTEM_PROMPT.lower()
     for needle in ("decompose", "parallel", "synthesize"):
@@ -662,7 +662,7 @@ async def t_prompt_multi_member(ctx: TestContext) -> None:
 
 @test("regression_v014", "build_mcp_catalog_summary handles None / empty / vault-foregrounded")
 async def t_catalog_summary_edges(ctx: TestContext) -> None:
-    from src.core.prompts import build_mcp_catalog_summary
+    from openagent_core.core.prompts import build_mcp_catalog_summary
 
     # No pool at all (early-boot or test fixture).
     text = build_mcp_catalog_summary(None)
@@ -715,7 +715,7 @@ async def t_pool_server_descriptions(ctx: TestContext) -> None:
     Without the method, the catalog falls back to generic blurbs and
     the vault foreground hint disappears.
     """
-    from src.mcp.pool import MCPPool
+    from openagent_core.mcp.pool import MCPPool
 
     fn = getattr(MCPPool, "server_descriptions", None)
     assert callable(fn), "MCPPool.server_descriptions must exist (Phase 10 gap fill)"
@@ -730,7 +730,7 @@ async def t_agent_memory_db_attr(ctx: TestContext) -> None:
     to start(). A rename of memory_db → memory (or vice versa) would
     re-introduce the "Agent has no attribute X" warning on every boot.
     """
-    from src.core.agent import Agent
+    from openagent_core.core.agent import Agent
 
     # The Agent class definition (not an instance — instances need a
     # MemoryDB + MCPPool which the test harness may not provide here).
@@ -747,7 +747,7 @@ async def t_curator_start_signature(ctx: TestContext) -> None:
     function rejected. Verify the contract holds.
     """
     import inspect
-    from src.learning.curator import start
+    from openagent_core.learning.curator import start
 
     sig = inspect.signature(start)
     params = list(sig.parameters)
@@ -770,7 +770,7 @@ async def t_wait_dual_signal_handler(ctx: TestContext) -> None:
     selector. Both MUST be installed.
     """
     import signal
-    from src.core.server import AgentServer
+    from openagent_core.core.server import AgentServer
 
     src_lines = inspect_source_lines(AgentServer.wait)
     text = "\n".join(src_lines)
@@ -810,7 +810,7 @@ async def t_tqdm_threading_lock(ctx: TestContext) -> None:
     # load, so by the time any test runs, tqdm is already pinned.
     # (Other tests in the suite import cli via the framework.)
     import threading
-    import src.cli  # noqa: F401  — module-level side effect: pin tqdm
+    import openagent_core.cli  # noqa: F401  — module-level side effect: pin tqdm
 
     try:
         import tqdm
@@ -838,7 +838,7 @@ async def t_tqdm_threading_lock(ctx: TestContext) -> None:
 
 @test("regression_v014", "openagent CLI subprocess exits without 'leaked semaphore' warning")
 async def t_subprocess_no_semaphore_leak(ctx: TestContext) -> None:
-    """End-to-end leak check: spawn ``python -m src.cli --help`` (the
+    """End-to-end leak check: spawn ``python -m openagent_core.cli --help`` (the
     lightest path that exercises module load + click teardown) and
     grep stderr for the resource_tracker warning. This catches a leak
     that the in-process test can't, because the warning fires at
@@ -851,7 +851,7 @@ async def t_subprocess_no_semaphore_leak(ctx: TestContext) -> None:
         python = Path(sys.executable)
 
     proc = subprocess.run(
-        [str(python), "-m", "src.cli", "--help"],
+        [str(python), "-m", "openagent_core.cli", "--help"],
         cwd=str(repo_root),
         capture_output=True,
         text=True,
@@ -883,7 +883,7 @@ async def t_team_members_typing(ctx: TestContext) -> None:
     classifier.
     """
     import inspect
-    from src.core._runner.team._init import __init__ as team_init
+    from openagent_core.core._runner.team._init import __init__ as team_init
 
     sig = inspect.signature(team_init)
     members_param = sig.parameters.get("members")
@@ -905,8 +905,8 @@ async def t_team_membership_api_based_only(ctx: TestContext) -> None:
     enabled api-based rows so the leader can delegate to them as
     specialist members.
     """
-    from src.models.catalog import FRAMEWORK_API_BASED, framework_of
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.catalog import FRAMEWORK_API_BASED, framework_of
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     providers = [
         {

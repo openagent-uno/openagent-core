@@ -36,7 +36,7 @@ def _providers() -> list[dict]:
 
 
 def _policy(**overrides):  # noqa: ANN003
-    from src.models.local_fallback import LocalFallbackPolicy
+    from openagent_core.models.local_fallback import LocalFallbackPolicy
 
     cfg = {
         "enabled": True,
@@ -50,7 +50,7 @@ def _policy(**overrides):  # noqa: ANN003
 
 @test("local_fallback", "private Claude proxy is not mistaken for local inference")
 async def t_explicit_identity(_ctx: TestContext) -> None:
-    from src.models.catalog import iter_configured_models
+    from openagent_core.models.catalog import iter_configured_models
 
     policy = _policy()
     entries = iter_configured_models(_providers())
@@ -61,7 +61,7 @@ async def t_explicit_identity(_ctx: TestContext) -> None:
 
 @test("local_fallback", "standby routes cloud normally and local during cooldown")
 async def t_cooldown_switch(_ctx: TestContext) -> None:
-    from src.models.catalog import iter_configured_models
+    from openagent_core.models.catalog import iter_configured_models
 
     policy = _policy()
     entries = iter_configured_models(_providers())
@@ -75,7 +75,7 @@ async def t_cooldown_switch(_ctx: TestContext) -> None:
 
 @test("local_fallback", "explicit pins build cloud-only or local-only teams")
 async def t_explicit_team_scope(_ctx: TestContext) -> None:
-    from src.models.catalog import iter_configured_models
+    from openagent_core.models.catalog import iter_configured_models
 
     policy = _policy()
     entries = iter_configured_models(_providers())
@@ -89,7 +89,7 @@ async def t_explicit_team_scope(_ctx: TestContext) -> None:
 
     # The dispatcher must validate a manual/scheduler/event pin against the
     # configured catalog, not the ordinary standby-filtered catalog.
-    from src.models.dispatcher import ModelDispatcher
+    from openagent_core.models.dispatcher import ModelDispatcher
     dispatcher = ModelDispatcher(_providers())
     dispatcher.set_local_fallback_policy({
         "enabled": True,
@@ -101,9 +101,9 @@ async def t_explicit_team_scope(_ctx: TestContext) -> None:
 
 @test("local_fallback", "fallback config appends local and activates circuit")
 async def t_fallback_config(_ctx: TestContext) -> None:
-    from src.core.runtime_errors import ModelRateLimitError
-    from src.models.local_fallback import LocalFallbackPolicy
-    from src.models.providers.fallback import FallbackConfig
+    from openagent_core.core.runtime_errors import ModelRateLimitError
+    from openagent_core.models.local_fallback import LocalFallbackPolicy
+    from openagent_core.models.providers.fallback import FallbackConfig
 
     policy = LocalFallbackPolicy({
         "enabled": True,
@@ -145,8 +145,8 @@ async def t_fallback_config(_ctx: TestContext) -> None:
 
 @test("local_fallback", "dispatcher pin overrides cooldown but not a budget cap")
 async def t_dispatcher_pin(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.models.dispatcher import ModelDispatcher
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     db = MemoryDB(str(ctx.test_dir / f"local_fallback_{uuid.uuid4().hex}.db"))
     await db.connect()
@@ -181,7 +181,7 @@ async def t_dispatcher_pin(ctx: TestContext) -> None:
 
 @test("local_fallback", "manual force-local switch is reversible")
 async def t_force_local_env(_ctx: TestContext) -> None:
-    from src.models.catalog import iter_configured_models
+    from openagent_core.models.catalog import iter_configured_models
 
     policy = _policy()
     entries = iter_configured_models(_providers())
@@ -208,7 +208,7 @@ async def t_local_endpoint_detection(ctx: TestContext) -> None:
     *.svc.cluster.local name - read as local and were handed the lean
     self-hosted profile.
     """
-    from src.core.execution_profile import _is_cloud_model_id, _is_local_url
+    from openagent_core.core.execution_profile import _is_cloud_model_id, _is_local_url
 
     # Network fact: all three of these ARE reachable locally.
     for url in (
@@ -234,7 +234,7 @@ async def t_local_endpoint_detection(ctx: TestContext) -> None:
 async def t_cheapest_prefers_self_hosted(ctx: TestContext) -> None:
     """Both a subscription proxy and our GPU report $0, so cost alone left the
     choice to configuration order - and compaction landed on cloud Claude."""
-    from src.models.catalog import cheapest_enabled_model
+    from openagent_core.models.catalog import cheapest_enabled_model
 
     providers = [
         {
@@ -259,8 +259,8 @@ async def t_no_cloud_default_under_strict_local(ctx: TestContext) -> None:
     silent escape, and no `openai` provider is even configured here."""
     from types import SimpleNamespace
 
-    from src.core._runner.agent._init import set_default_model
-    from src.core.execution_profile import strict_local_only_scope
+    from openagent_core.core._runner.agent._init import set_default_model
+    from openagent_core.core.execution_profile import strict_local_only_scope
 
     with strict_local_only_scope(True):
         try:
@@ -273,8 +273,8 @@ async def t_no_cloud_default_under_strict_local(ctx: TestContext) -> None:
 
 @test("local_fallback", "standby_only=false tiene i modelli della corsia anche nel Team")
 async def t_non_standby_lane_stays_in_team(_ctx: TestContext) -> None:
-    from src.models.local_fallback import LocalFallbackPolicy
-    from src.models.catalog import iter_configured_models
+    from openagent_core.models.local_fallback import LocalFallbackPolicy
+    from openagent_core.models.catalog import iter_configured_models
 
     # Il TeamRouterProvider passa SEMPRE il leader come explicit_runtime_id, quindi
     # e' il ramo del pin a decidere chi entra nel team. Con standby_only false i

@@ -29,7 +29,7 @@ from ._framework import TestContext, test
 
 @test("team_member_parity", "_compose_member_system: empty base → None")
 async def t_compose_empty(_ctx: TestContext) -> None:
-    from src.models.dispatcher import _compose_member_system
+    from openagent_core.models.dispatcher import _compose_member_system
     assert _compose_member_system(None, "coder") is None
     assert _compose_member_system("", "coder") is None
     assert _compose_member_system("   ", "coder") is None
@@ -37,7 +37,7 @@ async def t_compose_empty(_ctx: TestContext) -> None:
 
 @test("team_member_parity", "_compose_member_system: role-less call → base unchanged")
 async def t_compose_no_role(_ctx: TestContext) -> None:
-    from src.models.dispatcher import _compose_member_system
+    from openagent_core.models.dispatcher import _compose_member_system
     base = "FRAMEWORK_PROMPT\n\nuser persona text"
     assert _compose_member_system(base, "") == base
     assert _compose_member_system(base, "   ") == base
@@ -48,7 +48,7 @@ async def t_compose_no_role(_ctx: TestContext) -> None:
     "_compose_member_system: framework+persona base preserved verbatim ahead of role",
 )
 async def t_compose_keeps_base(_ctx: TestContext) -> None:
-    from src.models.dispatcher import _compose_member_system
+    from openagent_core.models.dispatcher import _compose_member_system
     base = "FRAMEWORK_PROMPT_TOKEN\n\nuser persona PERSONA_TOKEN"
     composed = _compose_member_system(base, "long-context reasoning")
     assert composed is not None
@@ -90,8 +90,8 @@ def _make_provider(pool: _FakePool):
     the test doesn't need a real provider config or API key — we only
     care about the ``RuntimeAgent`` constructor args (tools, system).
     """
-    from src.models.dispatcher import TeamRouterProvider
-    from src.models import native_provider as np_mod
+    from openagent_core.models.dispatcher import TeamRouterProvider
+    from openagent_core.models import native_provider as np_mod
 
     provider = TeamRouterProvider(
         entry_runtime_id="openai:gpt-4o-mini",
@@ -116,7 +116,7 @@ def _make_provider(pool: _FakePool):
 
 
 def _entry(runtime_id: str = "openai:gpt-4o-mini", tier_hint: str | None = None):
-    from src.models.catalog import CatalogModel
+    from openagent_core.models.catalog import CatalogModel
     return CatalogModel(
         provider="openai",
         model_id="gpt-4o-mini",
@@ -170,7 +170,7 @@ async def t_api_mcp_parity(_ctx: TestContext) -> None:
     "api-based leader & member: framework+persona base reaches RuntimeAgent.system_message",
 )
 async def t_api_system_prompt_parity(_ctx: TestContext) -> None:
-    from src.models.dispatcher import _compose_member_system
+    from openagent_core.models.dispatcher import _compose_member_system
 
     ts = _FakeToolSearchToolkit()
     pool = _FakePool(ts)

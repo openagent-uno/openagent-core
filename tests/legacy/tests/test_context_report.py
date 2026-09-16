@@ -2,7 +2,7 @@
 
 Covers the server-side source of truth behind the ``/context`` command,
 the ``GET /api/sessions/{id}/context`` endpoint, and the realtime
-``context_report`` WS frame: :func:`src.core.context_report.build_context_report`
+``context_report`` WS frame: :func:`openagent_core.core.context_report.build_context_report`
 plus the catalog context-window lookup and the wire round-trip. Uses a
 synthetic sessions DB + fake agent, so no network or gateway is needed.
 """
@@ -54,7 +54,7 @@ class _FakeAgent:
 
 @test("context_report", "build_context_report produces a sectioned window breakdown")
 async def test_build_report(ctx: TestContext) -> None:
-    from src.core.context_report import build_context_report
+    from openagent_core.core.context_report import build_context_report
 
     db_path = str(ctx.test_dir / "context-report.db")
     runs = [
@@ -106,14 +106,14 @@ async def test_build_report(ctx: TestContext) -> None:
 
 @test("context_report", "build_context_report returns None without a session id")
 async def test_no_session(ctx: TestContext) -> None:
-    from src.core.context_report import build_context_report
+    from openagent_core.core.context_report import build_context_report
 
     assert build_context_report(_FakeAgent("/nonexistent.db"), None) is None
 
 
 @test("context_report", "empty session (no runs) still yields a valid full-free window")
 async def test_empty_session(ctx: TestContext) -> None:
-    from src.core.context_report import build_context_report
+    from openagent_core.core.context_report import build_context_report
 
     db_path = str(ctx.test_dir / "context-empty.db")
     _make_session_db(db_path, "sid", [], {}, "")
@@ -134,7 +134,7 @@ async def test_backward_compat(ctx: TestContext) -> None:
     Covers: runs without a ``metrics``/``model`` field, a ``session_data``
     without ``session_metrics``, a legacy bare-dict metrics shape, the runtime's
     double-encoded (str-of-JSON) ``runs`` column, and a NULL ``runs`` column."""
-    from src.core.context_report import build_context_report
+    from openagent_core.core.context_report import build_context_report
 
     db_path = str(ctx.test_dir / "context-legacy.db")
     conn = sqlite3.connect(db_path)
@@ -178,7 +178,7 @@ async def test_backward_compat(ctx: TestContext) -> None:
 
 @test("context_report", "catalog context window falls back to 200k for unknown models")
 async def test_catalog_window_fallback(ctx: TestContext) -> None:
-    from src.models.catalog import get_model_context_window
+    from openagent_core.models.catalog import get_model_context_window
 
     window, source = get_model_context_window("local:some-self-hosted-model")
     assert window == 200_000, window
@@ -187,8 +187,8 @@ async def test_catalog_window_fallback(ctx: TestContext) -> None:
 
 @test("context_report", "ContextReport event round-trips through the wire codec")
 async def test_wire_roundtrip(ctx: TestContext) -> None:
-    from src.stream.events import ContextReport
-    from src.stream.wire import event_to_wire, wire_to_event
+    from openagent_core.stream.events import ContextReport
+    from openagent_core.stream.wire import event_to_wire, wire_to_event
 
     payload = {"used_tokens": 1234, "context_window": 200_000, "sections": [{"key": "free", "tokens": 198766}]}
     evt = ContextReport(session_id="sX", seq=7, ts_ms=999, report=payload)
@@ -203,7 +203,7 @@ async def test_wire_roundtrip(ctx: TestContext) -> None:
 
 @test("context_report", "format_context_report_text renders a fenced monospace block")
 async def test_text_form(ctx: TestContext) -> None:
-    from src.core.context_report import format_context_report_text
+    from openagent_core.core.context_report import format_context_report_text
 
     report = {
         "model_label": "claude-opus-4-8", "context_window": 200_000, "used_tokens": 42_000,

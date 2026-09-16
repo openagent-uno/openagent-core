@@ -31,7 +31,7 @@ from ._framework import TestContext, test
     "Team cache key retains the exact execution-host while ignoring session id",
 )
 async def t_team_cache_key_execution_host(ctx: TestContext) -> None:
-    from src.models.dispatcher import _system_cache_key
+    from openagent_core.models.dispatcher import _system_cache_key
 
     base = "framework and persona"
     host_a_s1 = (
@@ -250,7 +250,7 @@ def _install_stubs(provider, *, catalog: list[dict[str, Any]] | None = None,
         leader = fake_build_agent_for(entry, name="leader", role=None)
         team_model = leader.model
         recorded["team_model"] = team_model
-        from src.models.dispatcher import _build_role_blurb
+        from openagent_core.models.dispatcher import _build_role_blurb
         members = [
             fake_build_agent_for(e, name=f"specialist:{e.runtime_id}",
                                   role=_build_role_blurb(e))
@@ -281,8 +281,8 @@ async def t_role_blurb(ctx: TestContext) -> None:
     sourced from the DB row's ``tier_hint``. Verify the fallback chain
     so empty rows still produce a parseable role.
     """
-    from src.models.catalog import CatalogModel
-    from src.models.dispatcher import _build_role_blurb
+    from openagent_core.models.catalog import CatalogModel
+    from openagent_core.models.dispatcher import _build_role_blurb
 
     with_hint = CatalogModel(
         provider="openai", model_id="gpt-5",
@@ -315,7 +315,7 @@ async def t_team_uses_instructions(ctx: TestContext) -> None:
     """
     import inspect
 
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     src = inspect.getsource(TeamRouterProvider._ensure_runtime)
     assert "instructions=[system] if system else None" in src, (
@@ -340,9 +340,9 @@ async def t_real_team_leader_prompt_contains_member_ids(ctx: TestContext) -> Non
     Mirrors a multi-provider catalog shape (deepseek leader + 1 deepseek
     specialist + 2 anthropic specialists).
     """
-    from src.core._runner.team._messages import _build_team_context
+    from openagent_core.core._runner.team._messages import _build_team_context
 
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     providers = [
         {
@@ -423,10 +423,10 @@ async def t_real_team_members_block_e2e(ctx: TestContext) -> None:
     ``get_members_system_message_content``, and verifies what the leader
     LLM would see.
     """
-    from src.core._runner.team import Team
-    from src.core._runner.utils.team import get_member_id
+    from openagent_core.core._runner.team import Team
+    from openagent_core.core._runner.utils.team import get_member_id
 
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     providers = [
         {
@@ -510,9 +510,9 @@ async def t_real_team_full_context_e2e(ctx: TestContext) -> None:
     areas of expertise (the parallel-delegation hook the user is
     relying on).
     """
-    from src.core._runner.team._messages import _build_team_context
+    from openagent_core.core._runner.team._messages import _build_team_context
 
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     providers = [
         {
@@ -587,10 +587,10 @@ async def t_real_team_every_agent_carries_framework_prompt_e2e(
     Setup mirrors the user's live config: api-based leader plus two
     api-based specialists across two providers.
     """
-    from src.core._runner.agent import Agent as RuntimeAgent
-    from src.core._runner.team import Team
+    from openagent_core.core._runner.agent import Agent as RuntimeAgent
+    from openagent_core.core._runner.team import Team
 
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     framework_marker = (
         "PRETEND_FRAMEWORK_SYSTEM_PROMPT: vault, MCPs, scheduler, federation."
@@ -691,7 +691,7 @@ async def t_compose_member_system_unit(ctx: TestContext) -> None:
     member sees vision §15's non-removable prompt first), then a short
     Role block pinning the specialist to its lane.
     """
-    from src.models.dispatcher import _compose_member_system
+    from openagent_core.models.dispatcher import _compose_member_system
 
     # Empty framework prompt → returns None. Some classifier-only paths
     # call into the dispatcher with system=None; we must NOT synthesise
@@ -733,10 +733,10 @@ async def t_real_team_members_mixed_catalog_e2e(ctx: TestContext) -> None:
     leader plus an anthropic specialist. Verifies the member-id
     derivation produces ids matching their names for every provider.
     """
-    from src.core._runner.team import Team
-    from src.core._runner.utils.team import get_member_id
+    from openagent_core.core._runner.team import Team
+    from openagent_core.core._runner.utils.team import get_member_id
 
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     providers = [
         {
@@ -797,8 +797,8 @@ async def t_member_identifier_url_safe(ctx: TestContext) -> None:
     Fix: build member names with dashes (which ``url_safe_string``
     preserves) so the id the runtime generates equals the name we set.
     """
-    from src.core._runner.utils.string import url_safe_string
-    from src.models.dispatcher import _member_identifier
+    from openagent_core.core._runner.utils.string import url_safe_string
+    from openagent_core.models.dispatcher import _member_identifier
 
     runtime_ids = (
         "anthropic:claude-opus-4.7",
@@ -822,7 +822,7 @@ async def t_team_construction(ctx: TestContext) -> None:
     and the other two as specialist members. Each member's ``role``
     must be the corresponding DB row's ``tier_hint``.
     """
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     providers = _multi_specialist_catalog()
     provider = TeamRouterProvider(
@@ -866,7 +866,7 @@ async def t_single_agent_fallback(ctx: TestContext) -> None:
     Team adds latency for no benefit. ``_ensure_runtime`` should
     short-circuit to an NativeProvider-shaped single-agent runtime.
     """
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     providers = _single_model_catalog()
     provider = TeamRouterProvider(
@@ -913,7 +913,7 @@ async def t_coding_delegation_flow(ctx: TestContext) -> None:
     specialist's output is part of the reply", not "exactly one
     delegation fired".
     """
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     providers = _multi_specialist_catalog()
     provider = TeamRouterProvider(
@@ -988,7 +988,7 @@ async def t_effective_model_badge_after_delegation(ctx: TestContext) -> None:
     prefers the delegation target over the entry pick. Test verifies
     each link of that chain end-to-end without firing a real LLM.
     """
-    from src.models.dispatcher import ModelDispatcher, _extract_delegated_member_id
+    from openagent_core.models.dispatcher import ModelDispatcher, _extract_delegated_member_id
 
     providers = _multi_specialist_catalog()
     router = ModelDispatcher(providers_config=providers)
@@ -1040,7 +1040,7 @@ async def t_rebuild_invalidates_cache(ctx: TestContext) -> None:
     the fresh catalog. Otherwise edits in the model-manager UI would
     take effect only after a process restart.
     """
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     providers = _multi_specialist_catalog()
     provider = TeamRouterProvider(
@@ -1089,9 +1089,9 @@ async def t_team_mode_coordinate(ctx: TestContext) -> None:
     turn (route mode's contract: "delegate to exactly one member"),
     defeating multi-domain decomposition.
     """
-    from src.core._runner.team import Team, TeamMode
+    from openagent_core.core._runner.team import Team, TeamMode
 
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     providers = _multi_specialist_catalog()
     provider = TeamRouterProvider(
@@ -1134,7 +1134,7 @@ async def t_delegation_memo_clears_between_turns(ctx: TestContext) -> None:
     before kicking off the runtime run. If a delegation fires in this
     turn, it's recorded; otherwise the badge falls back to the leader.
     """
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     providers = _multi_specialist_catalog()
     provider = TeamRouterProvider(
@@ -1182,9 +1182,9 @@ async def t_team_has_tool_search_tools(ctx: TestContext) -> None:
     leader brain can call ``tool_search_*`` directly. Each member
     still has its own copy so delegated work also has tool access.
     """
-    from src.core._runner.team import Team
+    from openagent_core.core._runner.team import Team
 
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     providers = _multi_specialist_catalog()
     provider = TeamRouterProvider(
@@ -1224,7 +1224,7 @@ async def t_prompt_no_direct_mcp_call_examples(ctx: TestContext) -> None:
     actual directly-callable tools and says everything else goes
     through ``tool_search_call_tool``.
     """
-    from src.core.prompts import FRAMEWORK_SYSTEM_PROMPT
+    from openagent_core.core.prompts import FRAMEWORK_SYSTEM_PROMPT
 
     text = FRAMEWORK_SYSTEM_PROMPT
     # The five callable tools must be named at the top.

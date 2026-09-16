@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from src.memory.schedule import (
+from openagent_core.memory.schedule import (
     next_run_for_expression,
     validate_schedule_expression,
 )

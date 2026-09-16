@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team.team import Team
 
 from copy import deepcopy
 from typing import (
@@ -19,34 +19,34 @@ from typing import (
     Union,
 )
 
-from src.core._runner.agent import Agent
-from src.core.runtime_errors import RunCancelledException
-from src.stream.media import Audio, File, Image, Video
-from src.core._run_state import RunContext
-from src.core._run_state.agent import RunOutput, RunOutputEvent
-from src.core._run_state.base import RunStatus
-from src.core._run_state.team import (
+from openagent_core.core._runner.agent import Agent
+from openagent_core.core.runtime_errors import RunCancelledException
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.core._run_state import RunContext
+from openagent_core.core._run_state.agent import RunOutput, RunOutputEvent
+from openagent_core.core._run_state.base import RunStatus
+from openagent_core.core._run_state.team import (
     TaskCreatedEvent,
     TaskUpdatedEvent,
     TeamRunOutput,
     TeamRunOutputEvent,
 )
-from src.memory.sessions import TeamSession
-from src.core._runner.team.task import TaskList, TaskStatus, save_task_list
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.events import (
+from openagent_core.memory.sessions import TeamSession
+from openagent_core.core._runner.team.task import TaskList, TaskStatus, save_task_list
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.events import (
     create_team_task_created_event,
     create_team_task_updated_event,
     handle_event,
 )
-from src.core._runner.utils.log import (
+from openagent_core.core._runner.utils.log import (
     log_debug,
     use_agent_logger,
     use_team_logger,
 )
-from src.core._runner.utils.merge_dict import merge_dictionaries, merge_parallel_session_states
-from src.core._runner.utils.response import check_if_run_cancelled
-from src.core._runner.utils.team import (
+from openagent_core.core._runner.utils.merge_dict import merge_dictionaries, merge_parallel_session_states
+from openagent_core.core._runner.utils.response import check_if_run_cancelled
+from openagent_core.core._runner.utils.team import (
     add_interaction_to_team_run_context,
     format_member_agent_task,
 )
@@ -81,9 +81,9 @@ def _get_task_management_tools(
     _audio: List[Audio] = list(audio) if audio else []
     _files: List[File] = list(files) if files else []
 
-    from src.core._runner.team._init import _initialize_member
-    from src.core._runner.team._run import _update_team_media
-    from src.core._runner.team._tools import (
+    from openagent_core.core._runner.team._init import _initialize_member
+    from openagent_core.core._runner.team._run import _update_team_media
+    from openagent_core.core._runner.team._tools import (
         _determine_team_member_interactions,
         _find_member_by_id,
         _get_history_for_member_agent,
@@ -302,7 +302,7 @@ def _get_task_management_tools(
         if hasattr(member_agent, "add_history_to_context") and member_agent.add_history_to_context:
             history = _get_history_for_member_agent(team, session, member_agent)
             if history and isinstance(member_agent_task, str):
-                from src.models.providers.message import Message
+                from openagent_core.models.providers.message import Message
 
                 history.append(Message(role="user", content=member_agent_task))
 
@@ -349,7 +349,7 @@ def _get_task_management_tools(
                 or not member_agent.store_tool_messages
                 or not member_agent.store_history_messages
             ):
-                from src.core._runner.agent._run import scrub_run_output_for_storage
+                from openagent_core.core._runner.agent._run import scrub_run_output_for_storage
 
                 scrub_run_output_for_storage(member_agent, run_response=member_run_response)  # type: ignore[arg-type]
             session.upsert_run(member_run_response)

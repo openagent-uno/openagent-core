@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from src.mcp.servers.delegation import handlers
+from openagent_core.mcp.servers.delegation import handlers
 
 
 def _json_dump(value: Any) -> str:
@@ -23,8 +23,8 @@ def _json_dump(value: Any) -> str:
 
 def build_runtime_toolkit() -> Any:
     """Return a Toolkit exposing the two delegation tools to api-based agents."""
-    from src.mcp._runtime.function import ToolResult
-    from src.mcp._runtime.toolkit import Toolkit
+    from openagent_core.mcp._runtime.function import ToolResult
+    from openagent_core.mcp._runtime.toolkit import Toolkit
 
     async def delegate_task(task: str, model_id: str | None = None):
         result = await handlers.delegate_task(task=task, model_id=model_id)

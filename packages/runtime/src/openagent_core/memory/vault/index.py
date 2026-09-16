@@ -32,8 +32,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
 
-from src.memory.vault.model import Note
-from src.memory.vault.parser import link_key, parse_note_text
+from openagent_core.memory.vault.model import Note
+from openagent_core.memory.vault.parser import link_key, parse_note_text
 
 # Bumped to 2 when ``stem`` joined notes_fts: the FTS table's COLUMN COUNT
 # changed, so an index built by an older build cannot be reused — see
@@ -380,7 +380,7 @@ class VaultIndex:
     def _upsert(self, note: Note, body: str) -> None:
         # ``body`` is the full file text; split the frontmatter off so the
         # FTS table indexes only the prose (not the YAML).
-        from src.memory.vault.parser import split_frontmatter
+        from openagent_core.memory.vault.parser import split_frontmatter
         _, fts_body = split_frontmatter(body)
         self._conn.execute(
             """

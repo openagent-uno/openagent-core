@@ -14,7 +14,7 @@ from ._framework import TestContext, test
 
 @test("run_truncation", "the tool-call-limit marker is detected in a stored run")
 async def t_marker_detected(ctx: TestContext) -> None:
-    from src.core.scheduler import _run_was_truncated
+    from openagent_core.core.scheduler import _run_was_truncated
 
     clean = {"status": "COMPLETED", "content": "did the work",
              "messages": [{"role": "tool", "content": "ok"}]}
@@ -32,7 +32,7 @@ async def t_marker_detected(ctx: TestContext) -> None:
 @test("run_truncation", "detection never raises on an unserialisable run")
 async def t_detection_is_safe(ctx: TestContext) -> None:
     """It runs on every firing: it must never be the thing that breaks one."""
-    from src.core.scheduler import _run_was_truncated
+    from openagent_core.core.scheduler import _run_was_truncated
 
     class _Hostile:
         def __repr__(self):
@@ -44,7 +44,7 @@ async def t_detection_is_safe(ctx: TestContext) -> None:
 
 @test("run_truncation", "a truncated child run overrides the task status to failed")
 async def t_truncated_run_fails_the_task(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
+    from openagent_core.core.scheduler import Scheduler
 
     class _DB:
         async def list_session_runs(self, session_id, limit=1):
@@ -68,7 +68,7 @@ async def t_truncated_run_fails_the_task(ctx: TestContext) -> None:
 
 @test("run_truncation", "an ordinary completed run is still a success")
 async def t_clean_run_unchanged(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
+    from openagent_core.core.scheduler import Scheduler
 
     class _DB:
         async def list_session_runs(self, session_id, limit=1):

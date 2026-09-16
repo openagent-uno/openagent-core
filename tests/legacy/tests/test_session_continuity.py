@@ -55,7 +55,7 @@ async def t_agent_from_dict_empty_runs(_ctx: TestContext) -> None:
     blanket ``except``, and surface as "session not found" — making the
     next turn create a fresh session that wiped the row.
     """
-    from src.memory.sessions.agent import AgentSession
+    from openagent_core.memory.sessions.agent import AgentSession
 
     session = AgentSession.from_dict({
         "session_id": "S1",
@@ -71,7 +71,7 @@ async def t_agent_from_dict_empty_runs(_ctx: TestContext) -> None:
 @test("session_continuity", "TeamSession.from_dict tolerates runs=[]")
 async def t_team_from_dict_empty_runs(_ctx: TestContext) -> None:
     """Same contract as the AgentSession test above, for TeamSession."""
-    from src.memory.sessions.team import TeamSession
+    from openagent_core.memory.sessions.team import TeamSession
 
     session = TeamSession.from_dict({
         "session_id": "S1",
@@ -95,8 +95,8 @@ async def t_from_dict_dispatch_mixed_keys(_ctx: TestContext) -> None:
     at TRUTHY values, not just key presence, otherwise team runs get
     silently mis-classified as agent runs (and then their team_id-based
     filtering in ``get_messages`` drops them from history)."""
-    from src.memory.sessions.agent import AgentSession
-    from src.core._run_state.team import TeamRunOutput
+    from openagent_core.memory.sessions.agent import AgentSession
+    from openagent_core.core._run_state.team import TeamRunOutput
 
     session = AgentSession.from_dict({
         "session_id": "S1",
@@ -130,11 +130,11 @@ async def t_sqlite_two_turn_round_trip(_ctx: TestContext) -> None:
     second read MUST show 2 runs. Pre-fix, certain interleavings with
     the gateway's MemoryDB.upsert_session left only the most recent run
     in the row."""
-    from src.memory.store.sqlite import SqliteDb
-    from src.memory.store.base import SessionType
-    from src.memory.sessions import TeamSession
-    from src.core._run_state.team import TeamRunOutput
-    from src.models.providers.message import Message
+    from openagent_core.memory.store.sqlite import SqliteDb
+    from openagent_core.memory.store.base import SessionType
+    from openagent_core.memory.sessions import TeamSession
+    from openagent_core.core._run_state.team import TeamRunOutput
+    from openagent_core.models.providers.message import Message
 
     fd, db_path = tempfile.mkstemp(prefix="oa_continuity_", suffix=".db")
     os.close(fd)
@@ -199,11 +199,11 @@ async def t_gateway_runtime_interleave(_ctx: TestContext) -> None:
 
     After step 4 the row must contain BOTH runs.
     """
-    from src.memory.store.sqlite import SqliteDb
-    from src.memory.store.base import SessionType
-    from src.memory.sessions import TeamSession
-    from src.core._run_state.team import TeamRunOutput
-    from src.models.providers.message import Message
+    from openagent_core.memory.store.sqlite import SqliteDb
+    from openagent_core.memory.store.base import SessionType
+    from openagent_core.memory.sessions import TeamSession
+    from openagent_core.core._run_state.team import TeamRunOutput
+    from openagent_core.models.providers.message import Message
 
     fd, db_path = tempfile.mkstemp(prefix="oa_gw_interleave_", suffix=".db")
     os.close(fd)
@@ -289,11 +289,11 @@ async def t_session_type_mismatch_preserves_runs(_ctx: TestContext) -> None:
     should yield a TeamSession with all stored runs, even though the
     row's ``session_type`` column says 'agent'.
     """
-    from src.memory.store.sqlite import SqliteDb
-    from src.memory.store.base import SessionType
-    from src.memory.sessions import AgentSession, TeamSession
-    from src.core._run_state.team import TeamRunOutput
-    from src.models.providers.message import Message
+    from openagent_core.memory.store.sqlite import SqliteDb
+    from openagent_core.memory.store.base import SessionType
+    from openagent_core.memory.sessions import AgentSession, TeamSession
+    from openagent_core.core._run_state.team import TeamRunOutput
+    from openagent_core.models.providers.message import Message
 
     fd, db_path = tempfile.mkstemp(prefix="oa_mismatch_", suffix=".db")
     os.close(fd)
@@ -338,11 +338,11 @@ async def t_get_session_matches_null_user(_ctx: TestContext) -> None:
     Fix: ``get_session`` now matches ``user_id == X OR user_id IS NULL``
     so an authenticated read can claim an unowned row without losing
     its prior runs."""
-    from src.memory.store.sqlite import SqliteDb
-    from src.memory.store.base import SessionType
-    from src.memory.sessions import TeamSession
-    from src.core._run_state.team import TeamRunOutput
-    from src.models.providers.message import Message
+    from openagent_core.memory.store.sqlite import SqliteDb
+    from openagent_core.memory.store.base import SessionType
+    from openagent_core.memory.sessions import TeamSession
+    from openagent_core.core._run_state.team import TeamRunOutput
+    from openagent_core.models.providers.message import Message
 
     fd, db_path = tempfile.mkstemp(prefix="oa_read_null_", suffix=".db")
     os.close(fd)
@@ -387,11 +387,11 @@ async def t_team_claim_unowned_preserves_runs(_ctx: TestContext) -> None:
     user_id) TeamSession, append a new turn, save back, verify both
     runs survive AND the row's user_id is now the caller's handle (so
     subsequent strict-equality WHEREs match)."""
-    from src.memory.store.sqlite import SqliteDb
-    from src.memory.store.base import SessionType
-    from src.memory.sessions import TeamSession
-    from src.core._run_state.team import TeamRunOutput
-    from src.models.providers.message import Message
+    from openagent_core.memory.store.sqlite import SqliteDb
+    from openagent_core.memory.store.base import SessionType
+    from openagent_core.memory.sessions import TeamSession
+    from openagent_core.core._run_state.team import TeamRunOutput
+    from openagent_core.models.providers.message import Message
 
     fd, db_path = tempfile.mkstemp(prefix="oa_team_claim_", suffix=".db")
     os.close(fd)
@@ -465,7 +465,7 @@ async def t_reclaim_session_owners_migration(_ctx: TestContext) -> None:
     conversation every turn. The migration NULLs those so the runtime's
     ``IS NULL`` soft-match fires; rows already at 'openagent' (runtime-owned)
     or NULL (already claimable) are left untouched."""
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     fd, db_path = tempfile.mkstemp(prefix="oa_reclaim_", suffix=".db")
     os.close(fd)
@@ -544,7 +544,7 @@ async def t_gateway_insert_writes_null_owner(_ctx: TestContext) -> None:
     runtime ("openagent") could never match, so it could neither read
     prior runs nor persist new ones."""
     import json
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     fd, db_path = tempfile.mkstemp(prefix="oa_gw_insert_", suffix=".db")
     os.close(fd)
@@ -598,12 +598,12 @@ async def t_team_three_turns_accumulate(_ctx: TestContext) -> None:
     of the model call itself.
     """
     try:
-        from src.core._runner.agent import Agent as RuntimeAgent
-        from src.core._runner.team import Team, TeamMode
-        from src.memory.store.sqlite import SqliteDb
-        from src.memory.store.base import SessionType
-        from src.models.providers.base import Model
-        from src.models.providers.response import ModelResponse
+        from openagent_core.core._runner.agent import Agent as RuntimeAgent
+        from openagent_core.core._runner.team import Team, TeamMode
+        from openagent_core.memory.store.sqlite import SqliteDb
+        from openagent_core.memory.store.base import SessionType
+        from openagent_core.models.providers.base import Model
+        from openagent_core.models.providers.response import ModelResponse
     except ImportError as exc:
         raise TestSkip(f"runtime imports failed: {exc}")
 
@@ -721,13 +721,13 @@ async def t_bridge_session_survives_restart(_ctx: TestContext) -> None:
     ("openagent") could never match — so step 2 saw no history and its save
     was rejected, and every turn reset the conversation.
     """
-    from src.memory.db import MemoryDB
-    from src.memory.store.sqlite import SqliteDb
-    from src.memory.store.base import SessionType
-    from src.memory.sessions import TeamSession
-    from src.core._run_state.team import TeamRunOutput
-    from src.models.providers.message import Message
-    from src.models.catalog import RUNTIME_SESSION_USER_ID
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.store.sqlite import SqliteDb
+    from openagent_core.memory.store.base import SessionType
+    from openagent_core.memory.sessions import TeamSession
+    from openagent_core.core._run_state.team import TeamRunOutput
+    from openagent_core.models.providers.message import Message
+    from openagent_core.models.catalog import RUNTIME_SESSION_USER_ID
 
     fd, db_path = tempfile.mkstemp(prefix="oa_bridge_restart_", suffix=".db")
     os.close(fd)

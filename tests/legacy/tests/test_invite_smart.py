@@ -42,7 +42,7 @@ def _make_ctx(db_path: Path, agent_dir: Path) -> _StubCtx:
     the agent dir via ``core_paths.get_agent_dir()`` (so identity.key
     + addr cache live in the right place); the public setter handles
     the bookkeeping without us reaching into module-private state."""
-    from src.core import paths as core_paths
+    from openagent_core.core import paths as core_paths
 
     core_paths.set_agent_dir(agent_dir)
     return _StubCtx(obj={
@@ -56,8 +56,8 @@ async def _seed_network_and_user(
     """Set up a coordinator-mode network and optionally pre-register
     one user — so we can drive both the 'handle exists' and 'handle
     doesn't exist' branches."""
-    from src.memory.db import MemoryDB
-    from src.network.coordinator.store import CoordinatorStore
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.network.coordinator.store import CoordinatorStore
 
     db = MemoryDB(str(db_path))
     await db.connect()
@@ -98,7 +98,7 @@ async def _read_last_invite(db_path: Path) -> dict | None:
 
 @test("invite_smart", "no handle → user role, no bind_to (open invite)")
 async def t_no_handle(ctx: TestContext) -> None:
-    from src.network.cli_commands import _run_invite
+    from openagent_core.network.cli_commands import _run_invite
 
     agent_dir = ctx.test_dir / f"invsmart-no-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -117,7 +117,7 @@ async def t_no_handle(ctx: TestContext) -> None:
 
 @test("invite_smart", "new handle → user role, no bind_to (onboarding invite)")
 async def t_new_handle(ctx: TestContext) -> None:
-    from src.network.cli_commands import _run_invite
+    from openagent_core.network.cli_commands import _run_invite
 
     agent_dir = ctx.test_dir / f"invsmart-new-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -141,7 +141,7 @@ async def t_new_handle(ctx: TestContext) -> None:
 
 @test("invite_smart", "existing handle → device role bound to it (pairing invite)")
 async def t_existing_handle(ctx: TestContext) -> None:
-    from src.network.cli_commands import _run_invite
+    from openagent_core.network.cli_commands import _run_invite
 
     agent_dir = ctx.test_dir / f"invsmart-exist-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -166,7 +166,7 @@ async def t_existing_handle(ctx: TestContext) -> None:
 async def t_explicit_role(ctx: TestContext) -> None:
     """``--role agent`` (or any explicit role) must NOT be remapped
     by the auto-detect — the operator is signalling intent."""
-    from src.network.cli_commands import _run_invite
+    from openagent_core.network.cli_commands import _run_invite
 
     agent_dir = ctx.test_dir / f"invsmart-explicit-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -195,7 +195,7 @@ async def t_handle_normalisation(ctx: TestContext) -> None:
     must normalise so ``alessandro`` is found and the device branch
     fires. Otherwise we'd silently downgrade to a user invite for
     every non-lowercase paste."""
-    from src.network.cli_commands import _run_invite
+    from openagent_core.network.cli_commands import _run_invite
 
     agent_dir = ctx.test_dir / f"invsmart-norm-{uuid.uuid4().hex[:6]}"
     agent_dir.mkdir(parents=True, exist_ok=True)

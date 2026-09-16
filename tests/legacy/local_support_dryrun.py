@@ -22,10 +22,10 @@ from typing import Any
 
 import yaml
 
-from src.core import paths, reply_guard, tool_trace
-from src.core.dry_run import dry_run_scope
-from src.core.execution_profile import lean_local_event_scope
-from src.core.server import _build_agent
+from openagent_core.core import paths, reply_guard, tool_trace
+from openagent_core.core.dry_run import dry_run_scope
+from openagent_core.core.execution_profile import lean_local_event_scope
+from openagent_core.core.server import _build_agent
 
 
 JSON_FENCE = re.compile(r"```json\s*(.*?)```", re.IGNORECASE | re.DOTALL)

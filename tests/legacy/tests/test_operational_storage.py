@@ -82,7 +82,7 @@ def _reused_tool_call_runs() -> list[dict[str, object]]:
 
 
 async def _migration_state(path: Path) -> tuple[str, str, dict[str, int]]:
-    from src.memory.operational.schema import MIGRATION_ID
+    from openagent_core.memory.operational.schema import MIGRATION_ID
 
     async with aiosqlite.connect(path) as conn:
         ledger = await (
@@ -110,7 +110,7 @@ async def _migration_state(path: Path) -> tuple[str, str, dict[str, int]]:
 
 @test("operational_storage", "first migration backs up; repeat is journal-idempotent")
 async def t_backup_and_idempotence(_ctx: TestContext) -> None:
-    from src.memory.operational.schema import ensure_operational_storage
+    from openagent_core.memory.operational.schema import ensure_operational_storage
 
     with TemporaryDirectory(prefix="openagent-operational-") as directory:
         path = Path(directory) / "openagent.db"
@@ -156,7 +156,7 @@ async def t_backup_and_idempotence(_ctx: TestContext) -> None:
 
 @test("operational_storage", "committed DDL + failed bridge resumes without false backup")
 async def t_executescript_crash_recovery(_ctx: TestContext) -> None:
-    import src.memory.operational.schema as schema
+    import openagent_core.memory.operational.schema as schema
 
     with TemporaryDirectory(prefix="openagent-operational-recovery-") as directory:
         path = Path(directory) / "openagent.db"
@@ -198,8 +198,8 @@ async def t_executescript_crash_recovery(_ctx: TestContext) -> None:
 async def t_tool_context_repair_crash_recovery(_ctx: TestContext) -> None:
     import json
 
-    import src.memory.operational.schema as schema
-    from src.memory.db import MemoryDB
+    import openagent_core.memory.operational.schema as schema
+    from openagent_core.memory.db import MemoryDB
 
     with TemporaryDirectory(prefix="openagent-operational-repair-recovery-") as directory:
         path = Path(directory) / "openagent.db"
@@ -318,7 +318,7 @@ async def t_tool_context_repair_crash_recovery(_ctx: TestContext) -> None:
 
 @test("operational_storage", "legacy REAL timestamps are accepted by the strict change journal")
 async def t_legacy_real_timestamp_journal(_ctx: TestContext) -> None:
-    from src.memory.operational.schema import ensure_operational_storage
+    from openagent_core.memory.operational.schema import ensure_operational_storage
 
     with TemporaryDirectory(prefix="openagent-operational-real-time-") as directory:
         path = Path(directory) / "openagent.db"
@@ -349,7 +349,7 @@ async def t_legacy_real_timestamp_journal(_ctx: TestContext) -> None:
 async def t_lock_error_classification(_ctx: TestContext) -> None:
     import fcntl
 
-    from src.memory.operational.schema import (
+    from openagent_core.memory.operational.schema import (
         OperationalMigrationError,
         _MigrationFileLock,
     )
@@ -379,7 +379,7 @@ async def t_lock_error_classification(_ctx: TestContext) -> None:
 
 @test("operational_storage", "failed backup leaves no temporary or orphan evidence")
 async def t_backup_failure_cleanup(_ctx: TestContext) -> None:
-    import src.memory.operational.schema as schema
+    import openagent_core.memory.operational.schema as schema
 
     with TemporaryDirectory(prefix="openagent-operational-cleanup-") as directory:
         path = Path(directory) / "openagent.db"
@@ -418,7 +418,7 @@ async def t_backup_failure_cleanup(_ctx: TestContext) -> None:
 async def t_session_projection(_ctx: TestContext) -> None:
     import json
 
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     with TemporaryDirectory(prefix="openagent-operational-project-") as directory:
         path = Path(directory) / "openagent.db"
@@ -508,7 +508,7 @@ async def t_session_projection(_ctx: TestContext) -> None:
 async def t_legacy_empty_and_statusless_projection(_ctx: TestContext) -> None:
     import json
 
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     with TemporaryDirectory(prefix="openagent-operational-legacy-gaps-") as directory:
         db = MemoryDB(str(Path(directory) / "openagent.db"))
@@ -599,7 +599,7 @@ async def t_legacy_empty_and_statusless_projection(_ctx: TestContext) -> None:
 async def t_legacy_status_aliases_fail_closed(_ctx: TestContext) -> None:
     import json
 
-    from src.memory.operational.projection import build_session_projection
+    from openagent_core.memory.operational.projection import build_session_projection
 
     common = {
         "session_type": "agent",
@@ -704,8 +704,8 @@ async def t_legacy_status_aliases_fail_closed(_ctx: TestContext) -> None:
 async def t_tool_call_id_reuse_across_runs(_ctx: TestContext) -> None:
     import json
 
-    from src.memory.db import MemoryDB
-    from src.memory.operational.search import _source_row
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.operational.search import _source_row
 
     with TemporaryDirectory(prefix="openagent-operational-tool-context-") as directory:
         db = MemoryDB(str(Path(directory) / "openagent.db"))
@@ -769,8 +769,8 @@ async def t_tool_call_id_reuse_across_runs(_ctx: TestContext) -> None:
 async def t_same_run_duplicate_tool_call_id(_ctx: TestContext) -> None:
     import json
 
-    from src.memory.db import MemoryDB
-    from src.memory.operational.repository import project_legacy_session_async
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.operational.repository import project_legacy_session_async
 
     with TemporaryDirectory(prefix="openagent-operational-tool-duplicate-") as directory:
         db = MemoryDB(str(Path(directory) / "openagent.db"))
@@ -824,8 +824,8 @@ async def t_same_run_duplicate_tool_call_id(_ctx: TestContext) -> None:
 async def t_backfill_retry_is_durable_and_fair(_ctx: TestContext) -> None:
     import json
 
-    import src.memory.operational.repository as repository
-    from src.memory.db import MemoryDB
+    import openagent_core.memory.operational.repository as repository
+    from openagent_core.memory.db import MemoryDB
 
     with TemporaryDirectory(prefix="openagent-operational-retry-") as directory:
         db = MemoryDB(str(Path(directory) / "openagent.db"))
@@ -947,9 +947,9 @@ async def t_backfill_retry_is_durable_and_fair(_ctx: TestContext) -> None:
 async def t_beta3_tool_context_repair(_ctx: TestContext) -> None:
     import json
 
-    import src.memory.operational.schema as schema
-    from src.memory.db import MemoryDB
-    from src.memory.operational.repository import (
+    import openagent_core.memory.operational.schema as schema
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.operational.repository import (
         project_legacy_session_async,
         projection_coverage_async,
     )
@@ -1174,12 +1174,12 @@ async def t_beta3_tool_context_repair(_ctx: TestContext) -> None:
 
 @test("operational_storage", "SQLAlchemy runtime write is query-ready before restart")
 async def t_sqlalchemy_same_transaction_projection(_ctx: TestContext) -> None:
-    from src.core._run_state.agent import RunOutput
-    from src.core._run_state.base import RunStatus
-    from src.memory.db import MemoryDB
-    from src.memory.sessions import AgentSession
-    from src.memory.store.sqlite import SqliteDb
-    from src.models.providers.message import Message
+    from openagent_core.core._run_state.agent import RunOutput
+    from openagent_core.core._run_state.base import RunStatus
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.sessions import AgentSession
+    from openagent_core.memory.store.sqlite import SqliteDb
+    from openagent_core.models.providers.message import Message
 
     with TemporaryDirectory(prefix="openagent-operational-runtime-") as directory:
         path = Path(directory) / "openagent.db"
@@ -1248,8 +1248,8 @@ async def t_sqlalchemy_same_transaction_projection(_ctx: TestContext) -> None:
 
 @test("operational_storage", "ownerless visibility is limited to installation/quarantine")
 async def t_ownerless_visibility_policy(_ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.memory.operational.schema import operational_search_schema_sql
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.operational.schema import operational_search_schema_sql
 
     with TemporaryDirectory(prefix="openagent-operational-acl-") as directory:
         path = Path(directory) / "openagent.db"
@@ -1337,8 +1337,8 @@ async def t_ownerless_visibility_policy(_ctx: TestContext) -> None:
 async def t_incremental_projection_append_cost(_ctx: TestContext) -> None:
     import json
 
-    from src.memory.db import MemoryDB
-    from src.memory.operational.repository import project_legacy_session_async
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.operational.repository import project_legacy_session_async
 
     def run(number: int) -> dict[str, object]:
         return {
@@ -1425,9 +1425,9 @@ async def t_incremental_projection_append_cost(_ctx: TestContext) -> None:
 async def t_incremental_cumulative_run(_ctx: TestContext) -> None:
     import json
 
-    from src.memory.db import MemoryDB
-    from src.memory.operational.projection import NESTED_LAYOUT_KEY
-    from src.memory.operational.repository import project_legacy_session_async
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.operational.projection import NESTED_LAYOUT_KEY
+    from openagent_core.memory.operational.repository import project_legacy_session_async
 
     with TemporaryDirectory(prefix="openagent-operational-cumulative-") as directory:
         db = MemoryDB(str(Path(directory) / "openagent.db"))
@@ -1524,7 +1524,7 @@ async def t_incremental_cumulative_run(_ctx: TestContext) -> None:
 async def t_projection_dependency_relink(_ctx: TestContext) -> None:
     import json
 
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     with TemporaryDirectory(prefix="openagent-operational-relink-") as directory:
         db = MemoryDB(str(Path(directory) / "openagent.db"))
@@ -1595,12 +1595,12 @@ async def t_projection_dependency_relink(_ctx: TestContext) -> None:
 async def t_guarded_phase_cutover(_ctx: TestContext) -> None:
     import json
 
-    from src.memory.db import MemoryDB
-    from src.memory.operational.phase import (
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.operational.phase import (
         guard_storage_phase_async,
         preferred_session_source_async,
     )
-    from src.memory.operational.repository import reconcile_pending_async
+    from openagent_core.memory.operational.repository import reconcile_pending_async
 
     with TemporaryDirectory(prefix="openagent-operational-phase-") as directory:
         db = MemoryDB(str(Path(directory) / "openagent.db"))
@@ -1686,13 +1686,13 @@ async def t_guarded_phase_cutover(_ctx: TestContext) -> None:
 async def t_runtime_v2_read_fidelity(_ctx: TestContext) -> None:
     from sqlalchemy import event
 
-    from src.core._run_state.agent import RunOutput
-    from src.core._run_state.base import RunStatus
-    from src.memory.db import MemoryDB
-    from src.memory.sessions import AgentSession
-    from src.memory.store.base import SessionType
-    from src.memory.store.sqlite import SqliteDb
-    from src.models.providers.message import Message
+    from openagent_core.core._run_state.agent import RunOutput
+    from openagent_core.core._run_state.base import RunStatus
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.sessions import AgentSession
+    from openagent_core.memory.store.base import SessionType
+    from openagent_core.memory.store.sqlite import SqliteDb
+    from openagent_core.models.providers.message import Message
 
     with TemporaryDirectory(prefix="openagent-operational-v2-read-") as directory:
         path = Path(directory) / "openagent.db"
@@ -1761,8 +1761,8 @@ async def t_runtime_v2_read_fidelity(_ctx: TestContext) -> None:
 async def t_phase_readiness_and_corruption_recovery(_ctx: TestContext) -> None:
     import json
 
-    from src.memory.db import MemoryDB
-    from src.memory.operational.phase import StoragePhaseError
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.operational.phase import StoragePhaseError
 
     with TemporaryDirectory(prefix="openagent-operational-phase-gates-") as directory:
         path = Path(directory) / "openagent.db"
@@ -1877,7 +1877,7 @@ async def t_phase_readiness_and_corruption_recovery(_ctx: TestContext) -> None:
 async def t_lost_trigger_set_drift_recovery(_ctx: TestContext) -> None:
     import json
 
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     with TemporaryDirectory(prefix="openagent-operational-set-drift-") as directory:
         path = Path(directory) / "openagent.db"
@@ -1962,8 +1962,8 @@ async def t_lost_trigger_set_drift_recovery(_ctx: TestContext) -> None:
 
 @test("operational_storage", "clean promoted boot trusts intact downgrade journal")
 async def t_clean_promoted_boot_skips_transcript_audit(_ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
-    from src.memory.operational import phase as phase_module
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.operational import phase as phase_module
 
     with TemporaryDirectory(prefix="openagent-operational-clean-boot-") as directory:
         path = Path(directory) / "openagent.db"

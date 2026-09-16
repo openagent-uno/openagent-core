@@ -17,30 +17,30 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from src.core._runner.agent.agent import Agent
+    from openagent_core.core._runner.agent.agent import Agent
 
-from src.models.providers.base import Model
-from src.models.providers.message import Message
-from src.models.providers.metrics import MessageMetrics
-from src.models.providers.response import ModelResponse, ModelResponseEvent, ToolExecution
-from src.core._run_state import RunContext
-from src.core._run_state.agent import RunOutput, RunOutputEvent
-from src.core._run_state.messages import RunMessages
-from src.memory.sessions import AgentSession
-from src.mcp._runtime import Toolkit
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.agent import (
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.message import Message
+from openagent_core.models.providers.metrics import MessageMetrics
+from openagent_core.models.providers.response import ModelResponse, ModelResponseEvent, ToolExecution
+from openagent_core.core._run_state import RunContext
+from openagent_core.core._run_state.agent import RunOutput, RunOutputEvent
+from openagent_core.core._run_state.messages import RunMessages
+from openagent_core.memory.sessions import AgentSession
+from openagent_core.mcp._runtime import Toolkit
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.agent import (
     collect_joint_audios,
     collect_joint_files,
     collect_joint_images,
     collect_joint_videos,
 )
-from src.core._runner.utils.events import (
+from openagent_core.core._runner.utils.events import (
     create_tool_call_terminal_event,
     create_tool_call_started_event,
     handle_event,
 )
-from src.core._runner.utils.log import log_debug, log_warning
+from openagent_core.core._runner.utils.log import log_debug, log_warning
 
 
 # The ceiling on a single tool result lives in src/core/tool_output.py, because
@@ -49,7 +49,7 @@ from src.core._runner.utils.log import log_debug, log_warning
 # renders. Capping only this one is what let a 642 KB vault note reach the
 # context on every step of every run. We still cap the display record: the run
 # history is persisted, and a 1.7 MB tool result has no business in it either.
-from src.core.tool_output import cap_tool_output as _cap_tool_result  # noqa: E402
+from openagent_core.core.tool_output import cap_tool_output as _cap_tool_result  # noqa: E402
 
 
 def raise_if_async_tools(agent: Agent) -> None:
@@ -118,8 +118,8 @@ def get_tools(
     session: AgentSession,
     user_id: Optional[str] = None,
 ) -> List[Union[Toolkit, Callable, Function, Dict]]:
-    from src.core._runner.agent import _default_tools, _init
-    from src.core._runner.utils.callables import (
+    from openagent_core.core._runner.agent import _default_tools, _init
+    from openagent_core.core._runner.utils.callables import (
         get_resolved_knowledge,
         get_resolved_tools,
         resolve_callable_knowledge,
@@ -222,8 +222,8 @@ async def aget_tools(
     user_id: Optional[str] = None,
     check_mcp_tools: bool = True,
 ) -> List[Union[Toolkit, Callable, Function, Dict]]:
-    from src.core._runner.agent import _default_tools, _init
-    from src.core._runner.utils.callables import (
+    from openagent_core.core._runner.agent import _default_tools, _init
+    from openagent_core.core._runner.utils.callables import (
         aresolve_callable_knowledge,
         aresolve_callable_tools,
         get_resolved_knowledge,
@@ -611,7 +611,7 @@ def _maybe_create_audit_approval(
 ) -> None:
     """Create an audit approval record if the tool has approval_type='audit'."""
     if getattr(tool_execution, "approval_type", None) == "audit":
-        from src.core._run_state.approval import create_audit_approval
+        from openagent_core.core._run_state.approval import create_audit_approval
 
         create_audit_approval(
             db=agent.db,
@@ -628,7 +628,7 @@ async def _amaybe_create_audit_approval(
 ) -> None:
     """Async: create an audit approval record if the tool has approval_type='audit'."""
     if getattr(tool_execution, "approval_type", None) == "audit":
-        from src.core._run_state.approval import acreate_audit_approval
+        from openagent_core.core._run_state.approval import acreate_audit_approval
 
         await acreate_audit_approval(
             db=agent.db,
@@ -649,12 +649,12 @@ def run_tool(
     stream_events: bool = False,
     team_mode: bool = False,
 ) -> Iterator[RunOutputEvent]:
-    from src.core._run_state.agent import CustomEvent
+    from openagent_core.core._run_state.agent import CustomEvent
 
     # team_mode=True when called from team continue path with a TeamRunOutput.
     # Team-level tools need team event creators since TeamRunOutput has team_id, not agent_id.
     if team_mode:
-        from src.core._runner.utils.events import (
+        from openagent_core.core._runner.utils.events import (
             create_team_tool_call_terminal_event,
             create_team_tool_call_started_event,
         )
@@ -742,11 +742,11 @@ async def arun_tool(
     stream_events: bool = False,
     team_mode: bool = False,
 ) -> AsyncIterator[RunOutputEvent]:
-    from src.core._run_state.agent import CustomEvent
+    from openagent_core.core._run_state.agent import CustomEvent
 
     # team_mode=True when called from team continue path with a TeamRunOutput.
     if team_mode:
-        from src.core._runner.utils.events import (
+        from openagent_core.core._runner.utils.events import (
             create_team_tool_call_terminal_event,
             create_team_tool_call_started_event,
         )

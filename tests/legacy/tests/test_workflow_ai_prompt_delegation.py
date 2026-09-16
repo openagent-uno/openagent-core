@@ -89,7 +89,7 @@ class _PinnedOverrideModel:
 
 
 def _make_agent(model: Any) -> Any:
-    from src.core.agent import Agent
+    from openagent_core.core.agent import Agent
     return Agent(name="test", model=model, system_prompt="test", memory=None)
 
 
@@ -98,7 +98,7 @@ def _patch_install_capture(monkeypatch_target: str, captured: list[Any]):
     ``install_delegation_context``) to capture the dispatcher arg and
     return a no-op token tuple compatible with ``reset_context``.
     """
-    import src.mcp.servers.delegation.handlers as handlers
+    import openagent_core.mcp.servers.delegation.handlers as handlers
 
     original_install = handlers.install_context
     original_reset = handlers.reset_context
@@ -131,7 +131,7 @@ async def t_override_uses_canonical_dispatcher(_ctx: TestContext) -> None:
     agent = _make_agent(canonical)
 
     captured: list[dict[str, Any]] = []
-    undo = _patch_install_capture("src.core.agent", captured)
+    undo = _patch_install_capture("openagent_core.core.agent", captured)
     try:
         text = await agent.run(
             message="hi",
@@ -167,7 +167,7 @@ async def t_no_override_uses_self_model(_ctx: TestContext) -> None:
     agent = _make_agent(canonical)
 
     captured: list[dict[str, Any]] = []
-    undo = _patch_install_capture("src.core.agent", captured)
+    undo = _patch_install_capture("openagent_core.core.agent", captured)
     try:
         await agent.run(message="hi", user_id="u", session_id="sess-1")
     finally:
@@ -194,7 +194,7 @@ async def t_fallback_when_self_model_cant_dispatch(_ctx: TestContext) -> None:
     agent = _make_agent(bare_self)
 
     captured: list[dict[str, Any]] = []
-    undo = _patch_install_capture("src.core.agent", captured)
+    undo = _patch_install_capture("openagent_core.core.agent", captured)
     try:
         await agent.run(
             message="hi",

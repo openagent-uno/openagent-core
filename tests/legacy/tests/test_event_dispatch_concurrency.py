@@ -43,14 +43,14 @@ def _fresh_db_path(ctx: TestContext):
 
 
 async def _make_db(path):
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
     db = MemoryDB(str(path))
     await db.connect()
     return db
 
 
 async def _add_event(db, *, slug: str) -> str:
-    from src.core.event_secret import make_secret_material
+    from openagent_core.core.event_secret import make_secret_material
     _clear, enc, hint = make_secret_material(db_path=db.db_path)
     return await db.add_event(
         name=f"evt-{slug}", action_kind="prompt", slug=slug,
@@ -148,8 +148,8 @@ class _GatedDispatch:
 @test("event_dispatch_concurrency",
       "concurrency=K + burst of N>K: at most K in flight, rest stay received, all N drain")
 async def t_bound_holds_and_queue_drains(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
-    import src.core.event_dispatcher as ed
+    from openagent_core.core.scheduler import Scheduler
+    import openagent_core.core.event_dispatcher as ed
 
     K = 2
     N = 7  # a burst well over the cap (the production incident was ~66)
@@ -232,8 +232,8 @@ async def t_bound_holds_and_queue_drains(ctx: TestContext) -> None:
 @test("event_dispatch_concurrency",
       "a hanging turn holds its slot but does not block the drain; freeing one dispatches exactly one more")
 async def t_hanging_turn_does_not_block_drain(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
-    import src.core.event_dispatcher as ed
+    from openagent_core.core.scheduler import Scheduler
+    import openagent_core.core.event_dispatcher as ed
 
     K = 2
     extra = 3

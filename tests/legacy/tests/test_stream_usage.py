@@ -19,7 +19,7 @@ from ._framework import TestContext, test
 
 @test("stream_usage", "the sink collects tokens from a streamed run")
 async def t_sink_collects(_ctx: TestContext) -> None:
-    from src.models import stream_usage
+    from openagent_core.models import stream_usage
 
     sink, token = stream_usage.open_sink()
     try:
@@ -35,14 +35,14 @@ async def t_sink_collects(_ctx: TestContext) -> None:
 
 @test("stream_usage", "recording outside a sink is a no-op, never a crash")
 async def t_record_without_sink(_ctx: TestContext) -> None:
-    from src.models import stream_usage
+    from openagent_core.models import stream_usage
 
     stream_usage.record(input_tokens=999, output_tokens=1)  # must not raise
 
 
 @test("stream_usage", "metrics_to_tokens reads the runtime's shapes")
 async def t_metrics_shapes(_ctx: TestContext) -> None:
-    from src.models.stream_usage import metrics_to_tokens
+    from openagent_core.models.stream_usage import metrics_to_tokens
 
     assert metrics_to_tokens(None) == (0, 0)
     assert metrics_to_tokens({"input_tokens": 10, "output_tokens": 2}) == (10, 2)
@@ -75,8 +75,8 @@ def _stub_provider(monkeypatched_runtime):
     """A TeamRouterProvider whose runtime streams two deltas and reports the
     run's tokens through the sink, exactly as the runtime's RunCompletedEvent
     does."""
-    from src.models.base import BaseModel
-    from src.models import stream_usage
+    from openagent_core.models.base import BaseModel
+    from openagent_core.models import stream_usage
 
     class _Runtime(BaseModel):
         async def generate(self, *a, **k):  # pragma: no cover — stream test
@@ -93,9 +93,9 @@ def _stub_provider(monkeypatched_runtime):
 @test("stream_usage", "a streamed turn lands in usage_log")
 async def t_streamed_turn_is_billed(ctx: TestContext) -> None:
     """End-to-end through the dispatcher: stream a turn, then read the ledger."""
-    from src.memory.db import MemoryDB
-    from src.models.budget import BudgetTracker
-    from src.models.dispatcher import ModelDispatcher, RoutingDecision, TeamRouterProvider
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.models.budget import BudgetTracker
+    from openagent_core.models.dispatcher import ModelDispatcher, RoutingDecision, TeamRouterProvider
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -149,9 +149,9 @@ async def t_pinned_run_is_billed(ctx: TestContext) -> None:
     unbilled — usage_log held zero rows while it burned 412M input tokens.
     Accounting lives on the provider now, so this path bills like any other.
     """
-    from src.memory.db import MemoryDB
-    from src.models.budget import BudgetTracker
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.models.budget import BudgetTracker
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()

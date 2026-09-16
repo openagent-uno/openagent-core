@@ -90,9 +90,9 @@ class _Request(dict):
     "Desktop and CLI sharing a device own independent PTY namespaces",
 )
 async def t_same_device_connections_do_not_collide(ctx: TestContext) -> None:
-    import src.gateway.terminals as terminal_module
-    from src.gateway import protocol as P
-    from src.gateway.server import Gateway
+    import openagent_core.gateway.terminals as terminal_module
+    from openagent_core.gateway import protocol as P
+    from openagent_core.gateway.server import Gateway
 
     original_session = terminal_module.TerminalSession
     original_supported = terminal_module.PTY_SUPPORTED
@@ -222,7 +222,7 @@ async def t_same_device_connections_do_not_collide(ctx: TestContext) -> None:
     "terminal REST listing never mixes simultaneous same-device connections",
 )
 async def t_terminal_list_is_connection_scoped(ctx: TestContext) -> None:
-    from src.gateway.api.terminals import handle_list
+    from openagent_core.gateway.api.terminals import handle_list
 
     desktop = SimpleNamespace(
         terminal_id="desktop-terminal",

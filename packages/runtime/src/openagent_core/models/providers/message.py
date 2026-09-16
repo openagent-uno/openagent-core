@@ -5,9 +5,9 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.stream.media import Audio, File, Image, Video
-from src.core.metrics import MessageMetrics
-from src.core._runner.utils.log import log_debug, log_error, log_info, log_warning
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.core.metrics import MessageMetrics
+from openagent_core.core._runner.utils.log import log_debug, log_error, log_info, log_warning
 
 
 class MessageReferences(BaseModel):

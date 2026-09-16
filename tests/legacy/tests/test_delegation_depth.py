@@ -76,7 +76,7 @@ def _limits(*, max_depth=None, global_conc=None, per_chain=None):
     on the way in (to build pools at the patched size) and on the way out (so a
     later test never inherits a tiny pool from this one).
     """
-    from src.core import child_session as cs
+    from openagent_core.core import child_session as cs
 
     old = (cs._MAX_DEPTH, cs._GLOBAL_CONCURRENCY, cs._PER_CHAIN_CONCURRENCY)
     if max_depth is not None:
@@ -304,7 +304,7 @@ async def t_no_origin_bypass(ctx: TestContext) -> None:
 async def t_delegate_task_error(ctx: TestContext) -> None:
     """The MCP handler must hand the model a plain, actionable explanation —
     an opaque traceback invites the retry that IS the runaway."""
-    from src.mcp.servers.delegation import handlers as dh
+    from openagent_core.mcp.servers.delegation import handlers as dh
 
     with _limits(max_depth=1) as cs:
         agent = _Agent()

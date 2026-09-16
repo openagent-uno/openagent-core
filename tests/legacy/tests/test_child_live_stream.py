@@ -40,10 +40,10 @@ class _Capture:
 
 @test("child_live_stream", "member content + tool events mirror onto the child's stream")
 async def t_emit_member_event(ctx: TestContext) -> None:
-    from src.core._run_state.agent import RunContentEvent, ToolCallStartedEvent
-    from src.core._runner.team._default_tools import _emit_member_event
-    from src.models.providers.response import ToolExecution
-    from src.stream.child_stream import (
+    from openagent_core.core._run_state.agent import RunContentEvent, ToolCallStartedEvent
+    from openagent_core.core._runner.team._default_tools import _emit_member_event
+    from openagent_core.models.providers.response import ToolExecution
+    from openagent_core.stream.child_stream import (
         install_child_stream_emitter, reset_child_stream_emitter,
     )
 
@@ -75,9 +75,9 @@ async def t_emit_member_event(ctx: TestContext) -> None:
 
 @test("child_live_stream", "delegate card-link: stamps child_session_id + streams a clickable parent chip")
 async def t_card_link(ctx: TestContext) -> None:
-    from src.core._runner.team._default_tools import _emit_member_card_link
-    from src.models.providers.response import ToolExecution
-    from src.stream.child_stream import (
+    from openagent_core.core._runner.team._default_tools import _emit_member_card_link
+    from openagent_core.models.providers.response import ToolExecution
+    from openagent_core.stream.child_stream import (
         install_child_stream_emitter, reset_child_stream_emitter,
     )
 
@@ -115,7 +115,7 @@ async def t_card_link(ctx: TestContext) -> None:
 
 @test("child_live_stream", "turn_complete frame finalizes the child stream")
 async def t_turn_complete(ctx: TestContext) -> None:
-    from src.stream.child_stream import (
+    from openagent_core.stream.child_stream import (
         emit_child_frame, install_child_stream_emitter, reset_child_stream_emitter,
     )
 
@@ -135,8 +135,8 @@ async def t_run_child_session_stream(ctx: TestContext) -> None:
     ``run_child_session(stream=True)`` installs the gateway's broadcast sink and
     forwards each delta / status / turn_complete tagged with the child sid — the
     run screen renders it token-by-token like any session."""
-    from src.core.child_session import run_child_session
-    from src.stream.child_stream import set_child_broadcast_sink, broadcast_child_emitter
+    from openagent_core.core.child_session import run_child_session
+    from openagent_core.stream.child_stream import set_child_broadcast_sink, broadcast_child_emitter
 
     class _StreamAgent:
         name = "spy"
@@ -197,11 +197,11 @@ async def t_emit_card_link(ctx: TestContext) -> None:
     tool_call_id), tagged with the chat session, so the card flips clickable
     mid-run. It stays a RUNNING frame (no result) so the completion frame still
     matches + replaces it."""
-    from src.mcp.servers.delegation import handlers as dh
-    from src.stream.card_link import (
+    from openagent_core.mcp.servers.delegation import handlers as dh
+    from openagent_core.stream.card_link import (
         emit_card_link, reset_active_tool_call, set_active_tool_call,
     )
-    from src.stream.child_stream import (
+    from openagent_core.stream.child_stream import (
         install_child_stream_emitter, reset_child_stream_emitter,
     )
 
@@ -236,10 +236,10 @@ async def t_emit_card_link(ctx: TestContext) -> None:
 
 @test("child_live_stream", "emit_card_link is a silent no-op without an active tool / chat session")
 async def t_emit_card_link_noop(ctx: TestContext) -> None:
-    from src.stream.card_link import (
+    from openagent_core.stream.card_link import (
         emit_card_link, reset_active_tool_call, set_active_tool_call,
     )
-    from src.stream.child_stream import (
+    from openagent_core.stream.child_stream import (
         install_child_stream_emitter, reset_child_stream_emitter,
     )
 
@@ -263,10 +263,10 @@ async def t_emit_card_link_noop(ctx: TestContext) -> None:
 
 @test("child_live_stream", "no emitter installed → every child emit is a silent no-op")
 async def t_no_emitter_noop(ctx: TestContext) -> None:
-    from src.core._run_state.agent import RunContentEvent
-    from src.core._runner.team._default_tools import _emit_member_card_link, _emit_member_event
-    from src.models.providers.response import ToolExecution
-    from src.stream.child_stream import current_child_stream_emitter, emit_child_frame
+    from openagent_core.core._run_state.agent import RunContentEvent
+    from openagent_core.core._runner.team._default_tools import _emit_member_card_link, _emit_member_event
+    from openagent_core.models.providers.response import ToolExecution
+    from openagent_core.stream.child_stream import current_child_stream_emitter, emit_child_frame
 
     # Nothing installed (the default in bridge / scheduler / headless runs).
     assert current_child_stream_emitter() is None

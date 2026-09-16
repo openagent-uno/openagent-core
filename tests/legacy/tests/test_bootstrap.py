@@ -29,8 +29,8 @@ def _fresh_db_path(ctx: TestContext) -> str:
 
 @test("bootstrap", "ensure_builtin_mcps seeds vault + shared filesystem builtin")
 async def t_seeds_memory_defaults(ctx: TestContext) -> None:
-    from src.memory.bootstrap import ensure_builtin_mcps
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.bootstrap import ensure_builtin_mcps
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(_fresh_db_path(ctx))
     await db.connect()
@@ -69,9 +69,9 @@ async def t_seeds_memory_defaults(ctx: TestContext) -> None:
 
 @test("bootstrap", "ensure_builtin_mcps seeds every DEFAULT_MCPS entry on a fresh DB")
 async def t_seeds_every_default(ctx: TestContext) -> None:
-    from src.mcp.builtins import DEFAULT_MCPS
-    from src.memory.bootstrap import ensure_builtin_mcps
-    from src.memory.db import MemoryDB
+    from openagent_core.mcp.builtins import DEFAULT_MCPS
+    from openagent_core.memory.bootstrap import ensure_builtin_mcps
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(_fresh_db_path(ctx))
     await db.connect()
@@ -92,8 +92,8 @@ async def t_seeds_every_default(ctx: TestContext) -> None:
 
 @test("bootstrap", "ensure_builtin_mcps is idempotent (second boot adds zero)")
 async def t_idempotent(ctx: TestContext) -> None:
-    from src.memory.bootstrap import ensure_builtin_mcps
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.bootstrap import ensure_builtin_mcps
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(_fresh_db_path(ctx))
     await db.connect()
@@ -117,9 +117,9 @@ async def t_pool_loads_vault(ctx: TestContext) -> None:
     without the vault MCP — exactly the bug we're fixing."""
     import os
 
-    from src.mcp.pool import MCPPool
-    from src.memory.bootstrap import ensure_builtin_mcps
-    from src.memory.db import MemoryDB
+    from openagent_core.mcp.pool import MCPPool
+    from openagent_core.memory.bootstrap import ensure_builtin_mcps
+    from openagent_core.memory.db import MemoryDB
 
     # Never let spec resolution shell out to ``cargo build --release`` for a
     # native MCP here: a cold build of e.g. computer-control -> wayland-sys
@@ -169,8 +169,8 @@ async def t_pool_loads_vault(ctx: TestContext) -> None:
 
 @test("bootstrap", "ensure_builtin_mcps does not reset disabled rows")
 async def t_preserves_disabled(ctx: TestContext) -> None:
-    from src.memory.bootstrap import ensure_builtin_mcps
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.bootstrap import ensure_builtin_mcps
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -199,7 +199,7 @@ async def t_migrate_agno_sessions_renamed(ctx: TestContext) -> None:
     Idempotent — running connect() twice is a no-op for the rename.
     """
     import sqlite3
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"rename-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -318,7 +318,7 @@ async def t_migrate_agno_sessions_both_present(ctx: TestContext) -> None:
     drop. We only assert that connect() doesn't blow up and both tables
     survive."""
     import sqlite3
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"both-{uuid.uuid4().hex[:8]}.db")
     try:

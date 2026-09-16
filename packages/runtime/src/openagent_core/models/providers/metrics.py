@@ -1,11 +1,11 @@
 """Provider-side metric re-exports.
 
 Lets per-provider drivers (anthropic, openai, etc.) import the metrics
-types via ``src.models.providers.metrics`` without reaching across into
-``src.core.metrics`` directly. Pure re-export shim.
+types via ``openagent_core.models.providers.metrics`` without reaching across into
+``openagent_core.core.metrics`` directly. Pure re-export shim.
 """
 
-from src.core.metrics import (  # noqa: F401
+from openagent_core.core.metrics import (  # noqa: F401
     BaseMetrics,
     MessageMetrics,
     Metrics,

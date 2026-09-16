@@ -1,8 +1,8 @@
 from functools import update_wrapper, wraps
 from typing import Any, Callable, Dict, List, Optional, TypeVar, Union, overload
 
-from src.mcp._runtime.function import Function, get_entrypoint_docstring
-from src.core._runner.utils.log import log_error
+from openagent_core.mcp._runtime.function import Function, get_entrypoint_docstring
+from openagent_core.core._runner.utils.log import log_error
 
 # Type variable for better type hints
 F = TypeVar("F", bound=Callable[..., Any])

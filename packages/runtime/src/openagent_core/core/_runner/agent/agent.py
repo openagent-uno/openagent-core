@@ -20,7 +20,7 @@ from typing import (
 
 from pydantic import BaseModel
 
-from src.core._runner.agent import (
+from openagent_core.core._runner.agent import (
     _cli,
     _default_tools,
     _init,
@@ -32,37 +32,37 @@ from src.core._runner.agent import (
     _tools,
     _utils,
 )
-from src.core._runner._stubs import CompressionManager
-from src.core._runner._stubs import CultureManager
-from src.memory.store.base import AsyncBaseDb, BaseDb, ComponentType, UserMemory
-from src.memory.store.schemas.culture import CulturalKnowledge
-from src.core._runner._stubs import BaseEval
-from src.core._runner._stubs import FilterExpr
-from src.core._runner._stubs import BaseGuardrail
-from src.core._runner._stubs import KnowledgeProtocol
-from src.core._runner._stubs import LearningMachine
-from src.stream.media import Audio, File, Image, Video
-from src.core._runner._stubs import MemoryManager
-from src.core.metrics import SessionMetrics
-from src.models.providers.base import Model
-from src.models.providers.fallback import FallbackConfig
-from src.models.providers.message import Message
-from src.models.providers.response import ToolExecution
-from src.core._runner._stubs import Registry
-from src.core._run_state import RunContext, RunStatus
-from src.core._run_state.agent import (
+from openagent_core.core._runner._stubs import CompressionManager
+from openagent_core.core._runner._stubs import CultureManager
+from openagent_core.memory.store.base import AsyncBaseDb, BaseDb, ComponentType, UserMemory
+from openagent_core.memory.store.schemas.culture import CulturalKnowledge
+from openagent_core.core._runner._stubs import BaseEval
+from openagent_core.core._runner._stubs import FilterExpr
+from openagent_core.core._runner._stubs import BaseGuardrail
+from openagent_core.core._runner._stubs import KnowledgeProtocol
+from openagent_core.core._runner._stubs import LearningMachine
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.core._runner._stubs import MemoryManager
+from openagent_core.core.metrics import SessionMetrics
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.fallback import FallbackConfig
+from openagent_core.models.providers.message import Message
+from openagent_core.models.providers.response import ToolExecution
+from openagent_core.core._runner._stubs import Registry
+from openagent_core.core._run_state import RunContext, RunStatus
+from openagent_core.core._run_state.agent import (
     RunEvent,
     RunOutput,
     RunOutputEvent,
 )
-from src.core._run_state.requirement import RunRequirement
-from src.memory.sessions import AgentSession, SessionSummaryManager, TeamSession, WorkflowSession
-from src.memory.sessions.summary import SessionSummary
-from src.core._runner._stubs import Skills
-from src.mcp._runtime import Toolkit
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.log import log_warning
-from src.core._runner.utils.safe_formatter import SafeFormatter
+from openagent_core.core._run_state.requirement import RunRequirement
+from openagent_core.memory.sessions import AgentSession, SessionSummaryManager, TeamSession, WorkflowSession
+from openagent_core.memory.sessions.summary import SessionSummary
+from openagent_core.core._runner._stubs import Skills
+from openagent_core.mcp._runtime import Toolkit
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.log import log_warning
+from openagent_core.core._runner.utils.safe_formatter import SafeFormatter
 
 
 @dataclass(init=False)
@@ -583,7 +583,7 @@ class Agent:
         self._version: Optional[int] = None
         self._stage: Optional[str] = None
 
-        from src.core._runner.utils.callables import is_callable_factory
+        from openagent_core.core._runner.utils.callables import is_callable_factory
 
         if tools is None:
             self.tools = []
@@ -754,7 +754,7 @@ class Agent:
         kind: Optional[Literal["tools", "knowledge"]] = None,
         close: bool = False,
     ) -> None:
-        from src.core._runner.utils.callables import clear_callable_cache
+        from openagent_core.core._runner.utils.callables import clear_callable_cache
 
         clear_callable_cache(self, kind=kind, close=close)
 
@@ -763,7 +763,7 @@ class Agent:
         kind: Optional[Literal["tools", "knowledge"]] = None,
         close: bool = False,
     ) -> None:
-        from src.core._runner.utils.callables import aclear_callable_cache
+        from openagent_core.core._runner.utils.callables import aclear_callable_cache
 
         await aclear_callable_cache(self, kind=kind, close=close)
 
@@ -1680,7 +1680,7 @@ def get_agent_by_id(
     Returns:
         Agent instance or None.
     """
-    from src.core._runner.utils.log import log_error
+    from openagent_core.core._runner.utils.log import log_error
 
     try:
         row = db.get_config(component_id=id, label=label, version=version)
@@ -1711,7 +1711,7 @@ def get_agents(
 
     Sets _version and _stage on each agent from the component metadata.
     """
-    from src.core._runner.utils.log import log_error
+    from openagent_core.core._runner.utils.log import log_error
 
     agents: List[Agent] = []
     try:

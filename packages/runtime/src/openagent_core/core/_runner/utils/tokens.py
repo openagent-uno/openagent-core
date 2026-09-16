@@ -6,11 +6,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Type, Union
 
 from pydantic import BaseModel
 
-from src.stream.media import Audio, File, Image, Video
-from src.models.providers.message import Message
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.log import log_warning
-from src.core._runner.utils.media import get_image_type
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.models.providers.message import Message
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.log import log_warning
+from openagent_core.core._runner.utils.media import get_image_type
 
 # Default image dimensions used as fallback when actual dimensions cannot be determined.
 # These values provide a more conservative estimate for high-detail image token counting.

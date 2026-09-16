@@ -8,7 +8,7 @@ tools are writes. Generic: any MCP can honour the flag.
 
 The flag lives in a ``ContextVar`` set for the duration of the run
 (:func:`dry_run_scope`) and read at the single MCP call site
-(``src.core._runner.utils.mcp.get_entrypoint_for_tool``). ContextVars propagate
+(``openagent_core.core._runner.utils.mcp.get_entrypoint_for_tool``). ContextVars propagate
 into awaited coroutines and into child tasks (copied at ``create_task`` time),
 so the value set around ``run_child_session`` reaches every tool call the run
 makes.

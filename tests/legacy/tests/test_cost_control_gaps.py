@@ -53,8 +53,8 @@ async def _make(ctx: TestContext, providers_config: list[dict]):
     """Fresh isolated DB + a real ModelDispatcher (guard created + given the
     providers view in set_db). TTL pinned high so the sync hot path never spawns
     a background refresh mid-test."""
-    from src.memory.db import MemoryDB
-    from src.models.dispatcher import ModelDispatcher
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     db = MemoryDB(str(ctx.test_dir / f"cost_gaps_{uuid.uuid4().hex}.db"))
     await db.connect()
@@ -67,7 +67,7 @@ async def _make(ctx: TestContext, providers_config: list[dict]):
 @contextlib.contextmanager
 def _capture_bg():
     """Capture ``budget_guard``'s structured events as (name, kwargs) tuples."""
-    import src.core.budget_guard as bg
+    import openagent_core.core.budget_guard as bg
 
     events: list[tuple[str, dict]] = []
     orig = bg.elog
@@ -116,8 +116,8 @@ def _primed_pricing():
     True."""
     import time as _t
 
-    from src.models import discovery
-    import src.models.catalog as catalog
+    from openagent_core.models import discovery
+    import openagent_core.models.catalog as catalog
 
     fake = [{"id": "deepseek/deepseek-v4-pro",
              "pricing": {"prompt": "0.000000435", "completion": "0.00000087"}}]
@@ -135,8 +135,8 @@ def _primed_pricing():
 @contextlib.contextmanager
 def _cold_pricing():
     """Force the OpenRouter pricing cache empty (cold boot)."""
-    from src.models import discovery
-    import src.models.catalog as catalog
+    from openagent_core.models import discovery
+    import openagent_core.models.catalog as catalog
 
     saved_cache = getattr(discovery, "_OPENROUTER_CACHE", None)
     saved_index = catalog._OPENROUTER_INDEX
@@ -164,7 +164,7 @@ class _FakeAgent:
 def _blocked_guard(*blocked_providers: str):
     """A BudgetGuard whose cached snapshot marks each provider over its cap NOW.
     No DB, no refresh — we drive the read-side gate directly."""
-    from src.core.budget_guard import BudgetGuard, RuleState
+    from openagent_core.core.budget_guard import BudgetGuard, RuleState
 
     guard = BudgetGuard(db=None)
     guard._ttl = 1e9
@@ -186,8 +186,8 @@ def _members_built_by_ensure_runtime(providers, entry_runtime_id, guard):
     """Drive the REAL ``TeamRouterProvider._ensure_runtime`` with the runtime
     Agent/Team construction stubbed out, and return the list of member
     runtime_ids the team was actually built with (leader excluded)."""
-    import src.core._runner.team as team_mod
-    from src.models.dispatcher import TeamRouterProvider
+    import openagent_core.core._runner.team as team_mod
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     provider = TeamRouterProvider(
         entry_runtime_id=entry_runtime_id,
@@ -258,7 +258,7 @@ async def t_c1_member_never_empty(ctx: TestContext) -> None:
 
 @test("cost_control_gaps", "C1: no guard / no rules leaves the member set byte-identical")
 async def t_c1_member_no_guard_unchanged(ctx: TestContext) -> None:
-    from src.core.budget_guard import BudgetGuard
+    from openagent_core.core.budget_guard import BudgetGuard
 
     providers = _providers(
         ("local", ["claude-sub"]),
@@ -331,7 +331,7 @@ async def t_c2_no_boot_false_positive(ctx: TestContext) -> None:
 
 @test("cost_control_gaps", "C2: the usage view surfaces cost_metric_ineffective per rule")
 async def t_c2_usage_view_surface(ctx: TestContext) -> None:
-    from src.core.budget_guard import compute_budget_usage
+    from openagent_core.core.budget_guard import compute_budget_usage
 
     providers = _providers(("local", ["claude-sub"]), ("deepseek", ["deepseek-v4-pro"]))
     db, disp = await _make(ctx, providers)
@@ -367,14 +367,14 @@ class _PlainModel:
 
 
 def _router(providers) -> object:
-    from src.models.dispatcher import ModelDispatcher
+    from openagent_core.models.dispatcher import ModelDispatcher
 
     return ModelDispatcher(providers)
 
 
 @test("cost_control_gaps", "C3: compaction unset → cheapest NativeProvider, NOT the full router")
 async def t_c3_compaction_cheap_default(ctx: TestContext) -> None:
-    from src.core.compaction import _pick_summary_model
+    from openagent_core.core.compaction import _pick_summary_model
 
     providers = _providers(("deepseek", ["deepseek-v4-pro"]), ("local", ["claude-sub"]))
     agent = SimpleNamespace(_providers_config=providers, _db=None)
@@ -389,7 +389,7 @@ async def t_c3_compaction_cheap_default(ctx: TestContext) -> None:
 
 @test("cost_control_gaps", "C3: a NON-router fallback is preserved untouched (old contract)")
 async def t_c3_nonrouter_fallback_preserved(ctx: TestContext) -> None:
-    from src.core.compaction import _pick_summary_model
+    from openagent_core.core.compaction import _pick_summary_model
 
     providers = _providers(("deepseek", ["deepseek-v4-pro"]), ("local", ["claude-sub"]))
     agent = SimpleNamespace(_providers_config=providers, _db=None)
@@ -403,7 +403,7 @@ async def t_c3_nonrouter_fallback_preserved(ctx: TestContext) -> None:
 
 @test("cost_control_gaps", "C3: no enabled row → router fallback is used AND logged")
 async def t_c3_no_cheap_row_warns(ctx: TestContext) -> None:
-    import src.core.compaction as compaction
+    import openagent_core.core.compaction as compaction
 
     agent = SimpleNamespace(_providers_config=[], _db=None)  # nothing to resolve
     router = _router([])
@@ -416,7 +416,7 @@ async def t_c3_no_cheap_row_warns(ctx: TestContext) -> None:
 
 @test("cost_control_gaps", "C3: compaction with env SET is unchanged (configured cheap model)")
 async def t_c3_compaction_env_set_unchanged(ctx: TestContext) -> None:
-    from src.core.compaction import _pick_summary_model
+    from openagent_core.core.compaction import _pick_summary_model
 
     providers = _providers(("deepseek", ["deepseek-v4-pro"]), ("local", ["claude-sub"]))
     agent = SimpleNamespace(_providers_config=providers, _db=None)
@@ -430,7 +430,7 @@ async def t_c3_compaction_env_set_unchanged(ctx: TestContext) -> None:
 
 @test("cost_control_gaps", "C3: quality judge unset → cheapest NativeProvider, NOT the router")
 async def t_c3_judge_cheap_default(ctx: TestContext) -> None:
-    from src.core.quality_monitor import _pick_judge_model
+    from openagent_core.core.quality_monitor import _pick_judge_model
 
     providers = _providers(("deepseek", ["deepseek-v4-pro"]), ("local", ["claude-sub"]))
     router = _router(providers)
@@ -444,7 +444,7 @@ async def t_c3_judge_cheap_default(ctx: TestContext) -> None:
 
 @test("cost_control_gaps", "C3: quality judge with a NON-router model is preserved untouched")
 async def t_c3_judge_nonrouter_preserved(ctx: TestContext) -> None:
-    from src.core.quality_monitor import _pick_judge_model
+    from openagent_core.core.quality_monitor import _pick_judge_model
 
     providers = _providers(("deepseek", ["deepseek-v4-pro"]), ("local", ["claude-sub"]))
     plain = _PlainModel()

@@ -74,14 +74,14 @@ def _fresh_db_path(ctx: TestContext) -> "os.PathLike":
 
 
 async def _make_db(path):
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
     db = MemoryDB(str(path))
     await db.connect()
     return db
 
 
 async def _add_bound_event(db, *, slug: str, binding: bool = True):
-    from src.core.event_secret import make_secret_material
+    from openagent_core.core.event_secret import make_secret_material
     clear, enc, hint = make_secret_material(db_path=db.db_path)
     return await db.add_event(
         name=f"evt-{slug}", action_kind="prompt", slug=slug,
@@ -95,8 +95,8 @@ async def _add_bound_event(db, *, slug: str, binding: bool = True):
 async def _dispatch(db, ev, agent, did, payload):
     """Run one delivery through the REAL dispatch path (as the scheduler drain
     does), returning the produced child session id."""
-    from src.core.scheduler import Scheduler
-    from src.core.event_dispatcher import dispatch_event
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.core.event_dispatcher import dispatch_event
     os.environ.pop("OPENAGENT_SCHEDULER_DURABLE_SESSIONS", None)
     scheduler = Scheduler(db=db, agent=agent)  # type: ignore[arg-type]
     result = await dispatch_event(

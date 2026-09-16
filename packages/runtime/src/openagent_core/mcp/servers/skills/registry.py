@@ -22,7 +22,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.memory.vault.parser import (
+from openagent_core.memory.vault.parser import (
     FrontmatterSyntaxError,
     load_frontmatter_yaml,
     split_frontmatter,

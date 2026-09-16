@@ -20,24 +20,24 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from src.stream.media import Audio
-from src.models.providers.base import Model
-from src.models.providers.fallback import acall_model_stream_with_fallback, call_model_stream_with_fallback
-from src.models.providers.message import Message
-from src.models.providers.response import ModelResponse, ModelResponseEvent
-from src.core._runner._stubs import NextAction, ReasoningStep, ReasoningSteps
-from src.core._run_state import RunContext
-from src.core._run_state.agent import RunOutput, RunOutputEvent
-from src.core._run_state.messages import RunMessages
-from src.core._run_state.requirement import RunRequirement
-from src.core._run_state.team import (
+from openagent_core.stream.media import Audio
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.fallback import acall_model_stream_with_fallback, call_model_stream_with_fallback
+from openagent_core.models.providers.message import Message
+from openagent_core.models.providers.response import ModelResponse, ModelResponseEvent
+from openagent_core.core._runner._stubs import NextAction, ReasoningStep, ReasoningSteps
+from openagent_core.core._run_state import RunContext
+from openagent_core.core._run_state.agent import RunOutput, RunOutputEvent
+from openagent_core.core._run_state.messages import RunMessages
+from openagent_core.core._run_state.requirement import RunRequirement
+from openagent_core.core._run_state.team import (
     TeamRunEvent,
     TeamRunOutput,
     TeamRunOutputEvent,
 )
-from src.memory.sessions import TeamSession
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.events import (
+from openagent_core.memory.sessions import TeamSession
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.events import (
     create_team_compression_completed_event,
     create_team_compression_started_event,
     create_team_followups_completed_event,
@@ -55,19 +55,19 @@ from src.core._runner.utils.events import (
     create_team_tool_call_started_event,
     handle_event,
 )
-from src.core._runner.utils.log import log_debug, log_warning
-from src.core._runner.utils.merge_dict import merge_dictionaries
-from src.core._runner.utils.reasoning import (
+from openagent_core.core._runner.utils.log import log_debug, log_warning
+from openagent_core.core._runner.utils.merge_dict import merge_dictionaries
+from openagent_core.core._runner.utils.reasoning import (
     add_reasoning_metrics_to_metadata,
     add_reasoning_step_to_metadata,
     append_to_reasoning_content,
     update_run_output_with_reasoning,
 )
-from src.core._runner.utils.string import parse_response_dict_str, parse_response_model_str
+from openagent_core.core._runner.utils.string import parse_response_dict_str, parse_response_model_str
 
 if TYPE_CHECKING:
-    from src.core._runner._stubs import ReasoningEvent
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner._stubs import ReasoningEvent
+    from openagent_core.core._runner.team.team import Team
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +152,7 @@ def parse_response_with_parser_model(
     run_response: Optional[TeamRunOutput] = None,
 ) -> None:
     """Parse the model response using the parser model."""
-    from src.core._runner.team._messages import _get_messages_for_parser_model
+    from openagent_core.core._runner.team._messages import _get_messages_for_parser_model
 
     if team.parser_model is None:
         return
@@ -172,7 +172,7 @@ def parse_response_with_parser_model(
 
         # Accumulate parser model metrics
         if run_response is not None:
-            from src.core.metrics import ModelType, accumulate_model_metrics
+            from openagent_core.core.metrics import ModelType, accumulate_model_metrics
 
             accumulate_model_metrics(
                 parser_model_response,
@@ -194,7 +194,7 @@ async def aparse_response_with_parser_model(
     run_response: Optional[TeamRunOutput] = None,
 ) -> None:
     """Parse the model response using the parser model."""
-    from src.core._runner.team._messages import _get_messages_for_parser_model
+    from openagent_core.core._runner.team._messages import _get_messages_for_parser_model
 
     if team.parser_model is None:
         return
@@ -214,7 +214,7 @@ async def aparse_response_with_parser_model(
 
         # Accumulate parser model metrics
         if run_response is not None:
-            from src.core.metrics import ModelType, accumulate_model_metrics
+            from openagent_core.core.metrics import ModelType, accumulate_model_metrics
 
             accumulate_model_metrics(
                 parser_model_response,
@@ -236,7 +236,7 @@ def parse_response_with_parser_model_stream(
     run_context: Optional[RunContext] = None,
 ):
     """Parse the model response using the parser model"""
-    from src.core._runner.team._messages import _get_messages_for_parser_model_stream
+    from openagent_core.core._runner.team._messages import _get_messages_for_parser_model_stream
 
     if team.parser_model is not None:
         # run_context override for output_schema
@@ -307,7 +307,7 @@ async def aparse_response_with_parser_model_stream(
     run_context: Optional[RunContext] = None,
 ):
     """Parse the model response using the parser model stream."""
-    from src.core._runner.team._messages import _get_messages_for_parser_model_stream
+    from openagent_core.core._runner.team._messages import _get_messages_for_parser_model_stream
 
     if team.parser_model is not None:
         # run_context override for output_schema
@@ -383,7 +383,7 @@ def parse_response_with_output_model(
     run_response: Optional[TeamRunOutput] = None,
 ) -> None:
     """Parse the model response using the output model."""
-    from src.core._runner.team._messages import _get_messages_for_output_model
+    from openagent_core.core._runner.team._messages import _get_messages_for_output_model
 
     if team.output_model is None:
         return
@@ -393,7 +393,7 @@ def parse_response_with_output_model(
 
     # Accumulate output model metrics
     if run_response is not None:
-        from src.core.metrics import ModelType, accumulate_model_metrics
+        from openagent_core.core.metrics import ModelType, accumulate_model_metrics
 
         accumulate_model_metrics(
             output_model_response,
@@ -413,8 +413,8 @@ def generate_response_with_output_model_stream(
     stream_events: bool = False,
 ):
     """Parse the model response using the output model stream."""
-    from src.core._runner.team._messages import _get_messages_for_output_model
-    from src.core._runner.utils.events import (
+    from openagent_core.core._runner.team._messages import _get_messages_for_output_model
+    from openagent_core.core._runner.utils.events import (
         create_team_output_model_response_completed_event,
         create_team_output_model_response_started_event,
     )
@@ -468,7 +468,7 @@ async def agenerate_response_with_output_model(
     run_response: Optional[TeamRunOutput] = None,
 ) -> None:
     """Parse the model response using the output model stream."""
-    from src.core._runner.team._messages import _get_messages_for_output_model
+    from openagent_core.core._runner.team._messages import _get_messages_for_output_model
 
     if team.output_model is None:
         return
@@ -478,7 +478,7 @@ async def agenerate_response_with_output_model(
 
     # Accumulate output model metrics
     if run_response is not None:
-        from src.core.metrics import ModelType, accumulate_model_metrics
+        from openagent_core.core.metrics import ModelType, accumulate_model_metrics
 
         accumulate_model_metrics(
             output_model_response,
@@ -498,8 +498,8 @@ async def agenerate_response_with_output_model_stream(
     stream_events: bool = False,
 ):
     """Parse the model response using the output model stream."""
-    from src.core._runner.team._messages import _get_messages_for_output_model
-    from src.core._runner.utils.events import (
+    from openagent_core.core._runner.team._messages import _get_messages_for_output_model
+    from openagent_core.core._runner.utils.events import (
         create_team_output_model_response_completed_event,
         create_team_output_model_response_started_event,
     )
@@ -588,7 +588,7 @@ def handle_reasoning_event(
     This method handles the conversion of generic reasoning events to Team events,
     keeping the reason() function clean and simple.
     """
-    from src.core._runner._stubs import ReasoningEventType
+    from openagent_core.core._runner._stubs import ReasoningEventType
 
     if event.event_type == ReasoningEventType.started:
         if stream_events:
@@ -733,7 +733,7 @@ def reason(
     Handles both native reasoning models (DeepSeek, Anthropic, etc.) and
     default Chain-of-Thought reasoning with a clean, unified interface.
     """
-    from src.core._runner._stubs import ReasoningConfig, ReasoningManager
+    from openagent_core.core._runner._stubs import ReasoningConfig, ReasoningManager
 
     # Get the reasoning model (use copy of main model if not provided)
     reasoning_model: Optional[Model] = team.reasoning_model
@@ -778,7 +778,7 @@ async def areason(
     Handles both native reasoning models (DeepSeek, Anthropic, etc.) and
     default Chain-of-Thought reasoning with a clean, unified interface.
     """
-    from src.core._runner._stubs import ReasoningConfig, ReasoningManager
+    from openagent_core.core._runner._stubs import ReasoningConfig, ReasoningManager
 
     # Get the reasoning model (use copy of main model if not provided)
     reasoning_model: Optional[Model] = team.reasoning_model
@@ -1723,8 +1723,8 @@ def generate_team_followups(
     run_response: TeamRunOutput,
 ) -> None:
     """Generate followups after the main response (sync, non-streaming)."""
-    from src.core._runner.agent._response import _build_followup_messages, _get_followups_response_format, _parse_followups_response
-    from src.core.metrics import ModelType, accumulate_model_metrics
+    from openagent_core.core._runner.agent._response import _build_followup_messages, _get_followups_response_format, _parse_followups_response
+    from openagent_core.core.metrics import ModelType, accumulate_model_metrics
 
     if not team.followups or run_response.content is None:
         return
@@ -1753,8 +1753,8 @@ async def agenerate_team_followups(
     run_response: TeamRunOutput,
 ) -> None:
     """Generate followups after the main response (async, non-streaming)."""
-    from src.core._runner.agent._response import _build_followup_messages, _get_followups_response_format, _parse_followups_response
-    from src.core.metrics import ModelType, accumulate_model_metrics
+    from openagent_core.core._runner.agent._response import _build_followup_messages, _get_followups_response_format, _parse_followups_response
+    from openagent_core.core.metrics import ModelType, accumulate_model_metrics
 
     if not team.followups or run_response.content is None:
         return
@@ -1784,8 +1784,8 @@ def generate_team_followups_stream(
     stream_events: bool = True,
 ) -> Iterator[TeamRunOutputEvent]:
     """Generate followups after the main response (sync, streaming)."""
-    from src.core._runner.agent._response import _build_followup_messages, _get_followups_response_format, _parse_followups_response
-    from src.core.metrics import ModelType, accumulate_model_metrics
+    from openagent_core.core._runner.agent._response import _build_followup_messages, _get_followups_response_format, _parse_followups_response
+    from openagent_core.core.metrics import ModelType, accumulate_model_metrics
 
     if not team.followups or run_response.content is None:
         return
@@ -1831,8 +1831,8 @@ async def agenerate_team_followups_stream(
     stream_events: bool = True,
 ) -> AsyncIterator[TeamRunOutputEvent]:
     """Generate followups after the main response (async, streaming)."""
-    from src.core._runner.agent._response import _build_followup_messages, _get_followups_response_format, _parse_followups_response
-    from src.core.metrics import ModelType, accumulate_model_metrics
+    from openagent_core.core._runner.agent._response import _build_followup_messages, _get_followups_response_format, _parse_followups_response
+    from openagent_core.core.metrics import ModelType, accumulate_model_metrics
 
     if not team.followups or run_response.content is None:
         return

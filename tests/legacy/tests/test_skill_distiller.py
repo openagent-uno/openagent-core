@@ -33,7 +33,7 @@ async def _bare_server(config: dict, db):
     """A minimally-constructed AgentServer wired just enough to drive
     ``_sync_skill_distiller`` / ``_sync_skill_curator``: it reads ``self.config``
     and ``self.agent._db``. ``__new__`` skips the heavy ``__init__``."""
-    from src.core.server import AgentServer
+    from openagent_core.core.server import AgentServer
 
     srv = AgentServer.__new__(AgentServer)
     srv.config = config
@@ -53,17 +53,17 @@ async def _row(db, name: str):
 
 
 async def _distiller_row(db):
-    from src.core.builtin_tasks import SKILL_DISTILLER_TASK_NAME
+    from openagent_core.core.builtin_tasks import SKILL_DISTILLER_TASK_NAME
     return await _row(db, SKILL_DISTILLER_TASK_NAME)
 
 
 async def _curator_row(db):
-    from src.core.builtin_tasks import SKILL_CURATOR_TASK_NAME
+    from openagent_core.core.builtin_tasks import SKILL_CURATOR_TASK_NAME
     return await _row(db, SKILL_CURATOR_TASK_NAME)
 
 
 def _fresh_db(ctx: TestContext, tag: str):
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
     return MemoryDB(str(ctx.db_path.with_name(f"distiller-{tag}-{uuid.uuid4().hex[:8]}.db")))
 
 
@@ -71,7 +71,7 @@ def _fresh_db(ctx: TestContext, tag: str):
 
 @test("skill_distiller", "OFF by default: no scheduled task seeded; ON when opted in")
 async def t_distiller_gating(ctx: TestContext) -> None:
-    from src.core.scheduler import Scheduler
+    from openagent_core.core.scheduler import Scheduler
 
     # (a) DEFAULT config → nothing seeded (byte-identical to no feature).
     off_db = _fresh_db(ctx, "off")
@@ -114,7 +114,7 @@ async def t_distiller_gating(ctx: TestContext) -> None:
         assert row["enabled"], "the distiller was seeded but left disabled"
         assert row["prompt"], "the distiller task has no prompt"
 
-        from src.core.server import SKILL_DISTILLER_DEFAULT_CRON
+        from openagent_core.core.server import SKILL_DISTILLER_DEFAULT_CRON
         assert row["cron_expression"] == SKILL_DISTILLER_DEFAULT_CRON, row
 
         # (d) Turning it back off at runtime disables the surviving row.
@@ -145,11 +145,11 @@ async def t_distiller_gating(ctx: TestContext) -> None:
 
 @test("skill_distiller", "distiller and curator seed distinct rows on independent toggles")
 async def t_distiller_curator_distinct(ctx: TestContext) -> None:
-    from src.core.builtin_tasks import (
+    from openagent_core.core.builtin_tasks import (
         SKILL_CURATOR_TASK_NAME,
         SKILL_DISTILLER_TASK_NAME,
     )
-    from src.core.scheduler import Scheduler
+    from openagent_core.core.scheduler import Scheduler
 
     assert SKILL_DISTILLER_TASK_NAME != SKILL_CURATOR_TASK_NAME
 
@@ -210,7 +210,7 @@ async def t_distiller_curator_distinct(ctx: TestContext) -> None:
 
 @test("skill_distiller", "SKILL_DISTILLER_PROMPT: creates (never merges), names its signals")
 async def t_distiller_prompt(_ctx: TestContext) -> None:
-    from src.core.server import (
+    from openagent_core.core.server import (
         SKILL_CURATOR_PROMPT,
         SKILL_DISTILLER_DEFAULT_CRON,
         SKILL_DISTILLER_PROMPT,
@@ -260,7 +260,7 @@ async def t_distiller_prompt(_ctx: TestContext) -> None:
 
 @test("skill_distiller", "skill-distiller is a built-in mapped to the skills config section")
 async def t_distiller_is_builtin(_ctx: TestContext) -> None:
-    import src.core.builtin_tasks as bt
+    import openagent_core.core.builtin_tasks as bt
 
     assert bt.SKILL_DISTILLER_TASK_NAME == "skill-distiller"
     assert bt.SKILL_DISTILLER_TASK_NAME in bt.BUILTIN_TASK_NAMES, (

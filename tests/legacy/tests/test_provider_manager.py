@@ -13,8 +13,8 @@ from ._framework import TestContext, test
 
 @test("provider_manager", "add_provider writes api_key to DB (v0.12 framework-aware)")
 async def t_add_provider(ctx: TestContext) -> None:
-    import src.mcp.servers.model_manager.server as mgr
-    from src.memory.db import MemoryDB
+    import openagent_core.mcp.servers.model_manager.server as mgr
+    from openagent_core.memory.db import MemoryDB
 
     tmp_dir = ctx.db_path.parent / f"pmgr-{uuid.uuid4().hex[:8]}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -113,7 +113,7 @@ async def t_discovery_lists_vendor_models(ctx: TestContext) -> None:
     OpenRouter (the model picker), carrying whatever pricing OpenRouter
     reports. Uses a canned OpenRouter response so the test is hermetic."""
     import time
-    from src.models import discovery
+    from openagent_core.models import discovery
 
     prev = discovery._OPENROUTER_CACHE
     try:

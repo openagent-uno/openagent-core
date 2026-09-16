@@ -52,7 +52,7 @@ def _events_file(rows):
 
 @contextlib.contextmanager
 def _capture():
-    import src.core.quality_digest as qd
+    import openagent_core.core.quality_digest as qd
 
     events: list[tuple[str, dict]] = []
     orig = qd.elog
@@ -89,7 +89,7 @@ def _rows(now):
 
 @test("quality", "digest summarises quality/recall/cost + lists ONLY flagged sessions")
 async def t_digest_summary(ctx: TestContext) -> None:
-    import src.core.quality_digest as qd
+    import openagent_core.core.quality_digest as qd
 
     now = time.time()
     with _events_file(_rows(now)) as p:
@@ -108,7 +108,7 @@ async def t_digest_summary(ctx: TestContext) -> None:
 
 @test("quality", "alerts fire on breach, silent when healthy")
 async def t_alerts(ctx: TestContext) -> None:
-    import src.core.quality_digest as qd
+    import openagent_core.core.quality_digest as qd
 
     now = time.time()
     # avg (0.9+0.3+0.4)/3 = 0.533 < 0.7 floor; 1 fabrication; only 1 timeout
@@ -134,7 +134,7 @@ async def t_alerts(ctx: TestContext) -> None:
 
 @test("quality", "recall-timeout + embedder-down alerts trip at their thresholds")
 async def t_alerts_recall_embed(ctx: TestContext) -> None:
-    import src.core.quality_digest as qd
+    import openagent_core.core.quality_digest as qd
 
     now = time.time()
     rows = [{"ts": now, "event": "event.done"} for _ in range(10)]
@@ -149,7 +149,7 @@ async def t_alerts_recall_embed(ctx: TestContext) -> None:
 
 @test("quality", "run_once emits quality.digest and any quality.alert")
 async def t_run_once_emits(ctx: TestContext) -> None:
-    import src.core.quality_digest as qd
+    import openagent_core.core.quality_digest as qd
 
     now = time.time()
     with _events_file(_rows(now)) as p, _capture() as ev, \
@@ -166,7 +166,7 @@ async def t_run_once_emits(ctx: TestContext) -> None:
 
 @test("quality", "digest defaults to the monitor switch; start() no-op when off")
 async def t_enabled_default_and_start(ctx: TestContext) -> None:
-    import src.core.quality_digest as qd
+    import openagent_core.core.quality_digest as qd
 
     with _env(OPENAGENT_QUALITY_DIGEST_ENABLED=None, OPENAGENT_QUALITY_MONITOR_ENABLED="1"):
         assert qd.enabled() is True

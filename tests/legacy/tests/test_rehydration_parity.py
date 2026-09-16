@@ -15,7 +15,7 @@ two routes produced different shapes for the SAME underlying event.
 also dropped on the rehydration walk.
 
 This module locks in the parity: both routes go through the shared
-:mod:`src.models._tool_status` encoder which emits the runtime's native
+:mod:`openagent_core.models._tool_status` encoder which emits the runtime's native
 ``ToolExecution.to_dict()`` shape, and the rehydration walk recurses
 into ``member_responses`` so delegated content surfaces with the
 specialist's own model attribution.
@@ -78,7 +78,7 @@ class _FakeToolExec:
     """Minimal stand-in for the runtime's ``ToolExecution`` dataclass.
 
     Only the attributes the shared status encoder reads
-    (:mod:`src.models._tool_status`) are populated; everything else
+    (:mod:`openagent_core.models._tool_status`) are populated; everything else
     falls through to ``None`` so the encoder treats it as a the runtime
     object.
     """
@@ -127,7 +127,7 @@ async def t_shared_encoder_parity(ctx: TestContext) -> None:
     UI's parser inspects. Both go through the same encoder so the
     universal app's renderer branches identically.
     """
-    from src.models._tool_status import (
+    from openagent_core.models._tool_status import (
         stored_tool_to_wire,
         tool_exec_to_wire_json,
     )
@@ -170,8 +170,8 @@ async def t_shared_encoder_parity(ctx: TestContext) -> None:
     "live encoder overlays client host when runtime to_dict drops dynamic fields",
 )
 async def t_runtime_to_dict_keeps_stamped_execution_host(ctx: TestContext) -> None:
-    from src.core.execution_origin import TurnExecutionOrigin, execution_origin_scope
-    from src.models._tool_status import tool_exec_to_wire_json
+    from openagent_core.core.execution_origin import TurnExecutionOrigin, execution_origin_scope
+    from openagent_core.models._tool_status import tool_exec_to_wire_json
 
     origin = TurnExecutionOrigin(
         device_id="device-a",
@@ -202,7 +202,7 @@ async def t_encoder_error_path(ctx: TestContext) -> None:
     derivation lights up the "✗ foo failed" chip in both live and
     rehydration views.
     """
-    from src.models._tool_status import (
+    from openagent_core.models._tool_status import (
         stored_tool_to_wire,
         tool_exec_to_wire_json,
     )
@@ -237,7 +237,7 @@ async def t_stored_pass_through(ctx: TestContext) -> None:
     before execution-host attribution receive the only safe legacy default,
     while an already persisted client host remains byte-identical.
     """
-    from src.models._tool_status import stored_tool_to_wire
+    from openagent_core.models._tool_status import stored_tool_to_wire
 
     stored = {
         "tool_name": "x",
@@ -274,13 +274,13 @@ async def t_dispatcher_stream_emits_json_status(ctx: TestContext) -> None:
     instead of the legacy ``f"⚙ {name}"`` plain text. Without this,
     the chip renders one way live and another way after rehydration.
     """
-    from src.core._run_state.team import (
+    from openagent_core.core._run_state.team import (
         ToolCallCompletedEvent as TeamToolCallCompletedEvent,
         ToolCallErrorEvent as TeamToolCallErrorEvent,
         ToolCallStartedEvent as TeamToolCallStartedEvent,
         RunContentEvent as TeamRunContentEvent,
     )
-    from src.models.dispatcher import _arun_runtime_stream
+    from openagent_core.models.dispatcher import _arun_runtime_stream
 
     # The same ToolExecution mutates between start + completion in
     # the runtime — result is None at start, populated at done. Mirror
@@ -396,15 +396,15 @@ async def t_rehydration_walks_member_responses(ctx: TestContext) -> None:
     then either showed nothing (when the toolInfo result wasn't
     expanded) or showed it with the wrong model badge.
     """
-    from src.gateway.api.sessions import _expand_run_messages
+    from openagent_core.gateway.api.sessions import _expand_run_messages
 
     leader_model = "openai:gpt-4o-mini"
     specialist_model = "anthropic:claude-haiku-4-5"
 
     # Stored shape: a TeamRunOutput.to_dict() with one delegate tool
     # call and one member response. Matches the runtime's actual on-disk shape
-    # (see src.core._run_state.team.TeamRunOutput.to_dict and
-    # src.models.providers.response.ToolExecution.to_dict).
+    # (see openagent_core.core._run_state.team.TeamRunOutput.to_dict and
+    # openagent_core.models.providers.response.ToolExecution.to_dict).
     team_run = {
         "run_id": "team-run-1",
         "team_id": "openagent-test",
@@ -511,7 +511,7 @@ async def t_rehydration_nested_tools(ctx: TestContext) -> None:
     Rehydration path: those tools live in ``member_responses[*].tools``
     and the recursive expansion surfaces them at the right slot.
     """
-    from src.gateway.api.sessions import _expand_run_messages
+    from openagent_core.gateway.api.sessions import _expand_run_messages
 
     team_run = {
         "run_id": "team-run-2",
@@ -595,9 +595,9 @@ async def t_rehydration_solo_run_envelope(ctx: TestContext) -> None:
     Hermetic — no gateway needed; we exercise the rehydration helpers
     directly against a seeded ``sessions`` row.
     """
-    from src.gateway.api.sessions import _expand_run_messages
-    from src.memory.db import MemoryDB
-    from src.models._tool_status import tool_exec_to_wire_json
+    from openagent_core.gateway.api.sessions import _expand_run_messages
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.models._tool_status import tool_exec_to_wire_json
 
     tmp_db = ctx.db_path.with_name(f"rehyd-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -685,7 +685,7 @@ async def t_rehydration_skips_cancelled(ctx: TestContext) -> None:
     refactor. A cancelled run carries half-baked messages we don't
     want to replay.
     """
-    from src.gateway.api.sessions import _expand_run_messages
+    from openagent_core.gateway.api.sessions import _expand_run_messages
 
     run = {
         "run_id": "cancelled-run",
@@ -707,7 +707,7 @@ async def t_rehydration_preserves_order(ctx: TestContext) -> None:
     The rehydration walk must preserve that order so the chat reads
     "user asks → tool fires → assistant replies", same as live.
     """
-    from src.gateway.api.sessions import _expand_run_messages
+    from openagent_core.gateway.api.sessions import _expand_run_messages
 
     run = {
         "run_id": "ordered-run",
@@ -766,7 +766,7 @@ async def t_member_user_prompt_filtered(ctx: TestContext) -> None:
     Live streaming was unaffected because the live wire emits per-event
     deltas; the synthetic prompt never appeared on the wire.
     """
-    from src.gateway.api.sessions import _expand_run_messages
+    from openagent_core.gateway.api.sessions import _expand_run_messages
 
     leader_run = {
         "run_id": "team-1",
@@ -837,7 +837,7 @@ async def t_prompt_list_iteration_hint(ctx: TestContext) -> None:
     Without this, the model collapses lists into a single delegation —
     losing per-item parallelism.
     """
-    from src.core.prompts import FRAMEWORK_SYSTEM_PROMPT
+    from openagent_core.core.prompts import FRAMEWORK_SYSTEM_PROMPT
 
     text = FRAMEWORK_SYSTEM_PROMPT.lower()
     assert "list iteration is parallel by default" in text, (

@@ -23,7 +23,7 @@ from ._framework import TestContext, test
 
 @test("scheduled_task_model", "add_task/update_task round-trip the optional model pin")
 async def t_task_model_roundtrip(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -57,7 +57,7 @@ async def t_task_model_migration(ctx: TestContext) -> None:
     import os
     import tempfile
     import aiosqlite
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     # A FRESH path (the shared ``ctx.db_path`` already carries the full current
     # schema, so it can't stand in for a legacy DB). mkdtemp gives an isolated
@@ -147,8 +147,8 @@ class _FakeDB:
     "strict local-only refuses an unresolved child model pin instead of using default",
 )
 async def t_strict_local_bad_pin_fails_closed(ctx: TestContext) -> None:
-    from src.core.child_session import run_child_session
-    from src.core.execution_profile import strict_local_only_scope
+    from openagent_core.core.child_session import run_child_session
+    from openagent_core.core.execution_profile import strict_local_only_scope
 
     class _BadModel:
         def build_override_model(self, runtime_id: str):
@@ -178,7 +178,7 @@ async def t_strict_local_bad_pin_fails_closed(ctx: TestContext) -> None:
 async def _run_delegate(task: str, model_id=None):
     """Drive ``handlers.delegate_task`` with a fresh fake context, returning
     ``(result, agent)`` so callers can assert on both."""
-    from src.mcp.servers.delegation import handlers
+    from openagent_core.mcp.servers.delegation import handlers
 
     agent = _FakeAgent()
     db = _FakeDB()

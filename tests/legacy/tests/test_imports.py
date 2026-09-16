@@ -17,31 +17,31 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 @test("imports", "all openagent modules import")
 async def t_imports(ctx: TestContext) -> None:
     import src
-    import src.cli  # noqa: F401
-    import src.core.agent  # noqa: F401
-    import src.core.server  # noqa: F401
-    import src.gateway.server  # noqa: F401
-    import src.gateway.sessions  # noqa: F401
-    import src.mcp  # noqa: F401
-    import src.mcp.pool  # noqa: F401
-    import src.mcp.builtins  # noqa: F401
-    import src.mcp.servers.scheduler.server  # noqa: F401
-    import src.models.native_provider  # noqa: F401
-    import src.models.dispatcher  # noqa: F401
-    import src.models.runtime  # noqa: F401
-    import src.models.catalog  # noqa: F401
-    import src.models.budget  # noqa: F401
-    import src.memory.db  # noqa: F401
-    assert src.__version__
+    import openagent_core.cli  # noqa: F401
+    import openagent_core.core.agent  # noqa: F401
+    import openagent_core.core.server  # noqa: F401
+    import openagent_core.gateway.server  # noqa: F401
+    import openagent_core.gateway.sessions  # noqa: F401
+    import openagent_core.mcp  # noqa: F401
+    import openagent_core.mcp.pool  # noqa: F401
+    import openagent_core.mcp.builtins  # noqa: F401
+    import openagent_core.mcp.servers.scheduler.server  # noqa: F401
+    import openagent_core.models.native_provider  # noqa: F401
+    import openagent_core.models.dispatcher  # noqa: F401
+    import openagent_core.models.runtime  # noqa: F401
+    import openagent_core.models.catalog  # noqa: F401
+    import openagent_core.models.budget  # noqa: F401
+    import openagent_core.memory.db  # noqa: F401
+    assert openagent_core.__version__
 
 
-@test("imports", "groq SDK in deps + src.* collected in spec (bundle completeness)")
+@test("imports", "groq SDK in deps + openagent_core.* collected in spec (bundle completeness)")
 async def t_bundle_groq_and_src(ctx: TestContext) -> None:
-    """Verify that the PyInstaller spec collects every ``src.*`` submodule
+    """Verify that the PyInstaller spec collects every ``openagent_core.*`` submodule
     (including the inlined LLM provider drivers under
-    ``src.models.providers``) and that the groq Python SDK is a declared
+    ``openagent_core.models.providers``) and that the groq Python SDK is a declared
     project dependency. Both are required so
-    ``src.models.providers.groq`` is importable from the frozen binary;
+    ``openagent_core.models.providers.groq`` is importable from the frozen binary;
     the original incident was a per-session ImportError on lyra-virgil
     whenever a groq model was selected."""
     import re
@@ -66,7 +66,7 @@ async def t_bundle_groq_and_src(ctx: TestContext) -> None:
 
 @test("imports", "numpy in deps + spec (semantic recall bundle completeness)")
 async def t_bundle_numpy(ctx: TestContext) -> None:
-    """``src.memory.semantic_index`` does its cosine matmul with numpy. numpy
+    """``openagent_core.memory.semantic_index`` does its cosine matmul with numpy. numpy
     was NOT declared as a dependency nor collected in the spec, so the frozen
     binary shipped WITHOUT it — semantic recall (auto-recall + the
     ``semantic_recall`` MCP tool) failed at runtime with "No module named
@@ -89,7 +89,7 @@ async def t_bundle_numpy(ctx: TestContext) -> None:
     # numpy is now OPTIONAL: semantic_index must import + search with it FORCED
     # OFF, so a bundle that omits numpy still recalls (just slower). This is the
     # guarantee that a fragile numpy bundle can never again silently break recall.
-    import src.memory.semantic_index as si
+    import openagent_core.memory.semantic_index as si
     saved = si._HAS_NUMPY
     try:
         si._HAS_NUMPY = False
@@ -139,13 +139,13 @@ async def t_frozen_builtin_mcps_dir_matches_spec(ctx: TestContext) -> None:
         # Simulate the PyInstaller layout the spec produces.
         (bundle_path / "src" / "mcp" / "servers" / "workflow_manager").mkdir(parents=True)
 
-        sys.modules.pop("src.mcp.builtins", None)
+        sys.modules.pop("openagent_core.mcp.builtins", None)
         try:
-            with patch("src._frozen.is_frozen", return_value=True), \
-                 patch("src._frozen.sys") as sys_mock:
+            with patch("openagent_core._frozen.is_frozen", return_value=True), \
+                 patch("openagent_core._frozen.sys") as sys_mock:
                 sys_mock._MEIPASS = str(bundle_path)
                 sys_mock.executable = str(bundle_path / "openagent")
-                builtins_mod = importlib.import_module("src.mcp.builtins")
+                builtins_mod = importlib.import_module("openagent_core.mcp.builtins")
                 resolved = builtins_mod.BUILTIN_MCPS_DIR
                 assert resolved == bundle_path / "src" / "mcp" / "servers", (
                     f"frozen BUILTIN_MCPS_DIR must be <bundle>/src/mcp/servers, "
@@ -157,10 +157,10 @@ async def t_frozen_builtin_mcps_dir_matches_spec(ctx: TestContext) -> None:
                     "resolve_builtin_entry will raise FileNotFoundError"
                 )
         finally:
-            sys.modules.pop("src.mcp.builtins", None)
+            sys.modules.pop("openagent_core.mcp.builtins", None)
             # Re-import under real-frozen=False so later tests get the
             # dev-layout constants back.
-            importlib.import_module("src.mcp.builtins")
+            importlib.import_module("openagent_core.mcp.builtins")
 
 
 @test("imports", "no stale legacy refs (MCPRegistry / MCPTools / tool_factory)")
@@ -190,17 +190,17 @@ async def t_frozen_preload_covers_lazy_runtime(ctx: TestContext) -> None:
     surrounding hot paths) lazy-import so the preloader keeps them
     resident in ``sys.modules`` and the runtime never has to crack
     the PYZ archive after startup."""
-    import src.core.agent as agent_mod
+    import openagent_core.core.agent as agent_mod
 
     required = {
-        "src.core._runner.agent",
-        "src.core._runner.team",
-        "src.memory.store.sqlite",
-        "src.memory.sessions.agent",
-        "src.core._run_state.agent",
-        "src.core._run_state.team",
-        "src.models.providers.utils",
-        "src.mcp._runtime.mcp",
+        "openagent_core.core._runner.agent",
+        "openagent_core.core._runner.team",
+        "openagent_core.memory.store.sqlite",
+        "openagent_core.memory.sessions.agent",
+        "openagent_core.core._run_state.agent",
+        "openagent_core.core._run_state.team",
+        "openagent_core.models.providers.utils",
+        "openagent_core.mcp._runtime.mcp",
     }
     missing = required - set(agent_mod._FROZEN_RUNTIME_PRELOADS)
     assert not missing, (
@@ -214,7 +214,7 @@ async def t_frozen_preload_covers_lazy_runtime(ctx: TestContext) -> None:
 
 @test("imports", "frozen runtime preloader warms late imports without aborting startup")
 async def t_frozen_runtime_preload(ctx: TestContext) -> None:
-    import src.core.agent as agent_mod
+    import openagent_core.core.agent as agent_mod
 
     imported: list[str] = []
 
@@ -224,7 +224,7 @@ async def t_frozen_runtime_preload(ctx: TestContext) -> None:
             raise RuntimeError("boom")
         return object()
 
-    with patch("src._frozen.is_frozen", return_value=True), \
+    with patch("openagent_core._frozen.is_frozen", return_value=True), \
          patch.object(agent_mod, "_FROZEN_RUNTIME_PRELOADS", (
              "test.module.ok",
              "test.module.boom",

@@ -9,16 +9,16 @@ config doesn't silently fall back to a wrong vendor.
 
 from typing import Optional, Union
 
-from src.models.providers.base import Model
+from openagent_core.models.providers.base import Model
 
 
 _PROVIDER_LOADERS: dict[str, tuple[str, str]] = {
-    "anthropic": ("src.models.providers.anthropic", "Claude"),
-    "openai": ("src.models.providers.openai", "OpenAIChat"),
-    "google": ("src.models.providers.google", "Gemini"),
-    "gemini": ("src.models.providers.google", "Gemini"),
-    "deepseek": ("src.models.providers.deepseek", "DeepSeek"),
-    "groq": ("src.models.providers.groq", "Groq"),
+    "anthropic": ("openagent_core.models.providers.anthropic", "Claude"),
+    "openai": ("openagent_core.models.providers.openai", "OpenAIChat"),
+    "google": ("openagent_core.models.providers.google", "Gemini"),
+    "gemini": ("openagent_core.models.providers.google", "Gemini"),
+    "deepseek": ("openagent_core.models.providers.deepseek", "DeepSeek"),
+    "groq": ("openagent_core.models.providers.groq", "Groq"),
 }
 
 

@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from src.models.providers.message import Message
+from openagent_core.models.providers.message import Message
 
 
 @dataclass

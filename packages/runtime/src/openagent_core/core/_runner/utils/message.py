@@ -3,8 +3,8 @@ from typing import Dict, List, Optional, Sequence, Union
 
 from pydantic import BaseModel
 
-from src.models.providers.message import Message
-from src.core._runner.utils.log import log_debug
+from openagent_core.models.providers.message import Message
+from openagent_core.core._runner.utils.log import log_debug
 
 
 def normalize_tool_messages(messages: List[Message]) -> List[Message]:

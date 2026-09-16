@@ -20,7 +20,7 @@ from ._framework import TestContext, test
 
 
 async def _db(tmp):
-    from src.memory.db import MemoryDb
+    from openagent_core.memory.db import MemoryDb
 
     db = MemoryDb(db_path=str(tmp / "t.db"))
     await db.connect() if hasattr(db, "connect") else None
@@ -30,7 +30,7 @@ async def _db(tmp):
 @test("delivery_queue_starvation", "una riga conclusa non viene piu' rivendicata")
 async def test_finished_rows_are_skipped(ctx: TestContext) -> None:
     import sqlite3, tempfile, os
-    from src.memory import db as dbmod
+    from openagent_core.memory import db as dbmod
 
     d = tempfile.mkdtemp()
     path = os.path.join(d, "t.db")
@@ -60,7 +60,7 @@ async def test_finished_rows_are_skipped(ctx: TestContext) -> None:
 @test("delivery_queue_starvation", "il dispatcher satura in modo VISIBILE, non in silenzio")
 async def test_saturation_is_logged(ctx: TestContext) -> None:
     import inspect
-    from src.core import scheduler as sched
+    from openagent_core.core import scheduler as sched
 
     src = inspect.getsource(sched.Scheduler._drain_event_deliveries)
     assert "event_dispatch_saturated" in src, (

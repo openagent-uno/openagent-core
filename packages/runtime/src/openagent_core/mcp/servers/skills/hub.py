@@ -34,14 +34,14 @@ from pathlib import Path
 
 import yaml
 
-from src.core.paths import default_skills_path
-from src.memory.vault.parser import (
+from openagent_core.core.paths import default_skills_path
+from openagent_core.memory.vault.parser import (
     FrontmatterSyntaxError,
     load_frontmatter_yaml,
     split_frontmatter,
 )
-from src.mcp.servers.skills import hub_guard
-from src.mcp.servers.skills.registry import SkillsRegistry, parse_skill_file
+from openagent_core.mcp.servers.skills import hub_guard
+from openagent_core.mcp.servers.skills.registry import SkillsRegistry, parse_skill_file
 
 # The provenance stamp for a hub skill. NOT ``agent`` on purpose: the curator's
 # work set is ``created_by == "agent"``, so this value keeps hub skills off-

@@ -26,9 +26,9 @@ from __future__ import annotations
 import re
 import time
 
-from src.memory.vault import taxonomy
-from src.memory.vault.index import VaultIndex
-from src.memory.vault.model import (
+from openagent_core.memory.vault import taxonomy
+from openagent_core.memory.vault.index import VaultIndex
+from openagent_core.memory.vault.model import (
     GateConfig,
     GateReport,
     Note,

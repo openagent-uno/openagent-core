@@ -14,26 +14,26 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from src.core._runner.agent.agent import Agent
+    from openagent_core.core._runner.agent.agent import Agent
 
-from src.core.runtime_errors import InputCheckError, OutputCheckError
-from src.core._run_state import RunContext
-from src.core._run_state.agent import RunInput, RunOutput, RunOutputEvent
-from src.memory.sessions import AgentSession
-from src.core._runner.utils.events import (
+from openagent_core.core.runtime_errors import InputCheckError, OutputCheckError
+from openagent_core.core._run_state import RunContext
+from openagent_core.core._run_state.agent import RunInput, RunOutput, RunOutputEvent
+from openagent_core.memory.sessions import AgentSession
+from openagent_core.core._runner.utils.events import (
     create_post_hook_completed_event,
     create_post_hook_started_event,
     create_pre_hook_completed_event,
     create_pre_hook_started_event,
     handle_event,
 )
-from src.core._runner.utils.hooks import (
+from openagent_core.core._runner.utils.hooks import (
     copy_args_for_background,
     filter_hook_args,
     is_guardrail_hook,
     should_run_hook_in_background,
 )
-from src.core._runner.utils.log import (
+from openagent_core.core._runner.utils.log import (
     log_exception,
     log_warning,
 )
@@ -53,7 +53,7 @@ def execute_pre_hooks(
     **kwargs: Any,
 ) -> Iterator[RunOutputEvent]:
     """Execute multiple pre-hook functions in succession."""
-    from src.core._runner.agent._init import set_debug
+    from openagent_core.core._runner.agent._init import set_debug
 
     if hooks is None:
         return
@@ -164,7 +164,7 @@ async def aexecute_pre_hooks(
     **kwargs: Any,
 ) -> AsyncIterator[RunOutputEvent]:
     """Execute multiple pre-hook functions in succession (async version)."""
-    from src.core._runner.agent._init import set_debug
+    from openagent_core.core._runner.agent._init import set_debug
 
     if hooks is None:
         return
@@ -271,7 +271,7 @@ def execute_post_hooks(
     **kwargs: Any,
 ) -> Iterator[RunOutputEvent]:
     """Execute multiple post-hook functions in succession."""
-    from src.core._runner.agent._init import set_debug
+    from openagent_core.core._runner.agent._init import set_debug
 
     if hooks is None:
         return
@@ -372,7 +372,7 @@ async def aexecute_post_hooks(
     **kwargs: Any,
 ) -> AsyncIterator[RunOutputEvent]:
     """Execute multiple post-hook functions in succession (async version)."""
-    from src.core._runner.agent._init import set_debug
+    from openagent_core.core._runner.agent._init import set_debug
 
     if hooks is None:
         return

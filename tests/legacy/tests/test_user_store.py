@@ -38,7 +38,7 @@ def _restore_home(old_home: str | None) -> None:
 @test("user_store",
       "two handles coexist on one network name — invite redeemable by anyone")
 async def t_two_handles_coexist(ctx: TestContext) -> None:
-    from src.network import user_store
+    from openagent_core.network import user_store
 
     _, old_home = _fake_home(ctx)
     try:
@@ -86,7 +86,7 @@ async def t_two_handles_coexist(ctx: TestContext) -> None:
 @test("user_store",
       "add_or_update on the same (name, handle) updates in place, keeps added_at")
 async def t_same_pair_updates_in_place(ctx: TestContext) -> None:
-    from src.network import user_store
+    from openagent_core.network import user_store
 
     _, old_home = _fake_home(ctx)
     try:
@@ -112,7 +112,7 @@ async def t_same_pair_updates_in_place(ctx: TestContext) -> None:
 @test("user_store",
       "remove targets one (name, handle) pair, leaving the other intact")
 async def t_remove_targets_handle(ctx: TestContext) -> None:
-    from src.network import user_store
+    from openagent_core.network import user_store
 
     _, old_home = _fake_home(ctx)
     try:

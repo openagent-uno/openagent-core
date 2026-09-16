@@ -20,14 +20,14 @@ from ._framework import TestContext, test
 
 @test("tool_result_cap", "short string results pass through unchanged")
 async def t_passthrough_small(_ctx: TestContext) -> None:
-    from src.core.tool_output import cap_tool_output
+    from openagent_core.core.tool_output import cap_tool_output
 
     assert cap_tool_output("hello world") == "hello world"
 
 
 @test("tool_result_cap", "unknown result shapes are returned as-is")
 async def t_non_string_passthrough(_ctx: TestContext) -> None:
-    from src.core.tool_output import cap_tool_output
+    from openagent_core.core.tool_output import cap_tool_output
 
     assert cap_tool_output({"a": 1}) == {"a": 1}
     assert cap_tool_output(None) is None
@@ -35,7 +35,7 @@ async def t_non_string_passthrough(_ctx: TestContext) -> None:
 
 @test("tool_result_cap", "oversized string is truncated with a marker and bounded in size")
 async def t_truncates_oversized(_ctx: TestContext) -> None:
-    from src.core.tool_output import cap_tool_output, max_tool_result_chars
+    from openagent_core.core.tool_output import cap_tool_output, max_tool_result_chars
 
     limit = max_tool_result_chars()
     big = "A" * (limit * 3)
@@ -49,7 +49,7 @@ async def t_truncates_oversized(_ctx: TestContext) -> None:
 
 @test("tool_result_cap", "content-block lists are capped per text block, structure intact")
 async def t_caps_content_blocks(_ctx: TestContext) -> None:
-    from src.core.tool_output import cap_tool_output, max_tool_result_chars
+    from openagent_core.core.tool_output import cap_tool_output, max_tool_result_chars
 
     limit = max_tool_result_chars()
     blocks = [
@@ -68,8 +68,8 @@ async def t_caps_content_blocks(_ctx: TestContext) -> None:
 @test("tool_result_cap", "the cap reaches the MODEL's tool message, not just the display record")
 async def t_cap_applied_to_model_message(_ctx: TestContext) -> None:
     # THE regression. Before the fix, this message carried the full 642 KB.
-    from src.core.tool_output import max_tool_result_chars
-    from src.models.providers.base import Model
+    from openagent_core.core.tool_output import max_tool_result_chars
+    from openagent_core.models.providers.base import Model
 
     limit = max_tool_result_chars()
 

@@ -1,6 +1,6 @@
 import anyio
 
-from src.network.transport.anyio_cancel_guard import (
+from openagent_core.network.transport.anyio_cancel_guard import (
     _patch_deliver_cancellation,
     _unpatch_deliver_cancellation,
 )

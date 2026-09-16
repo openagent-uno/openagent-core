@@ -16,8 +16,8 @@ from ._framework import TestContext, test
 
 @test("workflow_examples", "every example passes structural validate_graph")
 async def t_examples_validate(ctx: TestContext) -> None:
-    from src.workflow.examples import WORKFLOW_EXAMPLES
-    from src.workflow.validate import ValidationError, validate_graph
+    from openagent_core.workflow.examples import WORKFLOW_EXAMPLES
+    from openagent_core.workflow.validate import ValidationError, validate_graph
 
     assert WORKFLOW_EXAMPLES, "WORKFLOW_EXAMPLES is empty"
 
@@ -32,7 +32,7 @@ async def t_examples_validate(ctx: TestContext) -> None:
 
 @test("workflow_examples", "every example has description + patterns")
 async def t_examples_metadata(ctx: TestContext) -> None:
-    from src.workflow.examples import WORKFLOW_EXAMPLES
+    from openagent_core.workflow.examples import WORKFLOW_EXAMPLES
 
     bad: list[str] = []
     for name, ex in WORKFLOW_EXAMPLES.items():
@@ -47,7 +47,7 @@ async def t_examples_metadata(ctx: TestContext) -> None:
 
 @test("workflow_examples", "list_workflow_examples returns the right shape")
 async def t_list_shape(ctx: TestContext) -> None:
-    from src.workflow.examples import (
+    from openagent_core.workflow.examples import (
         WORKFLOW_EXAMPLES, list_workflow_examples,
     )
 
@@ -64,7 +64,7 @@ async def t_list_shape(ctx: TestContext) -> None:
 
 @test("workflow_examples", "get_workflow_example returns a complete graph")
 async def t_get_returns_graph(ctx: TestContext) -> None:
-    from src.workflow.examples import (
+    from openagent_core.workflow.examples import (
         WORKFLOW_EXAMPLES, get_workflow_example,
     )
 
@@ -87,7 +87,7 @@ async def t_examples_cover_pitfalls(ctx: TestContext) -> None:
     """The whole point of the examples is to teach the LLM the block
     types it most often gets wrong. If we ever lose coverage of one of
     these, the reference manual stops earning its keep."""
-    from src.workflow.examples import WORKFLOW_EXAMPLES
+    from openagent_core.workflow.examples import WORKFLOW_EXAMPLES
 
     block_types_seen: set[str] = set()
     for ex in WORKFLOW_EXAMPLES.values():
@@ -114,7 +114,7 @@ async def t_if_block_false_routes(ctx: TestContext) -> None:
     a61b943; restoring it brings every workflow_finalize_resilience
     test back to green at the same time).
     """
-    from src.workflow.executor import NodeResult, _RunCtx, _h_if
+    from openagent_core.workflow.executor import NodeResult, _RunCtx, _h_if
 
     ctx_obj = _RunCtx(run_id="r1", workflow_id="wf1", inputs={}, vars={})
     # ``expression: False`` literal (YAML bool, not a string template).

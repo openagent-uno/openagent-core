@@ -3,7 +3,7 @@
 Operational-history search is an in-process capability because the model must
 never be allowed to choose the tenant or principal it searches as.  The
 gateway binds the verified device certificate here before entering the agent
-runtime; :mod:`src.mcp.servers.memory_search.adapters` reads the value at tool
+runtime; :mod:`openagent_core.mcp.servers.memory_search.adapters` reads the value at tool
 execution time.  ``ContextVar`` propagation also gives delegated child tasks
 the same subject without serialising a reusable credential.
 

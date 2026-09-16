@@ -5,15 +5,15 @@ LLM-free. A ``_FakeModel`` with mutable ``api_key`` / ``base_url`` /
 ``client`` / ``async_client`` and a synthetic ``aresponse`` /
 ``aresponse_stream`` stands in for the runtime Model, so these pin the
 rotation mechanism (pool selection + the fallback.py seam) without a live
-provider. The header note in :mod:`src.models.credential_pool` documents the
+provider. The header note in :mod:`openagent_core.models.credential_pool` documents the
 inert-by-default contract these guard.
 """
 from __future__ import annotations
 
 import time
 
-from src.core.runtime_errors import ModelProviderError, ModelRateLimitError
-from src.models.providers.response import ModelResponse
+from openagent_core.core.runtime_errors import ModelProviderError, ModelRateLimitError
+from openagent_core.models.providers.response import ModelResponse
 
 from ._framework import TestContext, test
 
@@ -91,7 +91,7 @@ def _attach_pool(model: _FakeModel, pool) -> None:
 
 
 def _acct(key: str, base_url: str = "http://proxy/v1"):
-    from src.models.credential_pool import PooledAccount
+    from openagent_core.models.credential_pool import PooledAccount
 
     return PooledAccount(api_key=key, base_url=base_url)
 
@@ -99,8 +99,8 @@ def _acct(key: str, base_url: str = "http://proxy/v1"):
 # ── 1. Rotate before fallback ────────────────────────────────────────
 @test("credential_pool", "rotates across accounts before falling back to deepseek")
 async def t_rotate_before_fallback(_ctx: TestContext) -> None:
-    from src.models.credential_pool import CredentialPool
-    from src.models.providers.fallback import FallbackConfig, acall_model_with_fallback
+    from openagent_core.models.credential_pool import CredentialPool
+    from openagent_core.models.providers.fallback import FallbackConfig, acall_model_with_fallback
 
     pool = CredentialPool([_acct("ka"), _acct("kb"), _acct("kc")], strategy="fill_first")
     model = _FakeModel(api_key="ka")
@@ -121,8 +121,8 @@ async def t_rotate_before_fallback(_ctx: TestContext) -> None:
 # ── 2. Pool exhausted → existing fallback fires ──────────────────────
 @test("credential_pool", "pool exhausted falls through to the existing fallback")
 async def t_pool_exhausted_falls_back(_ctx: TestContext) -> None:
-    from src.models.credential_pool import CredentialPool
-    from src.models.providers.fallback import FallbackConfig, acall_model_with_fallback
+    from openagent_core.models.credential_pool import CredentialPool
+    from openagent_core.models.providers.fallback import FallbackConfig, acall_model_with_fallback
 
     pool = CredentialPool([_acct("ka"), _acct("kb"), _acct("kc")], strategy="fill_first")
     model = _FakeModel(api_key="ka")
@@ -142,7 +142,7 @@ async def t_pool_exhausted_falls_back(_ctx: TestContext) -> None:
 # ── 3. Inert by default (no pool attribute) ──────────────────────────
 @test("credential_pool", "inert without a pool: one aresponse then existing fallback")
 async def t_inert_no_pool(_ctx: TestContext) -> None:
-    from src.models.providers.fallback import FallbackConfig, acall_model_with_fallback
+    from openagent_core.models.providers.fallback import FallbackConfig, acall_model_with_fallback
 
     model = _FakeModel(api_key="ka")
     model.fail_keys = {"ka"}
@@ -161,7 +161,7 @@ async def t_inert_no_pool(_ctx: TestContext) -> None:
 # ── 4. Strategy + cooldown + non-429 + auth units ────────────────────
 @test("credential_pool", "fill_first sticks to entry[0] until it is exhausted")
 async def t_fill_first_sticks(_ctx: TestContext) -> None:
-    from src.models.credential_pool import CredentialPool
+    from openagent_core.models.credential_pool import CredentialPool
 
     pool = CredentialPool([_acct("ka"), _acct("kb"), _acct("kc")], strategy="fill_first")
     assert [pool.select().api_key for _ in range(3)] == ["ka", "ka", "ka"]
@@ -171,7 +171,7 @@ async def t_fill_first_sticks(_ctx: TestContext) -> None:
 
 @test("credential_pool", "round_robin cycles across accounts")
 async def t_round_robin_cycles(_ctx: TestContext) -> None:
-    from src.models.credential_pool import CredentialPool
+    from openagent_core.models.credential_pool import CredentialPool
 
     pool = CredentialPool([_acct("ka"), _acct("kb"), _acct("kc")], strategy="round_robin")
     keys = [pool.select().api_key for _ in range(6)]
@@ -180,7 +180,7 @@ async def t_round_robin_cycles(_ctx: TestContext) -> None:
 
 @test("credential_pool", "least_used spreads load by request_count")
 async def t_least_used_spreads(_ctx: TestContext) -> None:
-    from src.models.credential_pool import CredentialPool
+    from openagent_core.models.credential_pool import CredentialPool
 
     pool = CredentialPool([_acct("ka"), _acct("kb"), _acct("kc")], strategy="least_used")
     keys = [pool.select().api_key for _ in range(4)]
@@ -189,7 +189,7 @@ async def t_least_used_spreads(_ctx: TestContext) -> None:
 
 @test("credential_pool", "elapsed cooldown re-enters select()")
 async def t_cooldown_reenters(_ctx: TestContext) -> None:
-    from src.models.credential_pool import CredentialPool
+    from openagent_core.models.credential_pool import CredentialPool
 
     pool = CredentialPool([_acct("ka"), _acct("kb")], strategy="fill_first")
     pool.mark_exhausted_and_rotate(status_code=429, api_key_hint="ka")
@@ -203,8 +203,8 @@ async def t_cooldown_reenters(_ctx: TestContext) -> None:
 
 @test("credential_pool", "a non-429 error does NOT rotate")
 async def t_non_ratelimit_no_rotate(_ctx: TestContext) -> None:
-    from src.models.credential_pool import CredentialPool
-    from src.models.providers.fallback import FallbackConfig, acall_model_with_fallback
+    from openagent_core.models.credential_pool import CredentialPool
+    from openagent_core.models.providers.fallback import FallbackConfig, acall_model_with_fallback
 
     pool = CredentialPool([_acct("ka"), _acct("kb")], strategy="fill_first")
     model = _FakeModel(api_key="ka")
@@ -226,7 +226,7 @@ async def t_non_ratelimit_no_rotate(_ctx: TestContext) -> None:
 
 @test("credential_pool", "auth (401) marks DEAD and is never re-selected")
 async def t_auth_dead_terminal(_ctx: TestContext) -> None:
-    from src.models.credential_pool import CredentialPool
+    from openagent_core.models.credential_pool import CredentialPool
 
     pool = CredentialPool([_acct("ka"), _acct("kb")], strategy="fill_first")
     nxt = pool.mark_exhausted_and_rotate(status_code=401, api_key_hint="ka")
@@ -242,7 +242,7 @@ async def t_auth_dead_terminal(_ctx: TestContext) -> None:
 # ── 5. Config parse / inert gate / singleton ─────────────────────────
 @test("credential_pool", "get_or_build_pool inert when accounts absent or <= 1")
 async def t_config_parse_and_singleton(_ctx: TestContext) -> None:
-    from src.models.credential_pool import _reset_registry_for_test, get_or_build_pool
+    from openagent_core.models.credential_pool import _reset_registry_for_test, get_or_build_pool
 
     _reset_registry_for_test()
     assert get_or_build_pool("p_absent", {"base_url": "http://proxy/v1"}) is None
@@ -266,7 +266,7 @@ async def t_config_parse_and_singleton(_ctx: TestContext) -> None:
 
 @test("credential_pool", "get_pool_strategy reads the top-level strategy map")
 async def t_get_pool_strategy(_ctx: TestContext) -> None:
-    from src.models.credential_pool import get_pool_strategy
+    from openagent_core.models.credential_pool import get_pool_strategy
 
     cfg = {"credential_pool_strategies": {"local": "round_robin", "openai": "least_used"}}
     assert get_pool_strategy("local", cfg) == "round_robin"
@@ -280,8 +280,8 @@ async def t_get_pool_strategy(_ctx: TestContext) -> None:
 # ── 6. Streaming: mid-stream 429 must NOT rotate ─────────────────────
 @test("credential_pool", "streaming: mid-stream 429 does not rotate (would duplicate output)")
 async def t_stream_midfail_no_rotate(_ctx: TestContext) -> None:
-    from src.models.credential_pool import CredentialPool
-    from src.models.providers.fallback import FallbackConfig, acall_model_stream_with_fallback
+    from openagent_core.models.credential_pool import CredentialPool
+    from openagent_core.models.providers.fallback import FallbackConfig, acall_model_stream_with_fallback
 
     pool = CredentialPool([_acct("ka"), _acct("kb")], strategy="fill_first")
     model = _FakeModel(api_key="ka")
@@ -301,8 +301,8 @@ async def t_stream_midfail_no_rotate(_ctx: TestContext) -> None:
 
 @test("credential_pool", "streaming: pre-first-event 429 rotates to the next account")
 async def t_stream_prefail_rotates(_ctx: TestContext) -> None:
-    from src.models.credential_pool import CredentialPool
-    from src.models.providers.fallback import FallbackConfig, acall_model_stream_with_fallback
+    from openagent_core.models.credential_pool import CredentialPool
+    from openagent_core.models.providers.fallback import FallbackConfig, acall_model_stream_with_fallback
 
     pool = CredentialPool([_acct("ka"), _acct("kb")], strategy="fill_first")
     model = _FakeModel(api_key="ka")

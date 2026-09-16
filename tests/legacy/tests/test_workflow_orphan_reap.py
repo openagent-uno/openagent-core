@@ -36,7 +36,7 @@ from ._framework import TestContext, test
 
 @test("workflow_orphan_reap", "reap_orphan_workflow_runs marks all running rows as failed")
 async def t_basic_reap(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"reap-{uuid.uuid4().hex[:8]}.db")
     db: MemoryDB | None = None
@@ -90,7 +90,7 @@ async def t_basic_reap(ctx: TestContext) -> None:
 
 @test("workflow_orphan_reap", "second reap is a no-op (idempotent)")
 async def t_reap_idempotent(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"reap-idem-{uuid.uuid4().hex[:8]}.db")
     db: MemoryDB | None = None
@@ -120,7 +120,7 @@ async def t_reap_preserves_error(ctx: TestContext) -> None:
     """When a partial finalize wrote a real error message but never
     flipped status to 'failed' (DB-lock mid-update), the reap should
     append its marker, not overwrite the diagnostic content."""
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"reap-merge-{uuid.uuid4().hex[:8]}.db")
     db: MemoryDB | None = None

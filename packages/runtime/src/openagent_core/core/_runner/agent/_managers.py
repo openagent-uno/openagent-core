@@ -11,16 +11,16 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from src.core._runner.agent.agent import Agent
-    from src.core.metrics import RunMetrics
+    from openagent_core.core._runner.agent.agent import Agent
+    from openagent_core.core.metrics import RunMetrics
 
-from src.memory.store.base import UserMemory
-from src.memory.store.schemas.culture import CulturalKnowledge
-from src.models.providers.message import Message
-from src.core._run_state.messages import RunMessages
-from src.memory.sessions import AgentSession
-from src.core._runner.utils.log import log_debug, log_warning
-from src.core.execution_origin import create_server_only_task
+from openagent_core.memory.store.base import UserMemory
+from openagent_core.memory.store.schemas.culture import CulturalKnowledge
+from openagent_core.models.providers.message import Message
+from openagent_core.core._run_state.messages import RunMessages
+from openagent_core.memory.sessions import AgentSession
+from openagent_core.core._runner.utils.log import log_debug, log_warning
+from openagent_core.core.execution_origin import create_server_only_task
 
 # ---------------------------------------------------------------------------
 # Memory
@@ -32,7 +32,7 @@ def make_memories(
     run_messages: RunMessages,
     user_id: Optional[str] = None,
 ) -> Optional[RunMetrics]:
-    from src.core.metrics import RunMetrics
+    from openagent_core.core.metrics import RunMetrics
 
     collector = RunMetrics()
     user_message_str = run_messages.user_message.get_content_string() if run_messages.user_message is not None else None
@@ -87,7 +87,7 @@ async def amake_memories(
     run_messages: RunMessages,
     user_id: Optional[str] = None,
 ) -> Optional[RunMetrics]:
-    from src.core.metrics import RunMetrics
+    from openagent_core.core.metrics import RunMetrics
 
     collector = RunMetrics()
     user_message_str = run_messages.user_message.get_content_string() if run_messages.user_message is not None else None
@@ -228,7 +228,7 @@ def get_user_memories(agent: Agent, user_id: Optional[str] = None) -> Optional[L
     Returns:
         Optional[List[UserMemory]]: The user memories.
     """
-    from src.core._runner.agent._init import set_memory_manager
+    from openagent_core.core._runner.agent._init import set_memory_manager
 
     if agent.memory_manager is None:
         set_memory_manager(agent)
@@ -249,7 +249,7 @@ async def aget_user_memories(agent: Agent, user_id: Optional[str] = None) -> Opt
     Returns:
         Optional[List[UserMemory]]: The user memories.
     """
-    from src.core._runner.agent._init import set_memory_manager
+    from openagent_core.core._runner.agent._init import set_memory_manager
 
     if agent.memory_manager is None:
         set_memory_manager(agent)
@@ -270,7 +270,7 @@ def make_cultural_knowledge(
     agent: Agent,
     run_messages: RunMessages,
 ) -> Optional[RunMetrics]:
-    from src.core.metrics import RunMetrics
+    from openagent_core.core.metrics import RunMetrics
 
     collector = RunMetrics()
     if run_messages.user_message is not None and agent.culture_manager is not None and agent.update_cultural_knowledge:
@@ -286,7 +286,7 @@ async def acreate_cultural_knowledge(
     agent: Agent,
     run_messages: RunMessages,
 ) -> Optional[RunMetrics]:
-    from src.core.metrics import RunMetrics
+    from openagent_core.core.metrics import RunMetrics
 
     collector = RunMetrics()
     if run_messages.user_message is not None and agent.culture_manager is not None and agent.update_cultural_knowledge:
@@ -405,7 +405,7 @@ def process_learnings(
     if agent._learning is None:
         return None
 
-    from src.core.metrics import RunMetrics
+    from openagent_core.core.metrics import RunMetrics
 
     collector = RunMetrics()
     try:
@@ -436,7 +436,7 @@ async def aprocess_learnings(
     if agent._learning is None:
         return None
 
-    from src.core.metrics import RunMetrics
+    from openagent_core.core.metrics import RunMetrics
 
     collector = RunMetrics()
     try:

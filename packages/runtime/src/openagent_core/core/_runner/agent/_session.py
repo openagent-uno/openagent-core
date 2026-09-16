@@ -15,16 +15,16 @@ from typing import (
 from uuid import uuid4
 
 if TYPE_CHECKING:
-    from src.core._runner.agent.agent import Agent
+    from openagent_core.core._runner.agent.agent import Agent
 
-from src.memory.store.base import SessionType
-from src.core.metrics import SessionMetrics
-from src.models.providers.message import Message
-from src.core._run_state import RunStatus
-from src.core._run_state.agent import RunOutput
-from src.memory.sessions import AgentSession, TeamSession, WorkflowSession
-from src.memory.sessions.summary import SessionSummary
-from src.core._runner.utils.agent import (
+from openagent_core.memory.store.base import SessionType
+from openagent_core.core.metrics import SessionMetrics
+from openagent_core.models.providers.message import Message
+from openagent_core.core._run_state import RunStatus
+from openagent_core.core._run_state.agent import RunOutput
+from openagent_core.memory.sessions import AgentSession, TeamSession, WorkflowSession
+from openagent_core.memory.sessions.summary import SessionSummary
+from openagent_core.core._runner.utils.agent import (
     aget_session_metrics_util,
     aget_session_name_util,
     aget_session_state_util,
@@ -36,7 +36,7 @@ from src.core._runner.utils.agent import (
     set_session_name_util,
     update_session_state_util,
 )
-from src.core._runner.utils.log import log_debug, log_error, log_warning
+from openagent_core.core._runner.utils.log import log_debug, log_error, log_warning
 
 # ---------------------------------------------------------------------------
 # Session initialization
@@ -86,7 +86,7 @@ def get_session(
     Returns:
         AgentSession: The AgentSession loaded from the database/cache or None if not found.
     """
-    from src.core._runner.agent import _init, _storage
+    from openagent_core.core._runner.agent import _init, _storage
 
     if not session_id and not agent.session_id:
         raise Exception("No session_id provided")
@@ -158,7 +158,7 @@ async def aget_session(
     Returns:
         AgentSession: The AgentSession loaded from the database/cache or None if not found.
     """
-    from src.core._runner.agent import _storage
+    from openagent_core.core._runner.agent import _storage
 
     if not session_id and not agent.session_id:
         raise Exception("No session_id provided")
@@ -217,7 +217,7 @@ def save_session(agent: Agent, session: Union[AgentSession, TeamSession, Workflo
     """
     Save the AgentSession to storage
     """
-    from src.core._runner.agent import _init, _storage
+    from openagent_core.core._runner.agent import _init, _storage
 
     if _init.has_async_db(agent):
         raise ValueError("Cannot use sync save_session() with an async database. Use asave_session() instead.")
@@ -241,7 +241,7 @@ async def asave_session(agent: Agent, session: Union[AgentSession, TeamSession, 
     """
     Save the AgentSession to storage
     """
-    from src.core._runner.agent import _init, _storage
+    from openagent_core.core._runner.agent import _init, _storage
 
     # If the agent is a member of a team, do not save the session to the database
     if (
@@ -271,7 +271,7 @@ def delete_session(agent: Agent, session_id: str, user_id: Optional[str] = None)
 
 async def adelete_session(agent: Agent, session_id: str, user_id: Optional[str] = None):
     """Delete the current session and save to storage"""
-    from src.core._runner.agent import _init
+    from openagent_core.core._runner.agent import _init
 
     if agent.db is None:
         return
@@ -295,7 +295,7 @@ def rename(agent: Agent, name: str, session_id: Optional[str] = None) -> None:
         name (str): The new name for the Agent.
         session_id (Optional[str]): The session_id of the session where to store the new name. If not provided, the current cached session ID is used.
     """
-    from src.core._runner.agent import _init
+    from openagent_core.core._runner.agent import _init
 
     session_id = session_id or agent.session_id
 
@@ -575,7 +575,7 @@ async def aget_session_metrics(agent: Agent, session_id: Optional[str] = None) -
 
 def update_session_metrics(agent: Agent, session: AgentSession, run_response: RunOutput) -> None:
     """Calculate session metrics convert run Metrics to SessionMetrics."""
-    from src.core._runner.agent._storage import update_session_metrics as _update_session_metrics_storage
+    from openagent_core.core._runner.agent._storage import update_session_metrics as _update_session_metrics_storage
 
     _update_session_metrics_storage(agent, session=session, run_response=run_response)
 

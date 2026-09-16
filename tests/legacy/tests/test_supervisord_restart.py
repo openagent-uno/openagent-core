@@ -27,7 +27,7 @@ def _which_map(present: set[str]):
 
 @test("restart", "systemctl-missing falls back to supervisorctl -c <conf> restart <program>")
 async def t_supervisord_fallback_when_systemctl_absent(ctx: TestContext) -> None:
-    import src.setup.installer as installer
+    import openagent_core.setup.installer as installer
 
     with tempfile.TemporaryDirectory() as tmp:
         conf = str(Path(tmp) / "supervisord.conf")
@@ -57,7 +57,7 @@ async def t_restart_service_dispatch_uses_fallback(ctx: TestContext) -> None:
     """The real entry point ``openagent update`` calls is
     ``restart_service``; on Linux with systemctl gone it must reach
     supervisorctl, not raise ``FileNotFoundError``."""
-    import src.setup.installer as installer
+    import openagent_core.setup.installer as installer
 
     with tempfile.TemporaryDirectory() as tmp:
         conf = str(Path(tmp) / "supervisord.conf")
@@ -82,7 +82,7 @@ async def t_restart_service_dispatch_uses_fallback(ctx: TestContext) -> None:
 
 @test("restart", "systemctl is still preferred and tried first on systemd hosts")
 async def t_systemctl_preferred_when_present(ctx: TestContext) -> None:
-    import src.setup.installer as installer
+    import openagent_core.setup.installer as installer
 
     run = MagicMock()
     with (
@@ -102,7 +102,7 @@ async def t_systemctl_preferred_when_present(ctx: TestContext) -> None:
 @test("restart", "systemctl present-but-erroring falls through to supervisord")
 async def t_systemctl_error_falls_through(ctx: TestContext) -> None:
     import subprocess
-    import src.setup.installer as installer
+    import openagent_core.setup.installer as installer
 
     with tempfile.TemporaryDirectory() as tmp:
         conf = str(Path(tmp) / "supervisord.conf")
@@ -130,7 +130,7 @@ async def t_systemctl_error_falls_through(ctx: TestContext) -> None:
 
 @test("restart", "neither systemctl nor supervisorctl: graceful RuntimeError, no crash")
 async def t_neither_available_is_graceful(ctx: TestContext) -> None:
-    import src.setup.installer as installer
+    import openagent_core.setup.installer as installer
 
     run = MagicMock()
     with (
@@ -152,7 +152,7 @@ async def t_neither_available_is_graceful(ctx: TestContext) -> None:
 
 @test("restart", "supervisord fallback is skipped when the conf file is missing")
 async def t_missing_conf_raises(ctx: TestContext) -> None:
-    import src.setup.installer as installer
+    import openagent_core.setup.installer as installer
 
     missing = "/nonexistent/does-not-exist/supervisord.conf"
     run = MagicMock()
@@ -180,9 +180,9 @@ async def t_update_no_restart_skips_restart(ctx: TestContext) -> None:
     bounce. Drives the real ``update`` command with the upgrade mocked
     out (invoked standalone so the heavy group callback is skipped)."""
     from click.testing import CliRunner
-    import src.core.server as server_mod
-    import src.setup.installer as installer
-    from src.cli import update
+    import openagent_core.core.server as server_mod
+    import openagent_core.setup.installer as installer
+    from openagent_core.cli import update
 
     restart = MagicMock(return_value="should-not-be-called")
     with (
@@ -201,9 +201,9 @@ async def t_update_default_restarts(ctx: TestContext) -> None:
     """Companion to the ``--no-restart`` test: with the flag off and a
     real version change, the command must invoke ``restart_service``."""
     from click.testing import CliRunner
-    import src.core.server as server_mod
-    import src.setup.installer as installer
-    from src.cli import update
+    import openagent_core.core.server as server_mod
+    import openagent_core.setup.installer as installer
+    from openagent_core.cli import update
 
     restart = MagicMock(return_value="restarted ok")
     with (

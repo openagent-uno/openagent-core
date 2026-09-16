@@ -49,12 +49,12 @@ def _reset_backend() -> None:
     A prior module (test_sandbox) may have left docker selected; without this
     the local path here would misroute. Mirrors test_sandbox's own discipline.
     """
-    from src.mcp.servers.shell import backends
+    from openagent_core.mcp.servers.shell import backends
     backends._reset_backend_for_tests()
 
 
 def _local_settings(**over):
-    from src.core.config import PtcSettings
+    from openagent_core.core.config import PtcSettings
     base = dict(enabled=True, require_sandbox=False, timeout_s=30)
     base.update(over)
     return PtcSettings(**base)
@@ -119,8 +119,8 @@ class _FakePtcDocker:
 
     def build_spawn(self, *, command, cwd, env):
         import sys
-        from src.mcp.servers.shell.backends import SpawnSpec
-        from src.mcp.servers.shell.shells import _pick_shell
+        from openagent_core.mcp.servers.shell.backends import SpawnSpec
+        from openagent_core.mcp.servers.shell.shells import _pick_shell
 
         if command.startswith("python3 "):
             command = sys.executable + command[len("python3"):]
@@ -143,7 +143,7 @@ class _FakePtcDocker:
 
 @test("ptc", "rpc server proxies a call through _call_tool_impl with args intact")
 async def t_rpc_proxy(_ctx: TestContext) -> None:
-    from src.mcp.servers.ptc import handlers
+    from openagent_core.mcp.servers.ptc import handlers
 
     seen: dict = {}
 
@@ -182,7 +182,7 @@ async def t_rpc_proxy(_ctx: TestContext) -> None:
 
 @test("ptc", "run_python round-trips: bare call_tool resolves, stdout carries the result")
 async def t_script_round_trip(_ctx: TestContext) -> None:
-    from src.mcp.servers.ptc import handlers
+    from openagent_core.mcp.servers.ptc import handlers
 
     _reset_backend()
 
@@ -208,9 +208,9 @@ async def t_script_round_trip(_ctx: TestContext) -> None:
 
 @test("ptc", "disabled by default: no gated entry, note empty, prompt byte-identical")
 async def t_disabled_by_default(_ctx: TestContext) -> None:
-    from src.mcp.builtins import config_gated_mcp_entries, DEFAULT_MCPS
-    from src.core.config import ptc_settings
-    from src.core.prompts import build_ptc_note, FRAMEWORK_SYSTEM_PROMPT
+    from openagent_core.mcp.builtins import config_gated_mcp_entries, DEFAULT_MCPS
+    from openagent_core.core.config import ptc_settings
+    from openagent_core.core.prompts import build_ptc_note, FRAMEWORK_SYSTEM_PROMPT
 
     # Unset config → OFF, and never in the unconditional default seed set.
     assert ptc_settings({}).enabled is False
@@ -238,8 +238,8 @@ async def t_disabled_by_default(_ctx: TestContext) -> None:
 
 @test("ptc", "oversized stdout is truncated with the cap marker")
 async def t_output_cap(_ctx: TestContext) -> None:
-    from src.mcp.servers.ptc import handlers
-    from src.core.tool_output import max_tool_result_chars
+    from openagent_core.mcp.servers.ptc import handlers
+    from openagent_core.core.tool_output import max_tool_result_chars
 
     _reset_backend()
     limit = max_tool_result_chars()
@@ -259,8 +259,8 @@ async def t_output_cap(_ctx: TestContext) -> None:
 
 @test("ptc", "dry_run captured at entry stamps call_meta on proxied tool calls")
 async def t_dry_run_stamping(_ctx: TestContext) -> None:
-    from src.mcp.servers.ptc import handlers
-    from src.core.dry_run import call_meta, dry_run_scope, is_dry_run
+    from openagent_core.mcp.servers.ptc import handlers
+    from openagent_core.core.dry_run import call_meta, dry_run_scope, is_dry_run
 
     _reset_backend()
     seen: dict = {}
@@ -302,7 +302,7 @@ async def t_dry_run_stamping(_ctx: TestContext) -> None:
 
 @test("ptc", "rpc server rejects a wrong or absent token and does not dispatch")
 async def t_auth(_ctx: TestContext) -> None:
-    from src.mcp.servers.ptc import handlers
+    from openagent_core.mcp.servers.ptc import handlers
 
     called = {"n": 0}
 
@@ -345,8 +345,8 @@ async def t_auth(_ctx: TestContext) -> None:
 
 @test("ptc", "require_sandbox and the docker backend both fail closed (no host run)")
 async def t_fail_closed(_ctx: TestContext) -> None:
-    from src.mcp.servers.ptc import handlers
-    from src.mcp.servers.shell import backends
+    from openagent_core.mcp.servers.ptc import handlers
+    from openagent_core.mcp.servers.shell import backends
 
     ran = {"n": 0}
 
@@ -371,7 +371,7 @@ async def t_fail_closed(_ctx: TestContext) -> None:
     # daemon-bring-up failure so this stays hermetic (no real docker required).
     class _PrepFails(_FakePtcDocker):
         async def prepare(self):
-            from src.mcp.servers.shell.backends import SandboxUnavailableError
+            from openagent_core.mcp.servers.shell.backends import SandboxUnavailableError
             raise SandboxUnavailableError("no docker daemon in this test")
 
     prev = os.environ.get("OPENAGENT_SANDBOX_BACKEND")
@@ -408,8 +408,8 @@ async def t_fail_closed(_ctx: TestContext) -> None:
 
 @test("ptc", "docker path: file-transport RPC round-trips through _call_tool_impl (fake docker)")
 async def t_docker_round_trip(_ctx: TestContext) -> None:
-    from src.mcp.servers.ptc import handlers
-    from src.mcp.servers.shell import backends
+    from openagent_core.mcp.servers.ptc import handlers
+    from openagent_core.mcp.servers.shell import backends
 
     seen: dict = {}
 
@@ -458,7 +458,7 @@ async def t_docker_round_trip(_ctx: TestContext) -> None:
 
 @test("ptc", "docker path: a wrong-token request file is rejected, uncounted (file transport)")
 async def t_docker_auth(_ctx: TestContext) -> None:
-    from src.mcp.servers.ptc import handlers
+    from openagent_core.mcp.servers.ptc import handlers
 
     ran = {"n": 0}
 

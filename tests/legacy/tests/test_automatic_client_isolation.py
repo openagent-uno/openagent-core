@@ -44,7 +44,7 @@ class _Pool:
         }
         self._last_connect_error: dict[str, str] = {}
 
-        from src.mcp.servers.tool_search.adapters import build_runtime_toolkit
+        from openagent_core.mcp.servers.tool_search.adapters import build_runtime_toolkit
 
         self._toolkit_by_name["tool-search"] = build_runtime_toolkit(pool=self)
 
@@ -74,7 +74,7 @@ class _Pool:
 
 class _LiveClientHarness:
     def __init__(self) -> None:
-        from src.gateway.capabilities import CapabilityRegistry
+        from openagent_core.gateway.capabilities import CapabilityRegistry
 
         self.registry = CapabilityRegistry()
         self.pool = _Pool()
@@ -116,8 +116,8 @@ class _LiveClientHarness:
 
     async def probe_server_only(self, source: str) -> None:
         """Exercise the same scoped catalog/call path exposed to the model."""
-        from src.core.execution_origin import current_execution_origin
-        from src.mcp.servers.tool_search.adapters import (
+        from openagent_core.core.execution_origin import current_execution_origin
+        from openagent_core.mcp.servers.tool_search.adapters import (
             _call_scoped_tool_impl,
             _list_scoped_servers_impl,
         )
@@ -222,8 +222,8 @@ async def _wait_for(predicate, *, timeout: float = 3.0) -> None:
 )
 async def t_scheduled_firing_server_only(ctx: TestContext) -> None:
     del ctx
-    from src.core.execution_origin import current_execution_origin, execution_origin_scope
-    from src.core.scheduler import Scheduler
+    from openagent_core.core.execution_origin import current_execution_origin, execution_origin_scope
+    from openagent_core.core.scheduler import Scheduler
 
     harness = await _LiveClientHarness().start()
     agent = _ProbeAgent(harness, "scheduler")
@@ -254,12 +254,12 @@ async def t_scheduled_firing_server_only(ctx: TestContext) -> None:
 async def t_webhook_and_event_server_only(ctx: TestContext) -> None:
     import urllib.request
 
-    from src.core.event_dispatcher import dispatch_event
-    from src.core.event_secret import make_secret_material
-    from src.core.execution_origin import execution_origin_scope
-    from src.core.scheduler import Scheduler
-    from src.gateway.webhook_site import WebhookSite
-    from src.memory.db import MemoryDB
+    from openagent_core.core.event_dispatcher import dispatch_event
+    from openagent_core.core.event_secret import make_secret_material
+    from openagent_core.core.execution_origin import execution_origin_scope
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.gateway.webhook_site import WebhookSite
+    from openagent_core.memory.db import MemoryDB
 
     harness = await _LiveClientHarness().start()
     db = MemoryDB(str(ctx.test_dir / "automatic-client-webhook.db"))
@@ -363,8 +363,8 @@ async def t_webhook_and_event_server_only(ctx: TestContext) -> None:
 )
 async def t_telegram_bridge_server_only(ctx: TestContext) -> None:
     del ctx
-    from src.gateway.server import Gateway
-    from src.gateway.sessions import SessionManager
+    from openagent_core.gateway.server import Gateway
+    from openagent_core.gateway.sessions import SessionManager
 
     harness = await _LiveClientHarness().start()
     agent = _ProbeAgent(harness, "telegram-bridge")
@@ -487,9 +487,9 @@ class _WorkflowDb:
 )
 async def t_automatic_workflow_server_only(ctx: TestContext) -> None:
     del ctx
-    from src.core.execution_origin import current_execution_origin, execution_origin_scope
-    from src.core.scheduler import Scheduler
-    from src.workflow.executor import WorkflowExecutor
+    from openagent_core.core.execution_origin import current_execution_origin, execution_origin_scope
+    from openagent_core.core.scheduler import Scheduler
+    from openagent_core.workflow.executor import WorkflowExecutor
 
     harness = await _LiveClientHarness().start()
     db = _WorkflowDb()

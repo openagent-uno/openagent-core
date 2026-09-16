@@ -5,7 +5,7 @@ import os
 from unittest.mock import patch
 from ._framework import test
 from .test_local_support_controller import _Doubles, _Model
-from src.core import local_support_controller as c, reply_guard as g, support_turn
+from openagent_core.core import local_support_controller as c, reply_guard as g, support_turn
 
 @test("support_sept6", "account recovery and conditional refunds preserve the main request")
 async def routing(_ctx):
@@ -97,7 +97,7 @@ async def apple_notice(_ctx):
 
 @test("support_sept6", "the grader sees action evidence and the reviewer's declared language")
 async def grader_evidence(_ctx):
-    from src.core import local_quality_scorer as scorer
+    from openagent_core.core import local_quality_scorer as scorer
     class Model:
         packet=None
         async def generate(self, **kw):
@@ -112,7 +112,7 @@ async def grader_evidence(_ctx):
 
 @test("support_sept6", "a model's perfect scores cannot authorize a profile promise")
 async def grader_profile_promise(_ctx):
-    from src.core import local_quality_scorer as scorer
+    from openagent_core.core import local_quality_scorer as scorer
     class Model:
         async def generate(self, **kw):
             return SimpleNamespace(content=json.dumps({key:1 for key in scorer._DIMENSIONS}))

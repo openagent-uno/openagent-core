@@ -10,7 +10,7 @@ Supported backends:
     - SQLAlchemy (SQLite, PostgreSQL, MySQL, SingleStore)
 
 Usage:
-    >>> from src.memory.store.filter_converter import filter_expr_to_sqlalchemy, TRACE_COLUMNS
+    >>> from openagent_core.memory.store.filter_converter import filter_expr_to_sqlalchemy, TRACE_COLUMNS
     >>>
     >>> # Convert a filter dict to a SQLAlchemy WHERE clause
     >>> filter_dict = {"op": "AND", "conditions": [
@@ -52,7 +52,7 @@ DATETIME_COLUMNS: Set[str] = {"start_time", "end_time", "created_at"}
 
 def _normalize_datetime_value(value: Any) -> Any:
     """Parse an ISO 8601 string and return it in UTC for consistent comparison."""
-    from src.core._runner.utils.dttm import parse_datetime_utc
+    from openagent_core.core._runner.utils.dttm import parse_datetime_utc
 
     try:
         return parse_datetime_utc(value).isoformat()

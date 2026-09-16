@@ -28,13 +28,13 @@ from ._framework import TestContext, test
 
 @test("stream", "events round-trip the wire codec verbatim")
 async def t_wire_round_trip(ctx: TestContext) -> None:
-    from src.stream.events import (
+    from openagent_core.stream.events import (
         Attachment, AudioChunk, Interrupt, OutAudioChunk, OutAudioEnd, OutAudioStart,
         OutReasoning, OutTextDelta, OutTextFinal, OutToolStatus, OutVideoFrame,
         SessionOpen, TextDelta, TextFinal, TurnComplete, VideoFrame,
     )
-    from src.stream.events import OutError
-    from src.stream.wire import event_to_wire, wire_to_event
+    from openagent_core.stream.events import OutError
+    from openagent_core.stream.wire import event_to_wire, wire_to_event
 
     cases = [
         OutTextDelta(session_id="s", seq=1, ts_ms=10, text="hi"),
@@ -77,8 +77,8 @@ async def t_wire_round_trip(ctx: TestContext) -> None:
 
 @test("stream", "legacy MESSAGE frame decodes to TextFinal")
 async def t_legacy_message_decodes(ctx: TestContext) -> None:
-    from src.stream.events import TextFinal
-    from src.stream.wire import wire_to_event
+    from openagent_core.stream.events import TextFinal
+    from openagent_core.stream.wire import wire_to_event
 
     evt = wire_to_event({"type": "message", "session_id": "s1", "text": "hey"})
     assert isinstance(evt, TextFinal)
@@ -88,8 +88,8 @@ async def t_legacy_message_decodes(ctx: TestContext) -> None:
 
 @test("stream", "outbound AttachmentRefs hide local CAS paths except for trusted bridges")
 async def t_outbound_attachment_paths_are_internal(ctx: TestContext) -> None:
-    from src.stream.events import OutTextFinal
-    from src.stream.wire import event_to_wire
+    from openagent_core.stream.events import OutTextFinal
+    from openagent_core.stream.wire import event_to_wire
 
     ref = {
         "type": "file",
@@ -118,7 +118,7 @@ async def t_outbound_attachment_paths_are_internal(ctx: TestContext) -> None:
 
 @test("stream", "unknown wire types decode to None")
 async def t_unknown_wire(ctx: TestContext) -> None:
-    from src.stream.wire import wire_to_event
+    from openagent_core.stream.wire import wire_to_event
 
     assert wire_to_event({"type": "auth"}) is None
     assert wire_to_event({"type": "lol_what"}) is None
@@ -131,8 +131,8 @@ async def t_session_open_emits_explicit_zero(ctx: TestContext) -> None:
     ``t_session_open_coalesce_default``); pin the encoder side too. A
     future "optimization" that drops 0 from the JSON would silently
     flip explicit opt-out sessions back to the default coalesce."""
-    from src.stream.events import SessionOpen
-    from src.stream.wire import event_to_wire
+    from openagent_core.stream.events import SessionOpen
+    from openagent_core.stream.wire import event_to_wire
 
     explicit_zero = event_to_wire(SessionOpen(
         session_id="s", seq=1, ts_ms=10, coalesce_window_ms=0,
@@ -157,8 +157,8 @@ async def t_session_open_coalesce_default(ctx: TestContext) -> None:
     default. The previous codec coerced missing/null to ``0``, which
     silently disabled coalescence on every webapp-opened session and
     made spam preempt the in-flight turn."""
-    from src.stream.events import SessionOpen
-    from src.stream.wire import wire_to_event
+    from openagent_core.stream.events import SessionOpen
+    from openagent_core.stream.wire import wire_to_event
 
     # Missing field
     evt = wire_to_event({"type": "session_open", "session_id": "s1"})
@@ -195,7 +195,7 @@ async def t_session_default_coalesce(ctx: TestContext) -> None:
     """The wire→session bridge in the gateway passes ``None`` whenever
     the client didn't carry an explicit value; ``StreamSession`` must
     translate that to its compiled-in default rather than 0."""
-    from src.stream.session import StreamSession
+    from openagent_core.stream.session import StreamSession
 
     class _Stub: pass
 
@@ -220,8 +220,8 @@ async def t_session_default_coalesce(ctx: TestContext) -> None:
 
 @test("stream", "resolve_tts returns LocalPiperTTS when no DB row")
 async def t_resolve_tts_local(ctx: TestContext) -> None:
-    from src.channels.tts_base import LocalPiperTTS, resolve_tts
-    from src.channels import tts_local
+    from openagent_core.channels.tts_base import LocalPiperTTS, resolve_tts
+    from openagent_core.channels import tts_local
 
     if not tts_local.is_available():
         from ._framework import TestSkip
@@ -233,7 +233,7 @@ async def t_resolve_tts_local(ctx: TestContext) -> None:
 
 @test("stream", "resolve_tts returns ElevenLabsWSTTS when row opts in")
 async def t_resolve_tts_elevenlabs_ws(ctx: TestContext) -> None:
-    from src.channels.tts_base import ElevenLabsWSTTS, resolve_tts
+    from openagent_core.channels.tts_base import ElevenLabsWSTTS, resolve_tts
 
     class _StubDB:
         async def latest_audio_model(self, kind: str):
@@ -274,8 +274,8 @@ class _FakeAgent:
 
 @test("stream", "StreamSession.run_one_shot pumps deltas and TurnComplete")
 async def t_run_one_shot(ctx: TestContext) -> None:
-    from src.stream.events import OutTextDelta, OutTextFinal, TurnComplete
-    from src.stream.session import StreamSession
+    from openagent_core.stream.events import OutTextDelta, OutTextFinal, TurnComplete
+    from openagent_core.stream.session import StreamSession
 
     agent = _FakeAgent(["he", "llo"])
     sess = StreamSession(
@@ -304,12 +304,12 @@ async def t_ui_marker_stream_parts(ctx: TestContext) -> None:
     import tempfile
     from pathlib import Path
 
-    from src.core.on_behalf_context import OnBehalfIdentity
-    from src.custom_views.repository import CustomViewRepository
-    from src.memory.db import MemoryDB
-    from src.memory.operational.access import AccessContext
-    from src.stream.events import OutTextDelta, OutTextFinal
-    from src.stream.session import StreamSession
+    from openagent_core.core.on_behalf_context import OnBehalfIdentity
+    from openagent_core.custom_views.repository import CustomViewRepository
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.memory.operational.access import AccessContext
+    from openagent_core.stream.events import OutTextDelta, OutTextFinal
+    from openagent_core.stream.session import StreamSession
 
     # A syntactically valid marker is not sufficient: the StreamSession must
     # resolve an authorized, revision-pinned inline View for this exact
@@ -365,8 +365,8 @@ async def t_ui_marker_stream_parts(ctx: TestContext) -> None:
 
 @test("stream", "text-only client strips OA-UI marker without receiving a UI part")
 async def t_ui_marker_text_only_client(ctx: TestContext) -> None:
-    from src.stream.events import OutTextDelta, OutTextFinal
-    from src.stream.session import StreamSession
+    from openagent_core.stream.events import OutTextDelta, OutTextFinal
+    from openagent_core.stream.session import StreamSession
 
     sess = StreamSession(
         _FakeAgent(["Created [OPENAGENT_UI:board@1]"]),
@@ -384,9 +384,9 @@ async def t_ui_marker_text_only_client(ctx: TestContext) -> None:
 
 @test("stream", "split UI and attachment carriers never reach live text or TTS")
 async def t_all_content_markers_hidden_from_stream_and_tts(ctx: TestContext) -> None:
-    from src.channels.tts_base import BaseTTS
-    from src.stream.events import OutTextDelta
-    from src.stream.session import StreamSession
+    from openagent_core.channels.tts_base import BaseTTS
+    from openagent_core.stream.events import OutTextDelta
+    from openagent_core.stream.session import StreamSession
 
     spoken: list[str] = []
 
@@ -475,8 +475,8 @@ async def _drain(sess):
 
 @test("stream", "plain 'Thinking…' status becomes OutReasoning(true/false), never an OutToolStatus string")
 async def t_reasoning_translation(ctx: TestContext) -> None:
-    from src.stream.events import OutReasoning, OutToolStatus, OutTextDelta
-    from src.stream.session import StreamSession
+    from openagent_core.stream.events import OutReasoning, OutToolStatus, OutTextDelta
+    from openagent_core.stream.session import StreamSession
 
     # Loading→Thinking (UI strings) then a tool (data) then the answer.
     agent = _StatusAgent(
@@ -510,8 +510,8 @@ async def t_reasoning_translation(ctx: TestContext) -> None:
 
 @test("stream", "tool-free turn: reasoning ends on the first delta")
 async def t_reasoning_ends_on_first_delta(ctx: TestContext) -> None:
-    from src.stream.events import OutReasoning, OutTextDelta
-    from src.stream.session import StreamSession
+    from openagent_core.stream.events import OutReasoning, OutTextDelta
+    from openagent_core.stream.session import StreamSession
 
     agent = _StatusAgent(script=["Thinking..."], deltas=["hello"])
     sess = StreamSession(agent, client_id="c", session_id="s")
@@ -528,8 +528,8 @@ async def t_reasoning_ends_on_first_delta(ctx: TestContext) -> None:
 
 @test("stream", "tool-only / empty turn still terminates reasoning at turn end")
 async def t_reasoning_safety_net_on_empty(ctx: TestContext) -> None:
-    from src.stream.events import OutReasoning, TurnComplete
-    from src.stream.session import StreamSession
+    from openagent_core.stream.events import OutReasoning, TurnComplete
+    from openagent_core.stream.session import StreamSession
 
     # Thinking fires but the model yields no deltas (tool-only / empty).
     agent = _StatusAgent(script=["Thinking..."], deltas=[])
@@ -553,8 +553,8 @@ async def t_compaction_translation(ctx: TestContext) -> None:
     raw-JSON leak was the "displayed poorly" bug this feature fixes.
     """
     import json as _json
-    from src.stream.events import SessionCompacted, OutToolStatus
-    from src.stream.session import StreamSession
+    from openagent_core.stream.events import SessionCompacted, OutToolStatus
+    from openagent_core.stream.session import StreamSession
 
     running = _json.dumps({
         "kind": "session.compacted", "phase": "running",
@@ -583,8 +583,8 @@ async def t_compaction_translation(ctx: TestContext) -> None:
 
 @test("stream", "StreamSession.run_one_shot never ships an empty final response")
 async def t_run_one_shot_empty_reply_gets_fallback(ctx: TestContext) -> None:
-    from src.stream.events import OutTextFinal
-    from src.stream.session import StreamSession
+    from openagent_core.stream.events import OutTextFinal
+    from openagent_core.stream.session import StreamSession
 
     sess = StreamSession(_FakeAgent([]), client_id="c", session_id="s")
     summary = await sess.run_one_shot("hi", speak=False)
@@ -602,8 +602,8 @@ async def t_run_one_shot_empty_reply_gets_fallback(ctx: TestContext) -> None:
 
 @test("stream", "StreamSession.run_one_shot finalizes unexpected cancellation")
 async def t_run_one_shot_unexpected_cancel_gets_terminal_frame(ctx: TestContext) -> None:
-    from src.stream.events import OutTextFinal, TurnComplete
-    from src.stream.session import StreamSession
+    from openagent_core.stream.events import OutTextFinal, TurnComplete
+    from openagent_core.stream.session import StreamSession
 
     class _CancelledAgent:
         name = "cancelled"
@@ -635,8 +635,8 @@ async def t_run_one_shot_unexpected_cancel_gets_terminal_frame(ctx: TestContext)
 
 @test("stream", "BatchedChannel collapses one turn into a finished reply")
 async def t_batched_channel(ctx: TestContext) -> None:
-    from src.stream.channel import BatchedChannel
-    from src.stream.session import StreamSession
+    from openagent_core.stream.channel import BatchedChannel
+    from openagent_core.stream.session import StreamSession
 
     async def _null(_db):
         return None
@@ -666,8 +666,8 @@ async def t_batched_channel(ctx: TestContext) -> None:
 
 @test("stream", "wire codec drops binary payloads losslessly via base64")
 async def t_wire_binary(ctx: TestContext) -> None:
-    from src.stream.events import OutAudioChunk
-    from src.stream.wire import event_to_wire, wire_to_event
+    from openagent_core.stream.events import OutAudioChunk
+    from openagent_core.stream.wire import event_to_wire, wire_to_event
 
     payload = bytes(range(256))
     evt = OutAudioChunk(session_id="s", seq=1, ts_ms=1, data=payload)
@@ -685,9 +685,9 @@ async def t_audio_chunk_seq_per_span(ctx: TestContext) -> None:
     bumped the counter), the player never sees seq=1, and the user
     hears nothing. Pin the contract: ``OutAudioChunk.seq`` must count
     1, 2, 3, ... within a single audio span."""
-    from src.channels.tts_base import BaseTTS
-    from src.stream.events import OutAudioChunk
-    from src.stream.session import StreamSession
+    from openagent_core.channels.tts_base import BaseTTS
+    from openagent_core.stream.events import OutAudioChunk
+    from openagent_core.stream.session import StreamSession
 
     class _NoiseTTS(BaseTTS):
         @property
@@ -753,7 +753,7 @@ async def t_basestt_pcm_to_wav(ctx: TestContext) -> None:
     import struct
     import wave
 
-    from src.channels.stt_base import BaseSTT, STTEvent
+    from openagent_core.channels.stt_base import BaseSTT, STTEvent
 
     # Synthesize 200 ms of a 1 kHz sine at 16 kHz mono.
     sample_rate = 16000
@@ -805,7 +805,7 @@ async def t_basestt_pcm_to_wav(ctx: TestContext) -> None:
 async def t_basestt_container_path(ctx: TestContext) -> None:
     """Non-PCM encodings (webm, mp4, ogg) must keep the original
     behaviour: write each chunk verbatim, no WAV header injection."""
-    from src.channels.stt_base import BaseSTT
+    from openagent_core.channels.stt_base import BaseSTT
 
     captured: dict = {}
 
@@ -834,9 +834,9 @@ async def t_dispatch_pcm_propagation(ctx: TestContext) -> None:
     BaseSTT builds the right WAV header."""
     import asyncio as _aio
 
-    from src.channels.stt_base import BaseSTT, STTEvent
-    from src.stream.events import AudioChunk, now_ms
-    from src.stream.session import StreamSession
+    from openagent_core.channels.stt_base import BaseSTT, STTEvent
+    from openagent_core.stream.events import AudioChunk, now_ms
+    from openagent_core.stream.session import StreamSession
 
     seen: dict = {}
 
@@ -895,10 +895,10 @@ async def t_dispatch_pcm_propagation(ctx: TestContext) -> None:
 
 @test("stream", "STT utterances never mix or retag authenticated client origins")
 async def t_stt_origin_is_per_utterance(ctx: TestContext) -> None:
-    from src.channels.stt_base import BaseSTT, STTEvent
-    from src.core.execution_origin import TrustedIngressIdentity, TurnExecutionOrigin
-    from src.stream.events import AudioChunk, now_ms
-    from src.stream.session import StreamSession
+    from openagent_core.channels.stt_base import BaseSTT, STTEvent
+    from openagent_core.core.execution_origin import TrustedIngressIdentity, TurnExecutionOrigin
+    from openagent_core.stream.events import AudioChunk, now_ms
+    from openagent_core.stream.session import StreamSession
 
     transcripts: list[tuple[str, object]] = []
     audio_seen: list[bytes] = []
@@ -1072,7 +1072,7 @@ async def _wait_for(condition, *, timeout: float = 1.0, step: float = 0.01):
 
 
 def _make_session(agent, **kwargs):
-    from src.stream.session import StreamSession
+    from openagent_core.stream.session import StreamSession
     return StreamSession(agent, client_id="c", session_id="s", **kwargs)
 
 
@@ -1080,8 +1080,8 @@ def _make_session(agent, **kwargs):
 async def t_ingress_isolates_bursts_and_media_without_capabilities(ctx: TestContext) -> None:
     import os
 
-    from src.core.execution_origin import TrustedIngressIdentity
-    from src.stream.events import Attachment, TextFinal, VideoFrame, now_ms
+    from openagent_core.core.execution_origin import TrustedIngressIdentity
+    from openagent_core.stream.events import Attachment, TextFinal, VideoFrame, now_ms
 
     agent = _RecordingAgent(block_first=False)
     sess = _make_session(agent, coalesce_window_ms=80)
@@ -1136,8 +1136,8 @@ async def t_ingress_isolates_bursts_and_media_without_capabilities(ctx: TestCont
 
 @test("stream", "Gateway stamps trusted ingress even when no capability host is online")
 async def t_gateway_stamps_capability_free_ingress(ctx: TestContext) -> None:
-    from src.gateway.server import Gateway, _StreamHolder
-    from src.gateway.sessions import SessionManager
+    from openagent_core.gateway.server import Gateway, _StreamHolder
+    from openagent_core.gateway.sessions import SessionManager
 
     class _Capabilities:
         def origin_for(self, _device, _instance):
@@ -1210,11 +1210,11 @@ async def t_gateway_turn_output_is_ingress_scoped(ctx: TestContext) -> None:
     The durable session is account-scoped, while transport ownership is
     per-turn. After A completes, B's own next turn must route only to B.
     """
-    from src.core.execution_origin import TrustedIngressIdentity
-    from src.gateway.server import Gateway, _StreamHolder
-    from src.gateway.sessions import SessionManager
-    from src.stream.channel import RealtimeChannel
-    from src.stream.session import StreamSession
+    from openagent_core.core.execution_origin import TrustedIngressIdentity
+    from openagent_core.gateway.server import Gateway, _StreamHolder
+    from openagent_core.gateway.sessions import SessionManager
+    from openagent_core.stream.channel import RealtimeChannel
+    from openagent_core.stream.session import StreamSession
 
     class _Capabilities:
         def origin_for(self, _device, _instance):
@@ -1351,11 +1351,11 @@ async def t_gateway_turn_output_is_ingress_scoped(ctx: TestContext) -> None:
 @test("stream", "detached zombie turns cannot inherit a replacement device route")
 async def t_zombie_turn_keeps_immutable_ingress(ctx: TestContext) -> None:
     """A provider swallowing cancellation must not publish through B's route."""
-    import src.stream.session as session_module
-    from src.core.execution_origin import TrustedIngressIdentity
-    from src.stream.channel import RealtimeChannel
-    from src.stream.events import TextFinal, now_ms
-    from src.stream.session import StreamSession
+    import openagent_core.stream.session as session_module
+    from openagent_core.core.execution_origin import TrustedIngressIdentity
+    from openagent_core.stream.channel import RealtimeChannel
+    from openagent_core.stream.events import TextFinal, now_ms
+    from openagent_core.stream.session import StreamSession
 
     class _Agent:
         name = "zombie"
@@ -1450,7 +1450,7 @@ async def t_coalesce_explicitly_off(ctx: TestContext) -> None:
     behaviour: each new TextFinal preempts the previous and dispatches
     as its own turn — no buffering, no merging. (The class default is
     now 500 ms; this test guards the explicit-disable escape hatch.)"""
-    from src.stream.events import TextFinal, now_ms
+    from openagent_core.stream.events import TextFinal, now_ms
 
     agent = _RecordingAgent(block_first=True)
     sess = _make_session(agent, coalesce_window_ms=0)
@@ -1483,7 +1483,7 @@ async def t_coalesce_merge_two(ctx: TestContext) -> None:
     """With a 200 ms window, two TextFinals arriving 50 ms apart while
     a turn is in flight must dispatch as a SINGLE merged turn whose
     text is ``"first\\n\\nsecond"`` — one barge-in, one merged dispatch."""
-    from src.stream.events import TextFinal, now_ms
+    from openagent_core.stream.events import TextFinal, now_ms
 
     agent = _RecordingAgent(block_first=True)
     sess = _make_session(agent, coalesce_window_ms=200)
@@ -1520,7 +1520,7 @@ async def t_coalesce_extends(ctx: TestContext) -> None:
     """Inputs landing within the window keep restarting the timer. Five
     TextFinals at 50 ms intervals (span 200 ms) inside a 200 ms window
     must collapse to ONE merged turn containing all 5."""
-    from src.stream.events import TextFinal, now_ms
+    from openagent_core.stream.events import TextFinal, now_ms
 
     agent = _RecordingAgent(block_first=True)
     sess = _make_session(agent, coalesce_window_ms=200)
@@ -1558,7 +1558,7 @@ async def t_coalesce_isolated_through_window(ctx: TestContext) -> None:
     ONE merged turn instead of "first dispatched + rest merged" (which
     leaves the first message orphaned in the agent's history). The cost
     is one ``coalesce_window_ms`` of latency on a quiet single send."""
-    from src.stream.events import TextFinal, now_ms
+    from openagent_core.stream.events import TextFinal, now_ms
 
     agent = _RecordingAgent(block_first=False)
     window_ms = 200
@@ -1595,7 +1595,7 @@ async def t_coalesce_single_cancel(ctx: TestContext) -> None:
     assistant text, awaits task cleanup). The coalescence path must call
     it exactly once per burst — the first input cancels, all subsequent
     inputs in the same window only extend the buffer."""
-    from src.stream.events import TextFinal, now_ms
+    from openagent_core.stream.events import TextFinal, now_ms
 
     agent = _RecordingAgent(block_first=True)
     sess = _make_session(agent, coalesce_window_ms=200)
@@ -1653,7 +1653,7 @@ async def t_coalesce_interrupt_clears(ctx: TestContext) -> None:
     """An explicit Interrupt is the user saying ``stop``. It must drop
     every buffered message + cancel the pending timer so no merged turn
     ever fires."""
-    from src.stream.events import Interrupt, TextFinal, now_ms
+    from openagent_core.stream.events import Interrupt, TextFinal, now_ms
 
     agent = _RecordingAgent(block_first=True)
     sess = _make_session(agent, coalesce_window_ms=200)
@@ -1696,7 +1696,7 @@ async def t_coalesce_interrupt_clears(ctx: TestContext) -> None:
 async def t_coalesce_close_drops_burst(ctx: TestContext) -> None:
     """Tearing down a session mid-burst must drop the pending merged
     turn — the WS is going away and there's no consumer for the reply."""
-    from src.stream.events import TextFinal, now_ms
+    from openagent_core.stream.events import TextFinal, now_ms
 
     agent = _RecordingAgent(block_first=True)
     sess = _make_session(agent, coalesce_window_ms=200)
@@ -1733,7 +1733,7 @@ async def t_coalesce_close_drops_burst(ctx: TestContext) -> None:
 async def t_coalesce_attachments_union(ctx: TestContext) -> None:
     """Each TextFinal in a burst carries its own attachments. The
     merged dispatch must see all of them concatenated in arrival order."""
-    from src.stream.events import TextFinal, now_ms
+    from openagent_core.stream.events import TextFinal, now_ms
 
     agent = _RecordingAgent(block_first=True)
     sess = _make_session(agent, coalesce_window_ms=200)
@@ -1778,7 +1778,7 @@ async def t_coalesce_stt_bypass(ctx: TestContext) -> None:
     debounce window is non-zero. This is what gives voice mode the
     OpenAI-Realtime feel — model stops the instant the user finishes
     speaking, no 500 ms wait."""
-    from src.stream.events import TextFinal, now_ms
+    from openagent_core.stream.events import TextFinal, now_ms
 
     agent = _RecordingAgent(block_first=True)
     sess = _make_session(agent, coalesce_window_ms=500)
@@ -1821,7 +1821,7 @@ async def t_coalesce_stt_folds_buffer(ctx: TestContext) -> None:
     talking and THEN spoke ``"and also D"``, the voice command flushes
     the buffer instead of racing it. The merged turn carries
     ``"B\\n\\nC\\n\\nand also D"`` as one user message."""
-    from src.stream.events import TextFinal, now_ms
+    from openagent_core.stream.events import TextFinal, now_ms
 
     agent = _RecordingAgent(block_first=True)
     sess = _make_session(agent, coalesce_window_ms=500)
@@ -1870,8 +1870,8 @@ async def t_post_turn_hook_resources(ctx: TestContext) -> None:
     which fires once on TurnComplete."""
     import json as _json
 
-    from src.stream.events import OutToolStatus, TurnComplete, now_ms
-    from src.stream.session import StreamSession
+    from openagent_core.stream.events import OutToolStatus, TurnComplete, now_ms
+    from openagent_core.stream.session import StreamSession
 
     sess = StreamSession(
         _RecordingAgent(), client_id="c", session_id="s", coalesce_window_ms=0,
@@ -1911,8 +1911,8 @@ async def t_collector_resolves_on_outerror(ctx: TestContext) -> None:
     """``fold_outbound_event`` returns True on OutError so a session-tagged
     error releases the awaiting bridge / CLI ``send_message`` even when
     the gateway never gets to publish a TurnComplete (turn died early)."""
-    from src.stream.collector import StreamCollector, fold_outbound_event
-    from src.stream.events import OutError, OutTextFinal, now_ms
+    from openagent_core.stream.collector import StreamCollector, fold_outbound_event
+    from openagent_core.stream.events import OutError, OutTextFinal, now_ms
 
     collector = StreamCollector()
     # OutTextFinal latches text but does NOT release.
@@ -1946,7 +1946,7 @@ async def t_cancel_suppresses_completion(ctx: TestContext) -> None:
     frames whenever the cancel is followed by a follow-up turn — only
     intermediate frames (deltas, tool status, audio chunks) should
     survive across the cancel boundary."""
-    from src.stream.events import (
+    from openagent_core.stream.events import (
         OutTextDelta, OutTextFinal, TextFinal, TurnComplete, now_ms,
     )
 
@@ -2039,7 +2039,7 @@ async def t_quick_burst_from_quiet_coalesces(ctx: TestContext) -> None:
     message immediately and only buffered the follow-ups, which left
     the first message orphaned and let the LLM "address only the
     follow-ups". Always-debouncing typed text is what makes this work."""
-    from src.stream.events import TextFinal, now_ms
+    from openagent_core.stream.events import TextFinal, now_ms
 
     agent = _RecordingAgent(block_first=False)
     sess = _make_session(agent, coalesce_window_ms=200)
@@ -2083,7 +2083,7 @@ async def t_slow_spawn_salvage(ctx: TestContext) -> None:
     This test simulates the spawn delay with a slow ``run_stream`` that
     awaits before yielding its first event. A second message during the
     spawn must trigger salvage so both messages reach the agent."""
-    from src.stream.events import TextFinal, now_ms
+    from openagent_core.stream.events import TextFinal, now_ms
 
     spawn_release = asyncio.Event()
     seen_messages: list[str] = []
@@ -2157,7 +2157,7 @@ async def t_interrupt_during_spawn_no_salvage(ctx: TestContext) -> None:
     DISCARDS it (no salvage, no merged turn). Pin this asymmetry — a
     refactor that flipped Interrupt to ``salvage_to_burst=True`` would
     silently re-feed user content the user was trying to discard."""
-    from src.stream.events import Interrupt, TextFinal, now_ms
+    from openagent_core.stream.events import Interrupt, TextFinal, now_ms
 
     spawn_release = asyncio.Event()
     seen_messages: list[str] = []
@@ -2224,8 +2224,8 @@ async def t_mirror_modality_stt_speaks_when_typed_silent(ctx: TestContext) -> No
     default), but voice (``source='stt'``) MUST still speak via the
     mirror-modality rule — without this the OpenAI-Realtime feel
     breaks for voice notes sent into chat-tab sessions."""
-    from src.channels.tts_base import BaseTTS
-    from src.stream.events import (
+    from openagent_core.channels.tts_base import BaseTTS
+    from openagent_core.stream.events import (
         OutAudioChunk, OutTextDelta, TextFinal, TurnComplete, now_ms,
     )
 
@@ -2300,7 +2300,7 @@ async def t_pre_dispatch_hook_rejects(ctx: TestContext) -> None:
     Returning a non-None error string must publish a clean error frame
     and SKIP the runner entirely — without this, budget-blocked turns
     would still spawn the agent."""
-    from src.stream.events import OutError, TextFinal, TurnComplete, now_ms
+    from openagent_core.stream.events import OutError, TextFinal, TurnComplete, now_ms
 
     agent = _RecordingAgent(block_first=False)
     sess = _make_session(agent, coalesce_window_ms=0)
@@ -2340,7 +2340,7 @@ async def t_pre_dispatch_hook_rejects(ctx: TestContext) -> None:
 async def t_pre_dispatch_hook_exception_swallowed(ctx: TestContext) -> None:
     """A buggy hook must not break the session — log, swallow, and
     fall through to the normal dispatch path."""
-    from src.stream.events import TextFinal, TurnComplete, now_ms
+    from openagent_core.stream.events import TextFinal, TurnComplete, now_ms
 
     agent = _RecordingAgent(block_first=False)
     sess = _make_session(agent, coalesce_window_ms=0)
@@ -2376,7 +2376,7 @@ async def t_stress_no_message_lost(ctx: TestContext) -> None:
     drops, no duplicates, no stuck dispatches. The collected calls
     concatenated in order must contain ``msg-0`` … ``msg-9`` exactly
     once each."""
-    from src.stream.events import TextFinal, now_ms
+    from openagent_core.stream.events import TextFinal, now_ms
 
     agent = _RecordingAgent(block_first=False)
     sess = _make_session(agent, coalesce_window_ms=100)
@@ -2414,7 +2414,7 @@ async def t_drain_race_no_double_dispatch(ctx: TestContext) -> None:
     both onto the same ``_current_turn`` slot. The dispatch lock must
     serialise the two paths so we get exactly two distinct turns
     (the merged one and the new one), not three."""
-    from src.stream.events import TextFinal, now_ms
+    from openagent_core.stream.events import TextFinal, now_ms
 
     agent = _RecordingAgent(block_first=True)
     # Tight window so the drain fires quickly. Keep block_first so the
@@ -2475,9 +2475,9 @@ async def t_realtime_rebind_recovers_stuck_frames(ctx: TestContext) -> None:
     ``rebind`` the same frame lands on the new send target. Without the
     fix the pump dropped the frame on the first False return and the
     UI's ``isProcessing`` flag never cleared."""
-    from src.stream.channel import RealtimeChannel
-    from src.stream.events import OutTextFinal, TurnComplete
-    from src.stream.session import StreamSession
+    from openagent_core.stream.channel import RealtimeChannel
+    from openagent_core.stream.events import OutTextFinal, TurnComplete
+    from openagent_core.stream.session import StreamSession
 
     agent = _FakeAgent(["hello"])
     sess = StreamSession(agent, client_id="c", session_id="s")
@@ -2527,8 +2527,8 @@ async def t_realtime_unrecoverable_callback(ctx: TestContext) -> None:
     """When no rebind ever lands, the pump surrenders the frame after
     the deadline and fires ``on_unrecoverable`` so the gateway can reap
     the orphaned StreamSession instead of leaking the agent resources."""
-    from src.stream.channel import RealtimeChannel
-    from src.stream.session import StreamSession
+    from openagent_core.stream.channel import RealtimeChannel
+    from openagent_core.stream.session import StreamSession
 
     agent = _FakeAgent(["x"])
     sess = StreamSession(agent, client_id="c", session_id="s")
@@ -2563,7 +2563,7 @@ async def t_child_frame_nonblocking(ctx: TestContext) -> None:
     with a stub ``broadcast`` that would explode confirms the frame lands on the
     queue and ``broadcast`` is never called inline."""
     import asyncio
-    from src.gateway.server import Gateway
+    from openagent_core.gateway.server import Gateway
 
     gw = Gateway.__new__(Gateway)
     gw.agent = type("_Agent", (), {"memory_db": None})()
@@ -2597,9 +2597,9 @@ async def t_gateway_adopt_sessions_to_ws(ctx: TestContext) -> None:
     """End-to-end check of the reconnect adoption path: sessions
     created with ``ws_old`` should have their channel send-target
     swapped to ``ws_new`` after ``_adopt_sessions_to_ws`` fires."""
-    from src.gateway.server import Gateway, _StreamHolder
-    from src.stream.channel import RealtimeChannel
-    from src.stream.session import StreamSession
+    from openagent_core.gateway.server import Gateway, _StreamHolder
+    from openagent_core.stream.channel import RealtimeChannel
+    from openagent_core.stream.session import StreamSession
 
     class _StubAgent:
         name = "stub"
@@ -2666,8 +2666,8 @@ async def t_gateway_replaced_websocket_close_contract(ctx: TestContext) -> None:
     """The old half of a same-device reconnect must never receive a normal
     close, because first-party clients retry normal transport drops.  Pin the
     private code and UTF-8 reason that stop only the superseded socket."""
-    from src.gateway import protocol as P
-    from src.gateway.server import Gateway
+    from openagent_core.gateway import protocol as P
+    from openagent_core.gateway.server import Gateway
 
     class _FakeWS:
         closed = False
@@ -2701,7 +2701,7 @@ async def t_gateway_live_state_rehydrates_active_turn(ctx: TestContext) -> None:
     keeps a replay tail and sends it back to the same authenticated owner when
     a fresh websocket attaches."""
     from weakref import WeakKeyDictionary
-    from src.gateway.server import Gateway
+    from openagent_core.gateway.server import Gateway
 
     gw = Gateway.__new__(Gateway)
     gw.agent = type("_Agent", (), {"memory_db": None})()
@@ -2760,7 +2760,7 @@ async def t_gateway_live_state_is_owner_scoped(ctx: TestContext) -> None:
     Child runs resolve ownership best-effort; until they do, reconnects should
     skip the snapshot instead of leaking it to another authenticated handle."""
     from weakref import WeakKeyDictionary
-    from src.gateway.server import Gateway
+    from openagent_core.gateway.server import Gateway
 
     class _DB:
         async def get_session(self, _session_id):
@@ -2795,8 +2795,8 @@ async def t_gateway_live_state_drops_completed_stream_turn(ctx: TestContext) -> 
     terminal frames but the run completed and persisted, reconnect must hydrate
     from the DB rather than resurrect a permanent live/reasoning state."""
     from weakref import WeakKeyDictionary
-    from src.gateway.sessions import SessionManager
-    from src.gateway.server import Gateway, _StreamHolder
+    from openagent_core.gateway.sessions import SessionManager
+    from openagent_core.gateway.server import Gateway, _StreamHolder
 
     gw = Gateway.__new__(Gateway)
     gw.agent = type("_Agent", (), {"memory_db": None})()
@@ -2855,7 +2855,7 @@ async def t_gateway_live_state_drops_db_terminal_despite_active_holder(ctx: Test
     stream holder still looks active. Reconnect must trust the persisted run
     and avoid resurrecting the replay as an endless live/reasoning turn."""
     from weakref import WeakKeyDictionary
-    from src.gateway.server import Gateway, _StreamHolder
+    from openagent_core.gateway.server import Gateway, _StreamHolder
 
     class _DB:
         def __init__(self):
@@ -2928,7 +2928,7 @@ async def t_gateway_live_state_ignores_unrelated_terminal_run(ctx: TestContext) 
     """A delayed terminal write from a previous/cancelled turn must not close
     a fresh live replay just because its timestamp lands after the new input."""
     from weakref import WeakKeyDictionary
-    from src.gateway.server import Gateway, _StreamHolder
+    from openagent_core.gateway.server import Gateway, _StreamHolder
 
     class _DB:
         def __init__(self):
@@ -3000,8 +3000,8 @@ async def t_gateway_context_report_after_turn_complete_stays_settled(ctx: TestCo
     frame must not create a new active replay, or the next new-chat
     session_open will rehydrate the previous completed chat as live."""
     from weakref import WeakKeyDictionary
-    from src.gateway.sessions import SessionManager
-    from src.gateway.server import Gateway
+    from openagent_core.gateway.sessions import SessionManager
+    from openagent_core.gateway.server import Gateway
 
     gw = Gateway.__new__(Gateway)
     gw.agent = type("_Agent", (), {"memory_db": None})()
@@ -3078,11 +3078,11 @@ async def t_gateway_adopt_retires_db_terminal_before_rebind_flush(ctx: TestConte
     the run has already completed in the DB. Reattach must retire the holder
     before ``rebind`` gives that stale frame a fresh transport."""
     from weakref import WeakKeyDictionary
-    from src.gateway.sessions import SessionManager
-    from src.gateway.server import Gateway, _StreamHolder
-    from src.stream.channel import RealtimeChannel
-    from src.stream.events import OutReasoning, now_ms
-    from src.stream.session import StreamSession
+    from openagent_core.gateway.sessions import SessionManager
+    from openagent_core.gateway.server import Gateway, _StreamHolder
+    from openagent_core.stream.channel import RealtimeChannel
+    from openagent_core.stream.events import OutReasoning, now_ms
+    from openagent_core.stream.session import StreamSession
 
     class _DB:
         def __init__(self):
@@ -3183,8 +3183,8 @@ async def t_realtime_rebind_preserves_order(ctx: TestContext) -> None:
     """A rebind during an in-flight pump iteration must not lose or
     reorder frames. The frame that was stuck on dead_send completes
     first on live_send, then subsequent frames follow in order."""
-    from src.stream.channel import RealtimeChannel
-    from src.stream.session import StreamSession
+    from openagent_core.stream.channel import RealtimeChannel
+    from openagent_core.stream.session import StreamSession
 
     agent = _FakeAgent(["a", "b", "c"])
     sess = StreamSession(agent, client_id="c", session_id="s")
@@ -3240,8 +3240,8 @@ async def t_barge_in_no_speaker_drain_stall(ctx: TestContext) -> None:
     immediately on a cancelled turn. Pin it: the cancel must complete in
     well under the drain timeout.
     """
-    from src.channels.tts_base import BaseTTS
-    from src.stream.events import Interrupt, TextFinal, now_ms
+    from openagent_core.channels.tts_base import BaseTTS
+    from openagent_core.stream.events import Interrupt, TextFinal, now_ms
 
     speaker_cancelled = asyncio.Event()
 

@@ -125,7 +125,7 @@ class _FakeRequest(dict):
 
 
 async def _pin(db, body):
-    from src.gateway.api import sessions as api
+    from openagent_core.gateway.api import sessions as api
 
     resp = await api.handle_pin(_FakeRequest(db, body))
     return resp.status, json.loads(resp.body.decode())
@@ -163,7 +163,7 @@ async def t_pin_refusals(ctx: TestContext) -> None:
 
 @test("rest_session_pin", "unpin clears the pin")
 async def t_unpin(ctx: TestContext) -> None:
-    from src.gateway.api import sessions as api
+    from openagent_core.gateway.api import sessions as api
 
     db = _FakeDB()
     await _pin(db, {"runtime_id": "vendor:model-a"})

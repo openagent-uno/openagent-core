@@ -93,13 +93,13 @@ def _make_request(db, *, method: str = "GET", path: str = "/x",
 
 @test("dream_surfacing", "run_dream_mode streams the firing live (stream=True)")
 async def t_manual_dream_streams(ctx: TestContext) -> None:
-    from src.core.builtin_tasks import DREAM_MODE_TASK_NAME
-    from src.mcp.servers.delegation import handlers as dh
-    from src.memory.db import MemoryDB
-    from src.stream.child_stream import (
+    from openagent_core.core.builtin_tasks import DREAM_MODE_TASK_NAME
+    from openagent_core.mcp.servers.delegation import handlers as dh
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.stream.child_stream import (
         install_child_stream_emitter, reset_child_stream_emitter,
     )
-    from src.stream.resource_events import set_resource_event_sink
+    from openagent_core.stream.resource_events import set_resource_event_sink
 
     tmp_db = ctx.db_path.with_name(f"dream-stream-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -175,10 +175,10 @@ async def t_manual_dream_self_heals(ctx: TestContext) -> None:
     ``scheduled_tasks`` row exists. A manual firing must create it (disabled)
     so the run records a ``task_runs`` row and shows up in the "Recent" feed —
     instead of silently running as an unlinked child session."""
-    from src.core.builtin_tasks import DREAM_MODE_TASK_NAME
-    from src.mcp.servers.delegation import handlers as dh
-    from src.memory.db import MemoryDB
-    from src.stream.resource_events import set_resource_event_sink
+    from openagent_core.core.builtin_tasks import DREAM_MODE_TASK_NAME
+    from openagent_core.mcp.servers.delegation import handlers as dh
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.stream.resource_events import set_resource_event_sink
 
     tmp_db = ctx.db_path.with_name(f"dream-heal-{uuid.uuid4().hex[:8]}.db")
     try:
@@ -228,8 +228,8 @@ async def t_manual_dream_self_heals(ctx: TestContext) -> None:
 async def _seed_feed_db(ctx: TestContext):
     """A temp DB with a seeded, enabled dream-mode built-in (with one recorded
     firing) plus a normal user task."""
-    from src.core.builtin_tasks import DREAM_MODE_TASK_NAME
-    from src.memory.db import MemoryDB
+    from openagent_core.core.builtin_tasks import DREAM_MODE_TASK_NAME
+    from openagent_core.memory.db import MemoryDB
 
     tmp_db = ctx.db_path.with_name(f"dream-feed-{uuid.uuid4().hex[:8]}.db")
     db = MemoryDB(str(tmp_db))
@@ -244,7 +244,7 @@ async def _seed_feed_db(ctx: TestContext):
 
 @test("dream_surfacing", "default list still hides built-ins; ?include_builtin=1 reveals them")
 async def t_list_include_builtin(ctx: TestContext) -> None:
-    from src.gateway.api.scheduled_tasks import handle_list
+    from openagent_core.gateway.api.scheduled_tasks import handle_list
 
     db, tmp_db, dream_id, user_id, _sid = await _seed_feed_db(ctx)
     try:
@@ -274,7 +274,7 @@ async def t_list_include_builtin(ctx: TestContext) -> None:
 
 @test("dream_surfacing", "built-in is readable by id + its run history (no 404)")
 async def t_get_and_runs_readable(ctx: TestContext) -> None:
-    from src.gateway.api.scheduled_tasks import handle_get, handle_runs_list
+    from openagent_core.gateway.api.scheduled_tasks import handle_get, handle_runs_list
 
     db, tmp_db, dream_id, _user_id, child_sid = await _seed_feed_db(ctx)
     try:
@@ -306,7 +306,7 @@ async def t_get_and_runs_readable(ctx: TestContext) -> None:
 
 @test("dream_surfacing", "built-in stays non-editable — every mutation is 403")
 async def t_builtin_mutations_rejected(ctx: TestContext) -> None:
-    from src.gateway.api.scheduled_tasks import (
+    from openagent_core.gateway.api.scheduled_tasks import (
         handle_delete, handle_run, handle_stop, handle_update,
     )
 

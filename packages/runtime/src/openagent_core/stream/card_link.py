@@ -93,7 +93,7 @@ async def emit_card_link(child_session_id: str) -> None:
         # run_child_session's synthetic scheduler/workflow parent). The main
         # agent that triggers these spawns owns the delegation MCP, so its
         # context carries the chat session id here.
-        from src.mcp.servers.delegation.handlers import current_parent_session_id
+        from openagent_core.mcp.servers.delegation.handlers import current_parent_session_id
         sid = current_parent_session_id()
         if not sid:
             return
@@ -105,7 +105,7 @@ async def emit_card_link(child_session_id: str) -> None:
         # A running status frame (no ``result``) — the app merges it onto the
         # existing chip by tool_call_id, flipping the card clickable while the
         # phase stays "running"; the later completion frame still matches.
-        from src.stream.child_stream import emit_child_frame
+        from openagent_core.stream.child_stream import emit_child_frame
         await emit_child_frame(sid, "status", text=payload)
     except Exception as e:  # noqa: BLE001 — card linkage is best-effort
         logger.debug("card_link: emit for %s failed: %s", child_session_id, e)

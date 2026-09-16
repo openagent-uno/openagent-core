@@ -17,7 +17,7 @@ in a later cleanup.
 
 The module is deliberately stdlib-only (PyYAML is used only when present) so the
 same file runs both:
-  * imported as ``src.core.session_retention`` inside the frozen binary, and
+  * imported as ``openagent_core.core.session_retention`` inside the frozen binary, and
   * as a standalone script under the pod's bare ``/usr/bin/python3`` — which is
     exactly how the supervisord ``session-retention`` program invokes it.
 

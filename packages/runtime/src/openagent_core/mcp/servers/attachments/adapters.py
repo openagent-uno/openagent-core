@@ -90,7 +90,7 @@ def build_runtime_toolkit() -> Any:
     the tool schema and the docstring becomes the description shown to
     the model.
     """
-    from src.mcp._runtime import Toolkit
+    from openagent_core.mcp._runtime import Toolkit
 
     async def send_file_to_user(path: str) -> dict:
         """Send a file from the agent's filesystem to the user as a chat attachment.

@@ -92,8 +92,8 @@ async def execute(pool: Any, directives: list[Directive]) -> tuple[bool, list[di
     back as an error envelope, so the caller can fail the task loudly instead
     of reporting a success nobody performed.
     """
-    from src.core import reply_guard
-    from src.mcp.servers.tool_search.adapters import _call_tool_impl
+    from openagent_core.core import reply_guard
+    from openagent_core.mcp.servers.tool_search.adapters import _call_tool_impl
 
     receipts: list[dict] = []
     for directive in directives:

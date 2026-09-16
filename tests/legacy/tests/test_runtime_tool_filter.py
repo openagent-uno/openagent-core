@@ -14,7 +14,7 @@ class _FakeToolkit:
 
 @test("runtime_tool_filter", "deepseek filters incompatible computer_control toolkit families")
 async def t_deepseek_filters_computer_control(_ctx: TestContext) -> None:
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
 
     provider = NativeProvider(model="deepseek:deepseek-v4-flash")
     provider.set_mcp_toolkits([
@@ -33,7 +33,7 @@ async def t_deepseek_filters_computer_control(_ctx: TestContext) -> None:
 
 @test("runtime_tool_filter", "deepseek image_url provider error is rewritten into an actionable message")
 async def t_deepseek_rewrites_image_url_error(_ctx: TestContext) -> None:
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
 
     provider = NativeProvider(model="deepseek:deepseek-v4-flash")
     rewritten = provider._rewrite_provider_error_detail(

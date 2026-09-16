@@ -25,7 +25,7 @@ LANE = ["codex:gpt-5.6-luna", "local:claude-haiku-4-5"]
 
 
 def _dispatcher():
-    from src.models.dispatcher import ModelDispatcher
+    from openagent_core.models.dispatcher import ModelDispatcher
     return ModelDispatcher()
 
 
@@ -40,7 +40,7 @@ async def t_lane_reaches_on_rate_limit(_ctx: TestContext) -> None:
     verifica il pezzo che era rotto e che ho corretto — che l'innesto AVVENGA
     con l'ordine di boot reale — sostituendo la costruzione delle righe.
     """
-    from src.models.providers.fallback import FallbackConfig
+    from openagent_core.models.providers.fallback import FallbackConfig
 
     d = _dispatcher()
     d.set_local_fallback_policy({"enabled": True, "models": LANE,
@@ -66,7 +66,7 @@ async def t_lane_reaches_on_rate_limit(_ctx: TestContext) -> None:
 @test("local_fallback_wiring",
       "senza corsia configurata la catena resta com'era")
 async def t_no_lane_is_a_noop(_ctx: TestContext) -> None:
-    from src.models.providers.fallback import FallbackConfig
+    from openagent_core.models.providers.fallback import FallbackConfig
 
     d = _dispatcher()
     d.set_local_fallback_policy(None)
@@ -91,7 +91,7 @@ async def t_no_unresolvable_strings(_ctx: TestContext) -> None:
     d = _dispatcher()
     d.set_local_fallback_policy({"enabled": True, "models": LANE,
                                  "on_rate_limit": True, "on_error": True})
-    from src.models.providers.fallback import FallbackConfig
+    from openagent_core.models.providers.fallback import FallbackConfig
     cfg = FallbackConfig()
     d.set_fallback_config(cfg)
     got = getattr(d, "fallback_config", None)
@@ -121,7 +121,7 @@ async def t_lane_built_when_providers_arrive(_ctx: TestContext) -> None:
     I provider arrivano dopo, dal DB, via `rebuild_routing` — al boot e a ogni
     hot-reload. E' li' che la corsia va ri-innestata.
     """
-    from src.models.providers.fallback import FallbackConfig
+    from openagent_core.models.providers.fallback import FallbackConfig
 
     PROVIDERS = [
         {"name": "local", "framework": "api-based", "enabled": 1,

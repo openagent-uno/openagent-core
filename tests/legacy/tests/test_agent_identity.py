@@ -72,7 +72,7 @@ class _Request(dict):
 
 
 def _actor(handle: str = "alice", principal_type: str = "user"):
-    from src.core.on_behalf_context import OnBehalfIdentity
+    from openagent_core.core.on_behalf_context import OnBehalfIdentity
 
     return OnBehalfIdentity(
         tenant_id="test-network",
@@ -115,7 +115,7 @@ def _payload(response: Any) -> dict[str, Any]:
 
 @test("agent_identity", "owner update is atomic, preserves YAML, hot-applies, and never broadcasts the persona")
 async def t_atomic_preserve_live_and_redacted(ctx: TestContext) -> None:
-    import src.core.agent_identity as identity
+    import openagent_core.core.agent_identity as identity
 
     path, original, db, agent, gateway = _fixture(ctx, "atomic")
     service = identity.AgentIdentityService(
@@ -193,7 +193,7 @@ async def t_atomic_preserve_live_and_redacted(ctx: TestContext) -> None:
 
 @test("agent_identity", "authorization fails closed for anonymous, peer-agent, and non-owner principals")
 async def t_owner_acl(ctx: TestContext) -> None:
-    from src.core.agent_identity import (
+    from openagent_core.core.agent_identity import (
         AgentIdentityPermissionError,
         AgentIdentityService,
     )
@@ -232,7 +232,7 @@ async def t_owner_acl(ctx: TestContext) -> None:
 
 @test("agent_identity", "optimistic revision conflict refuses stale overwrites")
 async def t_revision_conflict(ctx: TestContext) -> None:
-    from src.core.agent_identity import AgentIdentityConflict, AgentIdentityService
+    from openagent_core.core.agent_identity import AgentIdentityConflict, AgentIdentityService
 
     path, _raw, db, agent, gateway = _fixture(ctx, "revision")
     service = AgentIdentityService(
@@ -267,7 +267,7 @@ async def t_revision_conflict(ctx: TestContext) -> None:
 
 @test("agent_identity", "input bounds and the immutable framework boundary are explicit")
 async def t_validation_and_framework_boundary(ctx: TestContext) -> None:
-    from src.core.agent_identity import (
+    from openagent_core.core.agent_identity import (
         MAX_SYSTEM_PROMPT_BYTES,
         AgentIdentityInputError,
         AgentIdentityService,
@@ -307,13 +307,13 @@ async def t_validation_and_framework_boundary(ctx: TestContext) -> None:
 
 @test("agent_identity", "agent-manager is a default in-process builtin with principal-bound tools")
 async def t_builtin_and_toolkit(ctx: TestContext) -> None:
-    from src.core.on_behalf_context import (
+    from openagent_core.core.on_behalf_context import (
         install_on_behalf_identity,
         reset_on_behalf_identity,
     )
-    from src.core.prompts import FRAMEWORK_SYSTEM_PROMPT
-    from src.mcp.builtins import BUILTIN_MCP_SPECS, DEFAULT_MCPS
-    from src.mcp.servers.agent_manager.adapters import build_runtime_toolkit
+    from openagent_core.core.prompts import FRAMEWORK_SYSTEM_PROMPT
+    from openagent_core.mcp.builtins import BUILTIN_MCP_SPECS, DEFAULT_MCPS
+    from openagent_core.mcp.servers.agent_manager.adapters import build_runtime_toolkit
 
     path, _raw, db, agent, gateway = _fixture(ctx, "toolkit")
     pool = SimpleNamespace(
@@ -356,7 +356,7 @@ async def t_builtin_and_toolkit(ctx: TestContext) -> None:
 
 @test("agent_identity", "REST maps owner success, invalid input, conflicts, and ACL failures")
 async def t_rest_contract(ctx: TestContext) -> None:
-    from src.gateway.api import agent_identity as api
+    from openagent_core.gateway.api import agent_identity as api
 
     path, _raw, _db, agent, gateway = _fixture(ctx, "rest")
     read_response = await api.handle_get(_Request(gateway))
@@ -421,7 +421,7 @@ async def t_rest_contract(ctx: TestContext) -> None:
 
 @test("agent_identity", "legacy config writes cannot bypass identity authorization")
 async def t_legacy_config_routes_delegate(ctx: TestContext) -> None:
-    from src.gateway.api import config as config_api
+    from openagent_core.gateway.api import config as config_api
 
     path, _raw, _db, agent, gateway = _fixture(ctx, "legacy-config")
 

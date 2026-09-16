@@ -1,7 +1,7 @@
 """Async handler behind the ``vault_contradiction_candidates`` tool.
 
 A thin wrapper over the deterministic generator in
-``src.memory.vault.contradiction``. It lives in its own module (rather than in
+``openagent_core.memory.vault.contradiction``. It lives in its own module (rather than in
 ``handlers.py``) for the same reason ``recall.py`` does: it is a distinct
 concern with its own honesty contract, and it is the file to read when you want
 to know what this tool will and will not claim.
@@ -14,11 +14,11 @@ from __future__ import annotations
 
 import asyncio
 
-from src.memory.vault.contradiction import (
+from openagent_core.memory.vault.contradiction import (
     ContradictionConfig,
     find_contradiction_candidates,
 )
-from src.memory.vault.service import get_service
+from openagent_core.memory.vault.service import get_service
 
 
 async def vault_contradiction_candidates(limit: int = 20,

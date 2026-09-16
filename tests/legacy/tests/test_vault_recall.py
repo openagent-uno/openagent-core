@@ -50,7 +50,7 @@ async def t_recall_tools_are_real(ctx: TestContext) -> None:
     function names → ``vault_backlinks``, NOT ``vault_gate_backlinks``). Two
     servers, two spelling rules.
     """
-    from src.core.vault_recall import _RECALL_TOOL_ARGS
+    from openagent_core.core.vault_recall import _RECALL_TOOL_ARGS
 
     keys = _live_tool_keys()
     phantom = sorted(n for n in _RECALL_TOOL_ARGS if n not in keys)
@@ -64,7 +64,7 @@ async def t_recall_tools_are_real(ctx: TestContext) -> None:
 async def t_vault_tool_sets_are_real(ctx: TestContext) -> None:
     """Guards the sets ``_emit_tool_call_summary`` counts against. These held
     two phantoms since the day they shipped."""
-    from src.core.agent import _VAULT_READ_TOOLS, _VAULT_WRITE_TOOLS
+    from openagent_core.core.agent import _VAULT_READ_TOOLS, _VAULT_WRITE_TOOLS
 
     keys = _live_tool_keys()
     for label, names in (
@@ -86,8 +86,8 @@ async def t_vault_tool_sets_are_real(ctx: TestContext) -> None:
 async def t_read_write_disjoint(ctx: TestContext) -> None:
     """A tool counted as both would make vault_writes and vault_reads
     double-count the same call."""
-    from src.core.agent import _VAULT_READ_TOOLS, _VAULT_WRITE_TOOLS
-    from src.core.vault_recall import _RECALL_TOOL_ARGS
+    from openagent_core.core.agent import _VAULT_READ_TOOLS, _VAULT_WRITE_TOOLS
+    from openagent_core.core.vault_recall import _RECALL_TOOL_ARGS
 
     assert not (_VAULT_READ_TOOLS & _VAULT_WRITE_TOOLS)
     # A recall is a strict subset of a read: you cannot recall a note without
@@ -104,7 +104,7 @@ async def t_read_write_disjoint(ctx: TestContext) -> None:
 
 @test("vault_recall", "note paths extracted only from vault READ tools")
 async def t_extract_paths(ctx: TestContext) -> None:
-    from src.core import vault_recall as vr
+    from openagent_core.core import vault_recall as vr
 
     assert vr.note_paths_from_tool(
         "vault_read_note", {"path": "Projects/alpha.md"},
@@ -141,7 +141,7 @@ async def t_extract_paths(ctx: TestContext) -> None:
 async def t_no_body_in_sink(ctx: TestContext) -> None:
     """The token/memory hazard: ``tool_args`` can carry tens of KB of model
     text. Only short path-shaped strings are ever retained."""
-    from src.core import vault_recall as vr
+    from openagent_core.core import vault_recall as vr
 
     body = "x" * 50_000
     # Even on a read tool, an over-long value is not a path.
@@ -163,7 +163,7 @@ async def t_outcome_classification(ctx: TestContext) -> None:
     """The 294/294 trap: on the production log every errored run was also a
     cancelled one. Cancel MUST win over error, or the scorer learns that a
     user interrupting is a defect (§2 calls barge-in first-class)."""
-    from src.core import vault_recall as vr
+    from openagent_core.core import vault_recall as vr
 
     assert vr.outcome_for_exception(None) == vr.OUTCOME_OK
     assert vr.outcome_for_exception(asyncio.CancelledError()) == vr.OUTCOME_CANCELLED
@@ -179,7 +179,7 @@ async def t_outcome_classification(ctx: TestContext) -> None:
 async def t_dedupe(ctx: TestContext) -> None:
     """A retry loop re-reading the same note must not weight it by how badly
     the turn went."""
-    from src.core import vault_recall as vr
+    from openagent_core.core import vault_recall as vr
 
     sink, token = vr.open_sink()
     try:
@@ -194,7 +194,7 @@ async def t_dedupe(ctx: TestContext) -> None:
 async def t_no_sink(ctx: TestContext) -> None:
     """A provider used outside the dispatcher (a test, a direct call) must not
     blow up on telemetry."""
-    from src.core import vault_recall as vr
+    from openagent_core.core import vault_recall as vr
 
     vr.record_tool("vault_read_note", {"path": "a.md"})  # must not raise
 
@@ -204,7 +204,7 @@ async def t_no_sink(ctx: TestContext) -> None:
 
 @test("vault_recall", "ok_rate excludes barge-ins from the denominator")
 async def t_db_stats_exclude_cancelled(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -247,7 +247,7 @@ async def t_db_stats_exclude_cancelled(ctx: TestContext) -> None:
 async def t_db_stats_window(ctx: TestContext) -> None:
     import time
 
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -295,10 +295,10 @@ class _FakeRuntime:
         self._hang = hang
 
     def arun(self, prompt, **kwargs):
-        from src.core._run_state.agent import (
+        from openagent_core.core._run_state.agent import (
             RunContentEvent, ToolCallCompletedEvent,
         )
-        from src.core._run_state.requirement import ToolExecution
+        from openagent_core.core._run_state.requirement import ToolExecution
 
         note, fail, hang = self._note, self._fail, self._hang
 
@@ -331,7 +331,7 @@ def _provider(db, note, *, fail=False, hang=False):
     across all tests, so a shared note name would let one test's rows leak
     into another's assertions.
     """
-    from src.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import TeamRouterProvider
 
     p = TeamRouterProvider("test:model")
     p._db = db
@@ -349,7 +349,7 @@ async def t_stream_path_ok(ctx: TestContext) -> None:
     would have caught ``agent.turn.tool_calls`` being inert: it asserts a row
     lands in the DB from the STREAMING path, which is the only path production
     uses (697 streamed turns vs 11 non-streamed, on the real log)."""
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -375,7 +375,7 @@ async def t_stream_path_ok(ctx: TestContext) -> None:
 
 @test("vault_recall", "REAL stream path: a provider error books errored")
 async def t_stream_path_errored(ctx: TestContext) -> None:
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -404,7 +404,7 @@ async def t_stream_path_barge_in(ctx: TestContext) -> None:
     """The production-shaped case: the user interrupts mid-answer. 294 of the
     294 errored entries on the real log were this. It must land as cancelled
     and stay out of ok_rate."""
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()
@@ -468,7 +468,7 @@ async def t_flush_never_raises(ctx: TestContext) -> None:
 async def t_tool_registered(ctx: TestContext) -> None:
     """An unregistered tool is an inert feature — the exact failure mode this
     whole change exists to correct."""
-    from src.mcp.servers.vault_gate.adapters import build_runtime_toolkit
+    from openagent_core.mcp.servers.vault_gate.adapters import build_runtime_toolkit
 
     tk = build_runtime_toolkit()
     names = set(getattr(tk, "functions", {}) or {}) | set(
@@ -486,8 +486,8 @@ async def t_tool_registered(ctx: TestContext) -> None:
 async def t_tool_payload(ctx: TestContext) -> None:
     import os
 
-    from src.memory.db import MemoryDB
-    from src.mcp.servers.vault_gate import recall
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.mcp.servers.vault_gate import recall
 
     db = MemoryDB(str(ctx.db_path))
     await db.connect()

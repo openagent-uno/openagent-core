@@ -4,14 +4,14 @@ for the block type catalog; ``openagent/workflow/executor.py`` for
 the DAG walker.
 """
 
-from src.workflow.blocks import (
+from openagent_core.workflow.blocks import (
     BLOCK_CATALOG,
     BlockSpec,
     get_block_spec,
     iter_block_specs,
 )
-from src.workflow.templating import resolve_templates
-from src.workflow.validate import (
+from openagent_core.workflow.templating import resolve_templates
+from openagent_core.workflow.validate import (
     ValidationError,
     mcp_callability_from_pool,
     mcp_inventory_from_pool,

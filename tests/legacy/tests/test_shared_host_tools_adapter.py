@@ -63,24 +63,24 @@ from openagent_host_tools.sidecars import (
     COMPUTER_CONTROL_MANIFEST,
 )
 from openagent_host_tools.types import HostError, tool_error_result
-from src.mcp.builtins import (
+from openagent_core.mcp.builtins import (
     DEFAULT_MCPS,
     _profile_marker_claims_port,
     resolve_builtin_entry,
 )
-from src.mcp.pool import _resolve_specs, _specs_from_db
-from src.mcp._runtime import Function
-from src.mcp._runtime.function import classification_from_mcp_annotations
-from src.mcp.servers.host_tools.adapters import (
+from openagent_core.mcp.pool import _resolve_specs, _specs_from_db
+from openagent_core.mcp._runtime import Function
+from openagent_core.mcp._runtime.function import classification_from_mcp_annotations
+from openagent_core.mcp.servers.host_tools.adapters import (
     build_editor_runtime_toolkit,
     build_filesystem_runtime_toolkit,
 )
-from src.mcp.servers.shell.adapters import (
+from openagent_core.mcp.servers.shell.adapters import (
     build_runtime_toolkit as build_shell_runtime_toolkit,
     reset_session_context,
     set_session_context,
 )
-from src.mcp.servers.tool_search.adapters import (
+from openagent_core.mcp.servers.tool_search.adapters import (
     _describe_tool_impl,
     _list_tools_impl,
 )
@@ -253,7 +253,7 @@ def test_default_specs_route_through_shared_in_process_adapters():
     ):
         spec = resolve_builtin_entry(name)
         assert spec["in_process"] is True
-        assert spec["adapter_module"] == "src.mcp.servers.host_tools.adapters"
+        assert spec["adapter_module"] == "openagent_core.mcp.servers.host_tools.adapters"
         assert spec["runtime_toolkit_factory"] == factory
 
 
@@ -339,7 +339,7 @@ def test_frozen_macos_computer_control_prefers_nested_signed_helper_app(
     tmp_path: Path,
     monkeypatch,
 ):
-    import src.mcp.builtins as builtins
+    import openagent_core.mcp.builtins as builtins
 
     executable = tmp_path / "openagent.app" / "Contents" / "MacOS" / "openagent"
     helper = (

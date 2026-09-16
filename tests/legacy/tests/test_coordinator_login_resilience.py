@@ -81,7 +81,7 @@ class _FakePake:
 
 
 def _make_login_state(handle: str):
-    from src.network.coordinator.pake import LoginInProgress
+    from openagent_core.network.coordinator.pake import LoginInProgress
 
     # ``SRPServerSession`` isn't easily mockable, but our fake pake
     # doesn't touch ``state.session`` at all, so any sentinel works.
@@ -89,8 +89,8 @@ def _make_login_state(handle: str):
 
 
 def _make_service(store):
-    from src.network.coordinator.service import CoordinatorService
-    from src.network.coordinator.store import DeviceRow
+    from openagent_core.network.coordinator.service import CoordinatorService
+    from openagent_core.network.coordinator.store import DeviceRow
 
     coord_key = Ed25519PrivateKey.generate()
     svc = CoordinatorService(
@@ -105,8 +105,8 @@ def _make_service(store):
 
 @test("coord_login_resilience", "touch_device DB-lock doesn't break login for existing device")
 async def t_touch_device_locked_login_still_succeeds(ctx: TestContext) -> None:
-    from src.network.auth.device_cert import verify_cert
-    from src.network.coordinator.store import DeviceRow
+    from openagent_core.network.auth.device_cert import verify_cert
+    from openagent_core.network.coordinator.store import DeviceRow
 
     device_pubkey = b"\x00" * 32
     handle = "alessandro"

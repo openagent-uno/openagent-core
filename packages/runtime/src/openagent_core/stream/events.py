@@ -390,7 +390,7 @@ class ContextReport(Event):
     Emitted after each turn completes so a client's always-visible context
     panel (Claude-Code ``/context``) updates live as the conversation grows.
     ``report`` is the JSON payload produced by
-    :func:`src.core.context_report.build_context_report` — the same shape the
+    :func:`openagent_core.core.context_report.build_context_report` — the same shape the
     ``GET /api/sessions/{id}/context`` endpoint and the ``/context`` command's
     structured ``context`` field carry, so every surface shares one contract.
     """

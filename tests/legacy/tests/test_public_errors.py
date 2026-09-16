@@ -23,7 +23,7 @@ class _Wrapped(Exception):
 
 @test("public_errors", "unrecognised failures classify as generic")
 async def t_generic(_ctx: TestContext) -> None:
-    from src.core.public_errors import classify_run_error
+    from openagent_core.core.public_errors import classify_run_error
 
     result = classify_run_error(ValueError("something we have never seen"))
     assert result.code == "generic", f"expected generic, got {result.code!r}"
@@ -32,7 +32,7 @@ async def t_generic(_ctx: TestContext) -> None:
 
 @test("public_errors", "status codes map to auth and rate_limit")
 async def t_status_codes(_ctx: TestContext) -> None:
-    from src.core.public_errors import classify_run_error
+    from openagent_core.core.public_errors import classify_run_error
 
     for status, expected in ((401, "auth"), (403, "auth"), (429, "rate_limit")):
         result = classify_run_error(_Wrapped("provider said no", status))
@@ -46,7 +46,7 @@ async def t_walks_cause_chain(_ctx: TestContext) -> None:
     """A provider wraps the socket error it hit, so the DNS text is on the
     cause rather than the exception the run actually raised. Reading only
     the outermost exception would classify every one of those as generic."""
-    from src.core.public_errors import classify_run_error
+    from openagent_core.core.public_errors import classify_run_error
 
     try:
         try:
@@ -65,7 +65,7 @@ async def t_walks_cause_chain(_ctx: TestContext) -> None:
 async def t_chain_is_bounded(_ctx: TestContext) -> None:
     """``__context__`` can point back at an exception already visited.
     Without the seen-set the walk would spin instead of returning."""
-    from src.core.public_errors import classify_run_error
+    from openagent_core.core.public_errors import classify_run_error
 
     a = _Wrapped("a")
     b = _Wrapped("b")
@@ -81,7 +81,7 @@ async def t_public_message_is_constant(_ctx: TestContext) -> None:
     """The whole point of ``public_message`` is that a host can show it to
     someone who must not see provider internals. A message built from the
     exception would defeat that silently."""
-    from src.core.public_errors import PUBLIC_MESSAGES, classify_run_error
+    from openagent_core.core.public_errors import PUBLIC_MESSAGES, classify_run_error
 
     secret = "sk-live-0123456789-should-never-surface"
     result = classify_run_error(_Wrapped(secret, 401))
@@ -101,7 +101,7 @@ async def t_run_turn_error_round_trip(_ctx: TestContext) -> None:
     can report ``TURN_END_ERROR``. Re-classifying that stand-in must give
     back the code the agent already determined, not re-derive it from the
     message."""
-    from src.core.public_errors import RunTurnError, classify_run_error
+    from openagent_core.core.public_errors import RunTurnError, classify_run_error
 
     restored = classify_run_error(RunTurnError("opaque", code="rate_limit"))
     assert restored.code == "rate_limit", (

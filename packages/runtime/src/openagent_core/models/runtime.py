@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.models.base import BaseModel, ModelResponse
-from src.models.catalog import (
+from openagent_core.models.base import BaseModel, ModelResponse
+from openagent_core.models.catalog import (
     _iter_provider_entries,
     get_default_model_for_provider,
     normalize_runtime_model_id,
@@ -28,7 +28,7 @@ _UNSET = object()
 #
 # Pre-knowledge of what's behind tool-search comes via the catalog
 # summary injected into the system prompt (see
-# :func:`src.core.prompts.build_mcp_catalog_summary`), so the model
+# :func:`openagent_core.core.prompts.build_mcp_catalog_summary`), so the model
 # rarely needs a discovery turn at all.
 
 
@@ -79,11 +79,11 @@ def create_model_from_spec(
         providers_config = []
 
     if spec == "smart":
-        from src.models.dispatcher import ModelDispatcher
+        from openagent_core.models.dispatcher import ModelDispatcher
 
         model: BaseModel = ModelDispatcher(providers_config=providers_config)
     else:
-        from src.models.native_provider import NativeProvider
+        from openagent_core.models.native_provider import NativeProvider
 
         model = NativeProvider(
             model=spec,
@@ -99,7 +99,7 @@ def create_model_from_config(config: dict) -> BaseModel:
 
     Always returns a ``ModelDispatcher`` — it is the single top-level
     runtime and dispatches each session through its entry model's
-    ``TeamRouterProvider`` internally (see ``src.models.dispatcher``).
+    ``TeamRouterProvider`` internally (see ``openagent_core.models.dispatcher``).
     The ``providers`` / ``models`` SQLite tables are the sole source of
     truth for the catalog; the dispatcher starts empty and gets its
     routing populated by ``Agent.initialize`` (and every hot-reload

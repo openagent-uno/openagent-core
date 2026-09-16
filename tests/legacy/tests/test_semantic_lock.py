@@ -49,7 +49,7 @@ def _vault(ctx: TestContext, name: str, notes: int) -> tuple[str, str]:
 
 @test("semantic_lock", "search does not wait for the indexer's embedding round trip")
 async def t_search_not_blocked_by_sync(ctx: TestContext) -> None:
-    from src.memory.semantic_index import SemanticIndex
+    from openagent_core.memory.semantic_index import SemanticIndex
 
     db, vault = _vault(ctx, "a", 6)
     emb = _SlowEmbedder(delay=1.5)
@@ -86,7 +86,7 @@ async def t_search_not_blocked_by_sync(ctx: TestContext) -> None:
 @test("semantic_lock", "the vectors the indexer embedded still land in the index")
 async def t_sync_still_writes(ctx: TestContext) -> None:
     """Moving the embed call out of the lock must not lose the write."""
-    from src.memory.semantic_index import SemanticIndex
+    from openagent_core.memory.semantic_index import SemanticIndex
 
     db, vault = _vault(ctx, "b", 4)
     emb = _SlowEmbedder(delay=0.0)

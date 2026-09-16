@@ -3,11 +3,11 @@ from enum import Enum
 from time import time
 from typing import Any, Dict, List, Optional
 
-from src.stream.media import Audio, File, Image, Video
-from src.core.metrics import ToolCallMetrics
-from src.models.providers.message import Citations
-from src.models.providers.metrics import MessageMetrics
-from src.mcp._runtime.function import UserFeedbackQuestion, UserInputField
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.core.metrics import ToolCallMetrics
+from openagent_core.models.providers.message import Citations
+from openagent_core.models.providers.metrics import MessageMetrics
+from openagent_core.mcp._runtime.function import UserFeedbackQuestion, UserInputField
 
 
 class ModelResponseEvent(str, Enum):
@@ -235,7 +235,7 @@ class ModelResponse:
 
         # Reconstruct response usage (Metrics)
         if data.get("response_usage") and isinstance(data["response_usage"], dict):
-            from src.models.providers.metrics import MessageMetrics as _MessageMetrics
+            from openagent_core.models.providers.metrics import MessageMetrics as _MessageMetrics
 
             data["response_usage"] = _MessageMetrics.from_dict(data["response_usage"])
 

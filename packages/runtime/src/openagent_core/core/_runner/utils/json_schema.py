@@ -3,7 +3,7 @@ from typing import Any, Dict, Literal, Optional, Union, get_args, get_origin
 
 from pydantic import BaseModel
 
-from src.core._runner.utils.log import logger
+from openagent_core.core._runner.utils.log import logger
 
 
 def is_origin_union_type(origin: Any) -> bool:

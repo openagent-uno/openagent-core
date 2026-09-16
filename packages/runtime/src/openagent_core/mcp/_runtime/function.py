@@ -7,10 +7,10 @@ from docstring_parser import parse
 from packaging.version import Version
 from pydantic import BaseModel, Field, validate_call
 
-from src.core.runtime_errors import AgentRunException
-from src.stream.media import Audio, File, Image, Video
-from src.core._run_state import RunContext
-from src.core._runner.utils.log import log_debug, log_exception, log_warning
+from openagent_core.core.runtime_errors import AgentRunException
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.core._run_state import RunContext
+from openagent_core.core._runner.utils.log import log_debug, log_exception, log_warning
 
 T = TypeVar("T")
 
@@ -333,7 +333,7 @@ class Function(BaseModel):
     def from_callable(cls, c: Callable, name: Optional[str] = None, strict: bool = False) -> "Function":
         from inspect import getdoc, signature
 
-        from src.core._runner.utils.json_schema import get_json_schema
+        from openagent_core.core._runner.utils.json_schema import get_json_schema
 
         function_name = name or c.__name__
         parameters = {"type": "object", "properties": {}, "required": []}
@@ -452,7 +452,7 @@ class Function(BaseModel):
         """Process the entrypoint and make it ready for use by an agent."""
         from inspect import getdoc, signature
 
-        from src.core._runner.utils.json_schema import get_json_schema
+        from openagent_core.core._runner.utils.json_schema import get_json_schema
 
         if self.skip_entrypoint_processing:
             if strict:
@@ -508,8 +508,8 @@ class Function(BaseModel):
             # Also exclude parameters whose types are framework-injected,
             # even if the parameter name differs (e.g. my_agent: Agent). See issue #6344.
             try:
-                from src.core._runner.agent.agent import Agent
-                from src.core._runner.team.team import Team
+                from openagent_core.core._runner.agent.agent import Agent
+                from openagent_core.core._runner.team.team import Team
 
                 framework_types = (Agent, Team, RunContext, Image, Video, Audio, File)
                 for param_name, hint in list(type_hints.items()):
@@ -649,8 +649,8 @@ class Function(BaseModel):
         # from Agent/Team class hierarchies (like BaseDb) in the user's module globals.
         try:
             hints = get_type_hints(func)
-            from src.core._runner.agent.agent import Agent
-            from src.core._runner.team.team import Team
+            from openagent_core.core._runner.agent.agent import Agent
+            from openagent_core.core._runner.team.team import Team
 
             framework_types = (Agent, Team)
             for hint in hints.values():
@@ -1002,8 +1002,8 @@ class FunctionCall(BaseModel):
         # This handles cases like `my_agent: Agent` or `custom_team: Team`.
         # See issue #6344.
         try:
-            from src.core._runner.agent.agent import Agent
-            from src.core._runner.team.team import Team
+            from openagent_core.core._runner.agent.agent import Agent
+            from openagent_core.core._runner.team.team import Team
 
             hints = get_type_hints(self.function.entrypoint)  # type: ignore
             for param_name, hint in hints.items():

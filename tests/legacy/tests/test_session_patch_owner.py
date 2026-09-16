@@ -92,7 +92,7 @@ class _FakeRequest(dict):
 
 
 async def _patch(db, body, values=None):
-    from src.gateway.api import sessions as api
+    from openagent_core.gateway.api import sessions as api
 
     resp = await api.handle_patch_metadata(_FakeRequest(db, body, values=values))
     return resp.status, json.loads(resp.body.decode())
@@ -120,7 +120,7 @@ async def t_rename_broadcasts_after_commit(ctx: TestContext) -> None:
         {"title": "New durable title"},
         values={"user_handle": "marco", "client_id": "marco-device"},
     )
-    from src.gateway.api import sessions as api
+    from openagent_core.gateway.api import sessions as api
 
     response = await api.handle_patch_metadata(request)
     assert response.status == 200

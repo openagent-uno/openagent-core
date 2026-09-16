@@ -2,7 +2,7 @@ from typing import Any, Dict
 
 import requests
 
-from src.core._runner.utils.log import log_warning
+from openagent_core.core._runner.utils.log import log_warning
 
 
 def get_location() -> Dict[str, Any]:

@@ -10,16 +10,16 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from src.core.metrics import RunMetrics
-    from src.core._runner.team.team import Team
+    from openagent_core.core.metrics import RunMetrics
+    from openagent_core.core._runner.team.team import Team
 
 from typing import List
 
-from src.memory.store.base import UserMemory
-from src.core._run_state.messages import RunMessages
-from src.memory.sessions import TeamSession
-from src.core._runner.utils.log import log_debug, log_warning
-from src.core.execution_origin import create_server_only_task
+from openagent_core.memory.store.base import UserMemory
+from openagent_core.core._run_state.messages import RunMessages
+from openagent_core.memory.sessions import TeamSession
+from openagent_core.core._runner.utils.log import log_debug, log_warning
+from openagent_core.core.execution_origin import create_server_only_task
 
 # ---------------------------------------------------------------------------
 # Memory
@@ -31,7 +31,7 @@ def _make_memories(
     run_messages: RunMessages,
     user_id: Optional[str] = None,
 ) -> Optional[RunMetrics]:
-    from src.core.metrics import RunMetrics
+    from openagent_core.core.metrics import RunMetrics
 
     collector = RunMetrics()
     user_message_str = run_messages.user_message.get_content_string() if run_messages.user_message is not None else None
@@ -56,7 +56,7 @@ async def _amake_memories(
     run_messages: RunMessages,
     user_id: Optional[str] = None,
 ) -> Optional[RunMetrics]:
-    from src.core.metrics import RunMetrics
+    from openagent_core.core.metrics import RunMetrics
 
     collector = RunMetrics()
     user_message_str = run_messages.user_message.get_content_string() if run_messages.user_message is not None else None
@@ -157,7 +157,7 @@ def get_user_memories(team: "Team", user_id: Optional[str] = None) -> Optional[L
     Returns:
         Optional[List[UserMemory]]: The user memories.
     """
-    from src.core._runner.team._init import _set_memory_manager
+    from openagent_core.core._runner.team._init import _set_memory_manager
 
     if team.memory_manager is None:
         _set_memory_manager(team)
@@ -177,7 +177,7 @@ async def aget_user_memories(team: "Team", user_id: Optional[str] = None) -> Opt
     Returns:
         Optional[List[UserMemory]]: The user memories.
     """
-    from src.core._runner.team._init import _set_memory_manager
+    from openagent_core.core._runner.team._init import _set_memory_manager
 
     if team.memory_manager is None:
         _set_memory_manager(team)
@@ -204,7 +204,7 @@ def _process_learnings(
     if team._learning is None:
         return None
 
-    from src.core.metrics import RunMetrics
+    from openagent_core.core.metrics import RunMetrics
 
     collector = RunMetrics()
     try:
@@ -232,7 +232,7 @@ async def _aprocess_learnings(
     if team._learning is None:
         return None
 
-    from src.core.metrics import RunMetrics
+    from openagent_core.core.metrics import RunMetrics
 
     collector = RunMetrics()
     try:

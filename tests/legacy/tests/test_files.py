@@ -71,7 +71,7 @@ def _write_simple_png(path: str, color: tuple[int, int, int] = (255, 0, 0)) -> N
 
 @test("files", "parse_response_markers extracts IMAGE/FILE/VOICE/VIDEO markers")
 async def t_parse_response_markers(ctx: TestContext) -> None:
-    from src.channels.base import parse_response_markers
+    from openagent_core.channels.base import parse_response_markers
 
     text = (
         "Here's your report: [FILE:/tmp/report.pdf]\n"
@@ -299,14 +299,14 @@ async def t_agent_run_attachments_context(ctx: TestContext) -> None:
 
     - Image attachments are STILL prepended as a context block with a
       read hint (no images= channel on the model layer yet).
-    - Non-image attachments are converted to ``src.stream.media.File`` objects
+    - Non-image attachments are converted to ``openagent_core.stream.media.File`` objects
       and passed through the new ``files=`` kwarg. The user's bare text
       must NOT carry the synthetic "The user attached files:" prepend
       for non-images — that's now the runtime's native attachment path,
       propagated to Team members via ``delegate_task_to_member``.
     """
-    from src.core.agent import Agent
-    from src.models.base import BaseModel, ModelResponse
+    from openagent_core.core.agent import Agent
+    from openagent_core.models.base import BaseModel, ModelResponse
 
     captured_messages: list[dict] = []
     captured_files: list[Any] = []

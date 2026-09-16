@@ -26,7 +26,7 @@ def _make_provider(model: str = "deepseek:deepseek-chat"):
     NativeProvider.__init__ pulls in heavy runtime modules; tests just need
     the rewriter's bound methods, so we bypass __init__ and set the
     one field the rewriter reads (``self.model``)."""
-    from src.models.native_provider import NativeProvider
+    from openagent_core.models.native_provider import NativeProvider
 
     p = NativeProvider.__new__(NativeProvider)
     p.model = model

@@ -47,7 +47,7 @@ def _con_env(**kw):
 
 @test("recall_reserve_multi", "un prefisso solo continua a funzionare come prima")
 async def t_single_prefix_still_works(ctx: TestContext) -> None:
-    from src.core.agent import _recall_scoping
+    from openagent_core.core.agent import _recall_scoping
 
     ripristina = _con_env(
         OPENAGENT_AUTO_RECALL_RESERVE_PREFIX="lyra/procedures/customer-response/")
@@ -60,7 +60,7 @@ async def t_single_prefix_still_works(ctx: TestContext) -> None:
 
 @test("recall_reserve_multi", "due prefissi arrivano come due")
 async def t_two_prefixes(ctx: TestContext) -> None:
-    from src.core.agent import _recall_scoping
+    from openagent_core.core.agent import _recall_scoping
 
     ripristina = _con_env(
         OPENAGENT_AUTO_RECALL_RESERVE_PREFIX=
@@ -75,7 +75,7 @@ async def t_two_prefixes(ctx: TestContext) -> None:
 
 @test("recall_reserve_multi", "niente configurato, nessun posto riservato")
 async def t_unconfigured_is_identity(ctx: TestContext) -> None:
-    from src.core.agent import _recall_scoping
+    from openagent_core.core.agent import _recall_scoping
 
     ripristina = _con_env(OPENAGENT_AUTO_RECALL_RESERVE_PREFIX=None)
     try:
@@ -89,7 +89,7 @@ async def t_unconfigured_is_identity(ctx: TestContext) -> None:
 
 @test("recall_reserve_multi", "l'override per origine vince sul default")
 async def t_per_origin_override(ctx: TestContext) -> None:
-    from src.core.agent import _recall_scoping
+    from openagent_core.core.agent import _recall_scoping
 
     ripristina = _con_env(
         OPENAGENT_AUTO_RECALL_RESERVE_PREFIX="generico/",
@@ -104,7 +104,7 @@ async def t_per_origin_override(ctx: TestContext) -> None:
 
 @test("recall_reserve_multi", "gli slash iniziali non cambiano il confronto")
 async def t_leading_slash_normalised(ctx: TestContext) -> None:
-    from src.core.agent import _recall_scoping
+    from openagent_core.core.agent import _recall_scoping
 
     # I percorsi delle note sono relativi al vault; un prefisso scritto con lo
     # slash davanti non deve smettere di combaciare per una barra.
