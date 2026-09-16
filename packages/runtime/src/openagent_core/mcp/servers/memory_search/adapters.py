@@ -4,8 +4,8 @@ The prior subprocess MCP searched ``sessions.runs`` through
 ``TranscriptIndex``.  A subprocess cannot receive the authenticated turn
 principal without a reusable bearer token, so it cannot safely search a
 multi-user operational corpus.  This adapter stays in the agent process,
-reads the short-lived server-bound ContextVar, and delegates to
-``OperationalSearchService``.
+reads the trusted runtime ExecutionContext, and delegates to the host-provided
+canonical history service. Every hit is reauthorized for the complete audience.
 
 Memory Vault search remains a different MCP and a different index.  Nothing in
 this adapter reads Markdown notes or ``vault_index_*.db``.
@@ -16,11 +16,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from openagent_core.core.on_behalf_context import current_on_behalf_identity
-from openagent_core.memory.operational.access import AccessContext
+from openagent_core.runtime import current_runtime, current_execution_context
+from openagent_core.memory_access import search_authorized_history
 from openagent_core.memory.operational.service import (
     OperationalSearchInputError,
-    OperationalSearchService,
     SUPPORTED_SCOPES,
 )
 
@@ -30,11 +29,9 @@ _DEFAULT_LIMIT = 5
 
 
 def build_runtime_toolkit(pool: Any) -> Any:
-    """Build the runtime toolkit around the pool's canonical database."""
+    """Build the adapter; the trusted runtime supplies the history service."""
 
     from openagent_core.mcp._runtime import Toolkit
-
-    service = OperationalSearchService(getattr(pool, "_db", None))
 
     async def search_past_conversations(
         query: str,
@@ -46,8 +43,8 @@ def build_runtime_toolkit(pool: Any) -> Any:
         """Search authorized operational history using literal keywords.
 
         Use this for evidence about what happened in prior chats and
-        automations. ``scopes`` defaults to all five corpora and may contain
-        ``chats``, ``tools``, ``workflows``, ``scheduled``, and ``events``.
+        automations. ``scopes`` defaults to all six corpora and may contain
+        ``chats``, ``tools``, ``workflows``, ``scheduled``, ``events``, and ``views``.
         It searches redacted messages, titles, prompts, visible outputs,
         errors, tool identity/structure, workflow traces, scheduled runs, and
         event deliveries. Unknown tool argument/result VALUES and raw event
@@ -73,20 +70,18 @@ def build_runtime_toolkit(pool: Any) -> Any:
         closed.
         """
 
-        identity = current_on_behalf_identity()
-        if identity is None:
+        runtime, context = current_runtime(), current_execution_context()
+        if runtime is None or context is None:
             return {
                 "ok": False,
                 "hits": [],
                 "hint": (
                     "Operational history search requires an authenticated "
-                    "on-behalf-of turn and is unavailable in this execution context."
+                    "runtime turn and is unavailable in this execution context."
                 ),
             }
         try:
-            access = AccessContext.from_on_behalf_identity(identity)
-            return await service.search(
-                access=access,
+            return await search_authorized_history(runtime, context,
                 query=query,
                 scopes=(sorted(SUPPORTED_SCOPES) if scopes is None else scopes),
                 limit=limit,
@@ -99,7 +94,7 @@ def build_runtime_toolkit(pool: Any) -> Any:
             return {
                 "ok": False,
                 "hits": [],
-                "hint": "Authenticated on-behalf-of context is invalid.",
+                "hint": "The current execution is not authorized for this history.",
             }
         except Exception:  # noqa: BLE001 - query/result content must not enter logs
             logger.error("agent operational search failed (details suppressed)")

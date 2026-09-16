@@ -806,6 +806,7 @@ class OperationalSearchService:
         limit: int = 5,
         offset: int = 0,
         session_id: str | None = None,
+        audience_accesses: tuple[AccessContext, ...] = (),
     ) -> dict[str, Any]:
         if self._db is None:
             raise RuntimeError("operational database is unavailable")
@@ -890,6 +891,9 @@ class OperationalSearchService:
                 batch,
                 access,
             )
+            for recipient_access in audience_accesses:
+                recipient_visibility = await search_rows_visible(conn, batch, recipient_access)
+                visibility = tuple(left and right for left, right in zip(visibility, recipient_visibility))
             for row, row_visible in zip(batch, visibility):
                 if not row_visible:
                     continue
