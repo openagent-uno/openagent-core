@@ -44,6 +44,8 @@ class _FakeDB:
         row = self.rows.setdefault(session_id, {"session_id": session_id, "client_id": ""})
         if kwargs.get("client_id"):
             row["client_id"] = kwargs["client_id"]
+        if kwargs.get("title"):
+            row["title"] = kwargs["title"]
 
 
 class _FakeStreamSession:
@@ -64,7 +66,7 @@ def _gateway(db):
     )
 
 
-async def _create(db, *, session_id="rest-chat", client_id="ios-rest", handle="marco"):
+async def _create(db, *, session_id="rest-chat", client_id="ios-rest", handle="marco", message=None):
     from src.gateway.api import chat as chat_api
     from src.stream import session as stream_module
 
@@ -74,6 +76,7 @@ async def _create(db, *, session_id="rest-chat", client_id="ios-rest", handle="m
     try:
         return await chat_api._get_or_create_session(
             _gateway(db), client_id, session_id, handle=handle,
+            initial_message=message,
         )
     finally:
         stream_module.StreamSession = real
@@ -88,7 +91,7 @@ async def t_rest_chat_stamps_owner(_ctx: TestContext) -> None:
     # The handle, not the device key: the listing must be the same on every
     # device that user signs in from. The device stays for per-device routing.
     assert db.calls == [{
-        "session_id": "rest-chat", "client_id": "marco", "device_id": "ios-rest",
+        "session_id": "rest-chat", "client_id": "marco", "device_id": "ios-rest", "title": None,
     }], db.calls
 
 
@@ -104,6 +107,30 @@ async def t_existing_owner_is_kept(_ctx: TestContext) -> None:
     db = _FakeDB({"rest-chat": {"session_id": "rest-chat", "client_id": "giulia"}})
     await _create(db, handle="marco")
     assert db.calls == [], "attaching to someone else's session must not take it over"
+
+
+@test("session_owner_recovery", "the first meaningful REST message repairs an automatic title")
+async def t_rest_chat_gets_meaningful_title(_ctx: TestContext) -> None:
+    from src.gateway.api.chat import _record_session_owner
+
+    db = _FakeDB({
+        "rest-chat": {
+            "session_id": "rest-chat", "client_id": "marco", "title": "/model gpt",
+        },
+    })
+    gateway = _gateway(db)
+    await _record_session_owner(
+        gateway, "rest-chat", "ios-rest", "marco", "/model codex:gpt-5.6-sol:high",
+    )
+    assert db.calls == [], "a technical command is not a title"
+    await _record_session_owner(
+        gateway, "rest-chat", "ios-rest", "marco",
+        "  Start   BuzzerBeater locally with Aspire!  ",
+    )
+    assert db.calls == [{
+        "session_id": "rest-chat", "client_id": None, "device_id": None,
+        "title": "Start BuzzerBeater locally with Aspire",
+    }], db.calls
 
 
 @test("session_owner_recovery", "a runtime turn no longer erases the stored owner")

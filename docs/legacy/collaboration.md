@@ -71,6 +71,11 @@ results are broadcast and recorded as `command/result` in the session journal.
 command results with stable turn IDs, after checking the current session ACL.
 Host administration commands are not part of this session API.
 
+Automatic session names come from the first meaningful user request. Technical
+slash commands are never used as names, and a legacy `New Chat`, session-id or
+slash-command title is repaired by the next real request. REST chat persists and
+broadcasts that title together with the authenticated owner before dispatch.
+
 ```http
 POST /api/collaboration/stop
 Content-Type: application/json

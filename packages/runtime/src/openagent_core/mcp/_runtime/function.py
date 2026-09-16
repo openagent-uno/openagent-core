@@ -1019,6 +1019,24 @@ class FunctionCall(BaseModel):
 
         return entrypoint_args
 
+    def _merge_entrypoint_args(self, entrypoint_args: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge model arguments with framework-owned execution context.
+
+        ``run_context`` (and the other values produced by
+        :meth:`_build_entrypoint_args`) are runtime-owned parameters and are
+        deliberately omitted from the model-facing tool schema.  A nested
+        dispatcher such as tool-search can nevertheless forward one of those
+        keys in its free-form ``args`` object.  Passing the two dictionaries as
+        separate ``**kwargs`` then raises ``got multiple values`` before the
+        tool can run.  Build one mapping instead, with the trusted runtime
+        values winning, so direct and hook-wrapped calls have identical
+        semantics.
+        """
+
+        arguments = dict(self.arguments or {})
+        arguments.update(entrypoint_args)
+        return arguments
+
     def _build_hook_args(self, hook: Callable, name: str, func: Callable, args: Dict[str, Any]) -> Dict[str, Any]:
         """Build the arguments for the hook."""
         from inspect import signature
@@ -1060,9 +1078,7 @@ class FunctionCall(BaseModel):
 
         def execute_entrypoint(name, func, args):
             """Execute the entrypoint function."""
-            arguments = entrypoint_args.copy()
-            if self.arguments is not None:
-                arguments.update(self.arguments)
+            arguments = self._merge_entrypoint_args(entrypoint_args)
             return self.function.entrypoint(**arguments)  # type: ignore
 
         # If no hooks, just return the entrypoint execution function
@@ -1132,7 +1148,7 @@ class FunctionCall(BaseModel):
                 execution_chain = self._build_nested_execution_chain(entrypoint_args=entrypoint_args)
                 result = execution_chain(self.function.name, self.function.entrypoint, self.arguments or {})
             else:
-                result = self.function.entrypoint(**entrypoint_args, **self.arguments)  # type: ignore
+                result = self.function.entrypoint(**self._merge_entrypoint_args(entrypoint_args))  # type: ignore
 
             # Handle generator case
             if isgenerator(result):
@@ -1254,9 +1270,7 @@ class FunctionCall(BaseModel):
 
         async def execute_entrypoint_async(name, func, args):
             """Execute the entrypoint function asynchronously."""
-            arguments = entrypoint_args.copy()
-            if self.arguments is not None:
-                arguments.update(self.arguments)
+            arguments = self._merge_entrypoint_args(entrypoint_args)
 
             result = self.function.entrypoint(**arguments)  # type: ignore
             if iscoroutinefunction(self.function.entrypoint) and not isasyncgenfunction(self.function.entrypoint):
@@ -1265,9 +1279,7 @@ class FunctionCall(BaseModel):
 
         def execute_entrypoint(name, func, args):
             """Execute the entrypoint function synchronously."""
-            arguments = entrypoint_args.copy()
-            if self.arguments is not None:
-                arguments.update(self.arguments)
+            arguments = self._merge_entrypoint_args(entrypoint_args)
             return self.function.entrypoint(**arguments)  # type: ignore
 
         # If no hooks, just return the entrypoint execution function
@@ -1346,10 +1358,7 @@ class FunctionCall(BaseModel):
                 execution_chain = await self._build_nested_execution_chain_async(entrypoint_args)
                 self.result = await execution_chain(self.function.name, self.function.entrypoint, self.arguments or {})
             else:
-                if self.arguments is None or self.arguments == {}:
-                    result = self.function.entrypoint(**entrypoint_args)
-                else:
-                    result = self.function.entrypoint(**entrypoint_args, **self.arguments)
+                result = self.function.entrypoint(**self._merge_entrypoint_args(entrypoint_args))
 
                 # Handle both sync and async entrypoints
                 if isasyncgenfunction(self.function.entrypoint):

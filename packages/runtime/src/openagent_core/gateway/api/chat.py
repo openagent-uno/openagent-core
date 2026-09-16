@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import uuid
 from typing import Any
 
@@ -43,7 +44,38 @@ _sessions: dict[tuple[str, str], tuple[Any, asyncio.Lock]] = {}
 _sessions_registry_lock = asyncio.Lock()
 
 
-async def _record_session_owner(gateway, session_id: str, client_id: str, handle: str | None) -> None:
+def _automatic_session_title(title: str | None, session_id: str) -> bool:
+    normalized = str(title or "").strip()
+    return (
+        not normalized
+        or normalized == session_id
+        or normalized.lower() in {"new chat", "new conversation"}
+        or bool(re.match(r"^/[a-z][\w-]*(?:\s|$)", normalized, re.IGNORECASE))
+    )
+
+
+def _session_title_from_message(message: str | None, max_length: int = 60) -> str | None:
+    title = " ".join(str(message or "").split()).strip()
+    if not title or re.match(r"^/[a-z][\w-]*(?:\s|$)", title, re.IGNORECASE):
+        return None
+    title = re.sub(r"^(?:[-*#>]\s*)+", "", title)
+    title = re.sub(r"[`*_~]", "", title).strip()
+    if not title:
+        return None
+    if len(title) > max_length:
+        candidate = title[: max_length + 1]
+        boundary = candidate.rfind(" ")
+        title = candidate[: boundary if boundary >= max_length * 0.6 else max_length].rstrip()
+    return title.rstrip(".!?,;:") or None
+
+
+async def _record_session_owner(
+    gateway,
+    session_id: str,
+    client_id: str,
+    handle: str | None,
+    message: str | None = None,
+) -> None:
     """Record who owns this session, the way the WebSocket gateway does.
 
     ``SessionManager._persist_session`` stamps ``metadata.client_id`` on every
@@ -69,13 +101,27 @@ async def _record_session_owner(gateway, session_id: str, client_id: str, handle
         return
     try:
         row = await db.get_session(session_id)
-        if row is not None and str(row.get("client_id") or "").strip():
+        owner = str((row or {}).get("client_id") or "").strip()
+        suggested_title = _session_title_from_message(message)
+        title = (
+            suggested_title
+            if suggested_title and _automatic_session_title(
+                (row or {}).get("title"), session_id,
+            )
+            else None
+        )
+        if owner and title is None:
             return
         await db.upsert_session(
             session_id,
-            client_id=(handle or "").strip() or client_id,
-            device_id=client_id,
+            client_id=None if owner else (handle or "").strip() or client_id,
+            device_id=None if owner else client_id,
+            title=title,
         )
+        if title:
+            broadcast = getattr(gateway, "broadcast_session", None)
+            if callable(broadcast):
+                broadcast("updated" if row is not None else "created", session_id)
     except Exception:
         logger.warning(
             "chat: could not record the owner of session %s", session_id,
@@ -89,6 +135,7 @@ async def _get_or_create_session(
     session_id: str,
     handle: str | None = None,
     on_behalf_identity=None,
+    initial_message: str | None = None,
 ):
     """Return the cached StreamSession for this (client_id, session_id).
 
@@ -125,7 +172,9 @@ async def _get_or_create_session(
             await session.start()
             lock = asyncio.Lock()
             _sessions[key] = (session, lock)
-            await _record_session_owner(gateway, session_id, client_id, handle)
+            await _record_session_owner(
+                gateway, session_id, client_id, handle, initial_message,
+            )
             logger.debug("chat: created session %s/%s", client_id, session_id)
             return session, lock
         # Refresh the short-lived authorization subject from this verified
@@ -133,6 +182,9 @@ async def _get_or_create_session(
         # session was first created.  This also fails closed if an internal
         # caller reaches the handler without an authenticated context.
         entry[0].on_behalf_identity = on_behalf_identity
+        await _record_session_owner(
+            gateway, session_id, client_id, handle, initial_message,
+        )
         return entry
 
 
@@ -240,6 +292,7 @@ async def handle_chat(request: web.Request) -> web.Response:
             gateway, client_id, session_id,
             handle=user_handle,
             on_behalf_identity=on_behalf_identity,
+            initial_message=text,
         )
     except BusyError as exc:
         return web.json_response({"error": str(exc)}, status=409)

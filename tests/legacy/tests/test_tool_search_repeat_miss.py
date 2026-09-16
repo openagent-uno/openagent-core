@@ -108,6 +108,42 @@ async def t_success_resets(ctx: TestContext) -> None:
     assert "STOP" not in again, again
 
 
+@test("tool_search_repeat_miss", "nested tools cannot override framework run context")
+async def t_nested_tool_runtime_context_wins(_ctx: TestContext) -> None:
+    """A free-form tool-search call may carry a stale ``run_context`` key.
+
+    MCP entrypoints also receive the authoritative context from the runtime.
+    The two used to be expanded as separate ``**kwargs`` dictionaries, which
+    crashed Vault reads before dispatch with ``got multiple values for keyword
+    argument 'run_context'``.  The runtime value must win without exposing the
+    reserved key to the underlying MCP payload.
+    """
+    from src.mcp._runtime.function import Function, FunctionCall
+    from types import SimpleNamespace
+
+    authoritative = SimpleNamespace(session_state=None)
+    received: list[object] = []
+
+    async def _read(*, query: str, run_context=None):
+        received.append(run_context)
+        return {"query": query}
+
+    fn = Function(
+        name="vault_search_notes",
+        entrypoint=_read,
+        skip_entrypoint_processing=True,
+    )
+    fn._run_context = authoritative
+    execution = await FunctionCall(
+        function=fn,
+        arguments={"query": "refund policy", "run_context": "stale-forwarded-value"},
+    ).aexecute()
+
+    assert execution.status == "success", execution.error
+    assert execution.result == {"query": "refund policy"}
+    assert received == [authoritative]
+
+
 @test("tool_search_repeat_miss", "vault keyword search compatibility alias is read-only and exact")
 async def t_vault_search_compatibility_alias(_ctx: TestContext) -> None:
     from src.mcp.servers.tool_search import adapters
