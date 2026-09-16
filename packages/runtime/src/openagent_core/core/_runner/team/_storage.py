@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from openagent_core.persistence import run_sync
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -188,7 +190,7 @@ async def _aread_session(
             team.db = cast(AsyncBaseDb, team.db)
             session = await team.db.get_session(session_id=session_id, session_type=session_type, user_id=user_id)
         else:
-            session = team.db.get_session(session_id=session_id, session_type=session_type, user_id=user_id)  # type: ignore[assignment]
+            session = await run_sync(team.db.get_session, session_id=session_id, session_type=session_type, user_id=user_id)  # type: ignore[assignment]
         return session  # type: ignore
     except Exception as e:
         log_warning(f"Error getting session from db: {str(e)}")
@@ -217,7 +219,7 @@ async def _aupsert_session(team: "Team", session: TeamSession) -> Optional[TeamS
         if _has_async_db(team):
             return await team.db.upsert_session(session=session)  # type: ignore
         else:
-            return team.db.upsert_session(session=session)  # type: ignore
+            return await run_sync(team.db.upsert_session, session=session)  # type: ignore
     except Exception as e:
         log_warning(f"Error upserting session into db: {str(e)}")
     return None

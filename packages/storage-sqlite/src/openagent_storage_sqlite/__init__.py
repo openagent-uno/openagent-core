@@ -14,6 +14,9 @@ import sqlite3
 import time
 import uuid
 import hashlib
+import asyncio
+import functools
+from openagent_core.persistence import run_sync
 
 from .search import enqueue_source, restore_runtime_search_intents
 
@@ -21,11 +24,20 @@ from openagent_core.contracts import (ExecutionContext, IdempotencyConflict, Run
     RunRecord, RunRequest, TERMINAL_STATUSES, canonical_json)
 
 
+def _serialized(method):
+    @functools.wraps(method)
+    async def invoke(self, *args, **kwargs):
+        async with self._operation_lock:
+            return await run_sync(method, self, *args, **kwargs)
+    return invoke
+
+
 class SqliteRuntimeStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).absolute()
         self._db: sqlite3.Connection | None = None
         self._lock_fd: int | None = None
+        self._operation_lock = asyncio.Lock()
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -33,7 +45,7 @@ class SqliteRuntimeStore:
             raise RuntimeError("Store has not been started")
         return self._db
 
-    async def start(self) -> None:
+    def _start(self) -> None:
         if self._db is not None:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,7 +66,7 @@ class SqliteRuntimeStore:
         self._lock_fd = fd
         existed = self.path.exists() and self.path.stat().st_size > 0
         try:
-            self._db = sqlite3.connect(str(self.path), isolation_level=None, timeout=5)
+            self._db = sqlite3.connect(str(self.path), isolation_level=None, timeout=5, check_same_thread=False)
             self._db.row_factory = sqlite3.Row
             self._db.execute('PRAGMA foreign_keys=ON')
             if existed:
@@ -87,10 +99,10 @@ class SqliteRuntimeStore:
             with self._transaction() as db:
                 restore_runtime_search_intents(db, int(time.time()*1000))
         except BaseException:
-            await self.close()
+            self._close()
             raise
 
-    async def close(self) -> None:
+    def _close(self) -> None:
         if self._db is not None:
             self._db.close()
             self._db = None
@@ -116,7 +128,7 @@ class SqliteRuntimeStore:
                          metadata.get('request_digest',''), json.loads(row['output_json']) if row['output_json'] else None,
                          metadata.get('cancel_requested',False))
 
-    async def get(self, run_id: str) -> RunRecord | None:
+    def _get(self, run_id: str) -> RunRecord | None:
         row = self.connection.execute('SELECT * FROM session_runs WHERE id=?',(run_id,)).fetchone()
         if row:
             return self._record(row)
@@ -134,7 +146,7 @@ class SqliteRuntimeStore:
             canonical_json(actor),'run',run_id,row['session_id'],run_id,kind,int(time.time()*1000),1,canonical_json(dict(payload)))).lastrowid
         return RunEvent(cursor,run_id,kind,dict(payload))
 
-    async def accept(self, request: RunRequest, context: ExecutionContext) -> tuple[RunRecord,bool]:
+    def _accept(self, request: RunRequest, context: ExecutionContext) -> tuple[RunRecord,bool]:
         digest=request.fingerprint(context)
         with self._transaction() as db:
             rows=db.execute('SELECT * FROM session_runs WHERE id=? OR (session_id=? AND idempotency_key=?)',
@@ -213,7 +225,7 @@ class SqliteRuntimeStore:
             db.execute('UPDATE tool_invocations SET source_version=source_version+1 WHERE id=?', (tool['id'],))
             enqueue_source(db, 'tool_invocation', tool['id'], now)
 
-    async def transition(self, run_id: str, status: str, *, output: Any = None) -> RunRecord:
+    def _transition(self, run_id: str, status: str, *, output: Any = None) -> RunRecord:
         with self._transaction() as db:
             row=db.execute('SELECT * FROM session_runs WHERE id=?',(run_id,)).fetchone()
             if row is None:
@@ -237,7 +249,7 @@ class SqliteRuntimeStore:
             self._event(db,run_id,'run.'+status,{'status':status,'output':output})
             return self._record(db.execute('SELECT * FROM session_runs WHERE id=?',(run_id,)).fetchone())
 
-    async def request_cancel(self, run_id: str) -> RunRecord:
+    def _request_cancel(self, run_id: str) -> RunRecord:
         with self._transaction() as db:
             row=db.execute('SELECT * FROM session_runs WHERE id=?',(run_id,)).fetchone()
             if row is None:
@@ -250,7 +262,7 @@ class SqliteRuntimeStore:
             self._event(db,run_id,'run.cancel_requested',{})
             return self._record(db.execute('SELECT * FROM session_runs WHERE id=?',(run_id,)).fetchone())
 
-    async def reserve_cancel(self,run_id: str,context: ExecutionContext) -> RunRecord:
+    def _reserve_cancel(self,run_id: str,context: ExecutionContext) -> RunRecord:
         """Cancel a delayed request through the existing immutable event log.
 
         No synthetic message, owner or session is created before acceptance.
@@ -275,11 +287,11 @@ class SqliteRuntimeStore:
                     run_id,'run.cancel_reserved',int(time.time()*1000),1,canonical_json({'status':'cancelled','cancelled_before_accept':True})))
             return RunRecord(run_id,context.session_id,context.tenant_id,'cancelled','',cancel_requested=True)
 
-    async def append_event(self,run_id: str,kind: str,payload: Mapping[str,Any]) -> RunEvent:
+    def _append_event(self,run_id: str,kind: str,payload: Mapping[str,Any]) -> RunEvent:
         with self._transaction() as db:
             return self._event(db,run_id,kind,payload)
 
-    async def begin_tool(self, run_id: str, call_id: str, binding: Mapping[str, Any], arguments: Mapping[str, Any]) -> None:
+    def _begin_tool(self, run_id: str, call_id: str, binding: Mapping[str, Any], arguments: Mapping[str, Any]) -> None:
         """Commit the invocation intent before allowing an external effect."""
         with self._transaction() as db:
             run = db.execute('SELECT * FROM session_runs WHERE id=?', (run_id,)).fetchone()
@@ -303,7 +315,7 @@ class SqliteRuntimeStore:
             enqueue_source(db, 'tool_invocation', invocation_id, now)
             self._event(db,run_id,'tool.invoking',payload)
 
-    async def finish_tool(self, run_id: str, call_id: str, *, result: Any = None, error: Mapping[str, Any] | None = None) -> None:
+    def _finish_tool(self, run_id: str, call_id: str, *, result: Any = None, error: Mapping[str, Any] | None = None) -> None:
         with self._transaction() as db:
             row = db.execute('SELECT * FROM tool_invocations WHERE session_run_id=? AND tool_call_id=?',(run_id,call_id)).fetchone()
             if row is None:
@@ -326,18 +338,33 @@ class SqliteRuntimeStore:
             enqueue_source(db, 'tool_invocation', row['id'], int(time.time()*1000))
             self._event(db,run_id,'tool.completed',payload)
 
-    async def events(self,run_id: str,after: int=0) -> tuple[RunEvent,...]:
+    def _events(self,run_id: str,after: int=0) -> tuple[RunEvent,...]:
         rows=self.connection.execute('SELECT sequence,event_type,metadata_json FROM domain_events WHERE run_id=? AND sequence>? ORDER BY sequence',(run_id,after))
         return tuple(RunEvent(r[0],run_id,r[1],json.loads(r[2])) for r in rows)
 
-    async def recover(self) -> None:
+    def _recover(self) -> None:
         pending=self.connection.execute("SELECT t.session_run_id,t.tool_call_id FROM tool_invocations t JOIN session_runs r ON r.id=t.session_run_id WHERE json_extract(r.metadata_json,'$.runtime_contract')=1 AND t.finished_at_ms IS NULL").fetchall()
         for row in pending:
-            await self.finish_tool(row[0],row[1],error={'reason':'runtime_restarted','effects':'unknown','retry_allowed':False})
+            self._finish_tool(row[0],row[1],error={'reason':'runtime_restarted','effects':'unknown','retry_allowed':False})
         rows=self.connection.execute("SELECT id FROM session_runs WHERE json_extract(metadata_json,'$.runtime_contract')=1 AND finished_at_ms IS NULL").fetchall()
         for row in rows:
-            await self.transition(row[0],'interrupted',output={'reason':'runtime_restarted','effects':'unknown','retry_allowed':False})
+            self._transition(row[0],'interrupted',output={'reason':'runtime_restarted','effects':'unknown','retry_allowed':False})
 
-    async def children(self,run_id: str) -> tuple[RunRecord,...]:
+    def _children(self,run_id: str) -> tuple[RunRecord,...]:
         rows=self.connection.execute("SELECT * FROM session_runs WHERE json_extract(metadata_json,'$.execution_context.parent_run_id')=? ORDER BY created_at_ms,id",(run_id,))
         return tuple(self._record(row) for row in rows)
+
+    # Public asynchronous operations share one per-instance transaction lane.
+    start = _serialized(_start)
+    close = _serialized(_close)
+    get = _serialized(_get)
+    accept = _serialized(_accept)
+    transition = _serialized(_transition)
+    request_cancel = _serialized(_request_cancel)
+    reserve_cancel = _serialized(_reserve_cancel)
+    append_event = _serialized(_append_event)
+    begin_tool = _serialized(_begin_tool)
+    finish_tool = _serialized(_finish_tool)
+    events = _serialized(_events)
+    recover = _serialized(_recover)
+    children = _serialized(_children)

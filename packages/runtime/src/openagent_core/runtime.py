@@ -208,6 +208,13 @@ class Runtime:
         return await self._submit(request,context,executor)
 
     async def _submit(self, request: RunRequest, context: ExecutionContext, executor: AgentExecutor) -> RunRecord:
+        from .persistence import complete_before_cancelling
+        async with self._lifecycle:
+            # Closing cannot pass an acceptance whose execution has not yet
+            # been registered. Disconnecting the submitter cannot strand it.
+            return await complete_before_cancelling(self._admit_and_start(request, context, executor))
+
+    async def _admit_and_start(self, request: RunRequest, context: ExecutionContext, executor: AgentExecutor) -> RunRecord:
         self._admission()
         request = copy.deepcopy(request)
         if request.session_id != context.session_id:

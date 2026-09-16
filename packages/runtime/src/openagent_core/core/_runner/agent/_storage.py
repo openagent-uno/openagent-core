@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from openagent_core.persistence import run_sync
+
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -155,7 +157,7 @@ async def aread_session(
         if _init.has_async_db(agent):
             return await agent.db.get_session(session_id=session_id, session_type=session_type, user_id=user_id)  # type: ignore
         else:
-            return agent.db.get_session(session_id=session_id, session_type=session_type, user_id=user_id)  # type: ignore
+            return await run_sync(agent.db.get_session, session_id=session_id, session_type=session_type, user_id=user_id)  # type: ignore
     except Exception as e:
         import traceback
 
@@ -193,7 +195,7 @@ async def aupsert_session(
         if _init.has_async_db(agent):
             return await agent.db.upsert_session(session=session)  # type: ignore
         else:
-            return agent.db.upsert_session(session=session)  # type: ignore
+            return await run_sync(agent.db.upsert_session, session=session)  # type: ignore
     except Exception as e:
         import traceback
 

@@ -19,9 +19,10 @@ class Policy:
 
 
 class Echo:
-    def __init__(self):self.calls=[];self.hold=None
+    def __init__(self):self.calls=[];self.hold=None;self.started=asyncio.Queue()
     async def execute(self,request,context,runtime):
         self.calls.append((request.run_id,context.author.subject_id,current_execution_context()))
+        self.started.put_nowait(request.run_id)
         if self.hold:await self.hold.wait()
         return request.input
 
@@ -69,28 +70,31 @@ class Contracts(unittest.IsolatedAsyncioTestCase):
         self.executor.hold.set();self.assertEqual((await self.r.wait('run',self.ctx)).status,'success')
 
     async def test_exact_cancel_before_execution(self):
-        await self.r.start();await self.r.submit(self.request(),self.ctx)
+        self.executor.hold=asyncio.Event()
+        await self.r.start();await self.r.submit(self.request('blocker'),self.ctx)
+        self.assertEqual(await asyncio.wait_for(self.executor.started.get(),2),'blocker')
+        await self.r.submit(self.request(),self.ctx)
         self.assertEqual((await self.r.cancel('run',self.ctx)).status,'cancelled')
-        self.assertEqual(self.executor.calls,[])
+        self.assertEqual([row[0] for row in self.executor.calls],['blocker'])
+        self.executor.hold.set();await self.r.wait('blocker',self.ctx)
 
     async def test_steering_cancels_exact_target_and_uses_new_authority(self):
         self.executor.hold=asyncio.Event()
         await self.r.start();await self.r.submit(self.request('old'),self.ctx)
-        await asyncio.sleep(0)
+        self.assertEqual(await asyncio.wait_for(self.executor.started.get(),2),'old')
         bob=PrincipalRef('host','tenant','bob')
         context=replace(self.ctx,author=bob,initiator=bob,authority=bob,audience=(bob,),ingress_id='bob-device')
         request=self.request('steer',steer_run_id='old')
         await self.r.submit(request,context)
-        for _ in range(20):
-            if len(self.executor.calls)==2:break
-            await asyncio.sleep(0)
+        self.assertEqual(await asyncio.wait_for(self.executor.started.get(),2),'steer')
         self.assertEqual((await self.r.get_run('old',self.ctx)).status,'cancelled')
         self.assertEqual(self.executor.calls[-1][2],context)
         self.executor.hold.set()
         self.assertEqual((await self.r.wait('steer',context)).status,'success')
         # A late duplicate must never cancel the current run for this session.
         self.executor.hold=asyncio.Event()
-        await self.r.submit(self.request('later'),context);await asyncio.sleep(0)
+        await self.r.submit(self.request('later'),context)
+        self.assertEqual(await asyncio.wait_for(self.executor.started.get(),2),'later')
         await self.r.submit(request,context)
         self.assertEqual((await self.r.get_run('later',context)).status,'running')
         self.executor.hold.set();await self.r.wait('later',context)
