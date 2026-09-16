@@ -53,7 +53,9 @@ class RuntimeSearchOutbox(unittest.IsolatedAsyncioTestCase):
                 store = SqliteRuntimeStore(Path(directory)/'state.sqlite3')
                 await store.start()
                 restored = store.connection.execute('SELECT count(*) FROM search_outbox').fetchone()[0]
-                self.assertEqual(restored, 4)  # Session, two messages, one exact tool.
+                # The durable tool card is also a canonical message. Its outbox
+                # intent must survive rebuild alongside the separate tool record.
+                self.assertEqual(restored, 5)  # Session, three messages, one exact tool.
                 await store.close(); await store.start()
                 self.assertEqual(store.connection.execute('SELECT count(*) FROM search_outbox').fetchone()[0], restored)
                 # Only derived files are removed; canonical history remains intact.
@@ -61,7 +63,11 @@ class RuntimeSearchOutbox(unittest.IsolatedAsyncioTestCase):
                 for suffix in ('','-wal','-shm'):
                     Path(str(index)+suffix).unlink(missing_ok=True)
                 self.assertEqual(len((await query('orchid', ['chats','tools']))['hits']), 3)
-                self.assertEqual(store.connection.execute('SELECT count(*) FROM session_messages').fetchone()[0], 2)
+                self.assertEqual(store.connection.execute('SELECT count(*) FROM session_messages').fetchone()[0], 3)
+                anchor = store.connection.execute(
+                    "SELECT tool_call_id, status FROM session_messages WHERE role='tool'"
+                ).fetchall()
+                self.assertEqual([tuple(row) for row in anchor], [('call', 'complete')])
             finally:
                 await db.close()
                 await store.close()
