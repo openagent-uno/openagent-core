@@ -402,18 +402,28 @@ def resolve_builtin_entry(name: str, env: dict[str, str] | None = None) -> dict[
             resolved["env"] = dict(env)
         return resolved
 
+    is_python = spec.get("python", False)
     if name == "vault":
         try:
             from openagent_modules import module_assets
         except ImportError as exc:
             raise RuntimeError("The vault module requires the optional openagent-modules package") from exc
         mcp_dir = module_assets("vault")
+    elif is_python and is_frozen():
+        # Python modules are importable from the frozen PYZ archive. They do
+        # not require a duplicate source directory in the extraction tree.
+        # The product executable exposes the exact internal MCP entrypoint;
+        # DB, credentials and workspace remain explicitly supplied in env.
+        from importlib.util import find_spec
+        module_name = f"openagent_core.mcp.servers.{spec['dir']}.server"
+        if find_spec(module_name) is None:
+            raise FileNotFoundError(f"Built-in MCP '{name}' module is missing from the frozen distribution")
+        mcp_dir = bundle_dir()
     else:
         mcp_dir = BUILTIN_MCPS_DIR / spec["dir"]
     if not mcp_dir.exists():
         raise FileNotFoundError(f"Built-in MCP '{name}' directory not found at {mcp_dir}")
 
-    is_python = spec.get("python", False)
     if not is_python:
         # Dependency installation and compilation belong to product packaging.
         # Resolving a runtime module never downloads or edits its installed code.
