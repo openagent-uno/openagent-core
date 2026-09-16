@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {RunClient, RunHTTPError} from '../dist/index.js';
+const client = new RunClient(process.argv[2], () => ({Authorization:'Bearer test-alice'}));
+const request = {run_id:'typescript',session_id:'session',idempotency_key:'typescript',input:'hello'};
+await client.submit(request);
+assert.equal((await client.wait(request.run_id, undefined, 10)).output, 'alice: hello');
+await client.submit(request);
+const events = await client.events(request.run_id);
+assert(events.some(event => event.kind === 'run.success'));
+assert.deepEqual(await client.events(request.run_id, events.at(-1).cursor), []);
+await assert.rejects(() => client.submit({...request,input:'changed'}), error => error instanceof RunHTTPError && error.status === 409);
+assert.deepEqual(await client.children(request.run_id), []);
+console.log('TypeScript SDK authenticated protocol passed');

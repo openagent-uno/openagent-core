@@ -16,12 +16,13 @@ these subprocesses lean and dependency-free beyond ``SCHEMA_SQL``.
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import asyncio
 import logging
 import os
 
 import aiosqlite
-from src.memory.db import SCHEMA_SQL, sqlite_busy_timeout_ms, sqlite_busy_timeout_s
+from openagent_core.memory.db import SCHEMA_SQL, sqlite_busy_timeout_ms, sqlite_busy_timeout_s
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ def db_path() -> str:
     in the current working directory so the server still works when
     invoked directly with ``python -m openagent.mcp.servers.X.server``.
     """
-    injected = (os.environ.get("OPENAGENT_DB_PATH") or "").strip()
+    injected = (runtime_environment().get("OPENAGENT_DB_PATH") or "").strip()
     if injected:
         return injected
     # NOT ``"openagent.db"``. Relative to the CWD means, under PyInstaller, a
@@ -43,7 +44,7 @@ def db_path() -> str:
     # answers every question from an empty database. Fall back to the same
     # file the main process uses.
     try:
-        from src.core.paths import default_db_path
+        from openagent_core.core.paths import default_db_path
 
         resolved = str(default_db_path())
         logger.warning(
@@ -94,7 +95,7 @@ class SharedConnection:
 def run_stdio(mcp, *, loglevel_env: str) -> None:
     """Common entrypoint: configure logging and run FastMCP over stdio."""
     logging.basicConfig(
-        level=os.environ.get(loglevel_env, "INFO"),
+        level=runtime_environment().get(loglevel_env, "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     mcp.run()

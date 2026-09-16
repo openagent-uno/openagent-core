@@ -63,6 +63,7 @@ class TrustedTurnContext:
     client_kind: str | None = None
     client_capabilities: tuple[tuple[str, bool | int | str], ...] = ()
     allow_local_attachment_paths: bool = False
+    request_id: str | None = None
 
     def supports_client_capability(self, name: str, *, version: int = 1) -> bool:
         value = dict(self.client_capabilities).get(name)
@@ -102,6 +103,30 @@ class TrustedIngressIdentity:
 _origin_var: ContextVar[TurnExecutionOrigin | None] = ContextVar(
     "openagent_turn_execution_origin", default=None,
 )
+_ingress_var: ContextVar[TrustedIngressIdentity | None] = ContextVar(
+    "openagent_trusted_ingress", default=None,
+)
+
+
+def current_ingress_identity() -> TrustedIngressIdentity | None:
+    return _ingress_var.get()
+
+
+def install_ingress_identity(ingress: TrustedIngressIdentity | None):
+    return _ingress_var.set(ingress)
+
+
+def reset_ingress_identity(token) -> None:
+    _ingress_var.reset(token)
+
+
+@contextmanager
+def ingress_identity_scope(ingress: TrustedIngressIdentity | None):
+    token = install_ingress_identity(ingress)
+    try:
+        yield
+    finally:
+        reset_ingress_identity(token)
 
 
 def current_execution_origin() -> TurnExecutionOrigin | None:
@@ -133,6 +158,7 @@ def server_only_task_context() -> Context:
 
     context = copy_context()
     context.run(_origin_var.set, None)
+    context.run(_ingress_var.set, None)
     return context
 
 

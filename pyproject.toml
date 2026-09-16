@@ -1,194 +1,32 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "openagent-framework"
-version = "0.21.8"
-description = "Simplified LLM agent framework with MCP, memory, and multi-channel support"
+name = "openagent-core"
+version = "1.0.0b1"
+description = "Embeddable OpenAgent runtime and public host contracts"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-
-dependencies = [
-    # ``[cli]`` pulls in typer: recent ``mcp`` releases import it from a
-    # submodule that ``collect_submodules("mcp")`` walks at PyInstaller build
-    # time, so without typer the frozen build aborts with
-    # "typer is required. Install with 'pip install mcp[cli]'".
-    #
-    # Capped below 2.0: ``mcp`` 2.0.0 (2026-07-28) moved ``mcp.server.fastmcp``,
-    # which every server under ``src/mcp/servers/*`` imports directly. With no
-    # lock file committed, CI resolves this floor to the newest release on each
-    # run — so the day 2.0 shipped, a build that changed nothing relevant died
-    # with ``No module named 'mcp.server.fastmcp'`` across the whole suite.
-    # Migrating to the 2.x layout is real work and does not belong in whatever
-    # unrelated commit happens to run first after an upstream major.
-    "mcp[cli]>=1.0.0,<2",
-    "click>=8.1.0",
-    "rich>=13.0.0",
-    "pyyaml>=6.0",
-    "aiosqlite>=0.20.0",
-    "croniter>=2.0.0",
-    "sqlalchemy>=2.0.0",
-    "openai>=1.0.0",
-    "anthropic>=0.34.0",
-    "google-genai>=1.0.0",
-    # Pinned explicitly so PyInstaller bundles the CA store; frozen binaries
-    # otherwise hit CERTIFICATE_VERIFY_FAILED on stdlib HTTPS calls because
-    # the OS trust store isn't visible inside the bundle (updater.py uses
-    # certifi.where() to hand urlopen a working cafile).
-    "certifi",
-    # workflow block templating ({{expr}} resolution via SandboxedEnvironment)
-    "jinja2>=3.1.0",
-    # Directly imported by openagent code — currently arrives as a transitive
-    # of anthropic/openai, but declare explicitly so swapping those SDKs
-    # doesn't silently drop it from the PyInstaller build env.
-    "httpx>=0.24",
-    "packaging>=21.0",
-    # numpy: src.memory.semantic_index does the brute-force cosine matmul with
-    # it. Declared here so the frozen build env has it — without it, semantic
-    # recall (auto-recall + the semantic_recall MCP tool) silently goes inert
-    # with "No module named 'numpy'" (the import sits behind a try/except).
-    "numpy>=1.24",
-    # Bounded local PDF text extraction for text-only LLMs. The media
-    # dispatcher uses it only when a configured model lacks native file input;
-    # PDFs are capped by bytes/pages/chars before their text reaches context.
-    "pypdf>=5.0.0",
-    # OA-UI data-source and action input contracts use Draft 2020-12 JSON
-    # Schema validation. Declare it directly (rather than relying on an MCP
-    # transitive) so frozen/server-only builds keep the validation boundary.
-    "jsonschema>=4.20.0",
-    # Groq SDK: imported by src.models.providers.groq when a groq-based
-    # provider is selected. Declaring it here ensures it is installed in
-    # the build environment so PyInstaller bundles it
-    # (collect_submodules("groq")).
-    "groq>=0.4.0",
-    # LiteLLM: vendor-agnostic adapter for TTS/STT. One ``providers`` row
-    # with ``framework='litellm'`` + ``kind='tts'|'stt'`` + ``name=<vendor>``
-# routes through ``litellm.aspeech`` / ``litellm.atranscription``.
-# See ``src/channels/tts.py`` and ``src/channels/voice.py``.
-    "litellm>=1.50.0",
-    # Local STT fallback. Promoted from the ``voice`` extra to core so
-    # the bundled installer ships voice-in working out of the box (no
-    # cloud STT key required). First call downloads the model (~150 MB).
-    # CTranslate2 publishes neither a wheel nor an sdist for Windows ARM64,
-    # so that one platform keeps the existing cloud STT path but cannot
-    # advertise a local Whisper runtime that cannot be installed.
-    "faster-whisper>=1.0.0; platform_system != 'Windows' or platform_machine != 'ARM64'",
-    # Local TTS fallback (Piper). Same rationale as faster-whisper:
-    # the bundled Python release ships voice-out working out of the
-    # box. First synth call downloads the voice (~25 MB) into
-    # ``~/.cache/openagent/piper/``. ONNX runtime + native phonemize
-    # binary add ~80 MB to the install but mean the user never sees
-    # the "no TTS configured" banner unless they explicitly want a
-    # cloud vendor. Pinned to >=1.3 because that's where the
-    # ``PiperVoice.synthesize_wav`` entry point lands; the older
-    # ``synthesize(text, wav_file)`` signature was removed.
-    # Piper likewise has no Windows ARM64 distribution. Keep cloud TTS fully
-    # available there and make the missing local fallback an explicit package
-    # contract instead of letting release installation fail mid-resolve.
-    "piper-tts>=1.3.0; platform_system != 'Windows' or platform_machine != 'ARM64'",
-    # WebSocket client for ElevenLabs streaming TTS (token-in / audio-out).
-    # Already pulled in transitively by aiohttp / discord.py / openai-sdk
-    # in current installs, but declaring it explicit so the streaming
-    # TTS path doesn't quietly break if the transitive disappears in a
-    # future bump. ``src.channels.tts_streaming`` is the only
-    # module that imports it.
-    "websockets>=12.0",
-    # Cross-platform system telemetry (CPU/RAM/disk/network/processes)
-    # surfaced over /api/system + the system_snapshot WS broadcast.
-    # Same API on Windows, macOS, Linux — keeps the gateway code
-    # platform-agnostic.
-    "psutil>=5.9.0",
-    # Iroh: peer-to-peer QUIC transport that replaces the legacy
-    # ip:port + token gateway model. Networks are addressed by NodeId,
-    # users authenticate as handle@network. Pin tightly — pre-1.0 and
-    # the FFI surface still shifts between minors.
-    "iroh==0.35.0",
-    # SRP-6a: PAKE backend for the coordinator login flow. Pure-Python.
-    # The coordinator stores a verifier (never the password) and runs
-    # the standard SRP-6a exchange to mint device certs.
-    "srptools>=1.0.1",
-    # Ed25519 sign/verify for device certificates and key management.
-    # Already pulled in transitively by anthropic/openai but declared
-    # explicitly because the network layer imports the Ed25519 APIs
-    # directly — a transitive bump must not silently drop it.
-    # Upper bound is a WHEEL AVAILABILITY constraint, not an API one: 49.0.0
-    # stopped publishing a macOS x86_64 (universal2) wheel. Without one, pip
-    # builds cryptography from source on the Intel macOS runner against that
-    # runner's OpenSSL, and the PACKAGED binary then dies at startup on
-    # `Symbol not found: _SSL_get0_group_name` — the release matrix has failed
-    # there every time it has run. Raise this only together with evidence that
-    # a macOS x86_64 wheel exists again for the new floor.
-    # Windows ARM64 is narrower still: 46.0.3 is the newest release with a
-    # native wheel there. Keep that platform on the exact known-good binary;
-    # every other platform retains the macOS-x64-safe rolling range above.
-    "cryptography>=42,<49; platform_system != 'Windows' or platform_machine != 'ARM64'",
-    "cryptography==46.0.3; platform_system == 'Windows' and platform_machine == 'ARM64'",
-    # CBOR: device-cert payload encoding. Compact and deterministic
-    # (canonical CBOR), which matters because we sign the encoded bytes.
-    "cbor2>=5.5",
-    # aiohttp powers the gateway's HTTP+WS surface. Was previously an
-    # extra; promote to core since the network layer cannot work
-    # without it.
-    "aiohttp>=3.9",
-    # Telegram is a first-class channel in production OpenAgent deployments.
-    # Keep the SDK in the base install so source-style runtime installs cannot
-    # replace a bundled binary with an entry point that lacks the bridge deps.
-    "python-telegram-bot>=21.0",
-    # email-validator: pydantic.EmailStr defers to it at runtime, and
-    # openagent.spec imports it at build time so PyInstaller can bundle
-    # the .dist-info metadata that ``importlib.metadata.version`` needs.
-    # Pre-2026-05-12 builds worked by accident via pip cache; declaring
-    # it explicit so the CI build is reproducible (v0.13.2 release run
-    # failed with ModuleNotFoundError when the cache miss occurred).
-    "email-validator>=2.0",
-    # Shared, versioned filesystem/editor implementation used by both the
-    # server MCPPool adapters and client capability hosts.
-    "openagent-host-tools @ https://github.com/openagent-uno/openagent-host-tools/releases/download/v0.1.2/openagent_host_tools-0.1.2-py3-none-any.whl#sha256=22e74b799da2bfacaa3ff7f1e473e1c8205c8b4b8c20764d09211b50f22c31e0",
-]
+dependencies = []
 
 [project.optional-dependencies]
-# Kept as a compatibility alias for installers that still request
-# ``openagent-framework[telegram]``.
-telegram = []
-discord = ["discord.py>=2.3.0"]
-whatsapp = ["whatsapp-api-client-python>=0.0.46"]
-slack = ["slack-bolt>=1.20.0", "slack-sdk>=3.30.0"]
-# ACP (Agent Client Protocol) stdio adapter — exposes ``openagent acp`` so
-# editors (Zed, etc.) can drive the agent as a coding agent over stdin/stdout.
-# Opt-in: the base install and every existing runtime path stay byte-identical
-# because ``acp`` is imported ONLY when the ``openagent acp`` subcommand runs.
-acp = ["agent-client-protocol>=0.11.0"]
-# Voice in (faster-whisper) AND voice out (piper-tts) are core deps
-# so the bundled Python release ships voice mode working out of the
-# box. The ``voice`` extra is kept as an empty alias so existing
-# installers that resolve it keep working cleanly.
-voice = []
-websocket = ["aiohttp>=3.9"]
-all = [
-    "discord.py>=2.3.0",
-    "whatsapp-api-client-python>=0.0.46",
-    "slack-bolt>=1.20.0",
-    "slack-sdk>=3.30.0",
-    "aiohttp>=3.9",
-    # The agent-federation builtin embeds the standalone openagent-mcp package;
-    # bundled into the release binary via openagent.spec collect_submodules.
-    "openagent-mcp @ git+https://github.com/openagent-uno/openagent-mcp@main",
-]
+engine = ["mcp>=1.27,<2", "pyyaml>=6", "aiosqlite>=0.20", "sqlalchemy[asyncio]>=2", "croniter>=2", "jinja2>=3.1", "httpx>=0.24", "packaging>=21", "pydantic>=2", "jsonschema>=4.20", "rich>=13", "certifi", "docstring-parser>=0.16"]
+providers = ["openai>=1", "anthropic>=0.34", "google-genai>=1", "groq>=0.4"]
+retrieval = ["numpy>=1.24", "pypdf>=5"]
+modules = ["openagent-modules==1.0.0b1"]
 
-[project.scripts]
-openagent = "src.cli:main"
+[tool.setuptools]
+include-package-data = false
 
 [tool.setuptools.packages.find]
-include = ["src*"]
+where = ["packages/runtime/src"]
+include = ["openagent_core*"]
+namespaces = false
 
 [tool.setuptools.package-data]
-src = [
-    "memory/operational/sql/*.sql",
-    "mcp/servers/**/*.ts",
-    "mcp/servers/**/*.json",
-    "mcp/servers/**/*.py",
-    "mcp/servers/**/*.txt",
-    "mcp/servers/**/.gitignore",
-]
+openagent_core = ["prompts/*.json", "memory/operational/sql/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/public"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import logging
 import os
 import shutil
@@ -155,18 +156,18 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
         ),
     },
     "scheduler": {
-        "dir": "scheduler",
-        "command": ["python", "-m", "openagent_core.mcp.servers.scheduler.server"],
-        "python": True,
+        "in_process": True,
+        "adapter_module": "openagent_core.mcp.servers.scheduler.server",
+        "runtime_toolkit_factory": "build_runtime_toolkit",
         "description": (
             "create, list, update, and remove cron-scheduled prompts. "
             "Reach for it whenever the user asks for a recurring task"
         ),
     },
     "mcp-manager": {
-        "dir": "mcp_manager",
-        "command": ["python", "-m", "openagent_core.mcp.servers.mcp_manager.server"],
-        "python": True,
+        "in_process": True,
+        "adapter_module": "openagent_core.mcp.servers.mcp_manager.server",
+        "runtime_toolkit_factory": "build_runtime_toolkit",
         "description": (
             "inspect and manage MCP servers — list connected ones, add "
             "new ones, enable/disable, check health"
@@ -181,24 +182,11 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
             "pin one for the current session, set the entry/router model"
         ),
     },
-    "agent-manager": {
-        # In-process by design: the update is authorized against the exact
-        # authenticated turn principal, then hot-applied to the one live Agent
-        # and Gateway. A subprocess would need a reusable owner credential and
-        # could only edit YAML without updating the running identity.
-        "in_process": True,
-        "adapter_module": "openagent_core.mcp.servers.agent_manager.adapters",
-        "runtime_toolkit_factory": "build_runtime_toolkit",
-        "description": (
-            "inspect and update this agent's display name and user-defined "
-            "persona/system prompt. It never exposes or changes OpenAgent's "
-            "immutable framework prompt"
-        ),
-    },
+
     "workflow-manager": {
-        "dir": "workflow_manager",
-        "command": ["python", "-m", "openagent_core.mcp.servers.workflow_manager.server"],
-        "python": True,
+        "in_process": True,
+        "adapter_module": "openagent_core.mcp.servers.workflow_manager.server",
+        "runtime_toolkit_factory": "build_runtime_toolkit",
         "description": (
             "create and run multi-step workflows. Use for repeatable "
             "structured processes that benefit from explicit DAGs over "
@@ -206,9 +194,9 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
         ),
     },
     "events-manager": {
-        "dir": "events_manager",
-        "command": ["python", "-m", "openagent_core.mcp.servers.events_manager.server"],
-        "python": True,
+        "in_process": True,
+        "adapter_module": "openagent_core.mcp.servers.events_manager.server",
+        "runtime_toolkit_factory": "build_runtime_toolkit",
         "description": (
             "create, list, update, and remove webhook events, and fire one on "
             "demand. An event is an inbound trigger (a name, a webhook type, an "
@@ -267,18 +255,7 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
             "faster, or better-scoped for the work"
         ),
     },
-    "agent-federation": {
-        "dir": "agent_federation",
-        "in_process": True,
-        "adapter_module": "openagent_core.mcp.servers.agent_federation.adapters",
-        "description": (
-            "talk to a federated PEER OpenAgent agent over native Iroh — "
-            "list_agents() lists the peers this agent has joined; "
-            "ask_agent(target, message, session_id?) sends a message and "
-            "returns its reply. Use to consult a peer's own memory vault, "
-            "MCPs and tools, or to delegate a task to it"
-        ),
-    },
+
     "skill-data": {
         "dir": "skill_data",
         "command": ["python", "-m", "openagent_core.mcp.servers.skill_data.server"],
@@ -315,7 +292,6 @@ DEFAULT_MCPS: list[dict[str, Any]] = [
     {"builtin": "scheduler", "_default": True},
     {"builtin": "mcp-manager", "_default": True},
     {"builtin": "model-manager", "_default": True},
-    {"builtin": "agent-manager", "_default": True},
     {"builtin": "workflow-manager", "_default": True},
     {"builtin": "events-manager", "_default": True},
     # On by default: a spend cap the agent can't see is one it can't reason
@@ -326,7 +302,6 @@ DEFAULT_MCPS: list[dict[str, Any]] = [
     {"builtin": "budget-manager", "_default": True},
     {"builtin": "skill-data", "_default": True},
     {"builtin": "delegation", "_default": True},
-    {"builtin": "agent-federation", "_default": True},
     # On by default now that ``generate_image`` resolves its backend by
     # CAPABILITY rather than by vendor key. It was correctly left out while it
     # meant "call the metered OpenAI API or fail": seeding a tool nobody had a
@@ -372,7 +347,7 @@ def _find_node_binary() -> str | None:
     """Return absolute path to a working node binary, or None."""
     node_name = "node.exe" if platform.system() == "Windows" else "node"
     candidates = [
-        os.environ.get("OPENAGENT_NODE_BINARY", ""),
+        runtime_environment().get("OPENAGENT_NODE_BINARY", ""),
         str(Path(sys.executable).resolve().parent / node_name),
         str(bundle_dir() / node_name),
         "/opt/homebrew/bin/node",
@@ -474,7 +449,7 @@ def resolve_builtin_entry(name: str, env: dict[str, str] | None = None) -> dict[
     merged_env = {**(spec.get("env") or {}), **(env or {})}
     if is_python:
         package_parent = str(PACKAGE_PARENT_DIR)
-        existing_pp = merged_env.get("PYTHONPATH") or os.environ.get("PYTHONPATH", "")
+        existing_pp = merged_env.get("PYTHONPATH") or runtime_environment().get("PYTHONPATH", "")
         merged_env["PYTHONPATH"] = package_parent + (os.pathsep + existing_pp if existing_pp else "")
 
     return {

@@ -21,7 +21,9 @@ metrics so ``sessions.runs[*].metrics.cost`` stays queryable.
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import contextlib
+import asyncio
 import contextvars
 import functools
 import importlib
@@ -122,13 +124,13 @@ def _max_tool_calls_per_run() -> Optional[int]:
             ("OPENAGENT_LEAN_TASK_MAX_TOOL_CALLS", 40) if is_task
             else ("OPENAGENT_LEAN_EVENT_MAX_TOOL_CALLS", 10)
         )
-        raw = os.environ.get(env_key, str(default)).strip()
+        raw = runtime_environment().get(env_key, str(default)).strip()
         try:
             value = int(raw)
         except ValueError:
             value = default
         return value if value > 0 else default
-    raw = os.environ.get("OPENAGENT_MAX_TOOL_CALLS_PER_RUN", "").strip()
+    raw = runtime_environment().get("OPENAGENT_MAX_TOOL_CALLS_PER_RUN", "").strip()
     if not raw:
         return _DEFAULT_MAX_TOOL_CALLS_PER_RUN
     try:
@@ -151,10 +153,13 @@ def _execution_cache_key(system: str | None) -> tuple[str, str]:
 
     policy = current_execution_policy()
     allow = current_tool_allowlist()
-    if not policy and allow is None:
+    from openagent_core.core.execution_profile import stateless_completion_active
+    stateless = stateless_completion_active()
+    if not policy and allow is None and not stateless:
         return system_text, system_text
     marker = json.dumps(
         {
+            "stateless": stateless,
             "policy": policy or {},
             "tool_families": None if allow is None else sorted(allow),
         },
@@ -239,7 +244,6 @@ def _capture_log_errors():
 
 # Configure runtime tracebacks ONCE at import time — used to run per
 # generate() call which was global-state thrash on the hot path.
-os.environ.setdefault("AGNO_LOG_TRACEBACKS", "true")
 try:
     from openagent_core.core._runner.utils.log import set_log_tracebacks as _agno_set_log_tracebacks
     _agno_set_log_tracebacks(True)
@@ -323,13 +327,36 @@ def _agno_event_types() -> dict[str, tuple]:
     }
 
 
-def _evict_oldest(cache: OrderedDict[str, Any], max_size: int) -> None:
+def _evict_oldest(cache: OrderedDict[str, Any], max_size: int, on_evict=None) -> None:
     """Dispose and pop old runtimes so eviction also releases SQLite readers."""
     from openagent_core.models.runtime_db_lifecycle import close_runtime_databases
 
     while len(cache) > max_size:
         _key, runtime = cache.popitem(last=False)
-        close_runtime_databases(runtime)
+        if on_evict is None:
+            close_runtime_databases(runtime)
+        else:
+            on_evict(runtime)
+
+
+def _provider_call(method):
+    """Hold cached resources until every overlapping model call has finished."""
+    if inspect.isasyncgenfunction(method):
+        @functools.wraps(method)
+        async def stream(self, *args, **kwargs):
+            async with self._call_scope():
+                iterator = method(self, *args, **kwargs)
+                try:
+                    async for item in iterator:
+                        yield item
+                finally:
+                    await iterator.aclose()
+        return stream
+    @functools.wraps(method)
+    async def complete(self, *args, **kwargs):
+        async with self._call_scope():
+            return await method(self, *args, **kwargs)
+    return complete
 
 
 def _system_cache_key(system: str | None) -> str:
@@ -368,6 +395,12 @@ _AGNO_IMAGE_TMPDIR: str | None = None
 
 
 def _agno_image_tmpdir() -> str:
+    from openagent_core.runtime import current_runtime
+    runtime = current_runtime()
+    if runtime is not None:
+        path = runtime.settings.workspace / 'cache' / 'model-media'
+        path.mkdir(parents=True,exist_ok=True,mode=0o700)
+        return str(path)
     global _AGNO_IMAGE_TMPDIR
     if _AGNO_IMAGE_TMPDIR is None:
         import tempfile
@@ -641,24 +674,6 @@ def _summarize_provider_errors(errs: list[str]) -> str:
     return errs[-1].strip()
 
 
-# Set of env var names NativeProvider has already populated this process.
-# Avoids redundant writes from per-member NativeProvider construction in
-# TeamRouterProvider, and skips re-walking the providers list once a
-# given providers_config has already been processed.
-_INJECTED_ENV_KEYS: set[str] = set()
-_PROVIDERS_CONFIG_INJECTED: set[int] = set()
-
-
-def _set_env_key_once(env_var: str | None, value: str) -> None:
-    if not env_var or not value:
-        return
-    if env_var in _INJECTED_ENV_KEYS:
-        return
-    if not os.environ.get(env_var):
-        os.environ[env_var] = value
-    _INJECTED_ENV_KEYS.add(env_var)
-
-
 PROVIDER_ENV_VARS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
@@ -704,7 +719,7 @@ def _thinking_kwarg(provider_name: str, model_id: str) -> dict[str, Any]:
     """
     if provider_name != "anthropic":
         return {}
-    raw = (os.environ.get("OPENAGENT_EXTENDED_THINKING_TOKENS") or "").strip()
+    raw = (runtime_environment().get("OPENAGENT_EXTENDED_THINKING_TOKENS") or "").strip()
     if not raw:
         return {}
     try:
@@ -885,8 +900,12 @@ class NativeProvider(BaseModel):
         # mkdir()'d the parent — cached so the ensure-agent hot path
         # doesn't redo the stat+mkdir per cache miss.
         self._ensured_db_path: Path | None = None
+        self._retired_runtimes: list[Any] = []
+        self._active_calls = 0
+        self._closing = False
+        self._idle = asyncio.Event()
+        self._idle.set()
 
-        self._inject_provider_keys()
 
     def set_db(self, db) -> None:
         new_path = getattr(db, "db_path", self._db_path)
@@ -917,18 +936,50 @@ class NativeProvider(BaseModel):
         self._fallback_config = fallback_config
         self._clear_runtime_caches()
 
-    def _clear_runtime_caches(self) -> None:
-        """Dispose runtime session stores before dropping cache references."""
-        from openagent_core.models.runtime_db_lifecycle import close_runtime_databases
+    def _retire_runtime(self, runtime) -> None:
+        self._retired_runtimes.append(runtime)
 
-        seen: set[int] = set()
-        for runtime in [*self._agno_agents.values(), *self._agno_teams.values()]:
-            if id(runtime) in seen:
-                continue
-            seen.add(id(runtime))
-            close_runtime_databases(runtime)
+    def _clear_runtime_caches(self) -> None:
+        """Retire old resources without closing another turn's active clients."""
+        self._retired_runtimes.extend(self._agno_agents.values())
+        self._retired_runtimes.extend(self._agno_teams.values())
         self._agno_agents.clear()
         self._agno_teams.clear()
+
+    async def _release_retired(self) -> None:
+        from openagent_core.models.runtime_db_lifecycle import close_runtime_clients, close_runtime_databases
+        if self._active_calls:
+            return
+        retired, self._retired_runtimes = self._retired_runtimes, []
+        seen = set()
+        for runtime in retired:
+            if id(runtime) not in seen:
+                seen.add(id(runtime))
+                close_runtime_databases(runtime)
+                await close_runtime_clients(runtime)
+
+    @contextlib.asynccontextmanager
+    async def _call_scope(self):
+        if self._closing:
+            raise RuntimeError("Model provider is closed")
+        self._active_calls += 1
+        self._idle.clear()
+        try:
+            yield
+        finally:
+            self._active_calls -= 1
+            if not self._active_calls:
+                try:
+                    await self._release_retired()
+                finally:
+                    if not self._active_calls:
+                        self._idle.set()
+
+    async def shutdown(self) -> None:
+        self._closing = True
+        await self._idle.wait()
+        self._clear_runtime_caches()
+        await self._release_retired()
 
     async def close_session(self, session_id: str) -> None:
         """The runtime persists session history in DB but keeps no per-session subprocess."""
@@ -1042,43 +1093,6 @@ class NativeProvider(BaseModel):
 
     def _provider_name(self) -> str:
         return split_runtime_id(self.model)[0]
-
-    def _inject_provider_keys(self) -> None:
-        """Mirror configured API keys into ``os.environ`` for the runtime's
-        provider classes (which read from env, not constructor args).
-
-        Module-level deduplication: every key set is tracked in
-        :data:`_INJECTED_ENV_KEYS` so a fresh NativeProvider per Team
-        member per session doesn't re-walk the providers list or
-        re-write the same env vars. Existing env values are not
-        overwritten — once a key wins, it wins. (Hot-rotating an API
-        key requires a restart; documented limitation.)
-        """
-        provider_name = self._provider_name()
-        if self._api_key:
-            _set_env_key_once(PROVIDER_ENV_VARS.get(provider_name), self._api_key)
-            if provider_name == "google":
-                _set_env_key_once("GEMINI_API_KEY", self._api_key)
-
-        # API-based provider rows carry the api_keys worth exporting.
-        # The module-level dedupe means we only do the providers-list
-        # walk on the FIRST NativeProvider per (config-hash, provider) pair.
-        config_id = id(self._providers_config)
-        if config_id not in _PROVIDERS_CONFIG_INJECTED:
-            for entry in _iter_provider_entries(self._providers_config):
-                if entry.get("framework", FRAMEWORK_API_BASED) != FRAMEWORK_API_BASED:
-                    continue
-                name = str(entry.get("name") or "").strip()
-                key = entry.get("api_key")
-                if not name or not key:
-                    continue
-                _set_env_key_once(PROVIDER_ENV_VARS.get(name), key)
-                if name == "google":
-                    _set_env_key_once("GEMINI_API_KEY", key)
-            _PROVIDERS_CONFIG_INJECTED.add(config_id)
-
-        if self._base_url and provider_name == "openai":
-            _set_env_key_once("OPENAI_BASE_URL", self._base_url)
 
     def _runtime_db_path(self) -> str:
         # ``getattr``, not attribute access: the per-model sampling lookup now
@@ -1369,7 +1383,7 @@ class NativeProvider(BaseModel):
         # in yaml). This is the common constructor for the main agent, team
         # members, and the routing classifier, so it covers every model call.
         if kwargs.get("timeout") is None and "timeout" in accepted:
-            env_timeout = os.environ.get("OPENAGENT_MODEL_TIMEOUT_SECONDS")
+            env_timeout = runtime_environment().get("OPENAGENT_MODEL_TIMEOUT_SECONDS")
             try:
                 kwargs["timeout"] = float(env_timeout) if env_timeout else 90.0
             except (TypeError, ValueError):
@@ -1470,7 +1484,7 @@ class NativeProvider(BaseModel):
                     else ("OPENAGENT_LEAN_EVENT_MAX_TOKENS", "2500")
                 )
                 try:
-                    lean_max_tokens = int(os.environ.get(env_key, default))
+                    lean_max_tokens = int(runtime_environment().get(env_key, default))
                 except (TypeError, ValueError):
                     lean_max_tokens = int(default)
                 extra_kwargs["max_tokens"] = max(128, lean_max_tokens)
@@ -1548,7 +1562,9 @@ class NativeProvider(BaseModel):
         except ImportError as exc:
             raise RuntimeError(self._missing_dependency_hint(exc)) from exc
 
-        db_path = self._ensured_runtime_db_path()
+        from openagent_core.core.execution_profile import stateless_completion_active
+        stateless = stateless_completion_active()
+        db_path = None if stateless else self._ensured_runtime_db_path()
         compatible_toolkits, filtered_families = self._compatible_mcp_toolkits()
         if filtered_families:
             elog("runtime.toolkits_filtered",
@@ -1556,7 +1572,7 @@ class NativeProvider(BaseModel):
                 filtered_families=filtered_families,
                 runner="agent",
             )
-        agent_tools: list[Any] = list(compatible_toolkits)
+        agent_tools: list[Any] = [] if stateless else list(compatible_toolkits)
         from openagent_core.core.execution_profile import lean_local_event_active
         summaries_enabled = not lean_local_event_active()
         from openagent_core.core.execution_profile import strict_local_only_active
@@ -1601,7 +1617,7 @@ class NativeProvider(BaseModel):
             markdown=False,
         )
         self._agno_agents[cache_key] = agent
-        _evict_oldest(self._agno_agents, _AGENT_CACHE_MAX)
+        _evict_oldest(self._agno_agents, _AGENT_CACHE_MAX, self._retire_runtime)
         return agent
 
     def _tool_families(self) -> dict[str, list[Any]]:
@@ -1634,6 +1650,9 @@ class NativeProvider(BaseModel):
         framework prompt too so when the leader synthesises their
         output the persona is preserved.
         """
+        from openagent_core.core.execution_profile import stateless_completion_active
+        if stateless_completion_active():
+            return None
         cache_key, sys_key = _execution_cache_key(system)
         if not sys_key:
             return None
@@ -1739,7 +1758,7 @@ class NativeProvider(BaseModel):
             member_count=len(members),
         )
         self._agno_teams[cache_key] = team
-        _evict_oldest(self._agno_teams, _AGENT_CACHE_MAX)
+        _evict_oldest(self._agno_teams, _AGENT_CACHE_MAX, self._retire_runtime)
         return team
 
     def _flatten_messages(self, messages: list[dict[str, Any]]) -> str:
@@ -1821,6 +1840,26 @@ class NativeProvider(BaseModel):
                     continue
         return 0
 
+    @_provider_call
+    async def infer(self, request) -> ModelResponse:
+        """One stateless request to this exact model; no agent or tool loop."""
+        from openagent_core.models.providers.message import Message
+        messages = [Message(role='system',content=request.instructions)] if request.instructions else []
+        messages.extend(Message(role=value['role'],content=value['content']) for value in request.messages)
+        model = self._build_runtime_model()
+        try:
+            response = await model.aresponse(messages=messages,tools=[],tool_choice='none',tool_call_limit=0)
+            if any(getattr(message,'tool_calls',None) for message in messages):
+                raise RuntimeError('A stateless inference provider returned a tool call')
+            usage = getattr(response,'response_usage',None)
+            return ModelResponse(content=str(getattr(response,'content','') or ''),model=self.model,
+                input_tokens=int(getattr(usage,'input_tokens',0) or 0),
+                output_tokens=int(getattr(usage,'output_tokens',0) or 0))
+        finally:
+            from openagent_core.models.runtime_db_lifecycle import close_runtime_clients
+            await close_runtime_clients(model)
+
+    @_provider_call
     async def generate(
         self,
         messages: list[dict[str, Any]],
@@ -1898,6 +1937,10 @@ class NativeProvider(BaseModel):
             arun_kwargs: dict[str, Any] = {
                 "session_id": sid, "user_id": RUNTIME_SESSION_USER_ID,
             }
+            from openagent_core.runtime import current_execution_context, current_run_id
+            execution = current_execution_context()
+            if execution is not None and execution.session_id == sid:
+                arun_kwargs["run_id"] = current_run_id()
             if files:
                 arun_kwargs["files"] = files
             if images:
@@ -2099,6 +2142,7 @@ class NativeProvider(BaseModel):
             on_status, tool_exec, error_text=error_text, phase=phase,
         )
 
+    @_provider_call
     async def stream(
         self,
         messages: list[dict[str, Any]],
@@ -2154,6 +2198,10 @@ class NativeProvider(BaseModel):
                 "session_id": sid, "user_id": RUNTIME_SESSION_USER_ID,
                 "stream": True, "stream_events": True,
             }
+            from openagent_core.runtime import current_execution_context, current_run_id
+            execution = current_execution_context()
+            if execution is not None and execution.session_id == sid:
+                stream_kwargs["run_id"] = current_run_id()
             if files:
                 stream_kwargs["files"] = files
             if images:

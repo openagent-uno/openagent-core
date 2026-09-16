@@ -851,12 +851,11 @@ async def _h_ai_prompt(
     from openagent_core.core.identity_context import agent_author
 
     db = getattr(exe.agent, "_db", None) or exe.db
-    owner = None
-    if db is not None:
-        try:
-            owner = await db.primary_owner_handle()
-        except Exception:  # noqa: BLE001
-            owner = None
+    from openagent_core.runtime import current_execution_context
+    execution = current_execution_context()
+    if execution is None:
+        raise PermissionError('A workflow agent step requires an authorized execution context')
+    owner = execution.authority.key
 
     origin_ref: dict[str, Any] = {"workflow_id": ctx.workflow_id, "run_id": ctx.run_id}
     if not is_shared:

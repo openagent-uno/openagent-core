@@ -37,12 +37,13 @@ that never enabled it is byte-identical.
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import json
 import os
 import re
 from typing import Any, Optional
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 _ENABLED_ENV = "OPENAGENT_REPLY_GUARD_ENABLED"
 _BACKING_TOOLS_ENV = "OPENAGENT_REPLY_GUARD_BACKING_TOOLS"
@@ -380,11 +381,11 @@ def _truthy(v: str) -> bool:
 
 
 def enabled() -> bool:
-    return _truthy(os.environ.get(_ENABLED_ENV, "0"))
+    return _truthy(runtime_environment().get(_ENABLED_ENV, "0"))
 
 
 def _backing_tool_substrings() -> tuple[str, ...]:
-    raw = os.environ.get(_BACKING_TOOLS_ENV, "").strip()
+    raw = runtime_environment().get(_BACKING_TOOLS_ENV, "").strip()
     if not raw:
         return _DEFAULT_BACKING_TOOLS
     extra = tuple(
@@ -915,7 +916,7 @@ async def guard_reply(
     promise removed. FAIL-OPEN: returns *reply* unchanged on disabled / no
     visibility / no promise / backed promise / regeneration failure / any error.
     """
-    from src.core.execution_profile import lean_local_event_active
+    from openagent_core.core.execution_profile import lean_local_event_active
 
     strict_local = lean_local_event_active()
     if not (enabled() or strict_local) or not reply:
@@ -923,9 +924,9 @@ async def guard_reply(
     try:
         trace_rows: list[tuple[str, str]] = []
         if strict_local:
-            from src.core import tool_trace
+            from openagent_core.core import tool_trace
             trace_rows = list(tool_trace.peek(session_id) or [])
-        from src.core.dry_run import is_dry_run
+        from openagent_core.core.dry_run import is_dry_run
         dry_run = is_dry_run()
 
         has_human_promise = promises_followup(reply)
@@ -1017,7 +1018,7 @@ async def guard_reply(
             # Without trace visibility a normal turn cannot judge whether a
             # human promise is backed. A future-release violation is independent
             # and can still be removed from a strict local event.
-            from src.core import tool_trace
+            from openagent_core.core import tool_trace
             if not tool_trace._enabled():
                 if not any((
                     has_future_promise, has_action_claim,

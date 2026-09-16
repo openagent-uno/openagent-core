@@ -37,7 +37,7 @@ class PtcExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.pool=MCPPool([])
         self.pool.bind_capability_catalog(self.catalog)
         self.runtime=SimpleNamespace(capabilities=self.catalog,authorize=self.require,
-            services=SimpleNamespace(code_executor=self.executor,store=self),settings=SimpleNamespace(workspace=Path('/tmp')))
+            services=SimpleNamespace(code_executor=self.executor,store=self),settings=SimpleNamespace(workspace=Path('/tmp'),environment=()))
         self.settings=SimpleNamespace(require_sandbox=False,timeout_s=2,max_tool_calls=2,allowed_tools=None)
 
     async def authorize(self,context,action,resource,*,audience=()): return not self.denied

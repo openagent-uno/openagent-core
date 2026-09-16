@@ -36,13 +36,14 @@ than risking silence.
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import asyncio
 import json
 import os
 import re
 from typing import Any
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 # Hard ceiling on the check itself. It exists to save a model turn; one that
 # blocks the worker for longer than the turn would have taken is worse than
@@ -94,7 +95,7 @@ def _render(template: str, payload: dict[str, Any]) -> tuple[str, bool]:
 
     def _env_sub(m: re.Match[str]) -> str:
         nonlocal resolved
-        val = os.environ.get(m.group(1), "")
+        val = runtime_environment().get(m.group(1), "")
         if not val:
             resolved = False
         return val

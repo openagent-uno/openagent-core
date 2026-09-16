@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import os
 import re
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ def _substitute_env_vars(value: str) -> str:
     """Replace ${VAR_NAME} patterns with environment variable values."""
     def replacer(match: re.Match) -> str:
         var_name = match.group(1)
-        env_val = os.environ.get(var_name)
+        env_val = runtime_environment().get(var_name)
         if env_val is None:
             raise ValueError(f"Environment variable {var_name} is not set")
         return env_val
@@ -54,7 +55,7 @@ def load_config(path: str | Path | None = None) -> dict:
         if cwd_path.exists():
             config_path = cwd_path
         else:
-            from src.core.paths import default_config_path
+            from openagent_core.core.paths import default_config_path
             config_path = default_config_path()
 
     if not config_path.exists():
@@ -153,7 +154,7 @@ class SkillsSettings:
     review_mode:
         ``propose`` (default) or ``write``. In ``propose`` the fork CANNOT
         mutate the library — refused in
-        ``src.mcp.servers.skills.provenance``, not merely discouraged in a
+        ``openagent_core.mcp.servers.skills.provenance``, not merely discouraged in a
         prompt — and reports what it would change instead. Any value other
         than exactly ``write`` means propose, so a typo can never be what
         grants an autonomous writer.

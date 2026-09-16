@@ -1,23 +1,23 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from os import getenv
+from openagent_core.configuration import getenv
 from typing import Any, Dict, Iterator, List, Literal, Optional, Type, Union
 from uuid import uuid4
 
 import httpx
 from pydantic import BaseModel
 
-from src.core.runtime_errors import ContextWindowExceededError, ModelAuthenticationError, ModelProviderError
-from src.stream.media import Audio
-from src.models.providers.base import Model
-from src.models.providers.message import Message
-from src.models.providers.metrics import MessageMetrics
-from src.models.providers.response import ModelResponse
-from src.core._run_state.agent import RunOutput
-from src.core._run_state.team import TeamRunOutput
-from src.core._runner.utils.log import log_debug, log_error, log_warning
-from src.core._runner.utils.openai import _format_file_for_message, audio_to_message, images_to_message
-from src.core._runner.utils.reasoning import extract_thinking_content
+from openagent_core.core.runtime_errors import ContextWindowExceededError, ModelAuthenticationError, ModelProviderError
+from openagent_core.stream.media import Audio
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.message import Message
+from openagent_core.models.providers.metrics import MessageMetrics
+from openagent_core.models.providers.response import ModelResponse
+from openagent_core.core._run_state.agent import RunOutput
+from openagent_core.core._run_state.team import TeamRunOutput
+from openagent_core.core._runner.utils.log import log_debug, log_error, log_warning
+from openagent_core.core._runner.utils.openai import _format_file_for_message, audio_to_message, images_to_message
+from openagent_core.core._runner.utils.reasoning import extract_thinking_content
 
 try:
     from openai import APIConnectionError, APIStatusError, RateLimitError
@@ -227,7 +227,7 @@ class OpenAIChat(Model):
         if response_format is not None:
             if isinstance(response_format, type) and issubclass(response_format, BaseModel):
                 # Convert Pydantic to JSON schema for regular endpoint
-                from src.core._runner.utils.models.schema_utils import get_response_schema_for_provider
+                from openagent_core.core._runner.utils.models.schema_utils import get_response_schema_for_provider
 
                 schema = get_response_schema_for_provider(response_format, "openai")
                 base_params["response_format"] = {
@@ -381,7 +381,7 @@ class OpenAIChat(Model):
         self, messages: List[Message], compress_tool_results: bool = False
     ) -> List[Dict[str, Any]]:
         """Format all messages, remapping foreign tool call IDs to call_ prefix first."""
-        from src.core._runner.utils.message import normalize_tool_messages, reformat_tool_call_ids
+        from openagent_core.core._runner.utils.message import normalize_tool_messages, reformat_tool_call_ids
 
         # Backwards compat: expand old Gemini combined tool messages into individual canonical messages
         messages = normalize_tool_messages(messages)
@@ -596,7 +596,7 @@ class OpenAIChat(Model):
             # Un solo scrubber per flusso: lo stato "sono dentro un blocco di
             # ragionamento" e' esattamente cio' che non deve sopravvivere alla
             # fine della risposta.
-            from src.core._runner.utils.think_stream import ThinkStreamScrubber
+            from openagent_core.core._runner.utils.think_stream import ThinkStreamScrubber
 
             scrubber = ThinkStreamScrubber()
             for chunk in self.get_client().chat.completions.create(
@@ -705,7 +705,7 @@ class OpenAIChat(Model):
             # coda trattenuta emessa alla fine cosi' l'ultima parola non si
             # perde. Questa e' la via che usa il gateway, quindi e' quella da
             # cui il ragionamento sarebbe arrivato davvero all'utente.
-            from src.core._runner.utils.think_stream import ThinkStreamScrubber
+            from openagent_core.core._runner.utils.think_stream import ThinkStreamScrubber
 
             scrubber = ThinkStreamScrubber()
             async for chunk in async_stream:

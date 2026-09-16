@@ -1,19 +1,19 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from os import getenv
+from openagent_core.configuration import getenv
 from typing import Any, Dict, Iterator, List, Optional, Type, Union
 
 import httpx
 from pydantic import BaseModel
 
-from src.core.runtime_errors import ModelAuthenticationError, ModelProviderError
-from src.models.providers.base import Model
-from src.models.providers.message import Message
-from src.models.providers.metrics import MessageMetrics
-from src.models.providers.response import ModelResponse
-from src.core._run_state.agent import RunOutput
-from src.core._runner.utils.log import log_debug, log_error, log_warning
-from src.core._runner.utils.openai import images_to_message
+from openagent_core.core.runtime_errors import ModelAuthenticationError, ModelProviderError
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.message import Message
+from openagent_core.models.providers.metrics import MessageMetrics
+from openagent_core.models.providers.response import ModelResponse
+from openagent_core.core._run_state.agent import RunOutput
+from openagent_core.core._runner.utils.log import log_debug, log_error, log_warning
+from openagent_core.core._runner.utils.openai import images_to_message
 
 try:
     from groq import APIError, APIResponseValidationError, APIStatusError
@@ -286,7 +286,7 @@ class Groq(Model):
         """
         Send a chat completion request to the Groq API.
         """
-        from src.core._runner.utils.message import normalize_tool_messages
+        from openagent_core.core._runner.utils.message import normalize_tool_messages
 
         messages = normalize_tool_messages(messages)
 
@@ -328,7 +328,7 @@ class Groq(Model):
         """
         Sends an asynchronous chat completion request to the Groq API.
         """
-        from src.core._runner.utils.message import normalize_tool_messages
+        from openagent_core.core._runner.utils.message import normalize_tool_messages
 
         messages = normalize_tool_messages(messages)
 
@@ -370,7 +370,7 @@ class Groq(Model):
         """
         Send a streaming chat completion request to the Groq API.
         """
-        from src.core._runner.utils.message import normalize_tool_messages
+        from openagent_core.core._runner.utils.message import normalize_tool_messages
 
         messages = normalize_tool_messages(messages)
 
@@ -412,7 +412,7 @@ class Groq(Model):
         """
         Sends an asynchronous streaming chat completion request to the Groq API.
         """
-        from src.core._runner.utils.message import normalize_tool_messages
+        from openagent_core.core._runner.utils.message import normalize_tool_messages
 
         messages = normalize_tool_messages(messages)
 

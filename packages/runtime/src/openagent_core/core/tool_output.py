@@ -24,6 +24,7 @@ instead of the whole call dying on a non-retryable context-length error.
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import hashlib
 import os
 import time
@@ -38,17 +39,17 @@ DEFAULT_MAX_TOOL_RESULT_CHARS = 50_000
 
 def max_tool_result_chars() -> int:
     """The cap, read at call time so it can be tuned without a restart."""
-    from src.core.execution_profile import lean_local_event_active
+    from openagent_core.core.execution_profile import lean_local_event_active
 
     if lean_local_event_active():
         try:
-            lean_cap = int(os.environ.get("OPENAGENT_LEAN_EVENT_TOOL_RESULT_CHARS", "2500"))
+            lean_cap = int(runtime_environment().get("OPENAGENT_LEAN_EVENT_TOOL_RESULT_CHARS", "2500"))
         except (TypeError, ValueError):
             lean_cap = 2500
         return max(500, lean_cap)
     try:
         return int(
-            os.environ.get(
+            runtime_environment().get(
                 "OPENAGENT_MAX_TOOL_RESULT_CHARS", DEFAULT_MAX_TOOL_RESULT_CHARS
             )
         )
@@ -92,14 +93,14 @@ _TRUTHY = {"1", "true", "yes", "on"}
 
 def _offload_enabled() -> bool:
     return (
-        os.environ.get("OPENAGENT_TOOL_OFFLOAD_ENABLED", "0").strip().lower()
+        runtime_environment().get("OPENAGENT_TOOL_OFFLOAD_ENABLED", "0").strip().lower()
         in _TRUTHY
     )
 
 
 def _offload_threshold() -> int:
     """Chars above which a result is offloaded. Defaults to the truncation cap."""
-    raw = os.environ.get("OPENAGENT_TOOL_OFFLOAD_THRESHOLD", "").strip()
+    raw = runtime_environment().get("OPENAGENT_TOOL_OFFLOAD_THRESHOLD", "").strip()
     if raw:
         try:
             return int(raw)
@@ -110,7 +111,7 @@ def _offload_threshold() -> int:
 
 def _offload_keep() -> int:
     """Retention cap — how many offload files to keep. Default 200."""
-    raw = os.environ.get("OPENAGENT_TOOL_OFFLOAD_KEEP", "").strip()
+    raw = runtime_environment().get("OPENAGENT_TOOL_OFFLOAD_KEEP", "").strip()
     if raw:
         try:
             return int(raw)
@@ -126,11 +127,11 @@ def _offload_dir() -> Path:
     the filesystem/editor MCP root already covers by default, so the handle the
     preview hands back is re-readable without widening any root.
     """
-    raw = os.environ.get("OPENAGENT_TOOL_OFFLOAD_DIR", "").strip()
+    raw = runtime_environment().get("OPENAGENT_TOOL_OFFLOAD_DIR", "").strip()
     if raw:
         d = Path(raw).expanduser()
     else:
-        from src.core.paths import data_dir
+        from openagent_core.core.paths import data_dir
 
         d = data_dir() / "tool_outputs"
     d.mkdir(parents=True, exist_ok=True)

@@ -9,7 +9,7 @@ no reader at all.
 
 ``sessions.runs`` is already the source of truth and already holds every
 message of every session. This SQLite file is a *rebuildable cache* over it,
-in the exact shape of :mod:`src.memory.vault.index` — delete it and the next
+in the exact shape of :mod:`openagent_core.memory.vault.index` — delete it and the next
 ``sync`` reconstructs it. Nothing here is a second store of record: every row
 is derived, and the derivation is one function away from the raw text.
 
@@ -342,7 +342,7 @@ class TranscriptIndex:
                 return stats
             try:
                 try:
-                    cur = src.execute(
+                    cur = openagent_core.execute(
                         "SELECT session_id, updated_at, "
                         "       COALESCE(length(runs), 0) AS runs_len "
                         "FROM sessions"
@@ -397,7 +397,7 @@ class TranscriptIndex:
                 self._conn.commit()
             finally:
                 try:
-                    src.close()
+                    openagent_core.close()
                 except Exception:
                     pass
         stats.elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -412,7 +412,7 @@ class TranscriptIndex:
         """(Re)index one session. Returns the message count, or None if the
         row vanished mid-sync (a purge racing us — the next sync reconciles)."""
         try:
-            row = src.execute(
+            row = openagent_core.execute(
                 "SELECT runs, metadata FROM sessions WHERE session_id = ?", (sid,)
             ).fetchone()
         except sqlite3.Error:

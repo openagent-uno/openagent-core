@@ -17,6 +17,7 @@ write through the HTTP endpoint so there's only one write path.
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import json
 import logging
 import os
@@ -32,7 +33,7 @@ mcp = FastMCP("skill-data")
 
 def _db_path() -> str:
     """Same resolution as every other builtin MCP."""
-    return os.environ.get("OPENAGENT_DB_PATH", "./openagent.db")
+    return runtime_environment().get("OPENAGENT_DB_PATH", "./openagent.db")
 
 
 async def _connect() -> aiosqlite.Connection:

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from typing import Any
+import inspect
 
 
 def close_runtime_databases(runtime: Any) -> int:
@@ -62,4 +63,45 @@ def close_runtime_databases(runtime: Any) -> int:
         ):
             pending.extend(members)
 
+    return closed
+
+
+async def close_runtime_clients(runtime: Any) -> int:
+    """Close SDK clients constructed by a provider, including team members.
+
+    An explicitly supplied HTTP transport is borrowed. Its owner remains
+    responsible for closing it; closing its SDK wrapper would close it too.
+    This helper must run only after calls using the runtime have drained.
+    """
+    pending = [runtime]
+    seen: set[int] = set()
+    clients: set[int] = set()
+    closed = 0
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        pending.append(getattr(current, "model", None))
+        members = getattr(current, "members", None)
+        if isinstance(members, (list, tuple)):
+            pending.extend(members)
+        if getattr(current, "http_client", None) is not None:
+            continue
+        for attribute in ("client", "async_client"):
+            client = getattr(current, attribute, None)
+            if client is None or id(client) in clients:
+                continue
+            clients.add(id(client))
+            # google-genai owns a separate asynchronous transport on .aio.
+            aio = getattr(client, "aio", None)
+            if aio is not None and callable(getattr(aio, "aclose", None)):
+                await aio.aclose()
+            close = getattr(client, "aclose", None) or getattr(client, "close", None)
+            if callable(close):
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
+                closed += 1
+            setattr(current, attribute, None)
     return closed

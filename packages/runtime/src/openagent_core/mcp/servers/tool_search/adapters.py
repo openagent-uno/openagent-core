@@ -22,6 +22,8 @@ it; existing in-process adapters that don't take ``pool`` (e.g.
 """
 from __future__ import annotations
 
+from openagent_core.instance_state import InstanceMapping
+from openagent_core.configuration import runtime_environment
 import asyncio
 import difflib
 import inspect
@@ -298,7 +300,7 @@ def _denied_tool_rules() -> tuple[tuple[str, str], ...]:
     ``replio_thread_create_task``. Invalid entries are ignored rather than
     making every tool unavailable because of one malformed environment value.
     """
-    raw = (os.environ.get(_MCP_TOOL_DENYLIST_ENV) or "").strip()
+    raw = (runtime_environment().get(_MCP_TOOL_DENYLIST_ENV) or "").strip()
     if not raw:
         return ()
     rules: list[tuple[str, str]] = []
@@ -358,7 +360,7 @@ def _did_you_mean(name: str, available: list[str]) -> str:
 # so it must not be able to deny anyone a working tool. Any successful call
 # clears it, which is what keeps a busy agent from drifting into the loud
 # wording on unrelated work.
-_MISS_COUNTS: dict[tuple[str, str], int] = {}
+_MISS_COUNTS = InstanceMapping('mcp/servers/tool_search/adapters.py:_MISS_COUNTS')
 _MISS_COUNTS_MAX = 64
 _LOUD_AFTER = 2
 

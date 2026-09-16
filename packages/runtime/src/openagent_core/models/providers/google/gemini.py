@@ -7,30 +7,30 @@ import mimetypes
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from os import getenv
+from openagent_core.configuration import getenv
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Type, Union
 from uuid import uuid4
 
 from pydantic import BaseModel
 
-from src.core.runtime_errors import ModelProviderError
-from src.stream.media import Audio, File, Image, Video
-from src.models.providers.base import Model, RetryableModelProviderError
-from src.models.providers.google.utils import MALFORMED_FUNCTION_CALL_GUIDANCE, GeminiFinishReason, get_mime_type
-from src.models.providers.message import Citations, Message, UrlCitation
-from src.models.providers.metrics import MessageMetrics
-from src.models.providers.response import ModelResponse
-from src.core._run_state.agent import RunOutput
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.gemini import (
+from openagent_core.core.runtime_errors import ModelProviderError
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.models.providers.base import Model, RetryableModelProviderError
+from openagent_core.models.providers.google.utils import MALFORMED_FUNCTION_CALL_GUIDANCE, GeminiFinishReason, get_mime_type
+from openagent_core.models.providers.message import Citations, Message, UrlCitation
+from openagent_core.models.providers.metrics import MessageMetrics
+from openagent_core.models.providers.response import ModelResponse
+from openagent_core.core._run_state.agent import RunOutput
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.gemini import (
     format_function_definitions,
     format_image_for_message,
     inject_openagent_client_header,
     prepare_response_schema,
 )
-from src.core._runner.utils.log import log_debug, log_error, log_info, log_warning
-from src.core._runner.utils.tokens import count_schema_tokens, count_text_tokens, count_tool_tokens
+from openagent_core.core._runner.utils.log import log_debug, log_error, log_info, log_warning
+from openagent_core.core._runner.utils.tokens import count_schema_tokens, count_text_tokens, count_tool_tokens
 
 _GENAI_IMPORT_ERROR: Optional[str] = None
 try:
@@ -800,7 +800,7 @@ class Gemini(Model):
             messages (List[Message]): The list of messages to convert.
             compress_tool_results: Whether to compress tool results.
         """
-        from src.core._runner.utils.message import normalize_tool_messages
+        from openagent_core.core._runner.utils.message import normalize_tool_messages
 
         # Backwards compat: expand old Gemini combined tool messages into individual canonical messages
         messages = normalize_tool_messages(messages)

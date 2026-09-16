@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team.team import Team
 
 import json
 import os
@@ -23,34 +24,34 @@ from typing import (
 
 from pydantic import BaseModel
 
-from src.stream.media import Audio, File, Image, Video
-from src.models.providers.base import Model
-from src.models.providers.message import Message, MessageReferences
-from src.models.providers.response import ModelResponse
-from src.core._run_state import RunContext
-from src.core._run_state.messages import RunMessages
-from src.core._run_state.team import (
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.message import Message, MessageReferences
+from openagent_core.models.providers.response import ModelResponse
+from openagent_core.core._run_state import RunContext
+from openagent_core.core._run_state.messages import RunMessages
+from openagent_core.core._run_state.team import (
     TeamRunOutput,
 )
-from src.memory.sessions import TeamSession
-from src.mcp._runtime import Toolkit
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.agent import (
+from openagent_core.memory.sessions import TeamSession
+from openagent_core.mcp._runtime import Toolkit
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.agent import (
     aexecute_instructions,
     aexecute_system_message,
     execute_instructions,
     execute_system_message,
 )
-from src.core._runner.utils.common import is_typed_dict
-from src.core._runner.utils.log import (
+from openagent_core.core._runner.utils.common import is_typed_dict
+from openagent_core.core._runner.utils.log import (
     log_debug,
     log_warning,
 )
-from src.core._runner.utils.message import filter_tool_calls, get_text_from_message
-from src.core._runner.utils.team import (
+from openagent_core.core._runner.utils.message import filter_tool_calls, get_text_from_message
+from openagent_core.core._runner.utils.team import (
     get_member_id,
 )
-from src.core._runner.utils.timer import Timer
+from openagent_core.core._runner.utils.timer import Timer
 
 
 def _member_tools_cap() -> int:
@@ -65,7 +66,7 @@ def _member_tools_cap() -> int:
     the cap the member reaches via tool-search. Members with fewer tools than
     the cap are listed in full (unchanged behaviour). Tunable via
     ``OPENAGENT_MEMBER_TOOLS_CAP`` (0 disables the listing entirely)."""
-    raw = os.environ.get("OPENAGENT_MEMBER_TOOLS_CAP", "40")
+    raw = runtime_environment().get("OPENAGENT_MEMBER_TOOLS_CAP", "40")
     try:
         return max(0, int(raw))
     except (TypeError, ValueError):
@@ -97,8 +98,8 @@ def _get_tool_names(member: Any, async_mode: bool = False) -> List[str]:
 def get_members_system_message_content(
     team: "Team", indent: int = 0, run_context: Optional["RunContext"] = None, async_mode: bool = False
 ) -> str:
-    from src.core._runner.team.team import Team
-    from src.core._runner.utils.callables import get_resolved_members
+    from openagent_core.core._runner.team.team import Team
+    from openagent_core.core._runner.utils.callables import get_resolved_members
 
     pad = " " * indent
     content = ""
@@ -152,7 +153,7 @@ def _get_opening_prompt() -> str:
 
 def _get_mode_instructions(team: "Team") -> str:
     """Return the mode-specific <how_to_respond> block."""
-    from src.core._runner.team.mode import TeamMode
+    from openagent_core.core._runner.team.mode import TeamMode
 
     content = "\n<how_to_respond>\n"
 
@@ -236,7 +237,7 @@ def _build_team_context(
 
     Shared between sync and async system-message builders.
     """
-    from src.core._runner.utils.callables import get_resolved_members
+    from openagent_core.core._runner.utils.callables import get_resolved_members
 
     content = ""
     resolved_members = get_resolved_members(team, run_context)
@@ -383,7 +384,7 @@ def get_system_message(
     """
 
     # Extract values from run_context
-    from src.core._runner.team._init import _has_async_db, _set_memory_manager
+    from openagent_core.core._runner.team._init import _has_async_db, _set_memory_manager
 
     session_state = run_context.session_state if run_context else None
     user_id = run_context.user_id if run_context else None
@@ -476,7 +477,7 @@ def get_system_message(
 
     # 1.3.3 Add the current location
     if team.add_location_to_context:
-        from src.core._runner.utils.location import get_location
+        from openagent_core.core._runner.utils.location import get_location
 
         location = get_location()
         if location:
@@ -614,7 +615,7 @@ async def aget_system_message(
     """Get the system message for the team."""
 
     # Extract values from run_context
-    from src.core._runner.team._init import _has_async_db, _set_memory_manager
+    from openagent_core.core._runner.team._init import _has_async_db, _set_memory_manager
 
     session_state = run_context.session_state if run_context else None
     user_id = run_context.user_id if run_context else None
@@ -707,7 +708,7 @@ async def aget_system_message(
 
     # 1.3.3 Add the current location
     if team.add_location_to_context:
-        from src.core._runner.utils.location import get_location
+        from openagent_core.core._runner.utils.location import get_location
 
         location = get_location()
         if location:
@@ -967,7 +968,7 @@ def _get_run_messages(
         # same way in src/core/_runner/agent/_messages.py.
         if getattr(user_message, "author", None) is None:
             try:
-                from src.core.identity_context import current_author
+                from openagent_core.core.identity_context import current_author
                 _a = current_author()
                 if _a is not None:
                     user_message.author = _a
@@ -1113,7 +1114,7 @@ async def _aget_run_messages(
         # same way in src/core/_runner/agent/_messages.py.
         if getattr(user_message, "author", None) is None:
             try:
-                from src.core.identity_context import current_author
+                from openagent_core.core.identity_context import current_author
                 _a = current_author()
                 if _a is not None:
                     user_message.author = _a
@@ -1142,7 +1143,7 @@ def _get_user_message(
     **kwargs,
 ):
     # Get references from the knowledge base to use in the user message
-    from src.core._runner.team._utils import _convert_dependencies_to_string, _convert_documents_to_string
+    from openagent_core.core._runner.team._utils import _convert_dependencies_to_string, _convert_documents_to_string
 
     references = None
 
@@ -1300,7 +1301,7 @@ async def _aget_user_message(
     **kwargs,
 ):
     # Get references from the knowledge base to use in the user message
-    from src.core._runner.team._utils import _convert_dependencies_to_string, _convert_documents_to_string
+    from openagent_core.core._runner.team._utils import _convert_dependencies_to_string, _convert_documents_to_string
 
     references = None
 
@@ -1451,7 +1452,7 @@ def _get_messages_for_parser_model(
     run_context: Optional[RunContext] = None,
 ) -> List[Message]:
     """Get the messages for the parser model."""
-    from src.core._runner.utils.prompts import get_json_output_prompt
+    from openagent_core.core._runner.utils.prompts import get_json_output_prompt
 
     # Get output_schema from run_context
     output_schema = run_context.output_schema if run_context else None
@@ -1478,7 +1479,7 @@ def _get_messages_for_parser_model_stream(
     run_context: Optional[RunContext] = None,
 ) -> List[Message]:
     """Get the messages for the parser model."""
-    from src.core._runner.utils.prompts import get_json_output_prompt
+    from openagent_core.core._runner.utils.prompts import get_json_output_prompt
 
     # Get output_schema from run_context
     output_schema = run_context.output_schema if run_context else None

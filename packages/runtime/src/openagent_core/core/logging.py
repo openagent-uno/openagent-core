@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.core.paths import log_dir
+from openagent_core.core.paths import log_dir
 
 EVENT_LOGGER = "openagent.events"
 _LEVELS = {
@@ -67,7 +67,8 @@ def setup_logging(verbose: bool = False) -> None:
     """
     global _configured, _event_file_path
     stdout_level = logging.DEBUG if verbose else logging.WARNING
-    target = events_path()
+    from openagent_core.core.paths import get_agent_dir
+    target = events_path() if get_agent_dir() is not None else None
 
     if _configured:
         for h in logging.getLogger().handlers:
@@ -103,18 +104,44 @@ def setup_logging(verbose: bool = False) -> None:
     _configured = True
 
 
-def _reopen_event_file(target: Path) -> None:
-    """Swap the FileHandler on the event logger to write to *target*."""
+def _reopen_event_file(target: Path | None) -> None:
+    """Install a context router; a process logger never owns an agent path."""
     global _event_file_path
     events = logging.getLogger(EVENT_LOGGER)
     for h in list(events.handlers):
         if isinstance(h, logging.FileHandler):
             h.close()
             events.removeHandler(h)
-    handler = logging.FileHandler(target, encoding="utf-8")
-    handler.setFormatter(_JsonlFormatter())
-    events.addHandler(handler)
+    if not any(isinstance(h, _ContextFileHandler) for h in events.handlers):
+        events.addHandler(_ContextFileHandler())
     _event_file_path = target
+
+
+class _ContextFileHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        from openagent_core.instance_state import registry
+        from openagent_core.core.paths import get_agent_dir
+        # A library call with no explicitly bound workspace logs to the
+        # caller's handlers. It must not create a standalone user's files.
+        if get_agent_dir() is None:
+            return
+        state = registry('event-logging')
+        target = events_path()
+        handler = state.get('handler')
+        if handler is None or state.get('target') != target:
+            if handler is not None:
+                handler.close()
+            handler = logging.FileHandler(target, encoding='utf-8')
+            handler.setFormatter(_JsonlFormatter())
+            state.update(handler=handler,target=target)
+        handler.handle(record)
+
+
+def close_runtime_logging() -> None:
+    from openagent_core.instance_state import registry
+    handler = registry('event-logging').pop('handler',None)
+    if handler is not None:
+        handler.close()
 
 
 # ── reading events.jsonl ─────────────────────────────────────────────
@@ -129,7 +156,7 @@ _BLOCK_BYTES = 64 * 1024
 def events_path() -> Path:
     """Absolute path of the live ``events.jsonl``.
 
-    Resolved through :func:`src.core.paths.log_dir` on every call — the agent
+    Resolved through :func:`openagent_core.core.paths.log_dir` on every call — the agent
     directory can be set *after* bootstrap, and both the writer
     (:func:`setup_logging`) and every reader must follow it to the same file.
     """

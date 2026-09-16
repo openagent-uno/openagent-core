@@ -27,13 +27,14 @@ Off by default. Enable via ``memory.curator.enabled: true`` in
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import asyncio
 import os
 import time
 from pathlib import Path
 from typing import Any
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 _DAY_SECONDS = 86400.0
 
@@ -51,14 +52,14 @@ _DEFAULTS = {
 
 def _is_enabled() -> bool:
     return (
-        os.environ.get("OPENAGENT_CURATOR_ENABLED", "0").strip().lower()
+        runtime_environment().get("OPENAGENT_CURATOR_ENABLED", "0").strip().lower()
         in ("1", "true", "yes", "on")
     )
 
 
 def _int_env(name: str, default: int) -> int:
     try:
-        v = int(os.environ.get(name, default))
+        v = int(runtime_environment().get(name, default))
     except (TypeError, ValueError):
         return default
     return v if v > 0 else default
@@ -116,7 +117,7 @@ async def _maybe_backup(db: Any) -> None:
         _DEFAULTS["backup_interval_hours"],
     )
     keep = _int_env("OPENAGENT_CURATOR_BACKUP_KEEP", _DEFAULTS["backup_keep"])
-    db_path_str = getattr(db, "db_path", None) or os.environ.get("OPENAGENT_DB_PATH")
+    db_path_str = getattr(db, "db_path", None) or runtime_environment().get("OPENAGENT_DB_PATH")
     if not db_path_str:
         return
     db_path = Path(db_path_str)

@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
-from src.stream.events import (
+from openagent_core.stream.events import (
     OutAudioChunk,
     OutAudioEnd,
     OutAudioStart,
@@ -39,36 +39,12 @@ from src.stream.events import (
     TurnComplete,
     now_ms,
 )
-from src.stream.session import StreamSession, _ingress_key
-from src.stream.wire import event_to_wire, wire_to_event
+from openagent_core.stream.session import StreamSession, _ingress_key
+from openagent_core.stream.reply import BatchedReply
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class BatchedReply:
-    """Result of a :meth:`BatchedChannel.run_one_shot` call.
-
-    Mirrors the shape of legacy ``TurnRunner.run`` return value so
-    bridges can keep their existing render path.
-    """
-
-    text: str = ""
-    audio_chunks: list[bytes] = field(default_factory=list)
-    audio_format: str | None = None
-    audio_mime: str | None = None
-    voice_id: str | None = None
-    attachments: list[dict] = field(default_factory=list)
-    parts: list[dict] = field(default_factory=list)
-    model: str | None = None
-    errored: bool = False
-    error_text: str | None = None
-
-    @property
-    def audio_bytes(self) -> bytes | None:
-        if not self.audio_chunks:
-            return None
-        return b"".join(self.audio_chunks)
 
 
 class RealtimeChannel:
@@ -94,10 +70,14 @@ class RealtimeChannel:
         session: StreamSession,
         send_wire: Callable[[dict], Awaitable[bool]],
         *,
+        encoder: Callable,
+        decoder: Callable,
         on_outbound: Callable[[dict], None] | None = None,
         on_unrecoverable: Callable[[], Awaitable[None]] | None = None,
     ):
         self._session = session
+        self._encoder = encoder
+        self._decoder = decoder
         self._send = send_wire
         self._route_sends: dict[tuple[object, ...], Callable[[dict], Awaitable[bool]]] = {}
         self._route_identities: dict[tuple[object, ...], object] = {}
@@ -157,7 +137,7 @@ class RealtimeChannel:
 
     async def on_wire(self, frame: dict) -> None:
         """Decode an inbound wire frame and push it into the session."""
-        evt = wire_to_event(frame)
+        evt = self._decoder(frame)
         if evt is None:
             return
         await self._session.push_in(evt)
@@ -168,7 +148,7 @@ class RealtimeChannel:
                 evt = await self._session.outbound.get()
                 ingress_identity = self._session.take_outbound_ingress(evt)
                 try:
-                    payload = event_to_wire(
+                    payload = self._encoder(
                         evt,
                         include_local_attachment_paths=bool(
                             getattr(

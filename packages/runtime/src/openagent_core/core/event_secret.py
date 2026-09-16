@@ -50,9 +50,11 @@ def _load_or_create_key(db_path: Optional[str]) -> bytes:
     global _ephemeral_key
     key_path = _resolve_key_path(db_path)
     if key_path is None:
-        if _ephemeral_key is None:
-            _ephemeral_key = Fernet.generate_key()
-        return _ephemeral_key
+        from openagent_core.instance_state import registry
+        state = registry('event-secrets')
+        if 'ephemeral_key' not in state:
+            state['ephemeral_key'] = Fernet.generate_key()
+        return state['ephemeral_key']
     if key_path.exists():
         return key_path.read_bytes().strip()
     key = Fernet.generate_key()

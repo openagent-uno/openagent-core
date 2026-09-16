@@ -1,3 +1,4 @@
+from openagent_core.configuration import runtime_environment
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -5,16 +6,16 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Set, Tupl
 from uuid import uuid4
 
 if TYPE_CHECKING:
-    from src.core._runner._stubs import Span, Trace
+    from openagent_core.core._runner._stubs import Span, Trace
 
-from src.memory.store.base import BaseDb, ComponentType, SessionType
-from src.memory.store.migrations.manager import MigrationManager
-from src.memory.store.schemas.culture import CulturalKnowledge
-from src.memory.store.schemas.evals import EvalFilterType, EvalRunRecord, EvalType
-from src.memory.store.schemas.knowledge import KnowledgeRow
-from src.memory.store.schemas.memory import UserMemory
-from src.memory.store.sqlite.schemas import get_table_schema_definition
-from src.memory.store.sqlite.utils import (
+from openagent_core.memory.store.base import BaseDb, ComponentType, SessionType
+from openagent_core.memory.store.migrations.manager import MigrationManager
+from openagent_core.memory.store.schemas.culture import CulturalKnowledge
+from openagent_core.memory.store.schemas.evals import EvalFilterType, EvalRunRecord, EvalType
+from openagent_core.memory.store.schemas.knowledge import KnowledgeRow
+from openagent_core.memory.store.schemas.memory import UserMemory
+from openagent_core.memory.store.sqlite.schemas import get_table_schema_definition
+from openagent_core.memory.store.sqlite.utils import (
     apply_sorting,
     bulk_upsert_metrics,
     calculate_date_metrics,
@@ -25,16 +26,16 @@ from src.memory.store.sqlite.utils import (
     is_valid_table,
     serialize_cultural_knowledge_for_db,
 )
-from src.memory.store.utils import (
+from openagent_core.memory.store.utils import (
     deserialize_session,
     deserialize_session_json_fields,
     deserialize_sessions,
     serialize_session_json_fields,
 )
-from src.core._run_state.base import RunStatus
-from src.memory.sessions import AgentSession, Session, TeamSession, WorkflowSession
-from src.core._runner.utils.log import log_debug, log_error, log_info, log_warning
-from src.core._runner.utils.string import generate_id
+from openagent_core.core._run_state.base import RunStatus
+from openagent_core.memory.sessions import AgentSession, Session, TeamSession, WorkflowSession
+from openagent_core.core._runner.utils.log import log_debug, log_error, log_info, log_warning
+from openagent_core.core._runner.utils.string import generate_id
 
 try:
     from sqlalchemy import Column, MetaData, String, Table, event, func, or_, select, text
@@ -63,7 +64,7 @@ def _session_store_pragma_enabled() -> bool:
     ``OPENAGENT_SESSION_STORE_PRAGMA_ENABLED=0`` still turns it off for a
     deployment that wants the old behaviour back."""
     import os
-    raw = os.environ.get("OPENAGENT_SESSION_STORE_PRAGMA_ENABLED")
+    raw = runtime_environment().get("OPENAGENT_SESSION_STORE_PRAGMA_ENABLED")
     if raw is None:
         return True
     return raw.strip().lower() not in ("0", "false", "no", "off", "")
@@ -94,10 +95,10 @@ def _make_session_store_engine(url: str) -> "Engine":
 
     import os
 
-    from src.memory.db import sqlite_busy_timeout_s
+    from openagent_core.memory.db import sqlite_busy_timeout_s
 
     default_timeout = sqlite_busy_timeout_s()
-    raw = os.environ.get("OPENAGENT_SESSION_STORE_BUSY_TIMEOUT_SECONDS")
+    raw = runtime_environment().get("OPENAGENT_SESSION_STORE_BUSY_TIMEOUT_SECONDS")
     try:
         timeout = float(raw) if raw is not None else default_timeout
     except (TypeError, ValueError):
@@ -149,7 +150,7 @@ def _project_operational_session_in_transaction(
         return
     from uuid import uuid4 as _uuid4
 
-    from src.memory.operational.repository import (
+    from openagent_core.memory.operational.repository import (
         project_legacy_session,
         sqlalchemy_driver_connection,
     )
@@ -847,6 +848,23 @@ class SqliteDb(BaseDb):
             log_error(f"Error deleting sessions: {str(e)}")
             raise e
 
+    def _runtime_session(self, session_id: str) -> bool:
+        """Only the current admitted session may bypass provider-era sentinels."""
+        from openagent_core.runtime import current_runtime, current_execution_context, current_run_id
+        runtime, context = current_runtime(), current_execution_context()
+        if runtime is None or context is None or current_run_id() is None or context.session_id != session_id:
+            return False
+        from pathlib import Path
+        database = getattr(runtime.services.store, 'path', None)
+        return database is not None and self.db_file is not None and Path(database).resolve() == Path(self.db_file).resolve()
+
+    def _preserve_runtime_user(self, table, database_session, serialized: dict) -> None:
+        if not self._runtime_session(serialized.get('session_id')):
+            return
+        row = database_session.execute(select(table.c.user_id).where(table.c.session_id == serialized['session_id'])).first()
+        if row is not None:
+            serialized['user_id'] = row[0]
+
     def get_session(
         self,
         session_id: str,
@@ -871,6 +889,8 @@ class SqliteDb(BaseDb):
         Raises:
             Exception: If an error occurs during retrieval.
         """
+        if self._runtime_session(session_id):
+            user_id = None
         try:
             table = self._get_table(table_type="sessions")
             if table is None:
@@ -883,8 +903,8 @@ class SqliteDb(BaseDb):
                 # runtime's existing in-memory Session contract.  Per-session
                 # fallback is mandatory: any pending downgrade/direct write is
                 # served from legacy until reconciliation verifies it again.
-                from src.memory.operational.phase import preferred_session_source
-                from src.memory.operational.repository import (
+                from openagent_core.memory.operational.phase import preferred_session_source
+                from openagent_core.memory.operational.repository import (
                     load_v2_legacy_session,
                     sqlalchemy_driver_connection,
                 )
@@ -1110,6 +1130,7 @@ class SqliteDb(BaseDb):
 
             if isinstance(session, AgentSession):
                 with self.Session() as sess, sess.begin():
+                    self._preserve_runtime_user(table,sess,serialized_session)
                     stmt = sqlite.insert(table).values(
                         session_id=serialized_session.get("session_id"),
                         session_type=SessionType.AGENT.value,
@@ -1164,6 +1185,7 @@ class SqliteDb(BaseDb):
 
             elif isinstance(session, TeamSession):
                 with self.Session() as sess, sess.begin():
+                    self._preserve_runtime_user(table,sess,serialized_session)
                     stmt = sqlite.insert(table).values(
                         session_id=serialized_session.get("session_id"),
                         session_type=SessionType.TEAM.value,
@@ -1219,6 +1241,7 @@ class SqliteDb(BaseDb):
 
             else:
                 with self.Session() as sess, sess.begin():
+                    self._preserve_runtime_user(table,sess,serialized_session)
                     stmt = sqlite.insert(table).values(
                         session_id=serialized_session.get("session_id"),
                         session_type=SessionType.WORKFLOW.value,
@@ -1331,6 +1354,7 @@ class SqliteDb(BaseDb):
                     agent_data = []
                     for session in agent_sessions:
                         serialized_session = serialize_session_json_fields(session.to_dict())
+                        self._preserve_runtime_user(table,sess,serialized_session)
                         # Use preserved updated_at if flag is set and value exists, otherwise use current time
                         updated_at = serialized_session.get("updated_at") if preserve_updated_at else int(time.time())
                         agent_data.append(
@@ -1394,6 +1418,7 @@ class SqliteDb(BaseDb):
                     team_data = []
                     for session in team_sessions:
                         serialized_session = serialize_session_json_fields(session.to_dict())
+                        self._preserve_runtime_user(table,sess,serialized_session)
                         # Use preserved updated_at if flag is set and value exists, otherwise use current time
                         updated_at = serialized_session.get("updated_at") if preserve_updated_at else int(time.time())
                         team_data.append(
@@ -1455,6 +1480,7 @@ class SqliteDb(BaseDb):
                     workflow_data = []
                     for session in workflow_sessions:
                         serialized_session = serialize_session_json_fields(session.to_dict())
+                        self._preserve_runtime_user(table,sess,serialized_session)
                         # Use preserved updated_at if flag is set and value exists, otherwise use current time
                         updated_at = serialized_session.get("updated_at") if preserve_updated_at else int(time.time())
                         workflow_data.append(
@@ -2001,7 +2027,7 @@ class SqliteDb(BaseDb):
                 sess.execute(table.delete())
 
         except Exception as e:
-            from src.core._runner.utils.log import log_warning
+            from openagent_core.core._runner.utils.log import log_warning
 
             log_warning(f"Exception deleting all memories: {str(e)}")
             raise e
@@ -2778,7 +2804,7 @@ class SqliteDb(BaseDb):
             Optional[Trace]: The trace if found, None otherwise.
         """
         try:
-            from src.core._runner._stubs import Trace
+            from openagent_core.core._runner._stubs import Trace
 
             table = self._get_table(table_type="traces")
             if table is None:
@@ -2848,7 +2874,7 @@ class SqliteDb(BaseDb):
         try:
             from sqlalchemy import func
 
-            from src.core._runner._stubs import Trace
+            from openagent_core.core._runner._stubs import Trace
 
             log_debug(
                 f"get_traces called with filters: run_id={run_id}, session_id={session_id}, user_id={user_id}, agent_id={agent_id}, page={page}, limit={limit}"
@@ -2891,7 +2917,7 @@ class SqliteDb(BaseDb):
                 # Apply advanced filter expression
                 if filter_expr:
                     try:
-                        from src.memory.store.filter_converter import TRACE_COLUMNS, filter_expr_to_sqlalchemy
+                        from openagent_core.memory.store.filter_converter import TRACE_COLUMNS, filter_expr_to_sqlalchemy
 
                         base_stmt = base_stmt.where(
                             filter_expr_to_sqlalchemy(filter_expr, table, allowed_columns=TRACE_COLUMNS)
@@ -2991,7 +3017,7 @@ class SqliteDb(BaseDb):
                 # Apply advanced filter expression
                 if filter_expr:
                     try:
-                        from src.memory.store.filter_converter import TRACE_COLUMNS, filter_expr_to_sqlalchemy
+                        from openagent_core.memory.store.filter_converter import TRACE_COLUMNS, filter_expr_to_sqlalchemy
 
                         base_stmt = base_stmt.where(
                             filter_expr_to_sqlalchemy(filter_expr, table, allowed_columns=TRACE_COLUMNS)
@@ -3096,7 +3122,7 @@ class SqliteDb(BaseDb):
             Optional[Span]: The span if found, None otherwise.
         """
         try:
-            from src.core._runner._stubs import Span
+            from openagent_core.core._runner._stubs import Span
 
             table = self._get_table(table_type="spans")
             if table is None:
@@ -3128,7 +3154,7 @@ class SqliteDb(BaseDb):
             List[Span]: List of matching spans.
         """
         try:
-            from src.core._runner._stubs import Span
+            from openagent_core.core._runner._stubs import Span
 
             table = self._get_table(table_type="spans")
             if table is None:
@@ -3157,7 +3183,7 @@ class SqliteDb(BaseDb):
     # state worth carrying forward is the ``agno_sessions`` → ``sessions``
     # table rename, which lives in ``src/memory/db.py::bootstrap`` and
     # runs on every connect. The schema-internal v1→v2 transform no
-    # longer ships and ``src.memory.store.migrations.v1_to_v2`` was
+    # longer ships and ``openagent_core.memory.store.migrations.v1_to_v2`` was
     # dropped along with the unused agno provider tables.
 
     # -- Culture methods --
@@ -3177,7 +3203,7 @@ class SqliteDb(BaseDb):
                 sess.execute(table.delete())
 
         except Exception as e:
-            from src.core._runner.utils.log import log_warning
+            from openagent_core.core._runner.utils.log import log_warning
 
             log_warning(f"Exception deleting all cultural artifacts: {str(e)}")
             raise e

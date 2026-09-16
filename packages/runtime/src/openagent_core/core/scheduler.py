@@ -20,23 +20,23 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
+from openagent_core.configuration import runtime_environment
 import uuid
 from typing import Callable, TYPE_CHECKING
 
 import time
 
-from src.memory.schedule import (
+from openagent_core.memory.schedule import (
     is_one_shot_expression,
     next_run_for_expression,
 )
 
 if TYPE_CHECKING:
-    from src.core.agent import Agent
-    from src.memory.db import MemoryDB
-    from src.workflow.executor import WorkflowExecutor
+    from openagent_core.core.agent import Agent
+    from openagent_core.memory.db import MemoryDB
+    from openagent_core.workflow.executor import WorkflowExecutor
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 
 CHECK_INTERVAL = 30  # seconds between checking for due tasks
@@ -66,7 +66,7 @@ _CANCEL_SCAN_LIMIT = 500
 def _env_float(name: str, default: float) -> float:
     """A float env override that falls back to ``default`` on unset/garbage."""
     try:
-        return float(os.environ.get(name, str(default)))
+        return float(runtime_environment().get(name, str(default)))
     except (TypeError, ValueError):
         return default
 
@@ -74,7 +74,7 @@ def _env_float(name: str, default: float) -> float:
 def _env_int(name: str, default: int) -> int:
     """An int env override that falls back to ``default`` on unset/garbage."""
     try:
-        return int(os.environ.get(name, str(default)))
+        return int(runtime_environment().get(name, str(default)))
     except (TypeError, ValueError):
         return default
 
@@ -197,7 +197,7 @@ def _durable_child_sessions() -> bool:
     Set ``OPENAGENT_SCHEDULER_DURABLE_SESSIONS=0`` to revert to the exact
     legacy behavior (a reused ``scheduler:{task}`` session wiped via
     ``forget_session`` after every fire) as a safety hatch."""
-    return os.environ.get("OPENAGENT_SCHEDULER_DURABLE_SESSIONS", "1").strip() not in ("0", "false", "no")
+    return runtime_environment().get("OPENAGENT_SCHEDULER_DURABLE_SESSIONS", "1").strip() not in ("0", "false", "no")
 
 
 class Scheduler:
@@ -212,9 +212,11 @@ class Scheduler:
         db: MemoryDB,
         agent: Agent,
         broadcast: BroadcastHook | None = None,
+        *, execution_service=None,
     ):
         self.db = db
         self.agent = agent
+        self.execution_service = execution_service
         self._task: asyncio.Task | None = None
         # Dedicated loop that drains ``status='cancelling'`` rows. Kept
         # separate from ``_task`` so the heavy due-task scan stays on its
@@ -329,6 +331,8 @@ class Scheduler:
         tasks = await self.db.get_tasks(enabled_only=True)
         now = time.time()
         for task in tasks:
+            if self.execution_service is None or not await self.execution_service.definition_authorized('task',task):
+                continue
             try:
                 if is_one_shot_expression(task["cron_expression"]):
                     if task.get("last_run"):
@@ -367,6 +371,9 @@ class Scheduler:
             elog("scheduler.schedules_recalc_skipped", level="warning", error=str(e))
             schedules = []
         for sched in schedules:
+            workflow = await self.db.get_workflow(sched['workflow_id'])
+            if workflow is None or self.execution_service is None or not await self.execution_service.definition_authorized('workflow',workflow):
+                continue
             cron = sched.get("cron_expression")
             if not cron:
                 continue
@@ -536,6 +543,7 @@ class Scheduler:
             return
         try:
             requests = await self.db.claim_pending_task_requests(
+                definition_ids=await self.execution_service.authorized_definition_ids("task") if self.execution_service else (),
                 limit=_CANCEL_SCAN_LIMIT,
             )
         except Exception as e:  # noqa: BLE001
@@ -639,6 +647,7 @@ class Scheduler:
             return
         try:
             deliveries = await self.db.claim_pending_event_deliveries(
+                definition_ids=await self.execution_service.authorized_definition_ids("event") if self.execution_service else (),
                 limit=free,
             )
         except Exception as e:  # noqa: BLE001
@@ -647,7 +656,7 @@ class Scheduler:
             return
         if not deliveries:
             return
-        from src.core.event_dispatcher import dispatch_event
+        from openagent_core.core.event_dispatcher import dispatch_event
         for dl in deliveries:
             event = await self.db.get_event(dl.get("event_id"))
             if event is None:
@@ -781,7 +790,15 @@ class Scheduler:
     def _unregister_run(self, registry: dict[str, asyncio.Task], run_id: str) -> None:
         registry.pop(run_id, None)
 
-    async def run_task(
+    async def run_task(self, task: dict, *, trigger: str = "schedule", request_id: str | None = None,
+                       context: dict | None = None) -> None:
+        """Admit a firing before its first tool, provider or deterministic action."""
+        if self.execution_service is None:
+            raise PermissionError("A scheduler requires a host automation execution service")
+        return await self.execution_service.run_task(self, task, trigger=trigger,
+            request_id=request_id, payload=context, execute=self._execute_task)
+
+    async def _execute_task(
         self, task: dict, *, trigger: str = "schedule", request_id: str | None = None,
         context: dict | None = None,
     ) -> None:
@@ -807,30 +824,30 @@ class Scheduler:
         # firings) an injection-guarded block carrying the delivery payload.
         effective_prompt = task["prompt"]
         if context:
-            from src.core.event_dispatcher import render_payload_block
+            from openagent_core.core.event_dispatcher import render_payload_block
             effective_prompt = effective_prompt + render_payload_block(context)
-        from src.core.execution_profile import (
+        from openagent_core.core.execution_profile import (
             lean_local_event_scope,
             lean_local_task_scope,
             lean_local_tool_families,
-            should_use_lean_local_scheduled_task,
             strict_local_only_scope,
         )
-        from src.core.tool_scope import (
+        from openagent_core.core.tool_scope import (
             current_tool_allowlist,
             reset_tool_allowlist,
             set_tool_allowlist,
         )
-        from src.core.execution_policy import (
+        from openagent_core.core.execution_policy import (
             current_execution_policy,
             narrow_execution_policy,
             reset_execution_policy,
             set_execution_policy,
             task_execution_policy,
         )
-        from src.core.dry_run import dry_run_scope
+        from openagent_core.core.dry_run import dry_run_scope
 
-        use_lean_local = await should_use_lean_local_scheduled_task(task, self.db)
+        selector = getattr(getattr(self.agent,"extensions",None),"execution_profile_selector",None)
+        use_lean_local = bool(await selector("scheduled_task",task,self.db)) if selector is not None else False
         # Always bound: the error handler below reads it, and it is only
         # assigned inside the lean-local branch. Leaving it unbound would
         # raise NameError from the handler and bury the real failure.
@@ -852,7 +869,7 @@ class Scheduler:
         if execution_policy.get("timeout_seconds") is not None:
             run_timeout_s = float(execution_policy["timeout_seconds"])
         elif use_lean_local:
-            run_timeout_s = max(5.0, float(os.environ.get(
+            run_timeout_s = max(5.0, float(runtime_environment().get(
                 "OPENAGENT_LOCAL_SCHEDULED_TASK_TIMEOUT_SECONDS", "120",
             )))
         durable = _durable_child_sessions()
@@ -862,11 +879,11 @@ class Scheduler:
         # preserve the public ``run_task(task, ...)`` extension signature.
         preclaimed_run_id = task.get("_preclaimed_run_id")
         preclaimed_session_id = task.get("_preclaimed_session_id")
-        run_id: str = str(preclaimed_run_id or uuid.uuid4())
+        run_id: str = str(task.get("_runtime_run_id") or preclaimed_run_id or uuid.uuid4())
         # The durable per-run id MUST equal what ``run_child_session`` mints for
         # the same origin_ref, so the ``task_runs.session_id`` link points at the
         # real child row — mint it the one way instead of re-formatting by hand.
-        from src.core.child_session import mint_child_session_id
+        from openagent_core.core.child_session import mint_child_session_id
         session_id = str(preclaimed_session_id or (
             mint_child_session_id("scheduler", {"task_id": task["id"], "run_id": run_id})
             if durable else f"scheduler:{task['id']}"
@@ -876,7 +893,7 @@ class Scheduler:
         )
         ambient_families = current_tool_allowlist()
         if allowed_families is not None and ambient_families is not None:
-            from src.core.tool_scope import normalize_family
+            from openagent_core.core.tool_scope import normalize_family
 
             allowed_families = [
                 item for item in allowed_families
@@ -913,10 +930,10 @@ class Scheduler:
         # other task keeps the foreground default — a scheduled report that
         # happens to write a skill is doing it because a human asked for that
         # task, and is not the autonomous curator.
-        from src.core.builtin_tasks import (
+        from openagent_core.core.builtin_tasks import (
             SKILL_CURATOR_TASK_NAME, SKILL_DISTILLER_TASK_NAME,
         )
-        from src.mcp.servers.skills.provenance import (
+        from openagent_core.mcp.servers.skills.provenance import (
             BACKGROUND, reset_write_origin, set_write_origin,
         )
 
@@ -979,7 +996,7 @@ class Scheduler:
                 elog("scheduler.hot_reload_error", level="warning", error=str(e))
             # Provenance for vault commits made during this scheduled run.
             try:
-                from src.memory.vault.vault_origin import note_activity
+                from openagent_core.memory.vault.vault_origin import note_activity
                 note_activity(kind="scheduled_task", task=task["id"],
                               run=run_id, session=session_id)
             except Exception:  # noqa: BLE001
@@ -987,56 +1004,16 @@ class Scheduler:
             # An operator-approved execution block runs deterministically and
             # skips the model entirely. It is checked here, inside the try, so
             # the task_runs row records the outcome exactly like any firing.
-            from src.core import task_directive
+            from openagent_core.core import task_directive
 
-            # A quality run is judgement plus bookkeeping, and only the first
-            # half is the model's job. Measured against this scheduler, the
-            # model-driven version skipped the recording step in two firings
-            # out of three and once reported a refused write as "ok". So the
-            # code fetches, computes and records; the model only supplies the
-            # six sub-scores.
-            if "[[quality-digest]]" in effective_prompt:
-                from src.core import local_quality_scorer
-
-                pool = getattr(self.agent, "_mcp", None)
-                if pool is None:
-                    raise RuntimeError("quality digest needs an MCP pool")
-                product = "lyra" if "lyra" in task_name.lower() else "esound"
-                result = await local_quality_scorer.digest(pool, product=product)
-                elog("task.quality_digest", name=task_name,
-                     systemic=len(result.get("systemic") or []))
-                await self._record_task_finish(
-                    finish_run_id, task, status="success",
-                    output=json.dumps(result, ensure_ascii=False, default=str),
-                    error=None,
-                )
-                return
-
-            if "[[quality-scorer]]" in effective_prompt:
-                from src.core import local_quality_scorer
-
-                pool = getattr(self.agent, "_mcp", None)
-                if pool is None:
-                    raise RuntimeError("quality scorer needs an MCP pool")
-                product = "lyra" if "lyra" in task_name.lower() else "esound"
-                with (
-                    dry_run_scope(task_dry_run),
-                    lean_local_event_scope(use_lean_local),
-                    lean_local_task_scope(use_lean_local),
-                    strict_local_only_scope(use_lean_local),
-                ):
-                    result = await local_quality_scorer.run(
-                        self.agent, {"model": task.get("model") or ""}, pool,
-                        f"scheduler:{task['id']}", product=product,
-                    )
-                elog("task.quality_scored", name=task_name,
-                     scored=result.get("scored"), bad=result.get("bad"))
-                await self._record_task_finish(
-                    finish_run_id, task, status="success",
-                    output=json.dumps(result, ensure_ascii=False, default=str),
-                    error=None,
-                )
-                return
+            extension = getattr(getattr(self.agent, "extensions", None), "scheduled_handler", None)
+            if extension is not None:
+                result = await extension(agent=self.agent, task=task,
+                    prompt=effective_prompt, session_id=session_id, dry_run=task_dry_run)
+                if result is not None:
+                    await self._record_task_finish(finish_run_id, task, status="success",
+                        output=json.dumps(result, ensure_ascii=False, default=str), error=None)
+                    return
 
             directives = task_directive.parse(effective_prompt)
             if directives:
@@ -1065,14 +1042,13 @@ class Scheduler:
                 # authored by the agent (so the app renders the prompt as a
                 # Mission block), owned by the agent's primary user so the
                 # row lands in their session list.
-                from src.core.child_session import run_child_session
-                from src.core.identity_context import agent_author
-                owner = None
-                if self.db is not None:
-                    try:
-                        owner = await self.db.primary_owner_handle()
-                    except Exception:  # noqa: BLE001
-                        owner = None
+                from openagent_core.core.child_session import run_child_session
+                from openagent_core.core.identity_context import agent_author
+                from openagent_core.runtime import current_execution_context
+                authority=current_execution_context()
+                if authority is None or not authority.deferred or not authority.delegation_id:
+                    raise PermissionError("Scheduled execution requires its captured delegation")
+                owner=authority.authority.subject_id
                 with (
                     dry_run_scope(task_dry_run),
                     lean_local_event_scope(use_lean_local),
@@ -1111,7 +1087,7 @@ class Scheduler:
                 # ``run_child_session``. Clear explicitly here as well: a
                 # run-now call may be spawned while an interactive agent tool
                 # still has a client execution origin in its ContextVar.
-                from src.core.execution_origin import execution_origin_scope
+                from openagent_core.core.execution_origin import execution_origin_scope
 
                 with (
                     execution_origin_scope(None),
@@ -1270,7 +1246,7 @@ class Scheduler:
         # perche' nell'archivio e' indistinguibile da un lavoro fatto, ed e'
         # cosi' che un compito rotto resta vivo per settimane.
         try:
-            from src.core.run_evidence import unevidenced_reason
+            from openagent_core.core.run_evidence import unevidenced_reason
 
             reason = unevidenced_reason(
                 status="success",
@@ -1327,7 +1303,7 @@ class Scheduler:
             # this task's root. Default 0 = keep all (sessions stay navigable);
             # operators set a cap if firings accumulate.
             try:
-                keep = int(os.environ.get("OPENAGENT_SCHEDULER_KEEP_SESSIONS", "0"))
+                keep = int(runtime_environment().get("OPENAGENT_SCHEDULER_KEEP_SESSIONS", "0"))
             except (TypeError, ValueError):
                 keep = 0
             if keep > 0:
@@ -1383,6 +1359,8 @@ class Scheduler:
         due_tasks = await self.db.get_due_tasks(now)
 
         for task in due_tasks:
+            if self.execution_service is None or not await self.execution_service.definition_authorized("task", task):
+                continue
             elog("scheduler.run_due", name=task["name"])
             try:
                 one_shot = is_one_shot_expression(task["cron_expression"])
@@ -1392,7 +1370,7 @@ class Scheduler:
                 run_id = str(uuid.uuid4())
                 durable = _durable_child_sessions()
                 if durable:
-                    from src.core.child_session import mint_child_session_id
+                    from openagent_core.core.child_session import mint_child_session_id
 
                     session_id = mint_child_session_id(
                         "scheduler", {"task_id": task["id"], "run_id": run_id},
@@ -1451,6 +1429,8 @@ class Scheduler:
                 # FK cascade should prevent this, but guard anyway.
                 await self.db.delete_schedule(sched["id"])
                 continue
+            if self.execution_service is None or not await self.execution_service.definition_authorized("workflow", wf):
+                continue
             elog(
                 "scheduler.schedule_due",
                 workflow=wf.get("name"),
@@ -1488,12 +1468,14 @@ class Scheduler:
                     wf,
                     trigger="schedule",
                     entry_node_id=sched["node_id"],
+                    run_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"workflow:{sched['id']}:{sched.get('next_run_at')}")),
                 )
             )
 
         # AI-enqueued + manually-enqueued workflow runs (Phase 2).
         try:
-            requests = await self.db.claim_pending_workflow_requests(limit=5)
+            requests = await self.db.claim_pending_workflow_requests(limit=5,
+                definition_ids=await self.execution_service.authorized_definition_ids("workflow") if self.execution_service else ())
         except Exception as e:  # noqa: BLE001
             # 37e99bd dropped explicit BEGIN/ROLLBACK from the claim path,
             # but both signatures still surface across mixout / performa
@@ -1534,7 +1516,7 @@ class Scheduler:
         # user never adopts workflows, the executor class is never
         # loaded.
         if self._workflow_executor is None:
-            from src.workflow.executor import WorkflowExecutor
+            from openagent_core.workflow.executor import WorkflowExecutor
 
             self._workflow_executor = WorkflowExecutor(
                 self.agent, self.db, broadcast=self._broadcast,
@@ -1557,7 +1539,7 @@ class Scheduler:
         :meth:`_run_workflow`, which explicitly clears the origin.
         """
 
-        from src.core.execution_origin import current_execution_origin
+        from openagent_core.core.execution_origin import current_execution_origin
 
         if current_execution_origin() is None:
             raise PermissionError(
@@ -1586,7 +1568,7 @@ class Scheduler:
             if callable(refresh):
                 await refresh()
             try:
-                from src.memory.vault.vault_origin import note_activity
+                from openagent_core.memory.vault.vault_origin import note_activity
 
                 note_activity(
                     kind="workflow", workflow=workflow.get("id"), run=run_id,
@@ -1630,7 +1612,19 @@ class Scheduler:
         finally:
             self._unregister_run(self._workflow_run_tasks, run_id)
 
-    async def _run_workflow(
+    async def run_workflow(self, wf: dict, *, trigger: str, inputs: dict | None = None,
+                           request_id: str | None = None, entry_node_id: str | None = None,
+                           run_id: str | None = None):
+        if self.execution_service is None:
+            raise PermissionError("A workflow requires a host automation execution service")
+        return await self.execution_service.run_workflow(self, wf, trigger=trigger, inputs=inputs,
+            request_id=request_id, entry_node_id=entry_node_id, run_id=run_id, execute=self._execute_workflow)
+
+    async def _run_workflow(self, wf: dict, **kwargs):
+        """Compatibility adapter; every path uses the same public admission."""
+        return await self.run_workflow(wf, **kwargs)
+
+    async def _execute_workflow(
         self,
         wf: dict,
         *,
@@ -1687,7 +1681,7 @@ class Scheduler:
 
             # Provenance for vault commits made during this workflow run.
             try:
-                from src.memory.vault.vault_origin import note_activity
+                from openagent_core.memory.vault.vault_origin import note_activity
                 note_activity(kind="workflow", workflow=wf.get("id"), run=run_id)
             except Exception:  # noqa: BLE001
                 pass
@@ -1697,7 +1691,7 @@ class Scheduler:
             # was created from an interactive request task. A future genuinely
             # synchronous in-turn workflow can call WorkflowExecutor directly
             # under the ambient origin instead of this detached entry point.
-            from src.core.execution_origin import execution_origin_scope
+            from openagent_core.core.execution_origin import execution_origin_scope
 
             with execution_origin_scope(None):
                 final = await executor.run(

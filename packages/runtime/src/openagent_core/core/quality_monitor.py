@@ -37,6 +37,8 @@ so quality/cost/recall are summarised without a second store.
 """
 from __future__ import annotations
 
+from openagent_core.instance_state import InstanceSet
+from openagent_core.configuration import runtime_environment
 import asyncio
 import hashlib
 import json
@@ -44,9 +46,9 @@ import os
 import re
 from typing import Any, Optional
 
-from src.core.execution_origin import create_server_only_task
+from openagent_core.core.execution_origin import create_server_only_task
 
-from src.core.logging import elog, iter_events_reverse
+from openagent_core.core.logging import elog, iter_events_reverse
 
 # ── config (env-driven, set by ``_build_agent`` from ``quality_monitor.*``) ──
 
@@ -76,8 +78,8 @@ _DEFAULT_JUDGE_MODEL = "deepseek:deepseek-chat"
 
 def _preferred_judge_ids(providers_config: Any) -> list[str]:
     """Self-hosted rows first, then the deepseek default."""
-    from src.core.execution_profile import _is_cloud_model_id
-    from src.models.catalog import FRAMEWORK_API_BASED, iter_configured_models
+    from openagent_core.core.execution_profile import _is_cloud_model_id
+    from openagent_core.models.catalog import FRAMEWORK_API_BASED, iter_configured_models
 
     local = [
         entry.runtime_id
@@ -96,20 +98,20 @@ def _truthy(v: str) -> bool:
 def enabled() -> bool:
     """True when the monitor is switched on. Default OFF — a deployment that
     never configured it pays nothing (§17)."""
-    return _truthy(os.environ.get(_ENABLED_ENV, "0"))
+    return _truthy(runtime_environment().get(_ENABLED_ENV, "0"))
 
 
 def _rate() -> float:
     """Fraction of turns to judge, clamped to [0, 1]. Default 0.1 (10%)."""
     try:
-        return max(0.0, min(1.0, float(os.environ.get(_RATE_ENV, "0.1"))))
+        return max(0.0, min(1.0, float(runtime_environment().get(_RATE_ENV, "0.1"))))
     except ValueError:
         return 0.1
 
 
 def _timeout() -> float:
     try:
-        return max(1.0, float(os.environ.get(_TIMEOUT_ENV, "30")))
+        return max(1.0, float(runtime_environment().get(_TIMEOUT_ENV, "30")))
     except ValueError:
         return 30.0
 
@@ -117,7 +119,7 @@ def _timeout() -> float:
 def _min_len() -> int:
     """Skip trivially short turns (a one-word ack isn't worth a judge call)."""
     try:
-        return max(0, int(os.environ.get(_MIN_LEN_ENV, "40")))
+        return max(0, int(runtime_environment().get(_MIN_LEN_ENV, "40")))
     except ValueError:
         return 40
 
@@ -131,7 +133,7 @@ def _rules_chars() -> int:
     disables grounding entirely (pure generic rubric). Default 2000 chars — the
     operating principles fit; the exhaustive procedures live in the vault."""
     try:
-        return max(0, int(os.environ.get(_RULES_CHARS_ENV, "2000")))
+        return max(0, int(runtime_environment().get(_RULES_CHARS_ENV, "2000")))
     except ValueError:
         return 2000
 
@@ -169,7 +171,7 @@ def session_scope(session_id: Optional[str]) -> str:
 
 def _judged_scopes() -> frozenset[str]:
     """Scopes the judge is allowed to grade. Empty config means the default."""
-    raw = os.environ.get(_SCOPES_ENV, "") or _DEFAULT_SCOPES
+    raw = runtime_environment().get(_SCOPES_ENV, "") or _DEFAULT_SCOPES
     picked = {item.strip().lower() for item in raw.split(",") if item.strip()}
     return frozenset(picked or _DEFAULT_SCOPES.split(","))
 
@@ -289,7 +291,7 @@ def _agent_rules(agent: Any) -> str:
 # Warned ONCE each (a clear, actionable operator signal), NOT once per sampled
 # turn — the old code re-emitted the warning on every score (37x in production).
 # Keyed on the configured value so a fixed/changed config re-arms.
-_JUDGE_UNRESOLVED_WARNED: set = set()
+_JUDGE_UNRESOLVED_WARNED = InstanceSet('core/quality_monitor.py:_JUDGE_UNRESOLVED_WARNED')
 
 
 def _warn_judge_unresolved_once(configured: str) -> None:
@@ -325,12 +327,12 @@ def _default_judge_model(agent: Any) -> Any:
     # Only a full Team-router fallback is worth overriding; an already-plain
     # model was chosen deliberately (or is a test fake) — leave it be, exactly
     # as ``_cheap_background_model`` does for non-router callers.
-    from src.core.compaction import _cheap_background_model, _is_router
+    from openagent_core.core.compaction import _cheap_background_model, _is_router
 
     if _is_router(fallback):
         try:
-            from src.models.catalog import FRAMEWORK_API_BASED, iter_configured_models
-            from src.models.native_provider import NativeProvider
+            from openagent_core.models.catalog import FRAMEWORK_API_BASED, iter_configured_models
+            from openagent_core.models.native_provider import NativeProvider
 
             providers_config = getattr(agent, "_providers_config", None) or []
             wanted = _preferred_judge_ids(providers_config)
@@ -378,12 +380,12 @@ def _pick_judge_model(agent: Any) -> Any:
     ``NativeProvider`` for a named id so the judge pays no tool-schema overhead.
     Returns ``None`` only when even the fallback is missing.
     """
-    configured = (os.environ.get(_MODEL_ENV, "").strip()
-                  or os.environ.get("OPENAGENT_COMPACTION_MODEL", "").strip())
+    configured = (runtime_environment().get(_MODEL_ENV, "").strip()
+                  or runtime_environment().get("OPENAGENT_COMPACTION_MODEL", "").strip())
     if configured:
         try:
-            from src.models.catalog import FRAMEWORK_API_BASED, iter_configured_models
-            from src.models.native_provider import NativeProvider
+            from openagent_core.models.catalog import FRAMEWORK_API_BASED, iter_configured_models
+            from openagent_core.models.native_provider import NativeProvider
 
             providers_config = getattr(agent, "_providers_config", None) or []
             match = next(
@@ -430,7 +432,7 @@ def _pick_judge_model(agent: Any) -> Any:
         # routing still only touches the local sub-proxy / deepseek, never an
         # Anthropic key. A non-router ``agent.model`` (e.g. a unit-test fake) is
         # returned unchanged, preserving the old contract for that caller.
-        from src.core.compaction import _cheap_background_model
+        from openagent_core.core.compaction import _cheap_background_model
         return _cheap_background_model(
             agent, getattr(agent, "model", None),
             picked_event="quality.judge_model",
@@ -494,7 +496,7 @@ def _trace_block(tool_trace_rows: Any) -> str:
     if not tool_trace_rows:
         return ""
     try:
-        from src.core import tool_trace as _tt
+        from openagent_core.core import tool_trace as _tt
         body = _tt.render(tool_trace_rows, max_chars=_MAX_TRACE_CHARS)
     except Exception:  # noqa: BLE001 — grounding aid is best-effort, never fatal
         return ""
@@ -619,7 +621,7 @@ def spawn_scoring(agent: Any, session_id: Optional[str],
     if not enabled():
         return
     try:
-        from src.core import tool_trace
+        from openagent_core.core import tool_trace
         tool_trace_rows = tool_trace.take(session_id)
     except Exception:  # noqa: BLE001 — the trace is a grounding aid, never required
         tool_trace_rows = None
@@ -636,7 +638,7 @@ def spawn_scoring(agent: Any, session_id: Optional[str],
     task.add_done_callback(_INFLIGHT.discard)
 
 
-_INFLIGHT: set = set()
+_INFLIGHT = InstanceSet('core/quality_monitor.py:_INFLIGHT')
 
 
 # ── read side: aggregate quality + cost + recall over a window ────────────

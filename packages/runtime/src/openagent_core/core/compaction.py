@@ -30,7 +30,7 @@ The flow per turn, called from ``Agent._run_inner`` *before* the next
    ``phase="running"`` before the (slow) summariser call and once with
    ``phase="done"`` after the rewrite lands (or ``phase="error"`` if the
    summary came back empty). The turn runner
-   (:mod:`src.stream.session`) lifts that envelope into a typed
+   (:mod:`openagent_core.stream.session`) lifts that envelope into a typed
    :class:`stream.events.SessionCompacted` frame, so the desktop app
    draws a compaction card, the CLI a step line, and the bridges a
    "Compacting conversation" → "Compacted conversation" message. A
@@ -38,17 +38,17 @@ The flow per turn, called from ``Agent._run_inner`` *before* the next
    so debugging and metrics queries have a stable trail.
 
 The reactive ``ContextWindowExceededError`` fallback in
-``src.models.providers.fallback`` stays — it's the safety net for the
+``openagent_core.models.providers.fallback`` stays — it's the safety net for the
 case where compaction can't run (no DB-backed session, summarisation
 failure, race condition with very large single messages). Compaction
 runs first; fallback catches anything that slips through.
 
 What compaction is NOT:
 
-* It does **not** touch ``src.learning.user_profile`` — that subsystem
+* It does **not** touch ``openagent_core.learning.user_profile`` — that subsystem
   summarises *across* sessions, this one folds turns *within* one.
 * It does **not** delegate to the dropped ``CompressionManager`` subsystem
-  stubs in ``src.core._runner._stubs``. The runtime there is a typing
+  stubs in ``openagent_core.core._runner._stubs``. The runtime there is a typing
   shim; the real work lives here, with raw SQL against
   ``sessions.runs`` so it works regardless of whether the
   underlying provider is api-based.
@@ -59,6 +59,8 @@ What compaction is NOT:
 """
 
 from __future__ import annotations
+from openagent_core.configuration import runtime_environment
+from openagent_core.instance_state import InstanceMapping, InstanceSet
 
 import asyncio
 import json
@@ -70,9 +72,9 @@ import uuid
 from functools import lru_cache
 from typing import Any
 
-from src.core.execution_origin import create_server_only_task
+from openagent_core.core.execution_origin import create_server_only_task
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 # ── Tunables (env-driven so test/debug paths can override cleanly) ────
 
@@ -186,7 +188,7 @@ _DEFAULT_SUMMARY_MAX_INPUT_TOKENS = 16_000
 
 def _summary_input_fraction() -> float:
     """Fraction of the summariser's window the transcript may occupy."""
-    raw = os.environ.get(
+    raw = runtime_environment().get(
         "OPENAGENT_COMPACTION_SUMMARY_INPUT_FRACTION", "").strip()
     if not raw:
         return _DEFAULT_SUMMARY_INPUT_FRACTION
@@ -201,7 +203,7 @@ def _summary_input_fraction() -> float:
 
 def _summary_max_input_tokens() -> int:
     """Absolute transcript-token ceiling for one summariser request."""
-    raw = os.environ.get(_SUMMARY_MAX_INPUT_TOKENS_ENV, "").strip()
+    raw = runtime_environment().get(_SUMMARY_MAX_INPUT_TOKENS_ENV, "").strip()
     if not raw:
         return _DEFAULT_SUMMARY_MAX_INPUT_TOKENS
     try:
@@ -215,7 +217,7 @@ def _summary_max_input_tokens() -> int:
 
 def _summary_timeout_seconds() -> float:
     """Maximum wall time for one summariser provider call."""
-    raw = os.environ.get(_SUMMARY_TIMEOUT_ENV, "").strip()
+    raw = runtime_environment().get(_SUMMARY_TIMEOUT_ENV, "").strip()
     if not raw:
         return _DEFAULT_SUMMARY_TIMEOUT_SECONDS
     try:
@@ -228,7 +230,7 @@ def _summary_timeout_seconds() -> float:
 
 
 def _cost_ceiling() -> int:
-    raw = os.environ.get("OPENAGENT_COMPACTION_MAX_HISTORY_TOKENS", "").strip()
+    raw = runtime_environment().get("OPENAGENT_COMPACTION_MAX_HISTORY_TOKENS", "").strip()
     if raw:
         try:
             val = int(raw)
@@ -247,14 +249,14 @@ def _flag_enabled() -> bool:
     in a test runner) works without ceremony. ``""`` (the unset
     sentinel after ``os.environ.get``) also reads as enabled.
     """
-    val = os.environ.get("OPENAGENT_COMPACTION_ENABLED", "").strip().lower()
+    val = runtime_environment().get("OPENAGENT_COMPACTION_ENABLED", "").strip().lower()
     if val in {"false", "0", "no", "off"}:
         return False
     return True
 
 
 def _threshold() -> float:
-    raw = os.environ.get("OPENAGENT_COMPACTION_THRESHOLD", "").strip()
+    raw = runtime_environment().get("OPENAGENT_COMPACTION_THRESHOLD", "").strip()
     if not raw:
         return _DEFAULT_THRESHOLD
     try:
@@ -271,7 +273,7 @@ def _threshold() -> float:
 
 
 def _keep_runs() -> int:
-    raw = os.environ.get("OPENAGENT_COMPACTION_KEEP_RUNS", "").strip()
+    raw = runtime_environment().get("OPENAGENT_COMPACTION_KEEP_RUNS", "").strip()
     if not raw:
         return _DEFAULT_KEEP_RUNS
     try:
@@ -296,7 +298,7 @@ _DEFAULT_HISTORY_TOOL_RESULT_CHARS = 0
 
 def _history_tool_result_chars() -> int:
     """Char ceiling for a tool-result message kept in HISTORY (0 = off)."""
-    raw = os.environ.get(
+    raw = runtime_environment().get(
         "OPENAGENT_COMPACTION_HISTORY_TOOL_RESULT_CHARS", "").strip()
     if not raw:
         return _DEFAULT_HISTORY_TOOL_RESULT_CHARS
@@ -341,7 +343,7 @@ _PROXY_COUNT_MARGIN = 1.5
 # ratio between its count and our estimate and apply it to later folds, so a
 # model only has to teach us once. Ratcheted upward only: the provider's number
 # is a measurement, ours is a guess.
-_MEASURED_DENSITY: dict[str, float] = {}
+_MEASURED_DENSITY = InstanceMapping("compaction._MEASURED_DENSITY")
 
 
 def _density_factor(model_id: str | None) -> float:
@@ -384,7 +386,7 @@ def _is_native_tokenizer(model_id: str | None) -> bool:
     if not mid:
         return False
     try:
-        from src.core._runner.utils.tokens import _get_hf_tokenizer
+        from openagent_core.core._runner.utils.tokens import _get_hf_tokenizer
         if _get_hf_tokenizer(mid) is not None:
             return True
     except Exception:  # noqa: BLE001
@@ -401,7 +403,7 @@ def _estimate_text_tokens(text: str, model_id: str | None) -> int:
     """Best-effort token count for *text* under *model_id*.
 
     Defers to the runtime's tiktoken / HuggingFace selector
-    (``src.core._runner.utils.tokens.count_text_tokens``), then corrects it for
+    (``openagent_core.core._runner.utils.tokens.count_text_tokens``), then corrects it for
     how much we should actually trust the answer:
 
     * a tokenizer that really covers this model is taken at face value;
@@ -417,7 +419,7 @@ def _estimate_text_tokens(text: str, model_id: str | None) -> int:
         return 0
     native = _is_native_tokenizer(model_id)
     try:
-        from src.core._runner.utils.tokens import count_text_tokens
+        from openagent_core.core._runner.utils.tokens import count_text_tokens
         measured = count_text_tokens(text, model_id or "gpt-4o")
     except Exception:  # noqa: BLE001 — never let measurement block a turn
         measured = int(len(text) / _DENSE_CHARS_PER_TOKEN)
@@ -684,7 +686,7 @@ def _resolve_max_context(model: Any) -> int:
     model_id = _resolve_model_id(model)
     if model_id:
         try:
-            from src.models.catalog import get_model_context_window
+            from openagent_core.models.catalog import get_model_context_window
 
             window, source = get_model_context_window(model_id)
             if source in {"openrouter", "static"} and window > 0:
@@ -772,7 +774,7 @@ def _save_runs(db_path: str, session_id: str, runs: list[dict[str, Any]]) -> boo
         # A read-then-write on one connection: the SELECT below opens the
         # transaction and the UPDATE upgrades it, which is precisely the shape
         # that needs the full shared patience rather than a private 5s.
-        from src.memory.db import sqlite_busy_timeout_ms, sqlite_busy_timeout_s
+        from openagent_core.memory.db import sqlite_busy_timeout_ms, sqlite_busy_timeout_s
 
         conn = sqlite3.connect(db_path, timeout=sqlite_busy_timeout_s())
         conn.execute(f"PRAGMA busy_timeout = {sqlite_busy_timeout_ms()}")
@@ -1263,7 +1265,7 @@ def _is_router(model: Any) -> bool:
     path background jobs (compaction, quality judge) must avoid — rather than an
     already-cheap single model. Never raises."""
     try:
-        from src.models.dispatcher import ModelDispatcher, TeamRouterProvider
+        from openagent_core.models.dispatcher import ModelDispatcher, TeamRouterProvider
     except Exception:  # noqa: BLE001
         return False
     return isinstance(model, (ModelDispatcher, TeamRouterProvider))
@@ -1293,8 +1295,8 @@ def _cheap_background_model(
     if not _is_router(fallback):
         return fallback
     try:
-        from src.models.catalog import cheapest_enabled_model
-        from src.models.native_provider import NativeProvider
+        from openagent_core.models.catalog import cheapest_enabled_model
+        from openagent_core.models.native_provider import NativeProvider
 
         providers_config = getattr(agent, "_providers_config", None) or []
         cheap = cheapest_enabled_model(providers_config)
@@ -1352,7 +1354,7 @@ def _pick_summary_model(agent: Any, *, fallback: Any) -> Any:
     prompt and returns prose, so tool schemas would be pure token overhead on
     the very call we are trying to make cheap.
     """
-    configured = os.environ.get(_SUMMARY_MODEL_ENV, "").strip()
+    configured = runtime_environment().get(_SUMMARY_MODEL_ENV, "").strip()
     if not configured:
         # C3: no dedicated summariser configured. The old behaviour returned
         # ``fallback`` — the ACTIVE model — which on a live turn is the full
@@ -1370,8 +1372,8 @@ def _pick_summary_model(agent: Any, *, fallback: Any) -> Any:
             env_hint=_SUMMARY_MODEL_ENV,
         )
     try:
-        from src.models.catalog import FRAMEWORK_API_BASED, iter_configured_models
-        from src.models.native_provider import NativeProvider
+        from openagent_core.models.catalog import FRAMEWORK_API_BASED, iter_configured_models
+        from openagent_core.models.native_provider import NativeProvider
 
         providers_config = getattr(agent, "_providers_config", None) or []
         match = next(
@@ -1435,12 +1437,12 @@ def _summary_fallback_model(agent: Any, *, exclude_provider: str | None) -> Any:
     *exclude_provider*, preferring ``deepseek``. Returns ``None`` when no
     distinct fallback exists (the caller then gives up). Never raises."""
     try:
-        from src.models.catalog import (
+        from openagent_core.models.catalog import (
             FRAMEWORK_API_BASED,
             cheapest_enabled_model,
             iter_configured_models,
         )
-        from src.models.native_provider import NativeProvider
+        from openagent_core.models.native_provider import NativeProvider
 
         providers_config = getattr(agent, "_providers_config", None) or []
         db_path = getattr(getattr(agent, "_db", None), "db_path", None)
@@ -1459,7 +1461,7 @@ def _summary_fallback_model(agent: Any, *, exclude_provider: str | None) -> Any:
             if not e.disabled and e.framework == FRAMEWORK_API_BASED
         ]
         # 1) explicit operator choice (only if it is a distinct provider)
-        configured = os.environ.get(_SUMMARY_FALLBACK_MODEL_ENV, "").strip()
+        configured = runtime_environment().get(_SUMMARY_FALLBACK_MODEL_ENV, "").strip()
         if configured:
             m = next((e for e in enabled if e.runtime_id == configured), None)
             if m is not None and m.provider != exclude_provider:
@@ -1472,7 +1474,7 @@ def _summary_fallback_model(agent: Any, *, exclude_provider: str | None) -> Any:
         # 2) distinct-provider rows. A self-hosted row comes FIRST: it is off
         # every subscription and every rate limit, which is the property this
         # step was reaching for when it named DeepSeek. DeepSeek stays second.
-        from src.core.execution_profile import _is_cloud_model_id
+        from openagent_core.core.execution_profile import _is_cloud_model_id
 
         distinct = [e for e in enabled if e.provider != exclude_provider]
         if not distinct:
@@ -1516,7 +1518,7 @@ async def _emit_compaction_status(
     """Fire one ``session.compacted`` envelope down the *on_status* channel.
 
     The envelope rides the same hook tool progress uses; the turn runner
-    (``src.stream.session``) and the bridges lift it out with
+    (``openagent_core.stream.session``) and the bridges lift it out with
     ``channels.base.parse_compaction_status`` and render a first-class
     compaction affordance instead of a raw status line. Best-effort: a UI
     hint must never crash the turn, so a failing callback is logged and
@@ -1832,21 +1834,21 @@ async def compact(
 # Per-session mutex. Created on first use; opportunistically dropped by
 # ``mark_turn_done`` when a session goes fully idle so the map stays bounded
 # across the many short-lived (support-thread) sessions a long-running bot sees.
-_SESSION_LOCKS: dict[str, asyncio.Lock] = {}
+_SESSION_LOCKS = InstanceMapping("compaction._SESSION_LOCKS")
 # In-progress turn count per session (a count, not a flag, so overlapping turns
 # on one session — should they ever happen — still bracket correctly).
-_ACTIVE_TURNS: dict[str, int] = {}
+_ACTIVE_TURNS = InstanceMapping("compaction._ACTIVE_TURNS")
 # Sessions with a background compaction queued or running (dedup guard).
-_INFLIGHT_SESSIONS: set[str] = set()
+_INFLIGHT_SESSIONS = InstanceSet("compaction._INFLIGHT_SESSIONS")
 # Strong references to the background tasks themselves. ``asyncio.create_task``
 # keeps only a WEAK reference, so without this set the garbage collector can
 # drop a still-running compaction mid-flight (mirrors
 # ``scheduler._spawn_workflow`` and ``quality_monitor._INFLIGHT``).
-_INFLIGHT_TASKS: set[asyncio.Task[Any]] = set()
+_INFLIGHT_TASKS = InstanceSet("compaction._INFLIGHT_TASKS")
 # Direct lookup lets a newly-arrived turn cancel only its own detached
 # compaction. The set above remains the strong-reference owner for parity with
 # the other long-running background subsystems.
-_BACKGROUND_TASKS: dict[str, asyncio.Task[Any]] = {}
+_BACKGROUND_TASKS = InstanceMapping("compaction._BACKGROUND_TASKS")
 
 
 def session_lock(session_id: str) -> asyncio.Lock:
@@ -2156,3 +2158,14 @@ __all__ = [
     "mark_turn_active",
     "mark_turn_done",
 ]
+
+
+async def close_runtime_tasks() -> None:
+    """Stop only this runtime's background compactions before closing storage."""
+    tasks=tuple(_INFLIGHT_TASKS)
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks,return_exceptions=True)
+    _INFLIGHT_TASKS.clear();_INFLIGHT_SESSIONS.clear();_BACKGROUND_TASKS.clear()
+    _SESSION_LOCKS.clear();_ACTIVE_TURNS.clear()

@@ -21,20 +21,21 @@ it never depends on the main process's cached snapshot.
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import logging
 import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from src.core.budget_guard import compute_budget_usage, normalize_rule_input
-from src.memory.db import MemoryDB
+from openagent_core.core.budget_guard import compute_budget_usage, normalize_rule_input
+from openagent_core.memory.db import MemoryDB
 
 logger = logging.getLogger(__name__)
 
 
 def _db_path() -> str:
-    return os.environ.get("OPENAGENT_DB_PATH") or "openagent.db"
+    return runtime_environment().get("OPENAGENT_DB_PATH") or "openagent.db"
 
 
 _db: MemoryDB | None = None
@@ -193,7 +194,7 @@ async def remove_budget(
 
 def main() -> None:
     logging.basicConfig(
-        level=os.environ.get("OPENAGENT_BUDGET_MCP_LOGLEVEL", "INFO"),
+        level=runtime_environment().get("OPENAGENT_BUDGET_MCP_LOGLEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     mcp.run()

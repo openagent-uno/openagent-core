@@ -14,6 +14,7 @@ prefer ``artifact_id`` + the ACL-checked ``url``.
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import asyncio
 import hashlib
 import json
@@ -77,7 +78,7 @@ def attachment_limit_bytes(*, direction: str = "input") -> int:
     )
     default = 64 if direction == "input" else 256
     try:
-        mb = int(os.environ.get(env, str(default)) or str(default))
+        mb = int(runtime_environment().get(env, str(default)) or str(default))
     except ValueError:
         mb = default
     return max(0, mb) * 1024 * 1024
@@ -200,7 +201,7 @@ def _db_path(db: Any) -> str:
 def artifact_store_root(db: Any) -> Path:
     raw = _db_path(db)
     if raw == ":memory:" or raw.startswith("file::memory:"):
-        from src.core.paths import data_dir
+        from openagent_core.core.paths import data_dir
 
         root = data_dir() / "artifacts"
     else:
@@ -268,7 +269,7 @@ def _access_context(principal: Any) -> Any | None:
 
     if principal is None:
         return None
-    from src.memory.operational.access import AccessContext
+    from openagent_core.memory.operational.access import AccessContext
 
     if isinstance(principal, AccessContext):
         return principal
@@ -300,7 +301,7 @@ async def _ownership(
     if row is not None and p_tenant is not None and str(row[0]) != p_tenant:
         raise ArtifactNotFound(session_id)
     if row is not None and access is not None:
-        from src.memory.operational.access import resource_is_visible
+        from openagent_core.memory.operational.access import resource_is_visible
 
         session_acl = {
             "tenant_id": row[0],
@@ -558,7 +559,7 @@ async def _artifact_access_on_connection(
     uploader's private filename into another context.
     """
 
-    from src.memory.operational.access import resource_is_visible
+    from openagent_core.memory.operational.access import resource_is_visible
 
     if str(artifact["tenant_id"]) != access.tenant_id:
         return False, None
@@ -899,7 +900,7 @@ async def link_attachments_to_latest_message(
         if session is None:
             return None
         if access is not None:
-            from src.memory.operational.access import resource_is_visible
+            from openagent_core.memory.operational.access import resource_is_visible
 
             if not await resource_is_visible(conn, session, access):
                 return None

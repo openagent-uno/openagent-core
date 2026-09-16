@@ -39,6 +39,7 @@ Off by default. Enable by mounting in ``openagent.yaml``:
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import asyncio
 import hashlib
 import logging
@@ -50,7 +51,7 @@ from typing import Any, Optional
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-from src.mcp.servers._common import SharedConnection
+from openagent_core.mcp.servers._common import SharedConnection
 
 logger = logging.getLogger(__name__)
 
@@ -119,19 +120,19 @@ async def _capability_backend() -> Optional[tuple[str, str, str]]:
 
 async def _image_backend(model: str) -> tuple[Optional[tuple[str, str, str]], Optional[str]]:
     """Resolve where to send an image request. Returns ``(backend, reason)``."""
-    base = (os.environ.get("OPENAGENT_IMAGE_BASE_URL") or "").strip()
+    base = (runtime_environment().get("OPENAGENT_IMAGE_BASE_URL") or "").strip()
     if base:
         return (
             _images_url(base),
-            (os.environ.get("OPENAGENT_IMAGE_API_KEY") or "").strip(),
-            (os.environ.get("OPENAGENT_IMAGE_MODEL") or model or "").strip(),
+            (runtime_environment().get("OPENAGENT_IMAGE_API_KEY") or "").strip(),
+            (runtime_environment().get("OPENAGENT_IMAGE_MODEL") or model or "").strip(),
         ), None
 
     backend = await _capability_backend()
     if backend:
         return backend, None
 
-    api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    api_key = (runtime_environment().get("OPENAI_API_KEY") or "").strip()
     if api_key:
         return ("https://api.openai.com/v1/images/generations", api_key, model), None
 
@@ -260,7 +261,7 @@ async def generate_video(
 
     Returns ``{ok, local_path, remote_url}`` with ``ok=False`` and a
     ``reason`` when the Fal key is missing or generation fails."""
-    api_key = (os.environ.get("FAL_KEY") or os.environ.get("FAL_API_KEY") or "").strip()
+    api_key = (runtime_environment().get("FAL_KEY") or runtime_environment().get("FAL_API_KEY") or "").strip()
     if not api_key:
         return {
             "ok": False,

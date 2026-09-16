@@ -12,11 +12,12 @@ On by default when git is available; opt out with
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import asyncio
 import os
 from typing import Optional
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 _DEFAULT_INTERVAL_S = 25
 
@@ -28,25 +29,25 @@ _DEFAULT_PUSH_INTERVAL_S = 900
 
 
 def _enabled() -> bool:
-    return os.environ.get("OPENAGENT_VAULT_GIT_ENABLED", "1").strip().lower() in (
+    return runtime_environment().get("OPENAGENT_VAULT_GIT_ENABLED", "1").strip().lower() in (
         "1", "true", "yes", "on")
 
 
 def _interval() -> int:
     try:
-        return int(os.environ.get("OPENAGENT_VAULT_GIT_AUTOCOMMIT_SECONDS",
+        return int(runtime_environment().get("OPENAGENT_VAULT_GIT_AUTOCOMMIT_SECONDS",
                                   _DEFAULT_INTERVAL_S))
     except (TypeError, ValueError):
         return _DEFAULT_INTERVAL_S
 
 
 def _remote() -> str:
-    return (os.environ.get("OPENAGENT_VAULT_GIT_REMOTE") or "").strip()
+    return (runtime_environment().get("OPENAGENT_VAULT_GIT_REMOTE") or "").strip()
 
 
 def _push_interval() -> int:
     try:
-        return int(os.environ.get("OPENAGENT_VAULT_GIT_PUSH_SECONDS",
+        return int(runtime_environment().get("OPENAGENT_VAULT_GIT_PUSH_SECONDS",
                                   _DEFAULT_PUSH_INTERVAL_S))
     except (TypeError, ValueError):
         return _DEFAULT_PUSH_INTERVAL_S
@@ -54,7 +55,7 @@ def _push_interval() -> int:
 
 async def _push_loop() -> None:
     """Mirror the vault off the machine, on its own slower clock."""
-    from src.memory.vault.service import get_service
+    from openagent_core.memory.vault.service import get_service
     while True:
         try:
             interval = _push_interval()
@@ -84,7 +85,7 @@ async def _push_loop() -> None:
 
 
 async def _loop() -> None:
-    from src.memory.vault.service import get_service
+    from openagent_core.memory.vault.service import get_service
     while True:
         try:
             interval = _interval()
@@ -108,7 +109,7 @@ def start() -> Optional[asyncio.Task]:
     task, or ``None`` when git is disabled/unavailable."""
     if not _enabled() or _interval() <= 0:
         return None
-    from src.memory.vault.gitrepo import resolve_git_bin
+    from openagent_core.memory.vault.gitrepo import resolve_git_bin
     if not resolve_git_bin():
         elog("vault_autocommit.skipped", reason="git_not_found")
         return None

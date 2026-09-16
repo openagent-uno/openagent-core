@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from os import getenv
+from openagent_core.configuration import getenv
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -16,18 +16,18 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from src.core._runner.agent.agent import Agent
+    from openagent_core.core._runner.agent.agent import Agent
 
-from src.core._runner._stubs import CompressionManager
-from src.core._runner._stubs import CultureManager
-from src.memory.store.base import AsyncBaseDb
-from src.core._runner._stubs import LearningMachine
-from src.core._runner._stubs import MemoryManager
-from src.models.providers.utils import get_model
-from src.memory.sessions import SessionSummaryManager
-from src.mcp._runtime import Toolkit
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.log import (
+from openagent_core.core._runner._stubs import CompressionManager
+from openagent_core.core._runner._stubs import CultureManager
+from openagent_core.memory.store.base import AsyncBaseDb
+from openagent_core.core._runner._stubs import LearningMachine
+from openagent_core.core._runner._stubs import MemoryManager
+from openagent_core.models.providers.utils import get_model
+from openagent_core.memory.sessions import SessionSummaryManager
+from openagent_core.mcp._runtime import Toolkit
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.log import (
     log_debug,
     log_exception,
     log_info,
@@ -35,8 +35,8 @@ from src.core._runner.utils.log import (
     set_log_level_to_debug,
     set_log_level_to_info,
 )
-from src.core._runner.utils.safe_formatter import SafeFormatter
-from src.core._runner.utils.string import generate_id_from_name
+from openagent_core.core._runner.utils.safe_formatter import SafeFormatter
+from openagent_core.core._runner.utils.string import generate_id_from_name
 
 
 def set_id(agent: Agent) -> None:
@@ -69,7 +69,7 @@ def set_default_model(agent: Agent) -> None:
     # under a strict-local boundary that has to be a visible error, not a
     # quiet call to a cloud endpoint the operator did not choose.
     if agent.model is None:
-        from src.core.execution_profile import strict_local_only_active
+        from openagent_core.core.execution_profile import strict_local_only_active
 
         if strict_local_only_active():
             raise RuntimeError(
@@ -79,7 +79,7 @@ def set_default_model(agent: Agent) -> None:
     # Use the default Model (OpenAIResponses) if no model is provided
     if agent.model is None:
         try:
-            from src.models.providers.openai import OpenAIResponses
+            from openagent_core.models.providers.openai import OpenAIResponses
         except ModuleNotFoundError as e:
             log_exception(e)
             raise ImportError(
@@ -204,7 +204,7 @@ def has_async_db(agent: Agent) -> bool:
 
 
 def get_models(agent: Agent) -> None:
-    from src.core.metrics import ModelType
+    from openagent_core.core.metrics import ModelType
 
     if agent.model is not None:
         agent.model = get_model(agent.model)
@@ -252,7 +252,7 @@ def initialize_agent(agent: Agent, debug_mode: Optional[bool] = None) -> None:
 
 
 def add_tool(agent: Agent, tool: Union[Toolkit, Callable, Function, Dict]) -> None:
-    from src.core._runner.utils.callables import is_callable_factory
+    from openagent_core.core._runner.utils.callables import is_callable_factory
 
     if is_callable_factory(agent.tools, excluded_types=(Toolkit, Function)):
         raise RuntimeError(
@@ -264,7 +264,7 @@ def add_tool(agent: Agent, tool: Union[Toolkit, Callable, Function, Dict]) -> No
 
 
 def set_tools(agent: Agent, tools: Union[Sequence[Union[Toolkit, Callable, Function, Dict]], Callable]) -> None:
-    from src.core._runner.utils.callables import is_callable_factory
+    from openagent_core.core._runner.utils.callables import is_callable_factory
 
     if is_callable_factory(tools, excluded_types=(Toolkit, Function)):
         agent.tools = tools  # type: ignore[assignment]

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from openagent_core.instance_state import InstanceMapping
+from openagent_core.configuration import runtime_environment
 import asyncio
 import contextvars
 import importlib
@@ -12,19 +14,19 @@ import re
 import threading
 from typing import Any, AsyncIterator, Callable, Awaitable
 
-from src.models.base import BaseModel, ModelResponse
-from src.memory.db import MemoryDB
-from src.mcp.pool import MCPPool
-from src.core.prompts import (
+from openagent_core.models.base import BaseModel, ModelResponse
+from openagent_core.memory.db import MemoryDB
+from openagent_core.mcp.pool import MCPPool
+from openagent_core.core.prompts import (
     FRAMEWORK_SYSTEM_PROMPT,
     LEAN_LOCAL_EVENT_SYSTEM_PROMPT,
     build_mcp_catalog_summary,
     build_ptc_note,
     build_skills_index,
 )
-from src.models.runtime import wire_model_runtime
+from openagent_core.models.runtime import wire_model_runtime
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 
 def _now_local():
@@ -38,7 +40,7 @@ def _now_local():
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
-    from src.memory.schedule import default_timezone_name
+    from openagent_core.memory.schedule import default_timezone_name
 
     tz = default_timezone_name()
     if tz:
@@ -51,9 +53,7 @@ def _now_local():
 logger = logging.getLogger(__name__)
 
 _FROZEN_RUNTIME_PRELOADS = (
-    "src.models.discovery",
-    "src.channels.voice",
-    "src.channels.tts_local",
+    "openagent_core.models.discovery",
     # Runtime submodules that ``native_provider`` (and ``mcp.pool``)
     # import lazily on first use. Like the src modules above, they
     # live in the PyInstaller archive; a sibling-service binary swap
@@ -61,18 +61,18 @@ _FROZEN_RUNTIME_PRELOADS = (
     # ``zlib.error: Error -3 ... incorrect header check`` raised out
     # of ``_ensure_team``/``_dispatch`` and reported as
     # ``agent.run.error``.
-    "src.core._runner.agent",
-    "src.core._runner.team",
-    "src.memory.store.sqlite",
-    "src.memory.store.base",
-    "src.memory.sessions.agent",
-    "src.core._run_state.agent",
-    "src.core._run_state.base",
-    "src.core._run_state.team",
-    "src.models.providers.utils",
-    "src.models.providers.message",
-    "src.mcp._runtime",
-    "src.mcp._runtime.mcp",
+    "openagent_core.core._runner.agent",
+    "openagent_core.core._runner.team",
+    "openagent_core.memory.store.sqlite",
+    "openagent_core.memory.store.base",
+    "openagent_core.memory.sessions.agent",
+    "openagent_core.core._run_state.agent",
+    "openagent_core.core._run_state.base",
+    "openagent_core.core._run_state.team",
+    "openagent_core.models.providers.utils",
+    "openagent_core.models.providers.message",
+    "openagent_core.mcp._runtime",
+    "openagent_core.mcp._runtime.mcp",
 )
 
 
@@ -132,7 +132,7 @@ def _format_run_error(e: BaseException) -> str:
       - Anything else falls back to ``Error: <ClassName>: <repr>`` so
         the user sees *something* even on novel exception types.
     """
-    from src.models.native_provider import NativeProviderError
+    from openagent_core.models.native_provider import NativeProviderError
 
     # Il marcatore vale per QUALSIASI errore di run, non solo per quelli di
     # modello: se il turno e' morto, chi lo ha chiesto deve poterlo sapere.
@@ -155,7 +155,7 @@ def _preload_frozen_runtime_modules() -> None:
     sibling can swap the executable.
     """
     try:
-        from src._frozen import is_frozen
+        from openagent_core._frozen import is_frozen
     except Exception:  # noqa: BLE001
         return
     if not is_frozen():
@@ -175,27 +175,16 @@ def _preload_frozen_runtime_modules() -> None:
 
 
 def _format_shell_reminder(events) -> str:
-    """Format terminal shell events into a <system-reminder> block."""
-    lines = ["Background shell status update since your last message:"]
-    for ev in events:
-        if ev.kind == "completed":
-            detail = f"completed with exit_code={ev.exit_code}"
-        elif ev.kind == "timed_out":
-            detail = "timed_out"
-        else:
-            detail = f"killed ({ev.signal or 'unknown'})"
-        lines.append(
-            f"- shell_id={ev.shell_id}: {detail}. stdout_bytes={ev.bytes_stdout}, "
-            f"stderr_bytes={ev.bytes_stderr}. Read it from the same host with "
-            f"tool_search_call_tool(server={ev.tool_server!r}, "
-            f"tool='shell_output', args={{'shell_id': {ev.shell_id!r}}})."
-        )
-    lines.append(
-        "The user has not sent a new message; continue the task from where "
-        "you left off, or summarise and stop if the work is complete."
-    )
-    body = "\n".join(lines)
-    return f"<system-reminder>\n{body}\n</system-reminder>"
+    """Keep long-job continuation rules using the uniform catalog contract."""
+    import json
+    lines = ["Background task status update since your last message:"]
+    for event in events:
+        lines.append(f"- job_id={event.job_id}: {event.summary}. "
+            f"Discover {event.tool_name!r} on the exact source {event.source_id!r}; "
+            "use its current opaque tool_ref with arguments " + json.dumps(dict(event.arguments)) + ".")
+    lines.append("The user has not sent a new message; continue the task from where "
+        "you left off, or summarise and stop if the work is complete.")
+    return "<system-reminder>\n" + "\n".join(lines) + "\n</system-reminder>"
 
 
 _AGNO_IMAGE_MIMES = frozenset({
@@ -269,7 +258,7 @@ def _build_runtime_media(
     """
     if not attachments:
         return ([], [], [], [])
-    from src.stream.media import Audio, File as _RuntimeFile, Image, Video
+    from openagent_core.stream.media import Audio, File as _RuntimeFile, Image, Video
 
     images: list[Any] = []
     audios: list[Any] = []
@@ -431,7 +420,10 @@ def _emit_tool_call_summary(
     )
 
 
-async def _with_vault_reminder(db: Any, session_id: str | None, text: str) -> str:
+async def _with_vault_reminder(
+    db: Any, session_id: str | None, text: str, *,
+    config: dict | None = None, enabled: bool = True,
+) -> str:
     """Prepend the periodic memory-checkpoint nudge to a turn's input.
 
     Hooked here — on the shared run path — rather than in any one channel,
@@ -452,14 +444,14 @@ async def _with_vault_reminder(db: Any, session_id: str | None, text: str) -> st
 
     Never raises: a memory nudge must not be able to fail a turn.
     """
-    from src.core.execution_profile import lean_local_event_active
-
-    if lean_local_event_active() or db is None or not session_id:
+    if not enabled or db is None or not session_id:
         return text
     try:
-        from src.learning.vault_reminder import maybe_render_reminder
-
-        reminder = await maybe_render_reminder(db, session_id)
+        from openagent_core.learning.vault_reminder import (
+            VaultReminderSettings, maybe_render_reminder,
+        )
+        settings = VaultReminderSettings.from_config(config) if config is not None else None
+        reminder = await maybe_render_reminder(db, session_id, settings=settings)
     except Exception as exc:  # noqa: BLE001
         elog(
             "vault_reminder.hook_error",
@@ -503,14 +495,14 @@ async def _with_vault_reminder(db: Any, session_id: str | None, text: str) -> st
 #     "inject nothing", never to a stalled or failed turn.
 #
 # Outcome-weighting (prefer notes that preceded good runs, via
-# ``vault_recall_stats``) is DEFERRED — see ``_recall_block``. For now recency
+# ``vault_recall_stats``) is DEFERRED — see ``_recall_candidates``. For now recency
 # is the tie-breaker the search already applies through ``updated``.
 
 # One SemanticIndex per source DB, shared across agent instances (same db = same
 # cache file). Built lazily on first recall; the inert (no-embedder) case is
 # NOT cached, so enabling a model later — a restart, like a provider key —
 # takes effect without stale state.
-_RECALL_INDEX_CACHE: dict[str, Any] = {}
+_RECALL_INDEX_CACHE = InstanceMapping('core/agent.py:_RECALL_INDEX_CACHE')
 _RECALL_INDEX_LOCK = threading.Lock()
 # One-shot guard so a missing-numpy (or other import) failure is logged once,
 # not per turn — see ``_get_recall_index``.
@@ -528,7 +520,7 @@ _RECALL_IMPORT_WARNED = False
 # rank-based so it needs no score calibration between the two very different
 # scales, and a note found by both sides is boosted. Degrades cleanly (§17):
 # embedder down → FTS-only; FTS index unavailable → semantic-only.
-_FTS_INDEX_CACHE: dict[str, Any] = {}
+_FTS_INDEX_CACHE = InstanceMapping('core/agent.py:_FTS_INDEX_CACHE')
 _FTS_INDEX_LOCK = threading.Lock()
 _FTS_IMPORT_WARNED = False
 _RRF_K = 60  # standard RRF damping constant
@@ -536,13 +528,13 @@ _RRF_K = 60  # standard RRF damping constant
 
 def _recall_enabled() -> bool:
     return (
-        os.environ.get("OPENAGENT_AUTO_RECALL_ENABLED", "0").strip().lower()
+        runtime_environment().get("OPENAGENT_AUTO_RECALL_ENABLED", "0").strip().lower()
         in ("1", "true", "yes", "on")
     )
 
 
 def _recall_float(name: str, default: float) -> float:
-    raw = (os.environ.get(name) or "").strip()
+    raw = (runtime_environment().get(name) or "").strip()
     if not raw:
         return default
     try:
@@ -552,7 +544,7 @@ def _recall_float(name: str, default: float) -> float:
 
 
 def _recall_int(name: str, default: int) -> int:
-    raw = (os.environ.get(name) or "").strip()
+    raw = (runtime_environment().get(name) or "").strip()
     if not raw:
         return default
     try:
@@ -581,7 +573,7 @@ def _recall_query(message: str) -> str:
     or wrap only whitespace — an unconfigured deployment is byte-identical to
     the pre-marker behaviour.
     """
-    tag = (os.environ.get("OPENAGENT_AUTO_RECALL_QUERY_MARKER") or "").strip()
+    tag = (runtime_environment().get("OPENAGENT_AUTO_RECALL_QUERY_MARKER") or "").strip()
     if not tag or not message:
         return message
     # Only a plain tag name is honoured: anything else would build a bogus regex
@@ -624,10 +616,10 @@ def _recall_scoping(origin: str) -> tuple[str, list[str], list[str], list[str]]:
 
     def pick(base: str, default: str = "") -> str:
         if o:
-            v = (os.environ.get(f"{base}_{o}") or "").strip()
+            v = (runtime_environment().get(f"{base}_{o}") or "").strip()
             if v:
                 return v
-        return (os.environ.get(base) or "").strip() or default
+        return (runtime_environment().get(base) or "").strip() or default
 
     def prefixes(base: str) -> list[str]:
         return [p.strip().lstrip("/") for p in pick(base).split(",") if p.strip()]
@@ -665,7 +657,7 @@ def _get_recall_index(agent: Any) -> Any:
         if cached is not None:
             return cached
         try:
-            from src.memory.semantic_index import SemanticIndex, resolve_embedder
+            from openagent_core.memory.semantic_index import SemanticIndex, resolve_embedder
         except Exception as exc:  # noqa: BLE001 — numpy/module issue must not break turns
             # Don't fail the turn, but DON'T fail silently either: a missing
             # numpy in a frozen build disables all of semantic recall, and a
@@ -691,7 +683,7 @@ def _get_recall_index(agent: Any) -> Any:
         # index carries no skill leg, and recall is byte-identical to before.
         skills_root = None
         try:
-            from src.core.config import skills_settings
+            from openagent_core.core.config import skills_settings
             if skills_settings(getattr(agent, "config", None) or {}).enabled:
                 skills_root = agent._resolve_skills_path()
         except Exception:  # noqa: BLE001
@@ -711,7 +703,7 @@ def _hybrid_enabled() -> bool:
     """Hybrid FTS∪semantic recall. Default ON; set to 0/false for semantic-only
     (the pre-hybrid behaviour), which is what the tests pin as the fallback."""
     return (
-        os.environ.get("OPENAGENT_AUTO_RECALL_HYBRID", "1").strip().lower()
+        runtime_environment().get("OPENAGENT_AUTO_RECALL_HYBRID", "1").strip().lower()
         in ("1", "true", "yes", "on")
     )
 
@@ -737,8 +729,8 @@ def _get_vault_fts_index(agent: Any) -> Any:
         if cached is not None:
             return cached
         try:
-            from src.memory.vault.index import VaultIndex
-            from src.memory.vault.service import default_index_path
+            from openagent_core.memory.vault.index import VaultIndex
+            from openagent_core.memory.vault.service import default_index_path
         except Exception as exc:  # noqa: BLE001 — an import issue must not break turns
             global _FTS_IMPORT_WARNED
             if not _FTS_IMPORT_WARNED:
@@ -845,17 +837,15 @@ def _format_recall_block(hits: list[dict], max_chars: int) -> str:
     return f"<system-reminder>\n{body}\n</system-reminder>"
 
 
-def _recall_block(agent: Any, query: str, session_id: str | None = None) -> str:
-    """Sync worker (runs off the event loop): warm, search, format. Returns the
-    ``<system-reminder>`` string, or ``""`` when nothing clears the threshold.
+def _recall_candidates(agent: Any, query: str, session_id: str | None = None) -> list[dict]:
+    """Sync worker: warm and search, without publishing any candidate text.
+    Every hit must pass current central authorization before being formatted.
 
     Outcome-weighting via ``vault_recall_stats`` is deferred here: the honest
     tie-breaker today is recency (the index carries each note's ``updated``),
     and the threshold is what does the real quality-gating. Wiring the recall
     ledger in — prefer notes with a good measured ok_rate — is the follow-up.
     """
-    import time as _time  # locale: questo modulo non importa time a livello globale
-    _t0 = _time.monotonic()
     k = max(1, _recall_int("OPENAGENT_AUTO_RECALL_TOP_K", 3))
     floor = _recall_float("OPENAGENT_AUTO_RECALL_MIN_SCORE", 0.75)
     # Per-origin corpus scoping. Defaults are the identity (scope 'all', no path
@@ -962,25 +952,10 @@ def _recall_block(agent: Any, query: str, session_id: str | None = None) -> str:
     # Inert: neither layer could run (no embedder AND no FTS) — byte-identical to
     # pre-recall, and nothing to record.
     if not semantic_active and not fts_used:
-        return ""
-    # Quality monitor (opt-in): record this turn's recall outcome — hit-rate and
-    # top-score feed the aggregate and the min_score tuning signal. No-op when
-    # the monitor is off; safe from this worker thread (logging is thread-safe).
-    # top_score is the strongest SEMANTIC cosine among the fused hits; FTS-only
-    # hits carry no cosine and don't contribute to it.
-    try:
-        from src.core import quality_monitor
-        _top = max((h["score"] for h in hits if h.get("score") is not None),
-                   default=0.0)
-        quality_monitor.note_recall(
-            session_id, used=True, hits=len(hits), top_score=_top,
-            ms=int((_time.monotonic() - _t0) * 1000) if _t0 else None)
-    except Exception:  # noqa: BLE001 — a metric must never block recall
-        pass
+        return []
     if not hits:
-        return ""
-    max_chars = max(200, _recall_int("OPENAGENT_AUTO_RECALL_MAX_TOKENS", 400) * 4)
-    return _format_recall_block(hits, max_chars)
+        return []
+    return hits
 
 
 async def _with_recall(agent: Any, session_id: str | None, query: str,
@@ -997,21 +972,41 @@ async def _with_recall(agent: Any, session_id: str | None, query: str,
     event loop under ``OPENAGENT_AUTO_RECALL_TIMEOUT`` seconds. A miss, an error,
     or a slow endpoint all degrade to returning ``text`` unchanged.
     """
-    from src.core.execution_profile import lean_local_event_active
-
-    if lean_local_event_active() or not _recall_enabled() or not query or not query.strip():
+    if not _recall_enabled() or not query or not query.strip():
+        return text
+    from openagent_core.runtime import current_runtime, current_execution_context
+    from openagent_core.memory_access import authorized_memory_hits
+    runtime, context = current_runtime(), current_execution_context()
+    if (runtime is None or context is None or runtime.services.memory_access is None
+            or context.session_id != session_id):
         return text
     # Narrow the query to the marked span (usually the customer's own words)
     # before embedding. ``text`` — what the model reads — is left alone.
     query = _recall_query(query)
     try:
         timeout = _recall_float("OPENAGENT_AUTO_RECALL_TIMEOUT", 4.0)
-        block = await asyncio.wait_for(
-            asyncio.to_thread(_recall_block, agent, query, session_id), timeout=timeout)
+        async def retrieve():
+            import time
+            started = time.monotonic()
+            candidates = await asyncio.to_thread(_recall_candidates, agent, query, session_id)
+            hits = await authorized_memory_hits(runtime, context, candidates)
+            # Public quality summaries must describe exposed memory only, not
+            # counts or scores belonging to another audience's private hits.
+            try:
+                from openagent_core.core import quality_monitor
+                quality_monitor.note_recall(session_id, used=bool(hits), hits=len(hits),
+                    top_score=max((hit['score'] for hit in hits if hit.get('score') is not None), default=0.0),
+                    ms=int((time.monotonic() - started) * 1000))
+            except Exception:
+                pass
+            if not hits:
+                return ""
+            max_chars = max(200, _recall_int("OPENAGENT_AUTO_RECALL_MAX_TOKENS", 400) * 4)
+            return _format_recall_block(hits, max_chars)
+        block = await asyncio.wait_for(retrieve(), timeout=timeout)
     except Exception as exc:  # noqa: BLE001 — recall must never fail a turn
         elog("auto_recall.hook_error", level="warning",
-             session_id=session_id, error_type=type(exc).__name__,
-             error=str(exc) or repr(exc))
+             session_id=session_id, error_type=type(exc).__name__)
         return text
     return f"{block}\n\n{text}" if block else text
 
@@ -1059,8 +1054,25 @@ class Agent:
         memory: MemoryDB | str | None = None,
         config: dict | None = None,
         fallback_config: Any | None = None,
+        *,
+        owns_memory: bool = True,
+        owns_pool: bool = True,
+        owns_models: bool = True,
+        host_context_provider: Any | None = None,
+        extensions: Any | None = None,
+        background_jobs: Any | None = None,
+        owns_background_jobs: bool | None = None,
     ):
         self.name = name
+        self.owns_memory = owns_memory
+        self.owns_pool = owns_pool
+        self.owns_models = owns_models
+        self.host_context_provider = host_context_provider
+        from openagent_core.extensions import EngineExtensions
+        self.extensions = extensions or EngineExtensions()
+        from openagent_core.jobs import BackgroundJobs
+        self.background_jobs = background_jobs or BackgroundJobs()
+        self.owns_background_jobs = background_jobs is None if owns_background_jobs is None else owns_background_jobs
         self.model = model
         self.system_prompt = system_prompt
         self.config = config or {}
@@ -1105,6 +1117,11 @@ class Agent:
         # generate() call returns, then shutdown them asynchronously.
         self._inflight_counts: dict[int, int] = {}
         self._drain_events: dict[int, asyncio.Event] = {}
+
+    @property
+    def capability_pool(self) -> MCPPool:
+        """The explicitly configured per-instance capability adapter."""
+        return self._mcp
 
     @property
     def memory_db(self) -> MemoryDB | None:
@@ -1233,8 +1250,7 @@ class Agent:
             return
         await close_session(session_id)
         try:
-            from src.mcp.servers.shell.handlers import get_hub
-            await get_hub().purge_session(session_id)
+            await self.background_jobs.purge_session(session_id)
         except Exception as e:  # noqa: BLE001
             logger.debug("shell hub purge for %s failed: %s", session_id, e)
 
@@ -1328,179 +1344,46 @@ class Agent:
             if callable(close_session):
                 await close_session(session_id)
         try:
-            from src.mcp.servers.shell.handlers import get_hub
-            await get_hub().purge_session(session_id)
+            await self.background_jobs.purge_session(session_id)
         except Exception as e:  # noqa: BLE001
             logger.debug("shell hub purge for %s failed: %s", session_id, e)
 
-    async def initialize(self) -> None:
-        """Connect MCP servers and initialize memory DB.
+    def set_capability_pool(self, pool: MCPPool) -> None:
+        """Host assembly supplies its selected catalog before starting the engine."""
+        if self._initialized:
+            raise RuntimeError("Cannot replace a running engine's capability pool")
+        self._mcp = pool
+        bind = getattr(pool, "bind_agent_runtime", None)
+        if callable(bind):
+            bind(self)
 
-        The ``mcps`` / ``providers`` / ``models`` SQLite tables are the
-        sole sources of truth at runtime. ``ensure_builtin_mcps`` runs
-        every boot to backfill any missing builtin rows (forward compat
-        + safety net); the MCP pool is then (re)built from the DB via
-        ``MCPPool.from_db`` so the runtime can hot-reload entries
-        without a process restart (see ``reload_mcps_if_changed``).
+    async def load_model_catalog(self) -> None:
+        """Explicitly load configured providers; never seed or replace credentials."""
+        if self._db is None:
+            return
+        await self._hydrate_providers_from_db()
+        self._providers_last_updated = await self._db.providers_max_updated()
+        self._models_last_updated = await self._db.models_max_updated()
+        for model in list(self._runtime_models) + [self.model]:
+            rebuild = getattr(model, "rebuild_routing", None)
+            if callable(rebuild):
+                rebuild(self._providers_config)
+
+    async def initialize(self) -> None:
+        """Start only dependencies supplied by the embedding host.
+
+        Builtin selection, identities, provider catalog hydration and voice
+        downloads belong to product bootstrap. An injected pool is preserved.
         """
         if self._initialized:
             return
-        elog("agent.initialize.start", agent=self.name, model_class=type(self.model).__name__)
         if self._db:
             await self._db.connect()
-
-        # A local E2E fixture exercises the real DB, authenticated iroh
-        # gateway and client APIs, but must never start model runtimes, MCP
-        # subprocesses or network-backed warmups.  The CLI only sets this
-        # private flag after validating an explicitly marked disposable
-        # directory under the OS temp root (see ``_enable_local_e2e``).
-        if self.config.get("_local_e2e") is True:
-            self._initialized = True
-            elog(
-                "agent.initialize.local_e2e",
-                agent=self.name,
-                has_db=bool(self._db),
-            )
-            return
-
-        # Hydrate providers/models from the DB and swap to the DB-backed
-        # MCP pool. Skipped when there is no DB (pure in-memory tests);
-        # in that case we fall back to whatever pool the caller passed in.
-        if self._db is not None:
-            try:
-                from src.memory.bootstrap import ensure_builtin_mcps
-                # Every boot: re-seed any BUILTIN_MCP_SPECS entry that
-                # doesn't have a row yet (forward-compat for future
-                # builtins + safety net against manual DB tampering).
-                # Existing rows — including disabled ones — are untouched.
-                # ``config`` gates opt-in, off-by-default builtins (the
-                # skills MCP behind ``skills.enabled``); unset → no-op.
-                await ensure_builtin_mcps(self._db, config=self.config)
-                # Provider keys and the model catalog are DB-backed. Pull
-                # the rows into ``self._providers_config`` so ModelDispatcher
-                # / NativeProvider see the materialised view.
-                await self._hydrate_providers_from_db()
-                self._providers_last_updated = await self._db.providers_max_updated()
-                self._models_last_updated = await self._db.models_max_updated()
-                # Hand the freshly-hydrated list to every live runtime
-                # model. ModelDispatcher was constructed with an empty
-                # providers_config; without this push it would keep that
-                # empty reference until the first hot-reload tick — which
-                # only fires on gateway messages, so scheduler turns that
-                # run before any user chat would see an empty catalog and
-                # reject with "no_enabled_model".
-                providers_config = self._providers_config
-                for model in list(self._runtime_models) + [self.model]:
-                    if model is None:
-                        continue
-                    rebuild = getattr(model, "rebuild_routing", None)
-                    if callable(rebuild):
-                        try:
-                            rebuild(providers_config)
-                        except Exception as exc:  # noqa: BLE001
-                            logger.debug("rebuild_routing on boot failed: %s", exc)
-            except Exception as exc:  # noqa: BLE001 — bootstrap must not block startup
-                elog("bootstrap.error", level="warning", error=str(exc))
-
-            try:
-                db_path = getattr(self._db, "db_path", None)
-                new_pool = await MCPPool.from_db(self._db, db_path=db_path)
-                new_pool.bind_agent_runtime(self)
-                self._mcp = new_pool
-                self._mcps_last_updated = await self._db.mcps_max_updated()
-            except Exception as exc:  # noqa: BLE001 — leave the existing pool untouched
-                elog("pool.from_db_error", level="warning", error=str(exc))
-
-        _preload_frozen_runtime_modules()
         await self._mcp.connect_all()
-
         self._init_skills_registry()
-
         self._prepare_model_runtime(self.model)
         self._ensure_idle_cleanup_task()
-
-        # Prime OpenRouter's catalog in the background so ``get_model_pricing``
-        # has live rates before the first cost attribution, without blocking
-        # startup on a network call. Errors are swallowed — the catalog has a
-        # bundled offline backstop.
-        async def _prime_openrouter() -> None:
-            try:
-                from src.models.discovery import _fetch_openrouter_catalog
-                await _fetch_openrouter_catalog()
-            except Exception as exc:  # noqa: BLE001
-                # Some shutdown-time exceptions stringify to "" — also
-                # capture the type and full traceback so events.jsonl
-                # has something to triage from.
-                elog(
-                    "openrouter.prefetch_error",
-                    level="warning",
-                    error=str(exc) or type(exc).__name__,
-                    error_type=type(exc).__name__,
-                    exc_info=True,
-                )
-
-        # Warm the local Whisper model in the background so the first
-        # voice-tab utterance doesn't pay the 60s+ download/load tax
-        # (small ≈ 464 MB; ~10s cold-load even when cached locally).
-        # By the time the user records anything, the model is in RAM.
-        # Errors swallowed — transcribe() lazy-loads as a fallback.
-        async def _prime_whisper() -> None:
-            try:
-                from src.channels.voice import _load_local_model
-                await _load_local_model()
-                elog("whisper.prefetch_done")
-            except Exception as exc:  # noqa: BLE001
-                elog(
-                    "whisper.prefetch_error",
-                    level="warning",
-                    error=str(exc) or type(exc).__name__,
-                    error_type=type(exc).__name__,
-                    exc_info=True,
-                )
-
-        # Same idea for Piper: cold-load is ~10s for the ONNX model
-        # plus a one-time ~25 MB voice-file download. Prefetch so the
-        # first reply doesn't sit silent for 12s before audio plays.
-        async def _prime_piper() -> None:
-            try:
-                from src.channels import tts_local
-                if not tts_local.is_available():
-                    return
-                # Resolve to the configured default voice and load it.
-                # ``_load_voice`` is the exact path synth uses, so a
-                # successful prefetch guarantees the next synth is warm.
-                voice = tts_local._resolve_voice_name(None)
-                loaded = await tts_local._load_voice(voice)
-                if loaded is not None:
-                    elog("piper.prefetch_done", voice=voice)
-            except Exception as exc:  # noqa: BLE001
-                elog(
-                    "piper.prefetch_error",
-                    level="warning",
-                    error=str(exc) or type(exc).__name__,
-                    error_type=type(exc).__name__,
-                    exc_info=True,
-                )
-
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(_prime_openrouter())
-            loop.create_task(_prime_whisper())
-            loop.create_task(_prime_piper())
-        except RuntimeError:
-            # No running loop (sync entry point) — skip; all three
-            # backends lazy-load on first request.
-            pass
-
         self._initialized = True
-        elog(
-            "agent.initialize.done",
-            agent=self.name,
-            model_class=type(self.model).__name__,
-            mcp_servers=self._mcp.server_count,
-            tools=self._mcp.total_tool_count,
-            has_db=bool(self._db),
-        )
 
     async def refresh_registries(self) -> tuple[bool, int]:
         """Combined hot-reload probe for the gateway's dispatcher.
@@ -1616,9 +1499,8 @@ class Agent:
                     released_ids = await cleanup_idle()
                     if released_ids:
                         try:
-                            from src.mcp.servers.shell.handlers import get_hub
                             for sid in released_ids:
-                                await get_hub().purge_session(sid)
+                                await self.background_jobs.purge_session(sid)
                         except Exception as e:  # noqa: BLE001
                             logger.debug("shell hub purge on idle cleanup failed: %s", e)
                 except Exception as e:
@@ -1629,11 +1511,28 @@ class Agent:
         elog("agent.shutdown.start", agent=self.name)
         if self._idle_cleanup_task:
             self._idle_cleanup_task.cancel()
+            await asyncio.gather(self._idle_cleanup_task,return_exceptions=True)
             self._idle_cleanup_task = None
+        from openagent_core.core.compaction import close_runtime_tasks
+        await close_runtime_tasks()
+        from openagent_core.instance_state import registry
+        pending = set()
+        for key in ('core/quality_monitor.py:_INFLIGHT', 'core/_runner/agent/_run.py:_background_tasks', 'core/_runner/team/_run.py:_background_tasks'):
+            pending.update(registry(key))
+            registry(key).clear()
+        pending.discard(asyncio.current_task())
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending,return_exceptions=True)
+        if self.owns_background_jobs:
+            await self.background_jobs.close()
+        from openagent_core.memory.vault.service import close_all as close_vault_services
+        await close_vault_services()
         # Persistent model runtimes may need an explicit shutdown to
         # release subprocesses or cached sessions cleanly.
         seen: set[int] = set()
-        for model in [self.model, *self._runtime_models]:
+        for model in ([self.model, *self._runtime_models] if self.owns_models else []):
             if model is None or id(model) in seen:
                 continue
             seen.add(id(model))
@@ -1643,17 +1542,15 @@ class Agent:
                     await shutdown()
                 except Exception as e:  # noqa: BLE001
                     logger.warning("Model shutdown error: %s", e)
-        await self._mcp.close_all()
-        try:
-            from src.mcp.servers.shell.handlers import get_hub
-            await get_hub().shutdown()
-        except Exception as e:  # noqa: BLE001
-            logger.debug("shell hub shutdown failed: %s", e)
-        if self._db:
+        if self.owns_pool:
+            await self._mcp.close_all()
+        if self._db and self.owns_memory:
             await self._db.close()
         self._initialized = False
         self._runtime_models.clear()
         elog("agent.shutdown.done", agent=self.name)
+        from openagent_core.core.logging import close_runtime_logging
+        close_runtime_logging()
 
     async def run(
         self,
@@ -1664,6 +1561,7 @@ class Agent:
         on_status: StatusCallback | None = None,
         model_override: BaseModel | None = None,
         author: dict | None = None,
+        run_id: str | None = None,
     ) -> str:
         """Run the agent with a user message. Returns the final text response.
 
@@ -1676,7 +1574,7 @@ class Agent:
             author: Optional per-message author for this turn (a human handle,
                 or an agent-self seed for delegated/scheduled/workflow runs).
                 Stamped onto the user message and persisted in the runs JSON;
-                never sent to the model. See src.core.identity_context.
+                never sent to the model. See openagent_core.core.identity_context.
         """
         if not self.model:
             raise RuntimeError("No model configured. Set agent.model before calling run().")
@@ -1709,7 +1607,7 @@ class Agent:
             # so its non-consuming tool-trace peek leaves the trace for the
             # judge's take(). Fail-open: any failure returns `result` unchanged.
             try:
-                from src.core import reply_guard
+                from openagent_core.core import reply_guard
                 # Pass the model this turn ACTUALLY ran on. Reading it off the
                 # agent gave the guard the dispatcher, so a reply produced by a
                 # locally pinned run was rewritten on the cloud router - the
@@ -1724,7 +1622,7 @@ class Agent:
             # the reply path — fire-and-forget, so the judge's latency/cost never
             # sit on the response. Zero allocation + no task when disabled.
             try:
-                from src.core import quality_monitor
+                from openagent_core.core import quality_monitor
                 quality_monitor.spawn_scoring(self, session_id, message, result)
             except Exception:  # noqa: BLE001 — monitoring must never affect the turn
                 pass
@@ -1793,10 +1691,10 @@ class Agent:
         await _status("Loading context...")
 
         # Combine OpenAgent's framework-level guidelines with the user's
-        # project-specific system prompt from src.yaml. Passing
+        # project-specific system prompt from openagent_core.yaml. Passing
         # ``session_id`` appends a ``<session-id>`` tag so the LLM can
         # call tools that operate on its own session (e.g. pin_session).
-        system = self._combined_system_prompt(session_id=session_id)
+        system = await self._compose_run_prompt(session_id=session_id)
 
         # AgentOS-aligned media handling: split attachments by MIME and
         # construct typed runtime media objects (Image / Audio / Video /
@@ -1810,7 +1708,7 @@ class Agent:
         # so the leader doesn't paraphrase synthetic file-info blocks into
         # delegation tasks.
         if attachments:
-            from src.channels.base import build_attachment_context, prepend_context_block
+            from openagent_core.media import build_attachment_context, prepend_context_block
             image_atts = [a for a in attachments if (a.get("type") or "file") == "image"]
             if image_atts:
                 files_info: list[str] = []
@@ -1832,40 +1730,32 @@ class Agent:
                     ),
                 )
 
-        from src.mcp.servers.shell.handlers import get_hub
-        from src.mcp.servers.shell.adapters import set_session_context, reset_session_context
-        from src.mcp.servers.delegation.handlers import (
+        from openagent_core.mcp.servers.delegation.handlers import (
             install_context as install_delegation_context,
             reset_context as reset_delegation_context,
         )
-        from src.core.identity_context import (
+        from openagent_core.core.identity_context import (
             install_author_context, reset_author_context, owner_handle_of,
         )
-        from src.core.config import shell_settings
+        from openagent_core.core.config import shell_settings
 
-        hub = get_hub()
+        hub = self.background_jobs
         settings = shell_settings(getattr(self, "config", None) or {})
         wake_window = settings.wake_wait_window_seconds
         cap = settings.autoloop_cap
-        from src.core.execution_origin import current_execution_origin
-
-        turn_origin = current_execution_origin()
-        shell_client_host = (
-            (
-                turn_origin.device_id,
-                turn_origin.client_instance_id,
-                turn_origin.generation,
-            )
-            if turn_origin is not None
-            else None
-        )
+        from openagent_core.runtime import current_execution_context
+        context = current_execution_context()
+        job_context = context.coalescing_key if context is not None else "unbound"
 
         active_model = self._acquire_model_slot(model_override or self.model)
 
         # Applied to the first input only: the autoloop's shell-reminder
         # re-entries below reassign ``current_input``, so a long tool-driven
         # turn doesn't re-pay the nudge on every iteration.
-        current_input = await _with_vault_reminder(self._db, session_id, message)
+        current_input = await _with_vault_reminder(
+            self._db, session_id, message, config=getattr(self, "config", {}) or {},
+            enabled="vault" in self._prompt_module_names(),
+        )
         # Semantic auto-recall, on the same user-message path (cache-safe).
         # ``message`` (not ``current_input``) is embedded so the recall query is
         # the user's actual words, not the reminder prose wrapped around them.
@@ -1878,7 +1768,7 @@ class Agent:
         # below and ``src/core/compaction.py``.
         turn_registered = False
 
-        pending = hub.drain(session_id, client_host=shell_client_host)
+        pending = hub.drain(session_id, context_key=job_context)
         if pending:
             pre = _format_shell_reminder(pending)
             current_input = f"{pre}\n\n{current_input}"
@@ -1910,7 +1800,7 @@ class Agent:
                 # compaction") for the invariant. The reactive
                 # ContextWindowExceeded fallback still backstops even this.
                 if iter_count == 1 and session_id:
-                    from src.core import compaction
+                    from openagent_core.core import compaction
                     turn_registered = await compaction.run_start_of_turn(
                         session_id, active_model, self, _status,
                         current_message=message,
@@ -1919,11 +1809,10 @@ class Agent:
                 messages: list[dict[str, Any]] = [{"role": "user", "content": current_input}]
                 await _status("Thinking...")
 
-                token = set_session_context(session_id)
                 # Record the active chat session so the vault autocommit can
                 # attribute out-of-band note writes (external vault MCP) to it.
                 try:
-                    from src.memory.vault.vault_origin import note_activity
+                    from openagent_core.memory.vault.vault_origin import note_activity
                     note_activity(kind="chat", session=session_id)
                 except Exception:  # noqa: BLE001
                     pass
@@ -1971,7 +1860,6 @@ class Agent:
                         videos=media_videos if first else None,
                     )
                 finally:
-                    reset_session_context(token)
                     reset_delegation_context(delegation_tokens)
                     reset_author_context(author_token)
 
@@ -1981,17 +1869,17 @@ class Agent:
                     response, session_id=session_id, iter_count=iter_count,
                 )
 
-                events = hub.drain(session_id, client_host=shell_client_host)
+                events = hub.drain(session_id, context_key=job_context)
                 if not events:
                     if not hub.has_running(
-                        session_id, client_host=shell_client_host,
+                        session_id, context_key=job_context,
                     ):
                         break
                     if wake_window > 0:
                         events = await hub.wait(
                             session_id,
                             timeout=wake_window,
-                            client_host=shell_client_host,
+                            context_key=job_context,
                         )
                     if not events:
                         break
@@ -2011,7 +1899,7 @@ class Agent:
             # session as permanently busy and never compact it.
             if turn_registered and session_id:
                 try:
-                    from src.core import compaction
+                    from openagent_core.core import compaction
                     compaction.mark_turn_done(session_id)
                 except Exception:  # noqa: BLE001
                     pass
@@ -2032,7 +1920,7 @@ class Agent:
         # the NEXT turn actually blocks on this fold.
         if session_id:
             try:
-                from src.core import compaction
+                from openagent_core.core import compaction
                 compaction.compact_after_turn(session_id, active_model, self)
             except Exception as exc:  # noqa: BLE001 — never touch the reply
                 elog(
@@ -2062,6 +1950,7 @@ class Agent:
         on_status: StatusCallback | None = None,
         model_override: BaseModel | None = None,
         author: dict | None = None,
+        run_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Streaming sibling of :meth:`run` for voice-mode replies.
 
@@ -2121,7 +2010,7 @@ class Agent:
                     # (run() has the same hook; events go through run_stream, so
                     # without this the monitor never fires on real traffic.)
                     try:
-                        from src.core import quality_monitor
+                        from openagent_core.core import quality_monitor
                         quality_monitor.spawn_scoring(
                             self, session_id, message, event.get("text", ""))
                     except Exception:  # noqa: BLE001 — monitoring must never affect the turn
@@ -2162,7 +2051,7 @@ class Agent:
             # that string-matched the warning sign could tell. The marker,
             # the stable code and the diagnostic-free message let the stream
             # layer reach for ``OutError`` / ``TURN_END_ERROR`` instead.
-            from src.core.public_errors import classify_run_error
+            from openagent_core.core.public_errors import classify_run_error
             failure = classify_run_error(e)
             yield {
                 "kind": "done",
@@ -2191,7 +2080,7 @@ class Agent:
         just without the time-to-first-audio win.
         """
         await _status("Loading context...")
-        system = self._combined_system_prompt(session_id=session_id)
+        system = await self._compose_run_prompt(session_id=session_id)
 
         # AgentOS-aligned media: see ``_run_inner`` above for the full
         # rationale. Same per-MIME split + content=bytes construction.
@@ -2199,7 +2088,7 @@ class Agent:
 
         # Same images-prepend / files=-passthrough split as ``_run_inner``.
         if attachments:
-            from src.channels.base import build_attachment_context, prepend_context_block
+            from openagent_core.media import build_attachment_context, prepend_context_block
             image_atts = [a for a in attachments if (a.get("type") or "file") == "image"]
             if image_atts:
                 files_info: list[str] = []
@@ -2221,45 +2110,37 @@ class Agent:
                     ),
                 )
 
-        from src.mcp.servers.shell.handlers import get_hub
-        from src.mcp.servers.shell.adapters import set_session_context, reset_session_context
-        from src.mcp.servers.delegation.handlers import (
+        from openagent_core.mcp.servers.delegation.handlers import (
             install_context as install_delegation_context,
             reset_context as reset_delegation_context,
         )
-        from src.core.identity_context import (
+        from openagent_core.core.identity_context import (
             install_author_context, reset_author_context, owner_handle_of,
         )
-        from src.core.config import shell_settings
+        from openagent_core.core.config import shell_settings
 
-        hub = get_hub()
+        hub = self.background_jobs
         settings = shell_settings(getattr(self, "config", None) or {})
         wake_window = settings.wake_wait_window_seconds
         cap = settings.autoloop_cap
-        from src.core.execution_origin import current_execution_origin
-
-        turn_origin = current_execution_origin()
-        shell_client_host = (
-            (
-                turn_origin.device_id,
-                turn_origin.client_instance_id,
-                turn_origin.generation,
-            )
-            if turn_origin is not None
-            else None
-        )
+        from openagent_core.runtime import current_execution_context
+        context = current_execution_context()
+        job_context = context.coalescing_key if context is not None else "unbound"
 
         active_model = self._acquire_model_slot(model_override or self.model)
 
         # Streaming twin of the reminder hook in ``_run_inner`` — see there.
-        current_input = await _with_vault_reminder(self._db, session_id, message)
+        current_input = await _with_vault_reminder(
+            self._db, session_id, message, config=getattr(self, "config", {}) or {},
+            enabled="vault" in self._prompt_module_names(),
+        )
         current_input = await _with_recall(self, session_id, message, current_input)
         accumulated: list[str] = []
         iter_count = 0
         # Streaming twin of ``_run_inner``'s ``turn_registered`` — see there.
         turn_registered = False
 
-        pending = hub.drain(session_id, client_host=shell_client_host)
+        pending = hub.drain(session_id, context_key=job_context)
         if pending:
             pre = _format_shell_reminder(pending)
             current_input = f"{pre}\n\n{current_input}"
@@ -2285,7 +2166,7 @@ class Agent:
                 # ``compaction.run_start_of_turn``. Only on the first iteration
                 # so shell-reminder re-entries don't re-check.
                 if iter_count == 1 and session_id:
-                    from src.core import compaction
+                    from openagent_core.core import compaction
                     turn_registered = await compaction.run_start_of_turn(
                         session_id, active_model, self, _status,
                         current_message=message,
@@ -2294,11 +2175,10 @@ class Agent:
                 messages: list[dict[str, Any]] = [{"role": "user", "content": current_input}]
                 await _status("Thinking...")
 
-                token = set_session_context(session_id)
                 # Record the active chat session so the vault autocommit can
                 # attribute out-of-band note writes (external vault MCP) to it.
                 try:
-                    from src.memory.vault.vault_origin import note_activity
+                    from openagent_core.memory.vault.vault_origin import note_activity
                     note_activity(kind="chat", session=session_id)
                 except Exception:  # noqa: BLE001
                     pass
@@ -2375,21 +2255,20 @@ class Agent:
                         accumulated.append(delta)
                         yield {"kind": "delta", "text": delta}
                 finally:
-                    reset_session_context(token)
                     reset_delegation_context(delegation_tokens)
                     reset_author_context(author_token)
 
-                events = hub.drain(session_id, client_host=shell_client_host)
+                events = hub.drain(session_id, context_key=job_context)
                 if not events:
                     if not hub.has_running(
-                        session_id, client_host=shell_client_host,
+                        session_id, context_key=job_context,
                     ):
                         break
                     if wake_window > 0:
                         events = await hub.wait(
                             session_id,
                             timeout=wake_window,
-                            client_host=shell_client_host,
+                            context_key=job_context,
                         )
                     if not events:
                         break
@@ -2510,7 +2389,7 @@ class Agent:
             # Balance the mark_turn_active above (streaming twin of _run_inner).
             if turn_registered and session_id:
                 try:
-                    from src.core import compaction
+                    from openagent_core.core import compaction
                     compaction.mark_turn_done(session_id)
                 except Exception:  # noqa: BLE001
                     pass
@@ -2526,7 +2405,7 @@ class Agent:
         # INVISIBLE — see _run_inner's post-turn block for the rationale.
         if session_id:
             try:
-                from src.core import compaction
+                from openagent_core.core import compaction
                 compaction.compact_after_turn(session_id, active_model, self)
             except Exception as exc:  # noqa: BLE001 — never touch the reply
                 elog(
@@ -2576,7 +2455,7 @@ class Agent:
         Returned as a string ready to splice into the framework prompt.
         """
         from pathlib import Path
-        from src.core.paths import default_vault_path
+        from openagent_core.core.paths import default_vault_path
 
         cfg_path = (
             (self.config or {}).get("memory", {}).get("vault_path")
@@ -2596,10 +2475,10 @@ class Agent:
         """
         import os
         from pathlib import Path
-        from src.core.config import skills_settings
-        from src.core.paths import default_skills_path
+        from openagent_core.core.config import skills_settings
+        from openagent_core.core.paths import default_skills_path
 
-        env = os.environ.get("OPENAGENT_SKILLS_PATH", "").strip()
+        env = runtime_environment().get("OPENAGENT_SKILLS_PATH", "").strip()
         if env:
             return str(Path(env).expanduser().resolve())
         cfg_path = skills_settings(self.config).path
@@ -2616,16 +2495,15 @@ class Agent:
         skills MCP handlers — which have no config — resolve the SAME
         directory the prompt index was built from.
         """
-        from src.core.config import skills_settings
+        from openagent_core.core.config import skills_settings
 
         if not skills_settings(self.config).enabled:
             self._skills = None
             return
         import os
-        from src.mcp.servers.skills.registry import SkillsRegistry
+        from openagent_core.mcp.servers.skills.registry import SkillsRegistry
 
         path = self._resolve_skills_path()
-        os.environ.setdefault("OPENAGENT_SKILLS_PATH", path)
         registry = SkillsRegistry(path)
         registry.load()
         self._skills = registry
@@ -2638,13 +2516,13 @@ class Agent:
         """PTC note for ``{{PTC_NOTE}}`` — "" when ``ptc.enabled`` is unset, so
         the placeholder (flush against the next header) collapses to a
         byte-identical prompt."""
-        from src.core.config import ptc_settings
+        from openagent_core.core.config import ptc_settings
         return build_ptc_note(ptc_settings(getattr(self, "config", None) or {}).enabled)
 
     def _resolve_db_path(self) -> str:
         """Return the SQLite DB path backing runtime state for this agent."""
         from pathlib import Path
-        from src.core.paths import default_db_path
+        from openagent_core.core.paths import default_db_path
 
         cfg_path = (
             (self.config or {}).get("memory", {}).get("db_path")
@@ -2656,118 +2534,138 @@ class Agent:
             return str(Path(str(db_path)).expanduser().resolve())
         return str(default_db_path())
 
+    def _prompt_module_names(self) -> frozenset[str]:
+        """Resolve applicable module rules from this runtime's actual catalog."""
+        from openagent_core.prompts import modules_for_catalog
+        from openagent_core.runtime import current_runtime
+
+        runtime = current_runtime()
+        if runtime is not None:
+            return frozenset(runtime.settings.enabled_modules)
+        config = getattr(self, "config", None) or {}
+        configured = config.get("_enabled_prompt_modules")
+        if configured is not None:
+            return frozenset(str(name) for name in configured)
+        try:
+            return modules_for_catalog(self._mcp.server_summary())
+        except (AttributeError, TypeError):
+            # Construction-only legacy callers without a catalog still receive
+            # the historic module discipline; a real empty catalog stays empty.
+            return frozenset({"vault", "history", "delegation", "automation",
+                              "attachments", "models", "skills"})
+
     def _combined_system_prompt(self, session_id: str | None = None) -> str:
-        """Concatenate the framework prompt with the user's project-specific one.
+        """Compose mandatory framework/module rules and trusted host instructions.
 
-        Substitutes ``{{OPENAGENT_VAULT_PATH}}`` and
-        ``{{OPENAGENT_DB_PATH}}`` in the framework prompt with the
-        resolved on-disk paths so the agent sees the exact vault and
-        SQLite stores for this deployment. Per-agent because each agent
-        runs in its own process with its own ``--agent-dir`` (and
-        optional ``memory.*_path`` YAML overrides).
-
-        When ``session_id`` is provided we append a ``<session-id>`` tag
-        so the LLM can learn its own id and pass it to tools that
-        operate on "this session" — e.g.
-        ``model-manager.pin_session(session_id=..., runtime_id=...)``.
-        The tag is stripped of whitespace and comes last so project
-        prompts read cleanly above it.
-
-        Its position is now load-bearing for cost, not just readability.
-        ``Claude._build_system`` splits this string at the tag and emits the
-        tag as an uncached trailing block, so everything above it is a
-        byte-identical prefix across every session on the box and the ~10.8k
-        framework prompt is cached once rather than once per session. Moving
-        the tag, or appending anything after it, silently makes the cached
-        prefix per-session again — a quiet ~1.25x-write-per-session
-        regression with no test-visible symptom other than the bill.
-        ``src/models/native_provider.py`` and ``src/models/dispatcher.py``
-        also match this tag (to key their Agent caches), so its shape is a
-        contract, not a formatting choice.
+        This is the common path for chat, streaming, delegation, workflows,
+        schedules and events. Provider URL, execution profile and model family
+        never select a reduced framework. Provider cache splitting shares the
+        explicit stable/dynamic boundary from openagent_core.prompts.
         """
-        from src.core.execution_profile import lean_local_event_active
+        from openagent_core.prompts import PromptBlock, PromptComposer
+        from openagent_core.core.execution_origin import current_execution_origin
+        from openagent_core.core.on_behalf_context import current_on_behalf_identity
 
-        framework_template = (
-            LEAN_LOCAL_EVENT_SYSTEM_PROMPT
-            if lean_local_event_active()
-            else FRAMEWORK_SYSTEM_PROMPT
-        )
-        framework = framework_template.replace(
-            "{{OPENAGENT_VAULT_PATH}}", self._resolve_vault_path()
-        ).replace(
-            "{{OPENAGENT_DB_PATH}}", self._resolve_db_path()
-        )
-        if not lean_local_event_active():
-            framework = framework.replace(
-                "{{MCP_CATALOG_SUMMARY}}",
-                build_mcp_catalog_summary(self._mcp),
-            ).replace(
-                # Skills index — "" when disabled, so the placeholder (flush
-                # against the next header) collapses to a byte-identical prompt.
-                # Frozen snapshot above <session-id>, safe for the prompt cache.
-                "{{SKILLS_INDEX}}",
-                self._render_skills_index(),
-            ).replace(
-                # PTC note — "" when ``ptc.enabled`` is unset. Same
-                # flush-placeholder discipline as SKILLS_INDEX.
-                "{{PTC_NOTE}}",
-                self._render_ptc_note(),
-            )
+        config = getattr(self, "config", None) or {}
+        host = []
+        for raw in config.get("_host_prompt_blocks", ()):
+            host.append(raw if isinstance(raw, PromptBlock) else PromptBlock(**raw))
+        from openagent_core.runtime import current_execution_context, current_run_id
 
+        context = current_execution_context()
+        provider = getattr(self, "host_prompt_provider", None)
+        if provider is not None:
+            host.extend(provider.prompt_blocks(context))
         user = (self.system_prompt or "").strip()
-        if not user:
-            combined = framework
-        else:
-            combined = (
-                framework
-                + "\n\n── User-specific identity and project context ──\n\n"
-                + user
-            )
-
-        # Tell the agent what day it is. Without this it does not know: the
-        # prompt asks it for "absolute date" note fields and deadlines, and the
-        # model fills them from its training cutoff — a live dream-log came out
-        # dated 2025 while the agent ran in 2026. Every note's ``created:``,
-        # every ``dream-log-YYYY-MM-DD.md`` filename, every "<date>: symptom"
-        # receipt was a guess.
-        #
-        # This lands INSIDE the cached prefix, and that is fine — the date is
-        # the same for every session on a given day, so the prefix stays
-        # byte-identical fleet-wide and caches once PER DAY per box. The cost is
-        # one ~10.8k-token prefix rewrite at each midnight boundary, then reads
-        # all day: negligible. That is a different thing from the per-SESSION
-        # invalidation the ``<session-id>`` split guards against — there, every
-        # new session would pay the write. A daily date does not; a per-turn
-        # value (a clock time, the session id) would, which is why only the
-        # date goes here and the time-of-day is deliberately omitted.
-        _now = _now_local()
-        combined += (
-            f"\n\nThe current date is {_now:%Y-%m-%d} ({_now:%A}). Use it for "
+        if user:
+            host.append(PromptBlock("host.system", str(config.get("_system_prompt_revision", "1")),
+                                    user, "host"))
+        now = _now_local()
+        # Calendar date is stable across sessions that day; per-turn identity
+        # and the effective catalog live only in the dynamic tail.
+        host.append(PromptBlock("host.calendar", "1", (
+            f"The current date is {now:%Y-%m-%d} ({now:%A}). Use it for "
             "any absolute date you record — never guess the year from memory."
+        ), "runtime"))
+        dynamic = {"catalog": build_mcp_catalog_summary(self._mcp)}
+        host_context = getattr(self, "host_context_provider", None)
+        if host_context is not None:
+            dynamic["host_context"] = dict(host_context.prompt_context(context))
+        if context is not None:
+            dynamic["execution_context"] = context.snapshot()
+            dynamic["run_id"] = current_run_id()
+        origin = current_execution_origin()
+        if origin is not None:
+            dynamic["origin_capability_lease"] = {
+                "device_id": origin.device_id,
+                "target": origin.device_label,
+                "instance_id": origin.client_instance_id,
+                "generation": origin.generation,
+            }
+        identity = current_on_behalf_identity()
+        if identity is not None:
+            dynamic["execution_subject"] = {
+                key: getattr(identity, key) for key in
+                ("tenant_id", "principal_type", "handle", "device_id")
+                if getattr(identity, key, None) is not None
+            }
+        context_builder = getattr(self._mcp, "prompt_context", None)
+        if callable(context_builder):
+            dynamic["capabilities"] = context_builder()
+        contribution_builder = getattr(self._mcp, "prompt_blocks", None)
+        contributions = tuple(contribution_builder()) if callable(contribution_builder) else ()
+        # Capabilities injected by a connection can change every turn. Their
+        # instructions cannot contaminate the stable host/framework prefix.
+        if contributions:
+            dynamic["capability_instructions"] = [
+                {"id": block.id, "revision": block.revision,
+                 "provenance": block.provenance, "instructions": block.text}
+                for block in contributions
+            ]
+        enabled_modules = self._prompt_module_names()
+        substitutions = {
+            "OPENAGENT_VAULT_PATH": self._resolve_vault_path() if "vault" in enabled_modules else "",
+            "OPENAGENT_DB_PATH": self._resolve_db_path() if enabled_modules & {"vault", "history"} else "",
+            "MCP_CATALOG_SUMMARY": "See the current authorized catalog in the trusted turn context.",
+            "SKILLS_INDEX": self._render_skills_index(),
+            "PTC_NOTE": self._render_ptc_note(),
+        }
+        if substitutions["SKILLS_INDEX"]:
+            dynamic["skills_index"] = substitutions["SKILLS_INDEX"]
+        if substitutions["PTC_NOTE"]:
+            dynamic["programmatic_tool_calling"] = substitutions["PTC_NOTE"]
+        composed = PromptComposer().compose(
+            enabled_modules=enabled_modules, substitutions=substitutions,
+            host=host, dynamic=dynamic, session_id=session_id,
         )
-        if session_id:
-            from src.core.execution_origin import current_execution_origin
-            import json as _json
+        receipts = getattr(self, "_prompt_receipts", None)
+        if receipts is None:
+            receipts = self._prompt_receipts = {}
+        receipts[session_id or "__default__"] = tuple(
+            receipt.to_dict() for receipt in composed.receipts
+        )
+        # Bound diagnostics; receipts never contain prompt or credential text.
+        if len(receipts) > 128:
+            receipts.pop(next(iter(receipts)))
+        return composed.text
 
-            origin = current_execution_origin()
-            host = (
-                {**origin.execution_host, "client_tools_available": True}
-                if origin is not None
-                else {
-                    "kind": "server",
-                    "device_label": "Server OpenAgent",
-                    "client_tools_available": False,
-                }
-            )
-            # Escape '<' so a user-controlled device label cannot close the
-            # runtime tag. This tail is deliberately uncached (see provider
-            # split regexes), while the large framework prefix stays stable.
-            host_json = _json.dumps(
-                host, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-            ).replace("<", "\\u003c")
-            combined += f"\n\n<execution-host>{host_json}</execution-host>"
-            combined += f"\n\n<session-id>{session_id}</session-id>"
-        return combined
+    async def _compose_run_prompt(self, session_id: str | None = None) -> str:
+        """Persist revisions before inference or any tool effect can begin."""
+        from openagent_core.runtime import current_runtime, current_execution_context, current_run_id
+        text = self._combined_system_prompt(session_id=session_id)
+        runtime, context, run_id = current_runtime(), current_execution_context(), current_run_id()
+        if runtime is not None and context is not None and run_id:
+            if context.session_id != session_id:
+                raise PermissionError("Prompt composition belongs to another session")
+            await runtime.services.store.append_event(run_id, "run.prompt", {
+                "blocks": list(self.prompt_receipt(session_id)),
+            })
+        return text
+
+    def prompt_receipt(self, session_id: str | None = None) -> tuple[dict, ...]:
+        """Latest composition revisions/checksums for a session, without content."""
+        return tuple(dict(item) for item in getattr(self, "_prompt_receipts", {}).get(
+            session_id or "__default__", ()))
 
     async def stream_run(
         self,
@@ -2781,7 +2679,7 @@ class Agent:
 
         await self.initialize()
 
-        system = self._combined_system_prompt(session_id=session_id)
+        system = await self._compose_run_prompt(session_id=session_id)
         messages: list[dict[str, Any]] = [{"role": "user", "content": message}]
 
         async for chunk in self.model.stream(messages, system=system):

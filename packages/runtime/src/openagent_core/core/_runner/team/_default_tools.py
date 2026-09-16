@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team.team import Team
 
 import asyncio
 import contextlib
@@ -20,7 +21,7 @@ def _team_member_sessions_enabled() -> bool:
     local to avoid a dispatcher↔team import cycle). When ON, a delegated
     team member runs in its OWN durable child session row rather than nested
     in the team session, so it surfaces as a navigable card."""
-    return os.environ.get("OPENAGENT_TEAM_MEMBER_SESSIONS", "1").strip() not in ("0", "false", "no")
+    return runtime_environment().get("OPENAGENT_TEAM_MEMBER_SESSIONS", "1").strip() not in ("0", "false", "no")
 
 
 def _member_run_session_id(team_session_id, member_agent) -> str:
@@ -57,8 +58,8 @@ async def _upsert_member_child_row(member_agent, sid, meta, runs) -> None:
     visibility rides on ``metadata.client_id``."""
     import time as _time
 
-    from src.core._runner.agent import _storage
-    from src.memory.sessions.agent import AgentSession
+    from openagent_core.core._runner.agent import _storage
+    from openagent_core.memory.sessions.agent import AgentSession
 
     now = int(_time.time())
     child = AgentSession(
@@ -90,7 +91,7 @@ async def _announce_member_child_session(team_session, member_agent, member_sess
         await _upsert_member_child_row(member_agent, member_session_id, meta, runs=[])
         # Announce so connected clients add the sub-agent to the sidebar live.
         try:
-            from src.core.child_session import _notify_created
+            from openagent_core.core.child_session import _notify_created
             _notify_created(member_session_id, {
                 "owner": meta.get("client_id"),
                 "origin": "delegation",
@@ -135,11 +136,11 @@ _member_event_types_cache: Optional[dict] = None
 def _member_event_types() -> dict:
     global _member_event_types_cache
     if _member_event_types_cache is None:
-        from src.core._run_state.agent import (
+        from openagent_core.core._run_state.agent import (
             RunContentEvent as _AC, ToolCallCompletedEvent as _ACd,
             ToolCallErrorEvent as _AE, ToolCallStartedEvent as _AS,
         )
-        from src.core._run_state.team import (
+        from openagent_core.core._run_state.team import (
             RunContentEvent as _TC, ToolCallCompletedEvent as _TCd,
             ToolCallErrorEvent as _TE, ToolCallStartedEvent as _TS,
         )
@@ -176,8 +177,8 @@ async def _emit_member_card_link(run_response, team_session, member_id, member_s
         if target is None:
             return
         target.child_session_id = member_session_id  # type: ignore[attr-defined]
-        from src.models._tool_status import tool_exec_to_wire_json
-        from src.stream.child_stream import emit_child_frame
+        from openagent_core.models._tool_status import tool_exec_to_wire_json
+        from openagent_core.stream.child_stream import emit_child_frame
         encoded = tool_exec_to_wire_json(target, phase="started")
         if encoded is not None:
             await emit_child_frame(parent_sid, "status", text=encoded)
@@ -195,7 +196,7 @@ async def _emit_member_event(member_session_id, event) -> None:
     try:
         if not member_session_id:
             return
-        from src.stream.child_stream import current_child_stream_emitter, emit_child_frame
+        from openagent_core.stream.child_stream import current_child_stream_emitter, emit_child_frame
         if current_child_stream_emitter() is None:
             return
         types = _member_event_types()
@@ -205,7 +206,7 @@ async def _emit_member_event(member_session_id, event) -> None:
                 await emit_child_frame(member_session_id, "delta", text=content)
             return
         if isinstance(event, types["tool_start"] + types["tool_done"] + types["tool_err"]):
-            from src.models._tool_status import tool_exec_to_wire_json
+            from openagent_core.models._tool_status import tool_exec_to_wire_json
             tool = getattr(event, "tool", None)
             err = getattr(event, "error", None) if isinstance(event, types["tool_err"]) else None
             phase = "started" if isinstance(event, types["tool_start"]) else None
@@ -227,38 +228,38 @@ from typing import (
 
 from pydantic import BaseModel
 
-from src.core._runner.agent import Agent
-from src.memory.store.base import AsyncBaseDb, BaseDb, SessionType
-from src.core._runner._stubs import FilterExpr
-from src.core._runner._stubs import KnowledgeFilter
-from src.stream.media import Audio, File, Image, Video
-from src.core._runner._stubs import MemoryManager
-from src.models.providers.message import Message, MessageReferences
-from src.core._run_state import RunContext
-from src.core._run_state.agent import RunOutput, RunOutputEvent
-from src.core._run_state.team import (
+from openagent_core.core._runner.agent import Agent
+from openagent_core.memory.store.base import AsyncBaseDb, BaseDb, SessionType
+from openagent_core.core._runner._stubs import FilterExpr
+from openagent_core.core._runner._stubs import KnowledgeFilter
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.core._runner._stubs import MemoryManager
+from openagent_core.models.providers.message import Message, MessageReferences
+from openagent_core.core._run_state import RunContext
+from openagent_core.core._run_state.agent import RunOutput, RunOutputEvent
+from openagent_core.core._run_state.team import (
     TeamRunOutput,
     TeamRunOutputEvent,
 )
-from src.memory.sessions import TeamSession
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.knowledge import get_agentic_or_user_search_filters
-from src.core._runner.utils.log import (
+from openagent_core.memory.sessions import TeamSession
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.knowledge import get_agentic_or_user_search_filters
+from openagent_core.core._runner.utils.log import (
     log_debug,
     log_info,
     log_warning,
     use_agent_logger,
     use_team_logger,
 )
-from src.core._runner.utils.merge_dict import merge_dictionaries
-from src.core._runner.utils.response import (
+from openagent_core.core._runner.utils.merge_dict import merge_dictionaries
+from openagent_core.core._runner.utils.response import (
     check_if_run_cancelled,
 )
-from src.core._runner.utils.team import (
+from openagent_core.core._runner.utils.team import (
     add_interaction_to_team_run_context,
     format_member_agent_task,
 )
-from src.core._runner.utils.timer import Timer
+from openagent_core.core._runner.utils.timer import Timer
 
 
 def _get_update_user_memory_function(team: "Team", user_id: Optional[str] = None, async_mode: bool = False) -> Function:
@@ -400,8 +401,8 @@ def _search_past_sessions_function(
 ) -> Function:
     """Factory for search_past_sessions tool for Team."""
 
-    from src.core._runner.agent._default_tools import _extract_session_preview
-    from src.core._runner.team._init import _has_async_db
+    from openagent_core.core._runner.agent._default_tools import _extract_session_preview
+    from openagent_core.core._runner.team._init import _has_async_db
 
     _limit = num_past_sessions_to_search if num_past_sessions_to_search is not None else 20
     _num_runs = num_past_session_runs_in_search if num_past_session_runs_in_search is not None else 3
@@ -484,8 +485,8 @@ def _read_past_session_function(
 ) -> Function:
     """Factory for read_past_session tool for Team."""
 
-    from src.core._runner.agent._default_tools import _get_message_text
-    from src.core._runner.team._init import _has_async_db
+    from openagent_core.core._runner.agent._default_tools import _get_message_text
+    from openagent_core.core._runner.team._init import _has_async_db
 
     def read_past_session(session_id: str, num_runs: Optional[int] = None) -> str:
         """Read the full conversation from a previous session.
@@ -604,9 +605,9 @@ def _get_delegate_task_function(
     add_session_state_to_context: Optional[bool] = None,
     debug_mode: Optional[bool] = None,
 ) -> Function:
-    from src.core._runner.team._init import _initialize_member
-    from src.core._runner.team._run import _update_team_media
-    from src.core._runner.team._tools import (
+    from openagent_core.core._runner.team._init import _initialize_member
+    from openagent_core.core._runner.team._run import _update_team_media
+    from openagent_core.core._runner.team._tools import (
         _determine_team_member_interactions,
         _find_member_by_id,
         _get_history_for_member_agent,
@@ -731,7 +732,7 @@ def _get_delegate_task_function(
                 or not member_agent.store_tool_messages
                 or not member_agent.store_history_messages
             ):
-                from src.core._runner.agent._run import scrub_run_output_for_storage
+                from openagent_core.core._runner.agent._run import scrub_run_output_for_storage
 
                 scrub_run_output_for_storage(member_agent, run_response=member_agent_run_response)  # type: ignore[arg-type]
 
@@ -937,7 +938,7 @@ def _get_delegate_task_function(
         _member_author_tok = None
         if member_session_id and member_session_id != session.session_id and _team_member_sessions_enabled():
             try:
-                from src.core.identity_context import agent_author, install_author_context
+                from openagent_core.core.identity_context import agent_author, install_author_context
                 _member_author_tok = install_author_context(
                     agent_author(
                         f"Sub-agent · {getattr(member_agent, 'name', None) or member_id}",
@@ -1037,7 +1038,7 @@ def _get_delegate_task_function(
         # the leader's turn (the HITL / synthesis code below stamps nothing).
         if _member_author_tok is not None:
             try:
-                from src.core.identity_context import reset_author_context
+                from openagent_core.core.identity_context import reset_author_context
                 reset_author_context(_member_author_tok)
             except Exception:  # noqa: BLE001
                 pass
@@ -1053,7 +1054,7 @@ def _get_delegate_task_function(
             # canonical, so tell the app the sub-agent's turn is done — it
             # reconciles to that transcript and settles the streaming bubble.
             if member_session_id and member_session_id != session.session_id:
-                from src.stream.child_stream import emit_child_frame
+                from openagent_core.stream.child_stream import emit_child_frame
                 await emit_child_frame(member_session_id, "turn_complete")
 
         # Check if the member run is paused (HITL)
@@ -1115,7 +1116,7 @@ def _get_delegate_task_function(
         Returns:
             str: The result of the delegated task.
         """
-        from src.core._runner.utils.callables import get_resolved_members
+        from openagent_core.core._runner.utils.callables import get_resolved_members
 
         resolved_members = get_resolved_members(team, run_context) or []
 
@@ -1242,7 +1243,7 @@ def _get_delegate_task_function(
         Returns:
             str: The result of the delegated task.
         """
-        from src.core._runner.utils.callables import get_resolved_members
+        from openagent_core.core._runner.utils.callables import get_resolved_members
 
         resolved_members = get_resolved_members(team, run_context) or []
 
@@ -1478,7 +1479,7 @@ def add_to_knowledge(team: "Team", query: str, result: str) -> str:
     Returns:
         str: A string indicating the status of the addition.
     """
-    from src.core._runner.utils.callables import get_resolved_knowledge
+    from openagent_core.core._runner.utils.callables import get_resolved_knowledge
 
     knowledge = get_resolved_knowledge(team, None)
     if knowledge is None:
@@ -1493,7 +1494,7 @@ def add_to_knowledge(team: "Team", query: str, result: str) -> str:
     document_name = query.replace(" ", "_").replace("?", "").replace("!", "").replace(".", "")
     document_content = json.dumps({"query": query, "result": result})
     log_info(f"Adding document to Knowledge: {document_name}: {document_content}")
-    from src.core._runner._stubs import TextReader
+    from openagent_core.core._runner._stubs import TextReader
 
     insert_method(name=document_name, text_content=document_content, reader=TextReader())
     return "Successfully added to knowledge base"
@@ -1680,8 +1681,8 @@ def get_relevant_docs_from_knowledge(
     **kwargs,
 ) -> Optional[List[Union[Dict[str, Any], str]]]:
     """Return a list of references from the knowledge base"""
-    from src.core._runner._stubs import Document
-    from src.core._runner.utils.callables import get_resolved_knowledge
+    from openagent_core.core._runner._stubs import Document
+    from openagent_core.core._runner.utils.callables import get_resolved_knowledge
 
     knowledge = get_resolved_knowledge(team, run_context)
 
@@ -1767,8 +1768,8 @@ async def aget_relevant_docs_from_knowledge(
     **kwargs,
 ) -> Optional[List[Union[Dict[str, Any], str]]]:
     """Get relevant documents from knowledge base asynchronously."""
-    from src.core._runner._stubs import Document
-    from src.core._runner.utils.callables import get_resolved_knowledge
+    from openagent_core.core._runner._stubs import Document
+    from openagent_core.core._runner.utils.callables import get_resolved_knowledge
 
     knowledge = get_resolved_knowledge(team, run_context)
 

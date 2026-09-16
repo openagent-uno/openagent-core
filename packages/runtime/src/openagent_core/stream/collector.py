@@ -24,8 +24,8 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from src.stream.channel import BatchedReply
-from src.stream.events import (
+from openagent_core.stream.reply import BatchedReply
+from openagent_core.stream.events import (
     Event,
     OutAudioChunk,
     OutAudioEnd,

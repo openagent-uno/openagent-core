@@ -25,6 +25,7 @@ so it is paid only when the agent actually reaches for it.
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import os
 import time
 from typing import Any
@@ -42,10 +43,10 @@ def _db_path() -> str:
     first, then the packaged default — so an in-process tool and a subprocess
     MCP can never disagree about which database is the agent's.
     """
-    override = os.environ.get("OPENAGENT_DB_PATH")
+    override = runtime_environment().get("OPENAGENT_DB_PATH")
     if override:
         return override
-    from src.core.paths import default_db_path
+    from openagent_core.core.paths import default_db_path
 
     return str(default_db_path())
 
@@ -60,7 +61,7 @@ async def vault_recall_stats(
     Returns counts, never a verdict — see the ``caveat`` in the payload and
     the module docstring for why that distinction is load-bearing.
     """
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     limit = max(1, min(int(limit or 20), _MAX_LIMIT))
     since = None

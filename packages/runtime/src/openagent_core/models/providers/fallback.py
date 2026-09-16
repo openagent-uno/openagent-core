@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import os
 import threading
 import time
@@ -9,12 +10,12 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Iterator, List, Optional, Union
 
-from src.core.runtime_errors import ContextWindowExceededError, ModelProviderError, ModelRateLimitError
-from src.models.providers.base import Model
-from src.models.providers.response import ModelResponse, ModelResponseEvent
-from src.core._run_state.agent import RunOutputEvent
-from src.core._run_state.team import TeamRunOutputEvent
-from src.core._runner.utils.log import log_warning
+from openagent_core.core.runtime_errors import ContextWindowExceededError, ModelProviderError, ModelRateLimitError
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.response import ModelResponse, ModelResponseEvent
+from openagent_core.core._run_state.agent import RunOutputEvent
+from openagent_core.core._run_state.team import TeamRunOutputEvent
+from openagent_core.core._runner.utils.log import log_warning
 
 # Stream event type returned by response_stream / aresponse_stream
 StreamEvent = Union[ModelResponse, RunOutputEvent, TeamRunOutputEvent]
@@ -55,8 +56,8 @@ class FallbackConfig:
         """
         from copy import deepcopy
 
-        from src.core.metrics import ModelType
-        from src.models.providers.utils import get_model
+        from openagent_core.core.metrics import ModelType
+        from openagent_core.models.providers.utils import get_model
 
         for attr in ("on_error", "on_rate_limit", "on_context_overflow"):
             raw_list = getattr(self, attr)
@@ -188,7 +189,7 @@ _PAYLOAD_TOO_LARGE_PATTERNS = (
 
 
 def _inplace_recovery_enabled() -> bool:
-    return os.getenv(_INPLACE_RECOVERY_ENV, "1").strip().lower() not in {"0", "false", "no", "off"}
+    return runtime_environment().get(_INPLACE_RECOVERY_ENV, "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _classify_inplace_recovery(error: Exception) -> Optional[str]:
@@ -645,15 +646,16 @@ def _notify_fallback(
 #
 # Lo stato vive in memoria e muore col processo: e' un acceleratore, non una
 # fonte di verita'. Perderlo costa un viaggio a vuoto, non una risposta.
-_BREAKER_BASE_SECONDS = float(os.getenv("OPENAGENT_FALLBACK_BREAKER_SECONDS", "120"))
-_BREAKER_MAX_SECONDS = float(os.getenv("OPENAGENT_FALLBACK_BREAKER_MAX_SECONDS", "2700"))
+_BREAKER_BASE_SECONDS = 120.0
+_BREAKER_MAX_SECONDS = 2700.0
 _breaker_lock = threading.Lock()
 # model id -> (istante in cui si puo' riprovare, fallimenti consecutivi)
-_breaker: dict[str, tuple[float, int]] = {}
+from openagent_core.instance_state import InstanceMapping
+_breaker = InstanceMapping('provider-fallback-breaker')
 
 
 def _breaker_enabled() -> bool:
-    return os.getenv("OPENAGENT_FALLBACK_BREAKER_ENABLED", "1").strip().lower() not in (
+    return runtime_environment().get("OPENAGENT_FALLBACK_BREAKER_ENABLED", "1").strip().lower() not in (
         "0", "false", "no", "off",
     )
 
@@ -670,7 +672,10 @@ def _breaker_record_failure(model_id: str) -> None:
     with _breaker_lock:
         _, failures = _breaker.get(model_id, (0.0, 0))
         failures += 1
-        delay = min(_BREAKER_BASE_SECONDS * (2 ** (failures - 1)), _BREAKER_MAX_SECONDS)
+        env = runtime_environment()
+        base = max(0.0, float(env.get('OPENAGENT_FALLBACK_BREAKER_SECONDS', _BREAKER_BASE_SECONDS)))
+        ceiling = max(base, float(env.get('OPENAGENT_FALLBACK_BREAKER_MAX_SECONDS', _BREAKER_MAX_SECONDS)))
+        delay = min(base * (2 ** min(failures - 1, 30)), ceiling)
         _breaker[model_id] = (time.monotonic() + delay, failures)
     log_warning(f"Fallback breaker: '{model_id}' in quarantena per {delay:.0f}s (fallimento #{failures})")
 

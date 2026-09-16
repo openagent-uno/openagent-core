@@ -69,6 +69,7 @@ timezone, but it only affects how the ISO mirror is rendered.
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import datetime as dt
 import os
 import time
@@ -155,7 +156,7 @@ def default_timezone_name() -> str | None:
     see the module docstring — resolving NULL rows through this would shift
     every hand-converted cron the moment an operator set it.
     """
-    raw = os.environ.get(DEFAULT_TZ_ENV, "").strip()
+    raw = runtime_environment().get(DEFAULT_TZ_ENV, "").strip()
     if not raw:
         return None
     validate_timezone(raw)
@@ -283,7 +284,7 @@ def epoch_to_iso(epoch: float, timezone: str | None = None) -> str:
 
 def decorate_scheduled_task(row: Mapping[str, Any] | dict[str, Any]) -> dict[str, Any]:
     task = dict(row)
-    from src.core.execution_policy import normalize_execution_policy
+    from openagent_core.core.execution_policy import normalize_execution_policy
 
     task["execution_policy"] = normalize_execution_policy(
         task.pop("execution_policy_json", None)

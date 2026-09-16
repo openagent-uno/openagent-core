@@ -17,8 +17,8 @@ import click
 
 
 def _resolve_root(explicit: str | None) -> Path:
-    from src.core.config import load_config
-    from src.memory.vault.service import resolve_vault_root
+    from openagent_core.core.config import load_config
+    from openagent_core.memory.vault.service import resolve_vault_root
     if explicit:
         return Path(explicit).expanduser().resolve()
     cfg = load_config()
@@ -27,7 +27,7 @@ def _resolve_root(explicit: str | None) -> Path:
 
 
 def _service(explicit: str | None):
-    from src.memory.vault.service import VaultService
+    from openagent_core.memory.vault.service import VaultService
     return VaultService(_resolve_root(explicit))
 
 
@@ -192,22 +192,13 @@ def cmd_stats(vault_path):
 def cmd_init(vault_path, no_git):
     """Scaffold the 11-folder system + journal tree + canon workspace, and
     set up the git repo that tracks every change."""
-    import os as _os
-    if no_git:
-        # Honour the flag end-to-end: no install AND no repo/commits this run.
-        _os.environ["OPENAGENT_VAULT_GIT_ENABLED"] = "0"
-    else:
-        import shutil as _shutil
-        if not _shutil.which("git"):
-            from src.setup.bootstrap import ensure_git as _ensure_git
-            click.echo("Installing git for the vault repo…")
-            if not _ensure_git():
-                click.echo(click.style(
-                    "Could not install git — the vault works, but changes "
-                    "won't be tracked. Install git and re-run.", fg="yellow"))
+    import shutil
+    if not no_git and not shutil.which("git"):
+        raise click.ClickException("Git is unavailable. Install it with the product installer or select --no-git.")
 
     async def _run():
-        svc = _service(vault_path)
+        from openagent_core.memory.vault.service import VaultService
+        svc = VaultService(_resolve_root(vault_path), git_enabled=not no_git)
         res = await svc.init_taxonomy()
         await svc.close()
         return res

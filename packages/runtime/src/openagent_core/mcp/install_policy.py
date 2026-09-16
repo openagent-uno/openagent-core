@@ -66,12 +66,13 @@ picks off — which is how a safety feature ends up switched off fleet-wide.
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import os
 import re
 import shlex
 from functools import lru_cache
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 _POLICY_ENV = "OPENAGENT_MCP_INSTALL_POLICY"
 _ALLOW_PATTERNS_ENV = "OPENAGENT_MCP_INSTALL_ALLOW_PATTERNS"
@@ -112,7 +113,7 @@ def install_policy_enabled() -> bool:
     ``server.py`` only ever writes "1" or "0"; the wider set is for operators
     exporting the var by hand.
     """
-    return os.environ.get(_POLICY_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+    return runtime_environment().get(_POLICY_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def describe_install(
@@ -204,7 +205,7 @@ def check_mcp_install_allowed(
     descriptor = describe_install(
         command=command, args=args, url=url, registry_name=registry_name,
     )
-    for pat in _compile_allow((os.environ.get(_ALLOW_PATTERNS_ENV) or "").strip()):
+    for pat in _compile_allow((runtime_environment().get(_ALLOW_PATTERNS_ENV) or "").strip()):
         if pat.search(descriptor):
             elog(
                 "mcp.install_allowed",

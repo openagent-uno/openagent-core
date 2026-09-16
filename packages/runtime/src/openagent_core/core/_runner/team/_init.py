@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.core._runner.team.mode import TeamMode
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team.mode import TeamMode
+    from openagent_core.core._runner.team.team import Team
 
-from os import getenv
+from openagent_core.configuration import getenv
 from typing import (
     Any,
     Callable,
@@ -25,28 +25,28 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from src.core._runner.agent import Agent
-from src.core._runner._stubs import CompressionManager
-from src.memory.store.base import AsyncBaseDb, BaseDb
-from src.core._runner._stubs import BaseEval
-from src.core._runner._stubs import FilterExpr
-from src.core._runner._stubs import BaseGuardrail
-from src.core._runner._stubs import KnowledgeProtocol
-from src.core._runner._stubs import LearningMachine
-from src.core._runner._stubs import MemoryManager
-from src.models.providers.base import Model
-from src.models.providers.fallback import FallbackConfig
-from src.models.providers.message import Message
-from src.models.providers.utils import get_model
-from src.core._run_state.agent import RunEvent
-from src.core._run_state.team import (
+from openagent_core.core._runner.agent import Agent
+from openagent_core.core._runner._stubs import CompressionManager
+from openagent_core.memory.store.base import AsyncBaseDb, BaseDb
+from openagent_core.core._runner._stubs import BaseEval
+from openagent_core.core._runner._stubs import FilterExpr
+from openagent_core.core._runner._stubs import BaseGuardrail
+from openagent_core.core._runner._stubs import KnowledgeProtocol
+from openagent_core.core._runner._stubs import LearningMachine
+from openagent_core.core._runner._stubs import MemoryManager
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.fallback import FallbackConfig
+from openagent_core.models.providers.message import Message
+from openagent_core.models.providers.utils import get_model
+from openagent_core.core._run_state.agent import RunEvent
+from openagent_core.core._run_state.team import (
     TeamRunEvent,
 )
-from src.memory.sessions import SessionSummaryManager, TeamSession
-from src.core._runner._stubs import Skills
-from src.mcp._runtime import Toolkit
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.log import (
+from openagent_core.memory.sessions import SessionSummaryManager, TeamSession
+from openagent_core.core._runner._stubs import Skills
+from openagent_core.mcp._runtime import Toolkit
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.log import (
     log_debug,
     log_error,
     log_exception,
@@ -56,8 +56,8 @@ from src.core._runner.utils.log import (
     set_log_level_to_info,
     use_team_logger,
 )
-from src.core._runner.utils.safe_formatter import SafeFormatter
-from src.core._runner.utils.string import generate_id_from_name
+from openagent_core.core._runner.utils.safe_formatter import SafeFormatter
+from openagent_core.core._runner.utils.string import generate_id_from_name
 
 
 def __init__(
@@ -183,7 +183,7 @@ def __init__(
     callable_knowledge_cache_key: Optional[Callable[..., Optional[str]]] = None,
     callable_members_cache_key: Optional[Callable[..., Optional[str]]] = None,
 ):
-    from src.core._runner.utils.callables import is_callable_factory
+    from openagent_core.core._runner.utils.callables import is_callable_factory
 
     team.members = members
 
@@ -207,7 +207,7 @@ def __init__(
     team.max_iterations = max_iterations
 
     # Resolve TeamMode: explicit mode wins, otherwise infer from booleans
-    from src.core._runner.team.mode import TeamMode
+    from openagent_core.core._runner.team.mode import TeamMode
 
     if mode is not None:
         team.mode = mode
@@ -483,7 +483,7 @@ def _set_telemetry(team: "Team") -> None:
 
 
 def _initialize_member(team: "Team", member: Union["Team", Agent], debug_mode: Optional[bool] = None) -> None:
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team.team import Team
 
     # Set debug mode for all members
     if debug_mode:
@@ -522,7 +522,7 @@ def propagate_run_hooks_in_background(team: "Team", run_in_background: bool = Tr
     Args:
         run_in_background: Whether hooks should run in background. Defaults to True.
     """
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team.team import Team
 
     team._run_hooks_in_background = run_in_background
 
@@ -542,7 +542,7 @@ def propagate_run_hooks_in_background(team: "Team", run_in_background: bool = Tr
 def _set_default_model(team: "Team") -> None:
     # Set the default model
     if team.model is None:
-        from src.core.execution_profile import strict_local_only_active
+        from openagent_core.core.execution_profile import strict_local_only_active
 
         if strict_local_only_active():
             raise RuntimeError(
@@ -551,7 +551,7 @@ def _set_default_model(team: "Team") -> None:
             )
 
         try:
-            from src.models.providers.openai import OpenAIResponses
+            from openagent_core.models.providers.openai import OpenAIResponses
         except ModuleNotFoundError as e:
             log_exception(e)
             log_error(
@@ -734,7 +734,7 @@ def initialize_team(team: "Team", debug_mode: Optional[bool] = None) -> None:
 
 
 def add_tool(team: "Team", tool: Union[Toolkit, Callable, Function, Dict]) -> None:
-    from src.core._runner.utils.callables import is_callable_factory
+    from openagent_core.core._runner.utils.callables import is_callable_factory
 
     if is_callable_factory(team.tools, excluded_types=(Toolkit, Function)):
         raise RuntimeError(
@@ -746,7 +746,7 @@ def add_tool(team: "Team", tool: Union[Toolkit, Callable, Function, Dict]) -> No
 
 
 def set_tools(team: "Team", tools: Union[List[Union[Toolkit, Callable, Function, Dict]], Callable[..., List]]) -> None:
-    from src.core._runner.utils.callables import is_callable_factory
+    from openagent_core.core._runner.utils.callables import is_callable_factory
 
     if is_callable_factory(tools, excluded_types=(Toolkit, Function)):
         team.tools = tools  # type: ignore[assignment]

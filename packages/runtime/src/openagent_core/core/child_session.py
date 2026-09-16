@@ -39,15 +39,14 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
-import os
 import uuid
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from src.core.agent import clear_run_failure, take_run_failure
-from src.core.identity_context import agent_author
-from src.core.logging import elog
-from src.core.tool_scope import (
+from openagent_core.core.agent import clear_run_failure, take_run_failure
+from openagent_core.core.identity_context import agent_author
+from openagent_core.core.logging import elog
+from openagent_core.core.tool_scope import (
     current_tool_allowlist,
     normalize_family,
     reset_tool_allowlist,
@@ -72,7 +71,7 @@ HIDDEN_CHILD_ORIGINS: tuple[str, ...] = ("delegation", "scheduler", "workflow", 
 # valve: it bounds how many ``Agent.run`` loops (each holding an MCP runtime
 # + writing runs JSON to the one SQLite file) execute at once, regardless of
 # how many a single turn fans out. Env-overridable for big hosts.
-_GLOBAL_CONCURRENCY = max(1, int(os.environ.get("OPENAGENT_CHILD_SESSION_CONCURRENCY", "16")))
+_GLOBAL_CONCURRENCY = 16
 
 # How deep a delegation CHAIN may go. A chat turn's sub-agent is depth 1; a
 # sub-agent that delegates further is depth 2; and so on. This does NOT ban
@@ -90,7 +89,7 @@ _GLOBAL_CONCURRENCY = max(1, int(os.environ.get("OPENAGENT_CHILD_SESSION_CONCURR
 # delegating loop off long before it can saturate anything. A limit that trips
 # on real work would be worse than no limit at all: it converts a silent risk
 # into a live outage on someone's nightly cron.
-_MAX_DEPTH = max(1, int(os.environ.get("OPENAGENT_CHILD_SESSION_MAX_DEPTH", "5")))
+_MAX_DEPTH = 5
 
 # Per-CHAIN fan-out cap: how many children one delegation TREE (identified by
 # its root, not by its immediate parent) may run in parallel at one depth.
@@ -106,10 +105,7 @@ _MAX_DEPTH = max(1, int(os.environ.get("OPENAGENT_CHILD_SESSION_MAX_DEPTH", "5")
 # Defaults to the legacy OPENAGENT_CHILD_SESSION_PER_PARENT when an operator
 # has tuned that, so existing deployments keep their configured fan-out width.
 # 0 disables the per-chain cap.
-_PER_CHAIN_CONCURRENCY = max(0, int(os.environ.get(
-    "OPENAGENT_CHILD_SESSION_PER_CHAIN",
-    os.environ.get("OPENAGENT_CHILD_SESSION_PER_PARENT", "8"),
-)))
+_PER_CHAIN_CONCURRENCY = 8
 
 
 class DelegationDepthExceeded(RuntimeError):
@@ -145,7 +141,7 @@ class DelegationDepthExceeded(RuntimeError):
 # coroutine gets its own copy), so a value set around one child's run is seen
 # by every tool call that run makes — including its own nested spawns — while
 # remaining invisible to its siblings and to its parent. This is the same
-# mechanism ``src.core.dry_run`` relies on to reach every MCP call of a run.
+# mechanism ``openagent_core.core.dry_run`` relies on to reach every MCP call of a run.
 _depth_var: contextvars.ContextVar[int] = contextvars.ContextVar(
     "openagent_child_depth", default=0,
 )
@@ -158,31 +154,41 @@ _root_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
 # fresh loop per ``asyncio.run``. Cache the semaphores per running loop so a
 # semaphore created on a since-closed loop is never reused. Both pools are
 # keyed by DEPTH — see ``_tier_capacity`` for why that is load-bearing.
-_global_sems: dict[int, dict[int, asyncio.Semaphore]] = {}
-_chain_sems: dict[int, dict[tuple[str, int], asyncio.Semaphore]] = {}
+_legacy_state: contextvars.ContextVar[dict | None] = contextvars.ContextVar("openagent_child_state", default=None)
 
 
-# Optional best-effort "a child session was just created" hook. The gateway
-# registers one (``broadcast_resource_sync("session", "created", sid)``) so a
-# freshly-spawned child appears in connected clients' session lists live,
-# without ``core`` having to import the gateway. Stays None in tests / headless
-# runs. Signature: ``listener(session_id: str, info: dict) -> None``.
-_listener: Optional[Any] = None
+def _state() -> dict:
+    from openagent_core.runtime import current_runtime
+    runtime = current_runtime()
+    if runtime is not None:
+        if not hasattr(runtime, "child_state"):
+            runtime.child_state = {}
+        return runtime.child_state
+    state = _legacy_state.get()
+    if state is None:
+        state = {}
+        _legacy_state.set(state)
+    return state
+
+
+def _limit(name: str, default: int) -> int:
+    from openagent_core.runtime import current_runtime
+    runtime = current_runtime()
+    return getattr(runtime.settings, name) if runtime is not None else default
 
 
 def set_child_session_listener(cb: Optional[Any]) -> None:
-    """Register (or clear with None) the child-session-created listener."""
-    global _listener
-    _listener = cb
+    """Register a listener only for the current runtime instance."""
+    _state()["listener"] = cb
 
 
 def _notify_created(session_id: str, info: dict[str, Any]) -> None:
-    cb = _listener
+    cb = _state().get("listener")
     if cb is None:
         return
     try:
         cb(session_id, info)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug("child_session: created-listener failed for %s: %s", session_id, e)
 
 
@@ -239,14 +245,13 @@ def _tier_capacity(depth: int) -> int:
     fan-out to 8 — a throughput regression on real production crons, paid every
     night, to buy headroom against a case that cannot occur.
     """
-    if depth <= 1:
-        return _GLOBAL_CONCURRENCY
-    return max(1, _GLOBAL_CONCURRENCY >> (depth - 1))
+    limit = _limit("child_concurrency", _GLOBAL_CONCURRENCY)
+    return limit if depth <= 1 else max(1, limit >> (depth - 1))
 
 
 def _global_semaphore(depth: int) -> asyncio.Semaphore:
     loop_id = id(asyncio.get_running_loop())
-    per_loop = _global_sems.setdefault(loop_id, {})
+    per_loop = _state().setdefault("global_sems", {}).setdefault(loop_id, {})
     sem = per_loop.get(depth)
     if sem is None:
         sem = asyncio.Semaphore(_tier_capacity(depth))
@@ -261,14 +266,15 @@ def _chain_semaphore(root: Optional[str], depth: int) -> Optional[asyncio.Semaph
     ``_tier_capacity``: a single per-root semaphore would let a parent hold a
     root slot while awaiting a child that needs one from the same pool.
     """
-    if not root or _PER_CHAIN_CONCURRENCY <= 0:
+    limit = _limit("child_chain_concurrency", _PER_CHAIN_CONCURRENCY)
+    if not root or limit <= 0:
         return None
     loop_id = id(asyncio.get_running_loop())
-    per_loop = _chain_sems.setdefault(loop_id, {})
+    per_loop = _state().setdefault("chain_sems", {}).setdefault(loop_id, {})
     key = (root, depth)
     sem = per_loop.get(key)
     if sem is None:
-        sem = asyncio.Semaphore(_PER_CHAIN_CONCURRENCY)
+        sem = asyncio.Semaphore(limit)
         per_loop[key] = sem
     return sem
 
@@ -416,7 +422,7 @@ async def run_child_session(
             today — byte-identical, no contextvar touched. When an iterable of
             MCP tool-family / server names (e.g. ``["vault", "web"]``) is passed,
             the child's runtime is built with only those families for the
-            duration of its run (see ``src.core.tool_scope`` +
+            duration of its run (see ``openagent_core.core.tool_scope`` +
             ``models.native_provider``). The child can therefore only ever be
             NARROWER than the parent's grant, never broader. This never changes
             what an unrestricted child receives.
@@ -444,21 +450,22 @@ async def run_child_session(
     # metadata pre-stamp below creates a durable row, and a run we are about to
     # refuse must not leave a ghost session in the user's list.
     depth, root = _chain_of(parent_session_id, child_sid, origin)
-    if depth > _MAX_DEPTH:
+    max_depth = _limit("child_max_depth", _MAX_DEPTH)
+    if depth > max_depth:
         elog(
             "child_session.depth_exceeded",
             level="warning",
             session_id=parent_session_id,
             chain_root=root,
             depth=depth,
-            max_depth=_MAX_DEPTH,
+            max_depth=max_depth,
             origin=origin,
             delegated_to=model_id,
             title=title,
         )
         raise DelegationDepthExceeded(
             f"Delegation depth limit reached: this task is already {depth - 1} "
-            f"levels deep in a chain of sub-agents (the limit is {_MAX_DEPTH}). "
+            f"levels deep in a chain of sub-agents (the limit is {max_depth}). "
             f"Spawning another would risk unbounded recursion, so it was "
             f"refused. Do this part of the work yourself in the current session "
             f"rather than delegating it again — or, if the task genuinely needs "
@@ -468,10 +475,14 @@ async def run_child_session(
             depth=depth,
         )
 
+    from openagent_core.runtime import current_runtime, current_execution_context
+    public_runtime = current_runtime()
+    public_context = current_execution_context()
+
     # Resolve the owner handle so the row lands in the right flat list. An
     # explicit owner wins (scheduler / workflow have no human parent); else
     # inherit the parent chat session's owner.
-    owner = owner_client_id
+    owner = public_context.authority.key if public_context is not None else owner_client_id
     if not owner and parent_session_id and db is not None:
         try:
             parent_row = await db.get_session(parent_session_id)
@@ -479,21 +490,12 @@ async def run_child_session(
                 owner = parent_row.get("client_id") or None
         except Exception as e:  # noqa: BLE001
             logger.debug("child_session: parent owner lookup failed: %s", e)
-    # Last resort: the deployment's primary owner. Covers the race where a
-    # delegation fires on a session's first turn before the gateway's
-    # fire-and-forget owner stamp has committed (so the parent row has no
-    # client_id yet) — without this the child, AND its unowned parent, both
-    # fall out of every flat list. Single-owner deploys (the common case)
-    # always resolve here; multi-user inherits the parent above first.
-    if not owner and db is not None:
-        try:
-            owner = await db.primary_owner_handle()
-        except Exception as e:  # noqa: BLE001
-            logger.debug("child_session: primary-owner fallback failed: %s", e)
+    if not owner:
+        raise PermissionError("A child execution requires an explicit owner or authorized delegation")
 
     # Pre-stamp link metadata so the row exists (and can be broadcast) before
     # the run populates it. Metadata-only — never writes user_id.
-    if db is not None:
+    if db is not None and public_runtime is None:
         try:
             await db.upsert_session(
                 child_sid,
@@ -519,9 +521,9 @@ async def run_child_session(
     # asyncio task as the chat turn's tool); it no-ops for a scheduler/workflow
     # run-now (executed later on the Scheduler's own task, with no in-flight
     # tool bound) — those cards are linked client-side from the broadcast.
-    # See ``src.stream.card_link``.
+    # See ``openagent_core.stream.card_link``.
     try:
-        from src.stream.card_link import emit_card_link
+        from openagent_core.stream.card_link import emit_card_link
         await emit_card_link(child_sid)
     except Exception as e:  # noqa: BLE001 — card linkage is best-effort
         logger.debug("child_session: card-link emit failed for %s: %s", child_sid, e)
@@ -536,13 +538,13 @@ async def run_child_session(
                 override = smart.build_override_model(model_id)
             except Exception as e:  # noqa: BLE001
                 logger.warning("child_session: model_override %r failed: %s", model_id, e)
-                from src.core.execution_profile import strict_local_only_active
+                from openagent_core.core.execution_profile import strict_local_only_active
                 if strict_local_only_active():
                     raise RuntimeError(
                         f"strict local-only model pin {model_id!r} could not be resolved"
                     ) from e
         if override is None:
-            from src.core.execution_profile import strict_local_only_active
+            from openagent_core.core.execution_profile import strict_local_only_active
             if strict_local_only_active():
                 raise RuntimeError(
                     f"strict local-only model pin {model_id!r} has no runnable override"
@@ -557,7 +559,7 @@ async def run_child_session(
     async def _run_streamed() -> str:
         """Drive ``run_stream`` and forward each delta / status as a child frame
         so the run screen renders token-by-token, just like a chat turn."""
-        from src.stream.child_stream import (
+        from openagent_core.stream.child_stream import (
             emit_child_frame, current_child_stream_emitter,
             install_child_stream_emitter, reset_child_stream_emitter,
             broadcast_child_emitter,
@@ -623,6 +625,16 @@ async def run_child_session(
 
     async def _run() -> str:
         try:
+            if public_runtime is not None and public_context is not None:
+                from openagent_core.contracts import RunRequest
+                child_run_id = str(uuid.uuid4())
+                record = await public_runtime.spawn(
+                    RunRequest(child_run_id,child_sid,child_run_id,prompt,model_ref=model_id),
+                    public_context, deferred=not (inherit_execution_origin if inherit_execution_origin is not None else origin == "delegation"))
+                if record.status != "success":
+                    from openagent_core.core.agent import mark_run_failure
+                    mark_run_failure(record.status)
+                return record.output if isinstance(record.output,str) else ""
             # Streaming needs ``run_stream`` (every real Agent has it); a
             # minimal stub without it degrades to a single ``run`` — the
             # transcript still lands, just not token-by-token.
@@ -675,7 +687,7 @@ async def run_child_session(
         inherit_execution_origin = origin == "delegation"
     execution_origin_tok = None
     if not inherit_execution_origin:
-        from src.core.execution_origin import install_execution_origin
+        from openagent_core.core.execution_origin import install_execution_origin
 
         execution_origin_tok = install_execution_origin(None)
     try:
@@ -723,7 +735,7 @@ async def run_child_session(
         if scope_tok is not None:
             reset_tool_allowlist(scope_tok)
         if execution_origin_tok is not None:
-            from src.core.execution_origin import reset_execution_origin
+            from openagent_core.core.execution_origin import reset_execution_origin
 
             reset_execution_origin(execution_origin_tok)
 

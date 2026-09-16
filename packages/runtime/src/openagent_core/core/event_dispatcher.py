@@ -29,10 +29,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
+from openagent_core.configuration import runtime_environment
 from typing import Any, Optional
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +50,8 @@ MAX_EVENT_OUTPUT_CHARS = 4_000
 # is normally 1-3 min; anything past this is a stuck/jammed run (a rate-limited
 # model blocking on backoff, a loop) and is aborted so it can't zombie. Env
 # override for slower deployments.
-_EVENT_RUN_TIMEOUT_SECONDS = int(
-    os.environ.get("OPENAGENT_EVENT_RUN_TIMEOUT_SECONDS", "600")
-)
+def _event_run_timeout_seconds():
+    return max(1,int(runtime_environment().get("OPENAGENT_EVENT_RUN_TIMEOUT_SECONDS","600")))
 
 
 def _force_dry_run() -> bool:
@@ -71,7 +70,7 @@ def _force_dry_run() -> bool:
     ``OPENAGENT_FORCE_DRY_RUN=1``: writes are captured, never executed, whatever
     any payload says. Read per turn, so it cannot be flipped by a stale import.
     """
-    return os.environ.get("OPENAGENT_FORCE_DRY_RUN", "").strip().lower() in (
+    return runtime_environment().get("OPENAGENT_FORCE_DRY_RUN", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
 
@@ -92,7 +91,7 @@ def _event_stream_enabled() -> bool:
     Read at call time, not import time, so the knob can be flipped with a
     process reload instead of a release.
     """
-    return os.environ.get("OPENAGENT_EVENT_STREAM", "1").strip().lower() not in (
+    return runtime_environment().get("OPENAGENT_EVENT_STREAM", "1").strip().lower() not in (
         "0",
         "false",
         "no",
@@ -134,7 +133,7 @@ def render_prompt_template(template: str, *, payload: dict[str, Any], event: dic
     records the delivery ``rejected``) instead of silently emitting an empty
     string. The rendered text is prefixed with the untrusted-input header so
     even a template-driven prompt keeps the injection guard."""
-    from src.workflow.templating import resolve_templates, TemplateError  # lazy
+    from openagent_core.workflow.templating import resolve_templates, TemplateError  # lazy
 
     # Webhook callers are allowed to send either the raw payload object or an
     # ``{"event": ..., "payload": {...}}`` envelope.  The dispatcher keeps
@@ -279,7 +278,7 @@ def _retryable_mark() -> str:
     Importato qui e non in testa perche' il dispatcher riceve il ``db`` gia'
     costruito e non dipende dal modulo a livello di import.
     """
-    from src.memory.db import MemoryDB
+    from openagent_core.memory.db import MemoryDB
 
     return MemoryDB._RETRYABLE_TURN_MARK
 
@@ -304,7 +303,7 @@ def _classify_delivery_failure(error: Any) -> str:
         if status in (429, 529, 503):
             return "transient"
         try:
-            from src.core.runtime_errors import ModelRateLimitError
+            from openagent_core.core.runtime_errors import ModelRateLimitError
             if isinstance(error, ModelRateLimitError):
                 return "transient"
         except Exception:  # noqa: BLE001
@@ -332,12 +331,12 @@ def _heartbeat_interval_seconds() -> float:
     """Beat cadence (>= 1 s). Defaults to LEASE_TTL/3 so ~3 beats fit in one
     lease window; overridable for tuning."""
     try:
-        ttl = float(os.environ.get(_LEASE_TTL_ENV, "120"))
+        ttl = float(runtime_environment().get(_LEASE_TTL_ENV, "120"))
     except (TypeError, ValueError):
         ttl = 120.0
     default = max(1.0, ttl / 3.0)
     try:
-        return max(1.0, float(os.environ.get(_HEARTBEAT_INTERVAL_ENV, str(default))))
+        return max(1.0, float(runtime_environment().get(_HEARTBEAT_INTERVAL_ENV, str(default))))
     except (TypeError, ValueError):
         return default
 
@@ -369,9 +368,9 @@ def _start_lease_heartbeat(db: Any, delivery_id: str) -> Optional[asyncio.Task]:
 
 
 
-def _retained_output(text: str) -> str:
-    from src.core.support_delivery_receipts import retain_event_output
-    return retain_event_output(text, MAX_EVENT_OUTPUT_CHARS)
+def _retained_output(text: str, agent=None) -> str:
+    retain = getattr(getattr(agent, "extensions", None), "output_retainer", None)
+    return retain(text, MAX_EVENT_OUTPUT_CHARS) if retain else text[:MAX_EVENT_OUTPUT_CHARS]
 
 
 async def _stop_lease_heartbeat(task: Optional[asyncio.Task]) -> None:
@@ -385,7 +384,17 @@ async def _stop_lease_heartbeat(task: Optional[asyncio.Task]) -> None:
         pass
 
 
-async def dispatch_event(
+async def dispatch_event(*, agent, db, scheduler, event, payload, delivery_id,
+                         source="webhook", broadcast=None):
+    service = getattr(scheduler, "execution_service", None)
+    if service is None:
+        raise PermissionError("An event firing requires a host automation execution service")
+    return await service.run_event(agent=agent, db=db, scheduler=scheduler, event=event,
+        payload=payload, delivery_id=delivery_id, source=source, broadcast=broadcast,
+        execute=_execute_event)
+
+
+async def _execute_event(
     *,
     agent: Any,
     db: Any,
@@ -409,7 +418,7 @@ async def dispatch_event(
 
     def _emit(action: str = "updated") -> None:
         try:
-            from src.stream.resource_events import emit_resource_event
+            from openagent_core.stream.resource_events import emit_resource_event
             emit_resource_event("event", action, event_id)
         except Exception:  # noqa: BLE001
             pass
@@ -424,7 +433,7 @@ async def dispatch_event(
     # discovering that inside the model turn costs a full turn to learn
     # nothing. Fails open — see ``event_precondition``.
     try:
-        from src.core.event_precondition import should_skip
+        from openagent_core.core.event_precondition import should_skip
         skip, reason = await should_skip(event, payload)
     except Exception as exc:  # noqa: BLE001 — never let the guard eat a delivery
         elog("event.precondition_error", level="warning",
@@ -449,14 +458,14 @@ async def dispatch_event(
     # A frozen turn stops beating → the lease lapses → the reaper re-enqueues it.
     heartbeat = _start_lease_heartbeat(db, delivery_id)
 
-    from src.core.execution_policy import (
+    from openagent_core.core.execution_policy import (
         current_execution_policy,
         event_execution_policy,
         narrow_execution_policy,
         reset_execution_policy,
         set_execution_policy,
     )
-    from src.core.tool_scope import (
+    from openagent_core.core.tool_scope import (
         current_tool_allowlist,
         normalize_family,
         reset_tool_allowlist,
@@ -580,7 +589,7 @@ async def dispatch_event(
         await db.update_event_delivery(
             delivery_id,
             status=final_status,
-            output=_retained_output(result.get("output") or ""),
+            output=_retained_output(result.get("output") or "", agent),
             finished_at=_now(),
             # ``error`` incluso: un terminale `failed` che non ha alzato deve
             # comunque lasciare il MOTIVO nella colonna, come fa il ramo che alza.
@@ -651,8 +660,8 @@ async def _dispatch_task(*, scheduler, db, event, payload, delivery_id) -> dict[
 
 
 async def _dispatch_prompt(*, agent, db, event, payload, delivery_id, source, on_link=None) -> dict[str, Any]:
-    from src.core.child_session import run_child_session, mint_child_session_id
-    from src.core.identity_context import agent_author
+    from openagent_core.core.child_session import run_child_session, mint_child_session_id
+    from openagent_core.core.identity_context import agent_author
 
     template = event.get("prompt_template") or ""
     if template.strip():
@@ -665,11 +674,11 @@ async def _dispatch_prompt(*, agent, db, event, payload, delivery_id, source, on
             + render_payload_block(payload)
         )
 
-    owner = None
-    try:
-        owner = await db.primary_owner_handle()
-    except Exception:  # noqa: BLE001
-        owner = None
+    from openagent_core.runtime import current_execution_context
+    authority=current_execution_context()
+    if authority is None or not authority.deferred or not authority.delegation_id:
+        raise PermissionError("Event execution requires its captured delegation")
+    owner=authority.authority.subject_id
 
     origin_ref = {"event_id": event["id"], "delivery_id": delivery_id}
     candidate_session_id = mint_child_session_id("event", origin_ref)
@@ -699,40 +708,26 @@ async def _dispatch_prompt(*, agent, db, event, payload, delivery_id, source, on
 
     # A ``dry_run: true`` payload makes the whole turn a dry-run: every MCP tool
     # call it makes is stamped with dry-run meta so the server captures/rejects
-    # writes instead of executing them (see src.core.dry_run). Scoped to this
+    # writes instead of executing them (see openagent_core.core.dry_run). Scoped to this
     # turn only.
-    from src.core.dry_run import dry_run_scope
+    from openagent_core.core.dry_run import dry_run_scope
 
     is_dry = bool((payload or {}).get("dry_run")) or _force_dry_run()
-    from src.core.execution_profile import (
+    from openagent_core.core.execution_profile import (
         lean_local_event_scope,
-        should_use_lean_local_event,
     )
-    use_lean_local = await should_use_lean_local_event(event, db)
+    selector = getattr(getattr(agent,"extensions",None),"execution_profile_selector",None)
+    use_lean_local = bool(await selector("event",event,db)) if selector is not None else False
 
     async def _run_bound_turn():
         with dry_run_scope(is_dry), lean_local_event_scope(use_lean_local):
-            # Opt-in deterministic support lane. It performs policy/tool
-            # routing itself and uses the event's pinned model only as a
-            # tool-less final composer. Do NOT couple this explicit controller
-            # gate to ``use_lean_local``: our production Replio event is pinned
-            # to ``local:claude-haiku-4-5`` (a cloud-family model behind our
-            # local proxy), so the lean-profile detector correctly returns
-            # false. Requiring both flags silently bypassed the controller and
-            # sent real eSound/Lyra threads through the generic tool-using
-            # agent even while execute+drafts was configured.
-            from src.core import local_support_controller
-            if local_support_controller.enabled(event):
-                return await asyncio.wait_for(
-                    local_support_controller.run(
-                        agent=agent,
-                        event=event,
-                        payload=payload,
-                        session_id=session_id,
-                        delivery_id=delivery_id,
-                    ),
-                    timeout=_EVENT_RUN_TIMEOUT_SECONDS,
-                )
+            extension = getattr(getattr(agent, "extensions", None), "event_handler", None)
+            if extension is not None:
+                result = await asyncio.wait_for(extension(agent=agent, event=event,
+                    payload=payload, session_id=session_id, delivery_id=delivery_id),
+                    timeout=_event_run_timeout_seconds())
+                if result is not None:
+                    return result
             # Wall-clock cap so a single event turn can never become a zombie.
             # When the model provider is jammed (e.g. every proxy account
             # rate-limited), a call can block on backoff and a turn with many
@@ -755,7 +750,7 @@ async def _dispatch_prompt(*, agent, db, event, payload, delivery_id, source, on
                     stream=_event_stream_enabled(),
                     session_id=session_id,
                 ),
-                timeout=_EVENT_RUN_TIMEOUT_SECONDS,
+                timeout=_event_run_timeout_seconds(),
             )
 
     if bound:
@@ -807,6 +802,6 @@ async def _dispatch_prompt(*, agent, db, event, payload, delivery_id, source, on
     return {
         "status": "failed" if failed else "success",
         "session_id": result.session_id,
-        "output": _retained_output(result.text or ""),
+        "output": _retained_output(result.text or "", agent),
         **({"error": failure_detail[:2000]} if failed else {}),
     }

@@ -11,11 +11,12 @@ a task, a no-op when the semantic layer is inert (no embedding model configured)
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import asyncio
 import os
 from typing import Any, Optional
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 # One bounded ``sync`` embeds up to _MAX_ITEMS_PER_SYNC (128); loop until nothing
 # is pending so the first pass fully builds the index, then re-sync on this
@@ -25,7 +26,7 @@ _FIRST_BUILD_MAX_PASSES = 200  # 200 * 128 = 25.6k items — far above any real 
 
 
 def _interval() -> int:
-    raw = (os.environ.get("OPENAGENT_SEMANTIC_RESYNC_SECONDS") or "").strip()
+    raw = (runtime_environment().get("OPENAGENT_SEMANTIC_RESYNC_SECONDS") or "").strip()
     try:
         return max(30, int(raw)) if raw else _RESYNC_SECONDS
     except ValueError:
@@ -34,7 +35,7 @@ def _interval() -> int:
 
 async def _loop(db_path: str, vault_root: Optional[str], providers_config: Any,
                 skills_root: Optional[str] = None) -> None:
-    from src.memory.semantic_index import SemanticIndex, resolve_embedder
+    from openagent_core.memory.semantic_index import SemanticIndex, resolve_embedder
 
     embedder = resolve_embedder(providers_config)
     if embedder is None:

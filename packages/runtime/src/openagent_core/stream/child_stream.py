@@ -67,19 +67,18 @@ def current_child_stream_emitter() -> Optional[ChildStreamEmitter]:
 # that fans each child frame out to every connected client (tagged with the
 # child sid); ``run_child_session`` installs it as the turn emitter when none is
 # already bound. Stays None in headless/bridge runs → child frames are silent.
-_broadcast_sink: Optional[ChildStreamEmitter] = None
+from openagent_core.instance_state import registry
 
 
 def set_child_broadcast_sink(cb: Optional[ChildStreamEmitter]) -> None:
     """Register (or clear with None) the gateway's broadcast-to-all-clients
     emitter for detached child runs."""
-    global _broadcast_sink
-    _broadcast_sink = cb
+    registry("child_stream")["broadcast_sink"] = cb
 
 
 def broadcast_child_emitter() -> Optional[ChildStreamEmitter]:
     """The registered broadcast emitter, or None when no gateway is wired."""
-    return _broadcast_sink
+    return registry("child_stream").get("broadcast_sink")
 
 
 def child_frame_to_event(frame: dict[str, Any], *, seq: int = 0, ts_ms: int = 0):
@@ -88,7 +87,7 @@ def child_frame_to_event(frame: dict[str, Any], *, seq: int = 0, ts_ms: int = 0)
     mapping, shared by the in-turn channel emitter (``StreamTurnRunner``) and
     the detached broadcast sink (the gateway). Returns ``None`` for an unknown
     kind or a frame with no ``session_id``."""
-    from src.stream.events import (
+    from openagent_core.stream.events import (
         TURN_END_COMPLETED,
         OutSeedMessage, OutTextDelta, OutTextFinal, OutToolStatus, TurnComplete,
     )

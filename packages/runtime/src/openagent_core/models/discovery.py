@@ -26,11 +26,12 @@ confusion than a clean empty list. Errors are absorbed and logged via
 
 from __future__ import annotations
 
+from openagent_core.instance_state import InstanceMapping
 import hashlib
 import time
 from typing import Any
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 
 # Per-provider discovery endpoint config. Every OpenAI-compatible
@@ -114,15 +115,15 @@ _OPENROUTER_VENDOR_MAP = {
 }
 
 _CACHE_TTL_SECONDS = 600
-_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
+_CACHE = InstanceMapping('models/discovery.py:_CACHE')
 # Separate cache entry for the OpenRouter catalog — it's the same for
 # every provider lookup, so one fetch serves all.
 _OPENROUTER_CACHE: tuple[float, list[dict[str, Any]]] | None = None
 
 
-def _cache_key(provider: str, api_key: str) -> tuple[str, str]:
+def _cache_key(provider: str, api_key: str, base_url: str | None = None) -> tuple[str, str, str]:
     digest = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:12] if api_key else ""
-    return (provider, digest)
+    return (provider, digest, (base_url or "").rstrip("/"))
 
 
 def _parse_openai_style(payload: Any) -> list[dict[str, Any]]:
@@ -308,7 +309,7 @@ async def list_provider_models(
         return _tagged(provider, [dict(e) for e in _AUDIO_BUNDLED[provider]])
 
     if api_key:
-        cached = _CACHE.get(_cache_key(provider, api_key))
+        cached = _CACHE.get(_cache_key(provider, api_key, base_url))
         if cached and time.time() - cached[0] < _CACHE_TTL_SECONDS:
             return list(cached[1])
         try:
@@ -320,7 +321,7 @@ async def list_provider_models(
                 result = []
             if result:
                 tagged = _tagged(provider, result)
-                _CACHE[_cache_key(provider, api_key)] = (time.time(), list(tagged))
+                _CACHE[_cache_key(provider, api_key, base_url)] = (time.time(), list(tagged))
                 elog("discovery.live", provider=provider, count=len(tagged), source="live")
                 return tagged
             elog("discovery.live_empty", provider=provider)

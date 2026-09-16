@@ -60,6 +60,7 @@ bad regex — and never crashes a turn or takes the agent offline.
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import asyncio
 import os
 import time
@@ -67,9 +68,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone as _timezone
 from typing import Any
 
-from src.core.execution_origin import create_server_only_task
+from openagent_core.core.execution_origin import create_server_only_task
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 # The router gate acts on these only. ``task`` scopes and the ``per_run`` window
 # are stored, validated, and REPORTED in the usage view, but their enforcement
@@ -90,7 +91,7 @@ _STRICT_SCOPES_ENV = "OPENAGENT_BUDGET_STRICT_SCOPES"
 def _strict_scopes() -> frozenset[tuple[str, str]]:
     """Parse ``OPENAGENT_BUDGET_STRICT_SCOPES`` into a set of (scope_kind,
     scope_value) keys. Never raises — a malformed token is skipped."""
-    raw = os.environ.get(_STRICT_SCOPES_ENV, "").strip()
+    raw = runtime_environment().get(_STRICT_SCOPES_ENV, "").strip()
     if not raw:
         return frozenset()
     out: set[tuple[str, str]] = set()
@@ -129,13 +130,13 @@ _WEBHOOK_TIMEOUT_S = 8.0
 def _agent_zone():
     """The agent's timezone for window boundaries, or UTC.
 
-    Reads ``src.memory.schedule.default_timezone_name`` — the same
+    Reads ``openagent_core.memory.schedule.default_timezone_name`` — the same
     "the operator's day, not UTC" source the scheduler uses. Degrades to UTC on
     any error (bad env var, missing tzdata) rather than raising: a budget window
     resolving to UTC is a defensible fallback; crashing the gate is not (§17).
     """
     try:
-        from src.memory.schedule import default_timezone_name, resolve_timezone
+        from openagent_core.memory.schedule import default_timezone_name, resolve_timezone
 
         return resolve_timezone(default_timezone_name()) or _timezone.utc
     except Exception:  # noqa: BLE001 — any tz failure → UTC, never fatal
@@ -219,7 +220,7 @@ def _scope_is_cost_ineffective(
       its priced models, so it is not ineffective).
     - ``global`` scope   → spans everything; not a single priced target → False.
     """
-    from src.models.catalog import (
+    from openagent_core.models.catalog import (
         get_model_pricing,
         iter_configured_models,
         openrouter_pricing_ready,

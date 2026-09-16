@@ -23,6 +23,7 @@ is configured but has no tools — set TELEGRAM_BOT_TOKEN to enable").
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import asyncio
 import importlib
 import inspect
@@ -65,7 +66,7 @@ _DEFAULT_MCP_PRIORITY: tuple[str, ...] = (
 
 
 def _mcp_priority_order() -> tuple[str, ...]:
-    raw = (os.environ.get("OPENAGENT_MCP_PRIORITY") or "").strip()
+    raw = (runtime_environment().get("OPENAGENT_MCP_PRIORITY") or "").strip()
     if not raw:
         return _DEFAULT_MCP_PRIORITY
     parsed = tuple(seg.strip() for seg in raw.split(",") if seg.strip())
@@ -304,38 +305,15 @@ class _ServerSpec:
 
 
 def _normalise_spec(spec: _ServerSpec) -> None:
-    """Resolve relative commands to absolute paths and inject host secrets.
-
-    Mutates ``spec`` in place. Two concerns rolled into one pass since both
-    apply to the same spec list at the same point in the pipeline:
-
-    - Absolute command path: a stdio MCP whose first argv arg can't be
-      resolved on the subprocess ``$PATH`` is silently dropped (an issue
-      under systemd). Resolving up-front avoids the footgun.
-
-    - Messaging tokens: the messaging MCP gates each platform's tools on
-      ``TELEGRAM_BOT_TOKEN`` etc. We copy those env vars from our own
-      environment into the spec's ``env`` so the subprocess sees them.
-    """
+    """Resolve commands using only the environment supplied for this source."""
     if spec.is_stdio and spec.command:
         head = spec.command[0]
         if not os.path.isabs(head):
-            resolved = shutil.which(head)
+            resolved = shutil.which(head,path=(spec.env or {}).get('PATH',os.defpath))
             if resolved:
                 spec.command = [resolved] + spec.command[1:]
             else:
-                logger.warning(
-                    "MCP '%s': command %r not found on PATH — subprocess may fail to start",
-                    spec.name, head,
-                )
-
-    if spec.name == "messaging" and spec.is_stdio:
-        env = dict(spec.env) if spec.env else {}
-        for var in _MESSAGING_TOKEN_ENV_VARS:
-            val = os.environ.get(var)
-            if val and var not in env:
-                env[var] = val
-        spec.env = env or None
+                logger.warning("MCP '%s': command %r is absent from its configured PATH",spec.name,head)
 
 
 def _resolve_specs(

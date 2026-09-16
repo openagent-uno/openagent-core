@@ -7,6 +7,7 @@ and per-rule severities. No I/O, no parsing logic — those live in
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
@@ -262,12 +263,12 @@ class GateConfig:
         defaults, so this is safe to call unconditionally."""
         def _int(name: str, default: int) -> int:
             try:
-                return int(os.environ.get(name, default))
+                return int(runtime_environment().get(name, default))
             except (TypeError, ValueError):
                 return default
 
         def _bool(name: str, default: bool) -> bool:
-            raw = os.environ.get(name)
+            raw = runtime_environment().get(name)
             if raw is None:
                 return default
             return raw.strip().lower() in ("1", "true", "yes", "on")

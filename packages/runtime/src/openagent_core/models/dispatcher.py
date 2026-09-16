@@ -32,20 +32,21 @@ describing something that no longer happens.
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import logging
 import os
 import re
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable
 
-from src.core import tool_trace, vault_recall
-from src.core.budget_guard import BudgetGuard
-from src.core.logging import elog
-from src.models import stream_usage
-from src.models.base import BaseModel, ModelResponse
-from src.models.budget import BudgetTracker
-from src.models.local_fallback import LocalFallbackPolicy
-from src.models.catalog import (
+from openagent_core.core import tool_trace, vault_recall
+from openagent_core.core.budget_guard import BudgetGuard
+from openagent_core.core.logging import elog
+from openagent_core.models import stream_usage
+from openagent_core.models.base import BaseModel, ModelResponse
+from openagent_core.models.budget import BudgetTracker
+from openagent_core.models.local_fallback import LocalFallbackPolicy
+from openagent_core.models.catalog import (
     CatalogModel,
     FRAMEWORK_API_BASED,
     FULL_SESSION_HISTORY_RUNS,
@@ -53,8 +54,8 @@ from src.models.catalog import (
     framework_of,
     iter_configured_models,
 )
-from src.models.runtime import wire_model_runtime
-from src.models.media_capabilities import (
+from openagent_core.models.runtime import wire_model_runtime
+from openagent_core.models.media_capabilities import (
     MediaCapabilityError,
     input_modalities_for,
     select_media_model,
@@ -164,11 +165,11 @@ def _mark_no_capacity(reason: str) -> None:
     una frase. Qui non si cambia il flusso — restituire la frase resta il
     comportamento — si scrive solo il marcatore che ``run_child_session`` legge,
     cosi' la delivery diventa `failed` ritentabile e torna in coda quando il
-    catalogo c'e' di nuovo. Import locale: ``src.core.agent`` sta piu' in alto
+    catalogo c'e' di nuovo. Import locale: ``openagent_core.core.agent`` sta piu' in alto
     nella catena di import.
     """
     try:
-        from src.core.agent import mark_run_failure
+        from openagent_core.core.agent import mark_run_failure
 
         mark_run_failure(f"router: {reason or 'no_enabled_model'}")
     except Exception:  # noqa: BLE001 - la telemetria non deve mai rompere il turno
@@ -193,7 +194,7 @@ def _team_member_sessions_enabled() -> bool:
     Default ON (the chosen design); set
     ``OPENAGENT_TEAM_MEMBER_SESSIONS=0`` to revert to the legacy nested
     ``member_responses`` behavior."""
-    return os.environ.get("OPENAGENT_TEAM_MEMBER_SESSIONS", "1").strip() not in ("0", "false", "no")
+    return runtime_environment().get("OPENAGENT_TEAM_MEMBER_SESSIONS", "1").strip() not in ("0", "false", "no")
 
 
 def _member_identifier(runtime_id: str) -> str:
@@ -310,6 +311,10 @@ async def _arun_runtime_collect(
     arun_kwargs: dict[str, Any] = {
         "session_id": session_id, "user_id": user_id, "stream": False,
     }
+    from openagent_core.runtime import current_execution_context, current_run_id
+    execution = current_execution_context()
+    if execution is not None and execution.session_id == session_id:
+        arun_kwargs["run_id"] = current_run_id()
     if files:
         arun_kwargs["files"] = files
     if images:
@@ -318,7 +323,7 @@ async def _arun_runtime_collect(
         arun_kwargs["audio"] = audio
     if videos:
         arun_kwargs["videos"] = videos
-    from src.core.metrics import (
+    from openagent_core.core.metrics import (
         open_turn_cache_read, close_turn_cache_read, read_turn_cache_read,
     )
     _cr_token = open_turn_cache_read()
@@ -334,7 +339,7 @@ async def _arun_runtime_collect(
     # Team/Agent runtimes keep tool-produced media typed on RunOutput. Carry
     # it through the same internal boundary NativeProvider uses; StreamSession
     # consumes these markers into CAS-backed structured AttachmentRefs.
-    from src.models.native_provider import _output_media_markers
+    from openagent_core.models.native_provider import _output_media_markers
 
     output_markers = _output_media_markers(run_output)
     if output_markers:
@@ -419,14 +424,14 @@ async def _arun_runtime_stream(
     reported as "team-member usages sometimes shown as tool components,
     sometimes as text response".
     """
-    from src.core._run_state.agent import (
+    from openagent_core.core._run_state.agent import (
         RunCompletedEvent as _AgentRunCompletedEvent,
         RunContentEvent as _AgentRunContentEvent,
         ToolCallCompletedEvent as _AgentToolCallCompletedEvent,
         ToolCallErrorEvent as _AgentToolCallErrorEvent,
         ToolCallStartedEvent as _AgentToolCallStartedEvent,
     )
-    from src.core._run_state.team import (
+    from openagent_core.core._run_state.team import (
         IntermediateRunContentEvent as _TeamIntermediateRunContentEvent,
         RunCompletedEvent as _TeamRunCompletedEvent,
         RunContentEvent as _TeamRunContentEvent,
@@ -434,8 +439,8 @@ async def _arun_runtime_stream(
         ToolCallErrorEvent as _TeamToolCallErrorEvent,
         ToolCallStartedEvent as _TeamToolCallStartedEvent,
     )
-    from src.models import stream_usage
-    from src.models._tool_status import emit_tool_status
+    from openagent_core.models import stream_usage
+    from openagent_core.models._tool_status import emit_tool_status
 
     run_completed_event_types = (
         _AgentRunCompletedEvent,
@@ -459,7 +464,7 @@ async def _arun_runtime_stream(
         _AgentToolCallErrorEvent,
         _TeamToolCallErrorEvent,
     )
-    from src.models.native_provider import (
+    from openagent_core.models.native_provider import (
         _output_media_failure,
         _output_media_markers,
         _save_agno_output_media,
@@ -487,6 +492,10 @@ async def _arun_runtime_stream(
             "session_id": session_id, "user_id": user_id, "stream": True,
             "stream_events": True,
         }
+        from openagent_core.runtime import current_execution_context, current_run_id
+        execution = current_execution_context()
+        if execution is not None and execution.session_id == session_id:
+            stream_kwargs["run_id"] = current_run_id()
         if files:
             stream_kwargs["files"] = files
         if images:
@@ -833,7 +842,7 @@ class TeamRouterProvider(BaseModel):
         """Clear all per-session caches so the next turn rebuilds from
         the current db / pool / providers_config.
         """
-        from src.models.runtime_db_lifecycle import close_runtime_databases
+        from openagent_core.models.runtime_db_lifecycle import close_runtime_databases
 
         for runtime in self._session_runtime.values():
             close_runtime_databases(runtime)
@@ -893,7 +902,7 @@ class TeamRouterProvider(BaseModel):
         still runs with the full OpenAgent identity (vault, MCPs,
         framework guidelines) and the user's persona.
         """
-        from src.models.native_provider import NativeProvider
+        from openagent_core.models.native_provider import NativeProvider
 
         provider = NativeProvider(
             model=entry.runtime_id,
@@ -906,7 +915,7 @@ class TeamRouterProvider(BaseModel):
             member_toolkits = list(self._mcp_pool.runtime_toolkits_tool_search_only())
             provider.set_mcp_toolkits(member_toolkits)
         runtime_model = provider.build_runtime_model()
-        from src.core._runner.agent import Agent as RuntimeAgent
+        from openagent_core.core._runner.agent import Agent as RuntimeAgent
 
         return RuntimeAgent(
             name=name,
@@ -972,7 +981,7 @@ class TeamRouterProvider(BaseModel):
             # A prompt/media-shape change replaces the runtime in-place. Close
             # its SqliteDb before overwriting the cache slot; relying on GC is
             # what left old SQLAlchemy pools holding WAL reader snapshots.
-            from src.models.runtime_db_lifecycle import close_runtime_databases
+            from openagent_core.models.runtime_db_lifecycle import close_runtime_databases
 
             close_runtime_databases(cached)
             self._session_runtime.pop(session_id, None)
@@ -993,7 +1002,7 @@ class TeamRouterProvider(BaseModel):
             )
 
         members_catalog = [e for e in catalog if e.runtime_id != entry.runtime_id]
-        from src.core.execution_profile import lean_local_event_active
+        from openagent_core.core.execution_profile import lean_local_event_active
         force_solo = lean_local_event_active()
         # Budget gate for MEMBERS (C1). The leader is already gated upstream
         # (``ModelDispatcher._enabled_catalog`` → ``guard.filter_catalog``), but
@@ -1012,7 +1021,7 @@ class TeamRouterProvider(BaseModel):
         # (nothing to route TO). Skip Team and dispatch the lone leader as
         # a single agent via NativeProvider.
         if force_solo or not members_catalog:
-            from src.models.native_provider import NativeProvider
+            from openagent_core.models.native_provider import NativeProvider
 
             provider = NativeProvider(
                 model=entry.runtime_id,
@@ -1045,8 +1054,8 @@ class TeamRouterProvider(BaseModel):
 
         # Multi-model: build Team(mode=coordinate). See the ``mode=``
         # kwarg below for why coordinate (not route).
-        from src.memory.store.sqlite import SqliteDb
-        from src.core._runner.team import Team, TeamMode
+        from openagent_core.memory.store.sqlite import SqliteDb
+        from openagent_core.core._runner.team import Team, TeamMode
 
         # The shared runtime DB. Built BEFORE the members so it can be handed
         # to each one: in team-member-session mode a delegated member persists
@@ -1164,7 +1173,7 @@ class TeamRouterProvider(BaseModel):
         if not db_path:
             return
         try:
-            from src.memory.store.sqlite import SqliteDb
+            from openagent_core.memory.store.sqlite import SqliteDb
 
             runtime_db = SqliteDb(db_file=db_path)
             try:
@@ -1181,7 +1190,7 @@ class TeamRouterProvider(BaseModel):
         """
         if not session_id:
             return
-        from src.models.runtime_db_lifecycle import close_runtime_databases
+        from openagent_core.models.runtime_db_lifecycle import close_runtime_databases
 
         runtime = self._session_runtime.pop(session_id, None)
         close_runtime_databases(runtime)
@@ -1383,7 +1392,7 @@ class TeamRouterProvider(BaseModel):
             # Per-run cost-anomaly alert (opt-in): page on REAL cost / non-cached
             # input, NEVER on the summed ``input_tokens`` counter, which a cached
             # agentic loop inflates ~10x. No-op when disabled.
-            from src.core import cost_anomaly
+            from openagent_core.core import cost_anomaly
             cost_anomaly.note_run(
                 session_id=session_id, model=runtime_id, cost_usd=cost,
                 input_tokens=input_tokens, output_tokens=output_tokens,
@@ -1725,8 +1734,8 @@ class ModelDispatcher(BaseModel):
 
       1. **Per-session pin** (``models.pin_session``) — if the user or
          the agent itself has chosen a specific runtime_id for this
-         session, dispatch directly. A pin to a now-disabled model is
-         auto-healed rather than failing the turn.
+         session, dispatch directly. An unavailable pin remains stored and
+         fails explicitly until the host or user changes the selection.
       2. **Default-leader flag** — the first row flagged
          ``is_classifier`` in catalog order. The column name is a
          leftover from the retired classifier router; it means "lead
@@ -2094,27 +2103,15 @@ class ModelDispatcher(BaseModel):
             try:
                 pinned_id = await self._db.get_session_pin(session_id)
             except Exception as e:  # noqa: BLE001
-                logger.debug("get_session_pin failed for %s: %s", session_id, e)
-                pinned_id = None
+                raise RuntimeError("The session model selection could not be read") from e
             if pinned_id:
                 configured_ids = {
                     entry.runtime_id for entry in self._configured_enabled_catalog()
                 }
                 if pinned_id not in configured_ids:
-                    # Genuinely gone (deleted / disabled in config). Auto-heal by
-                    # unpinning so the session doesn't keep asking for a model
-                    # that no longer exists.
-                    elog(
-                        "router.pin_auto_heal",
-                        session_id=session_id,
-                        pinned_model=pinned_id,
-                        reason="model_not_enabled",
-                    )
-                    try:
-                        await self._db.unpin_session_model(session_id)
-                    except Exception as e:  # noqa: BLE001
-                        logger.debug("unpin_session_model failed for %s: %s", session_id, e)
-                    pinned_id = None
+                    # Preserve the user's pin. An unavailable destination is
+                    # an explicit failure, never authority to select another.
+                    raise LookupError('The pinned model is unavailable')
                 else:
                     # A manual pin overrides the standby/cooldown policy, but
                     # never a real spend cap. Check the budget-filtered catalog
@@ -2124,18 +2121,7 @@ class ModelDispatcher(BaseModel):
                         pin_catalog = self._budget_guard.filter_catalog(pin_catalog)
                     enabled_ids = {entry.runtime_id for entry in pin_catalog}
                     if pinned_id not in enabled_ids:
-                        # Enabled but budget-excluded THIS window. Route elsewhere
-                        # for this turn only — do NOT unpin: the cap is temporary
-                        # and the pin must be honoured again once the window rolls
-                        # over. Unpinning here would turn one over-cap moment into
-                        # a permanent loss of the user's model choice.
-                        elog(
-                            "router.pin_budget_bypass",
-                            session_id=session_id,
-                            pinned_model=pinned_id,
-                            reason="over_budget",
-                        )
-                        pinned_id = None
+                        raise PermissionError('The pinned model is currently excluded by its budget')
             if pinned_id:
                 return RoutingDecision(
                     reason="session_pin",

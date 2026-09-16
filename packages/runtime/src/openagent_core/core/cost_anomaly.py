@@ -47,6 +47,7 @@ dead endpoint can never break a turn. Everything is best-effort.
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import asyncio
 import json
 import os
@@ -54,8 +55,8 @@ import time
 from typing import Any, Optional
 from urllib import request as _urllib_request
 
-from src.core.execution_origin import create_server_only_task
-from src.core.logging import elog
+from openagent_core.core.execution_origin import create_server_only_task
+from openagent_core.core.logging import elog
 
 _ENABLED_ENV = "OPENAGENT_COST_ANOMALY_ENABLED"
 _COST_USD_ENV = "OPENAGENT_COST_ANOMALY_COST_USD"
@@ -85,12 +86,12 @@ def enabled() -> bool:
     """True when per-run cost-anomaly alerting is switched on. Default ON — the
     thresholds are safe (the false-alarm run can't page), so a real runaway run
     surfaces out of the box. ``OPENAGENT_COST_ANOMALY_ENABLED=0`` disables it."""
-    return _truthy(os.environ.get(_ENABLED_ENV, "1"))
+    return _truthy(runtime_environment().get(_ENABLED_ENV, "1"))
 
 
 def _cost_threshold() -> float:
     try:
-        return max(0.0, float(os.environ.get(_COST_USD_ENV, "").strip()
+        return max(0.0, float(runtime_environment().get(_COST_USD_ENV, "").strip()
                               or _DEFAULT_COST_USD))
     except ValueError:
         return _DEFAULT_COST_USD
@@ -98,7 +99,7 @@ def _cost_threshold() -> float:
 
 def _uncached_threshold() -> int:
     try:
-        return max(0, int(os.environ.get(_UNCACHED_TOKENS_ENV, "").strip()
+        return max(0, int(runtime_environment().get(_UNCACHED_TOKENS_ENV, "").strip()
                           or _DEFAULT_UNCACHED_INPUT_TOKENS))
     except ValueError:
         return _DEFAULT_UNCACHED_INPUT_TOKENS
@@ -156,10 +157,10 @@ def _alert_webhook_url() -> Optional[str]:
     """The alert webhook to page, or ``None``. The dedicated cost-anomaly var
     wins; unset, we reuse the quality-digest paging webhook so a single
     already-configured Slack/PagerDuty bridge receives cost anomalies too."""
-    raw = os.environ.get(_ALERT_WEBHOOK_ENV, "").strip()
+    raw = runtime_environment().get(_ALERT_WEBHOOK_ENV, "").strip()
     if raw:
         return raw
-    shared = os.environ.get(_SHARED_ALERT_WEBHOOK_ENV, "").strip()
+    shared = runtime_environment().get(_SHARED_ALERT_WEBHOOK_ENV, "").strip()
     return shared or None
 
 

@@ -1,6 +1,6 @@
 import logging
 from functools import lru_cache
-from os import getenv
+from openagent_core.configuration import getenv
 from typing import Any, Literal, Optional
 
 from rich.logging import RichHandler

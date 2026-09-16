@@ -48,11 +48,12 @@ a silent risk into a live outage on someone's nightly cron.
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import os
 import re
 from functools import lru_cache
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 # Destructive shell / VCS / k8s patterns rejected when
 # ``safety.approvals.enabled: true``. Carried over verbatim from the retired
@@ -117,7 +118,7 @@ def approvals_enabled() -> bool:
     ``server.py`` only ever writes "1" or "0"; the wider set is for operators
     exporting the var by hand.
     """
-    val = os.environ.get(_APPROVALS_ENV, "").strip().lower()
+    val = runtime_environment().get(_APPROVALS_ENV, "").strip().lower()
     return val in {"1", "true", "yes", "on"}
 
 
@@ -203,7 +204,7 @@ def check_command_allowed(command: str, *, tool: str = "shell_exec") -> None:
     # about their intent than a default pattern written years ago. Checked
     # FIRST so an exempt command never reaches the block loop — which also
     # means it is never audited as blocked, because it wasn't.
-    for pat in _compile_allow((os.environ.get(_ALLOW_PATTERNS_ENV) or "").strip()):
+    for pat in _compile_allow((runtime_environment().get(_ALLOW_PATTERNS_ENV) or "").strip()):
         if pat.search(command):
             elog(
                 "safety.command_allowed",
@@ -213,7 +214,7 @@ def check_command_allowed(command: str, *, tool: str = "shell_exec") -> None:
             )
             return
 
-    for pat in _compile((os.environ.get(_EXTRA_PATTERNS_ENV) or "").strip()):
+    for pat in _compile((runtime_environment().get(_EXTRA_PATTERNS_ENV) or "").strip()):
         m = pat.search(command)
         if m:
             elog(

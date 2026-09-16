@@ -18,6 +18,7 @@ cross-process signalling is required.
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import asyncio
 import logging
 import os
@@ -26,9 +27,9 @@ from typing import Any
 
 import aiosqlite
 from mcp.server.fastmcp import FastMCP
-from src.core.execution_policy import encode_execution_policy
-from src.memory.db import SCHEMA_SQL, sqlite_busy_timeout_ms, sqlite_busy_timeout_s
-from src.memory.schedule import (
+from openagent_core.core.execution_policy import encode_execution_policy
+from openagent_core.memory.db import SCHEMA_SQL, sqlite_busy_timeout_ms, sqlite_busy_timeout_s
+from openagent_core.memory.schedule import (
     build_one_shot_expression,
     decorate_scheduled_task,
     default_timezone_name,
@@ -68,7 +69,7 @@ def _db_path() -> str:
     """
     # Same rule as ``_common.db_path``: never the CWD (see that docstring —
     # under PyInstaller it means an empty database nobody notices).
-    from src.mcp.servers._common import db_path as _shared_db_path
+    from openagent_core.mcp.servers._common import db_path as _shared_db_path
 
     return _shared_db_path()
 
@@ -76,24 +77,10 @@ def _db_path() -> str:
 # Single shared connection per MCP process. SQLite handles this fine
 # thanks to WAL (the main OpenAgent process also opens WAL on the same
 # file), and keeping one connection avoids per-call open/close overhead.
-_conn_lock = asyncio.Lock()
-_conn: aiosqlite.Connection | None = None
+async def _get_conn():
+    from openagent_core.automation import repository_connection
+    return repository_connection()
 
-
-async def _get_conn() -> aiosqlite.Connection:
-    global _conn
-    async with _conn_lock:
-        if _conn is None:
-            path = _db_path()
-            conn = await aiosqlite.connect(path, timeout=sqlite_busy_timeout_s())
-            conn.row_factory = aiosqlite.Row
-            await conn.execute(f"PRAGMA busy_timeout = {sqlite_busy_timeout_ms()}")
-            await conn.execute("PRAGMA journal_mode=WAL")
-            await conn.executescript(SCHEMA_SQL)
-            await conn.commit()
-            _conn = conn
-            logger.info("scheduler MCP connected to %s", path)
-        return _conn
 
 
 def _row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
@@ -714,7 +701,7 @@ async def describe_cron(
 def main() -> None:
     """Entrypoint: run the FastMCP server over stdio."""
     logging.basicConfig(
-        level=os.environ.get("OPENAGENT_SCHEDULER_MCP_LOGLEVEL", "INFO"),
+        level=runtime_environment().get("OPENAGENT_SCHEDULER_MCP_LOGLEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     mcp.run()  # stdio transport by default
@@ -722,3 +709,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def build_runtime_toolkit():
+    from openagent_core.automation import build_automation_toolkit
+    return build_automation_toolkit('scheduled_task')

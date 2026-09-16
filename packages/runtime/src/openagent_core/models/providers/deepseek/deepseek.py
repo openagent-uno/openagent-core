@@ -1,12 +1,12 @@
 from dataclasses import dataclass, field
-from os import getenv
+from openagent_core.configuration import getenv
 from typing import Any, Dict, Optional
 
-from src.core.runtime_errors import ModelAuthenticationError
-from src.models.providers.message import Message
-from src.models.providers.openai.like import OpenAILike
-from src.core._runner.utils.log import log_warning
-from src.core._runner.utils.openai import _format_file_for_message, audio_to_message, images_to_message
+from openagent_core.core.runtime_errors import ModelAuthenticationError
+from openagent_core.models.providers.message import Message
+from openagent_core.models.providers.openai.like import OpenAILike
+from openagent_core.core._runner.utils.log import log_warning
+from openagent_core.core._runner.utils.openai import _format_file_for_message, audio_to_message, images_to_message
 
 
 @dataclass

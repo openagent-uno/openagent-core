@@ -9,7 +9,7 @@ turn's principal.
 
 Exposes ``search_past_conversations``: "remember when we discussed X?" across
 every session this agent has stored. The index lives in
-:mod:`src.memory.transcript_index` (a rebuildable FTS5 cache over
+:mod:`openagent_core.memory.transcript_index` (a rebuildable FTS5 cache over
 ``sessions.runs``); this server is a thin wrapper that keeps it fresh, bounds
 the result, and — the part that carries the most weight — tells the truth
 about what it did and did not look at.
@@ -40,6 +40,7 @@ way an unbounded read on the event loop would.
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import asyncio
 import logging
 import os
@@ -75,7 +76,7 @@ def _db_path() -> str:
     """Resolve the agent DB path the way every other in-tree MCP subprocess
     does — env var first (injected by ``MCPPool`` at spawn), then a relative
     fallback so the module still runs when invoked directly."""
-    return os.environ.get("OPENAGENT_DB_PATH", "./openagent.db")
+    return runtime_environment().get("OPENAGENT_DB_PATH", "./openagent.db")
 
 
 def _vault_path() -> Optional[str]:
@@ -83,11 +84,11 @@ def _vault_path() -> Optional[str]:
     ``OPENAGENT_VAULT_PATH`` (set by the parent for the vault MCP) first, then
     the packaged default. Returns ``None`` only if resolution raises — the
     index then covers sessions alone."""
-    override = os.environ.get("OPENAGENT_VAULT_PATH")
+    override = runtime_environment().get("OPENAGENT_VAULT_PATH")
     if override:
         return override
     try:
-        from src.core.paths import default_vault_path
+        from openagent_core.core.paths import default_vault_path
         return str(default_vault_path())
     except Exception:  # noqa: BLE001
         return None
@@ -110,10 +111,10 @@ async def _get_semantic_index() -> Any:
         _sem_lock = asyncio.Lock()
     async with _sem_lock:
         if _sem_index is None:
-            from src.memory.semantic_index import SemanticIndex, resolve_embedder
+            from openagent_core.memory.semantic_index import SemanticIndex, resolve_embedder
 
             embedder = resolve_embedder()  # subprocess: env-only, no providers_config
-            override = os.environ.get("OPENAGENT_SEMANTIC_INDEX_PATH") or None
+            override = runtime_environment().get("OPENAGENT_SEMANTIC_INDEX_PATH") or None
             _sem_index = await asyncio.to_thread(
                 SemanticIndex, _db_path(),
                 vault_root=_vault_path(), index_path=override, embedder=embedder,
@@ -129,9 +130,9 @@ async def _get_index() -> Any:
         _index_lock = asyncio.Lock()
     async with _index_lock:
         if _index is None:
-            from src.memory.transcript_index import TranscriptIndex
+            from openagent_core.memory.transcript_index import TranscriptIndex
 
-            override = os.environ.get("OPENAGENT_TRANSCRIPT_INDEX_PATH") or None
+            override = runtime_environment().get("OPENAGENT_TRANSCRIPT_INDEX_PATH") or None
             _index = await asyncio.to_thread(TranscriptIndex, _db_path(), override)
         return _index
 

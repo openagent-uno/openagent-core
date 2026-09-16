@@ -16,6 +16,7 @@ mcp-manager uses (DB-backed hand-off).
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import asyncio
 import json
 import logging
@@ -27,27 +28,27 @@ from typing import Any
 import aiosqlite
 from mcp.server.fastmcp import FastMCP
 
-from src.workflow import (
+from openagent_core.workflow import (
     BLOCK_CATALOG,
     ValidationError,
     iter_block_specs,
     validate_graph,
 )
-from src.workflow.blocks import get_block_spec
-from src.workflow.cancel import (
+from openagent_core.workflow.blocks import get_block_spec
+from openagent_core.workflow.cancel import (
     await_runs_terminal as _await_runs_terminal,
     flag_workflow_runs_cancelling,
 )
-from src.workflow.examples import (
+from openagent_core.workflow.examples import (
     get_workflow_example as _get_workflow_example,
     list_workflow_examples as _list_workflow_examples,
 )
-from src.workflow.schedule_sync import (
+from openagent_core.workflow.schedule_sync import (
     iter_trigger_schedule_blocks,
     trigger_types_from_graph,
 )
-from src.memory.db import SCHEMA_SQL, sqlite_busy_timeout_ms, sqlite_busy_timeout_s
-from src.memory.schedule import (
+from openagent_core.memory.db import SCHEMA_SQL, sqlite_busy_timeout_ms, sqlite_busy_timeout_s
+from openagent_core.memory.schedule import (
     epoch_to_iso,
     next_run_for_expression,
     validate_schedule_expression,
@@ -59,30 +60,15 @@ logger = logging.getLogger(__name__)
 def _db_path() -> str:
     # Same rule as ``_common.db_path``: never the CWD (see that docstring —
     # under PyInstaller it means an empty database nobody notices).
-    from src.mcp.servers._common import db_path as _shared_db_path
+    from openagent_core.mcp.servers._common import db_path as _shared_db_path
 
     return _shared_db_path()
 
 
-_conn_lock = asyncio.Lock()
-_conn: aiosqlite.Connection | None = None
+async def _get_conn():
+    from openagent_core.automation import repository_connection
+    return repository_connection()
 
-
-async def _get_conn() -> aiosqlite.Connection:
-    global _conn
-    async with _conn_lock:
-        if _conn is None:
-            path = _db_path()
-            conn = await aiosqlite.connect(path, timeout=sqlite_busy_timeout_s())
-            conn.row_factory = aiosqlite.Row
-            await conn.execute(f"PRAGMA busy_timeout = {sqlite_busy_timeout_ms()}")
-            await conn.execute("PRAGMA journal_mode=WAL")
-            await conn.execute("PRAGMA foreign_keys = ON")
-            await conn.executescript(SCHEMA_SQL)
-            await conn.commit()
-            _conn = conn
-            logger.info("workflow-manager MCP connected to %s", path)
-        return _conn
 
 
 # ── row hydration ────────────────────────────────────────────────────
@@ -1034,7 +1020,7 @@ async def stop_workflow(
 
 def main() -> None:
     logging.basicConfig(
-        level=os.environ.get("OPENAGENT_WORKFLOW_MCP_LOGLEVEL", "INFO"),
+        level=runtime_environment().get("OPENAGENT_WORKFLOW_MCP_LOGLEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     mcp.run()
@@ -1042,3 +1028,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def build_runtime_toolkit():
+    from openagent_core.automation import build_automation_toolkit
+    return build_automation_toolkit('workflow')

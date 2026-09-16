@@ -3,7 +3,7 @@
 WHAT LIVES HERE (and what moved)
 --------------------------------
 The reverse block reader this MCP was built on now lives in
-``src.core.logging`` — the module that owns the log's *format* — and is shared
+``openagent_core.core.logging`` — the module that owns the log's *format* — and is shared
 with ``read_tail`` / ``GET /api/logs``. That was always the right home (the
 original version of this docstring said so and deferred it); the endpoint was
 still slurping the whole file on the gateway's event loop, so the move landed
@@ -54,6 +54,7 @@ span) and leave latency ranking to a log that records it.
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import json
 import os
 import re
@@ -65,7 +66,7 @@ from typing import Any
 # The format's own reader, shared with ``read_tail`` / ``GET /api/logs``.
 # Re-exported unchanged so this module stays the single import site for the
 # MCP's handlers (and so ``reader.iso`` / ``reader.ScanStats`` keep resolving).
-from src.core.logging import (  # noqa: F401
+from openagent_core.core.logging import (  # noqa: F401
     _BLOCK_BYTES,
     ScanStats,
     events_path,
@@ -80,7 +81,7 @@ from src.core.logging import (  # noqa: F401
 # ~15k entries at the observed 137-byte average — far more than any capped
 # result can return — so the bound is invisible in practice and only bites on
 # a pathological log.
-_MAX_SCAN_BYTES = int(os.environ.get("OPENAGENT_LOGS_MCP_MAX_SCAN_BYTES", str(2_000_000)))
+_MAX_SCAN_BYTES = 2_000_000
 
 # Value-level truncation. Precedent: tool_search clamps tool descriptions to
 # 200 chars so list_tools stays affordable. Log values skew short (137-byte
@@ -179,10 +180,10 @@ def _now() -> float:
 
 
 def iter_entries_reverse(
-    *, since: float | None = None, max_bytes: int = _MAX_SCAN_BYTES,
+    *, since: float | None = None, max_bytes: int | None = None,
     stats: ScanStats | None = None, path: Path | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """This MCP's capped view of :func:`src.core.logging.iter_events_reverse`.
+    """This MCP's capped view of :func:`openagent_core.core.logging.iter_events_reverse`.
 
     The *only* difference from the core primitive is the default: the scan cap
     is applied here and nowhere else. Core defaults to unbounded because
@@ -191,6 +192,8 @@ def iter_entries_reverse(
     nothing and would otherwise walk the whole log on the event loop. Callers
     that genuinely want the whole file pass ``max_bytes`` explicitly.
     """
+    if max_bytes is None:
+        max_bytes = int(runtime_environment().get('OPENAGENT_LOGS_MCP_MAX_SCAN_BYTES', _MAX_SCAN_BYTES))
     return iter_events_reverse(
         since=since, max_bytes=max_bytes, stats=stats, path=path,
     )

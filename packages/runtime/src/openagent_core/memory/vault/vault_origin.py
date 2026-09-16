@@ -15,7 +15,10 @@ import time
 from typing import Any, Optional
 
 _lock = threading.Lock()
-_last: dict[str, Any] = {"origin": None, "ts": 0.0}
+from openagent_core.instance_state import registry
+
+def _last() -> dict:
+    return registry("vault_provenance")
 
 # Order + labels for the git trailer lines.
 _ORDER = ("kind", "session", "workflow", "task", "run", "tool", "user")
@@ -39,16 +42,16 @@ def note_activity(**origin: Any) -> None:
     if not clean:
         return
     with _lock:
-        _last["origin"] = clean
-        _last["ts"] = time.monotonic()
+        _last()["origin"] = clean
+        _last()["ts"] = time.monotonic()
 
 
 def recent_origin(max_age_s: float = 180.0) -> Optional[dict]:
     """The most recent activity origin, if it is fresh enough to plausibly
     own an out-of-band edit; otherwise ``None`` (→ "external")."""
     with _lock:
-        origin = _last["origin"]
-        ts = _last["ts"]
+        origin = _last().get("origin")
+        ts = _last().get("ts", 0.0)
     if origin and (time.monotonic() - ts) <= max_age_s:
         return dict(origin)
     return None

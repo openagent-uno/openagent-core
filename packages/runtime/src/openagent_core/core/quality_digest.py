@@ -30,6 +30,8 @@ off. Reuses ``quality_monitor.aggregate()`` and the one-reverse-scan
 """
 from __future__ import annotations
 
+from openagent_core.instance_state import InstanceSet
+from openagent_core.configuration import runtime_environment
 import asyncio
 import json
 import os
@@ -37,8 +39,8 @@ import time
 from typing import Any, Optional
 from urllib import request as _urllib_request
 
-from src.core.logging import elog, iter_events_reverse
-from src.core import quality_monitor
+from openagent_core.core.logging import elog, iter_events_reverse
+from openagent_core.core import quality_monitor
 
 # ── config (env-driven, set by ``_build_agent`` from ``quality_monitor.digest.*``) ──
 _ENABLED_ENV = "OPENAGENT_QUALITY_DIGEST_ENABLED"
@@ -70,14 +72,14 @@ def enabled() -> bool:
     """True when the digest should run. Defaults to the quality monitor's own
     switch (enabling the monitor gives you the digest), unless
     ``OPENAGENT_QUALITY_DIGEST_ENABLED`` explicitly overrides it."""
-    raw = os.environ.get(_ENABLED_ENV)
+    raw = runtime_environment().get(_ENABLED_ENV)
     if raw is None or raw.strip() == "":
         return quality_monitor.enabled()
     return _truthy(raw)
 
 
 def _interval_seconds() -> float:
-    raw = os.environ.get(_INTERVAL_ENV, "").strip()
+    raw = runtime_environment().get(_INTERVAL_ENV, "").strip()
     if not raw:
         return _DEFAULT_INTERVAL_HOURS * 3600.0
     try:
@@ -87,7 +89,7 @@ def _interval_seconds() -> float:
 
 
 def _float_env(name: str, default: float) -> float:
-    raw = os.environ.get(name, "").strip()
+    raw = runtime_environment().get(name, "").strip()
     if not raw:
         return default
     try:
@@ -97,7 +99,7 @@ def _float_env(name: str, default: float) -> float:
 
 
 def _int_env(name: str, default: int) -> int:
-    raw = os.environ.get(name, "").strip()
+    raw = runtime_environment().get(name, "").strip()
     if not raw:
         return default
     try:
@@ -201,11 +203,11 @@ def evaluate_alerts(digest: dict[str, Any]) -> list[dict[str, Any]]:
 # thus pages ONCE, not every cycle; a kind that clears and later recurs pages
 # again. The ``elog`` side is untouched — it still fires every cycle — so the
 # unset-webhook behaviour is byte-identical to before.
-_alerted_kinds: set[str] = set()
+_alerted_kinds = InstanceSet('core/quality_digest.py:_alerted_kinds')
 
 
 def _alert_webhook_url() -> Optional[str]:
-    raw = os.environ.get(_ALERT_WEBHOOK_ENV, "").strip()
+    raw = runtime_environment().get(_ALERT_WEBHOOK_ENV, "").strip()
     return raw or None
 
 

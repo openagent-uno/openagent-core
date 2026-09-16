@@ -33,6 +33,7 @@ TWO RULES THIS MODULE LEARNED THE HARD WAY
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import os
 import time
 from dataclasses import dataclass
@@ -83,14 +84,14 @@ _REMINDER_TEMPLATE = (
 def _is_enabled() -> bool:
     # On by default; opt out with memory.vault_reminder.enabled: false.
     return (
-        os.environ.get("OPENAGENT_VAULT_REMINDER_ENABLED", "1").strip().lower()
+        runtime_environment().get("OPENAGENT_VAULT_REMINDER_ENABLED", "1").strip().lower()
         in ("1", "true", "yes", "on")
     )
 
 
 def _every() -> int:
     try:
-        n = int(os.environ.get("OPENAGENT_VAULT_REMINDER_EVERY_N_TURNS", _DEFAULT_EVERY))
+        n = int(runtime_environment().get("OPENAGENT_VAULT_REMINDER_EVERY_N_TURNS", _DEFAULT_EVERY))
     except (TypeError, ValueError):
         return _DEFAULT_EVERY
     return max(1, n)

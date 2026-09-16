@@ -17,10 +17,8 @@ didn't have until now:
     touching server code. Output is captured (truncated to 4 KB) into
     the event log so failures are visible.
 
-Both are populated by ``core/server.create_agent`` from yaml. The
-registry is module-level state — that's deliberate: bridges and the
-agent runtime live in the same process, so a singleton dict is the
-right tool. A multi-process deployment would need a different shape.
+Both are populated by ``core/server.create_agent`` from yaml. Registries are owned by each runtime instance; callbacks never select
+another agent by its session ID.
 
 Defaults: empty mapping → both features no-op. Operators opt in by
 filling the yaml sections.
@@ -33,17 +31,33 @@ import json
 import os
 import shlex
 import time
+from contextvars import ContextVar
 from typing import Any
 
-from src.core.execution_origin import create_server_only_task
+from openagent_core.core.execution_origin import create_server_only_task
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 
 # ── Quick commands ──────────────────────────────────────────────────
 
 
-_QUICK_COMMANDS: dict[str, str] = {}
+_registries: ContextVar[dict[str, dict[str, str]] | None] = ContextVar("openagent_hook_registries", default=None)
+
+def _registry(name: str) -> dict[str, str]:
+    from openagent_core.runtime import current_runtime
+    runtime=current_runtime()
+    if runtime is not None:
+        registries=getattr(runtime,"hook_registries",None)
+        if registries is None:
+            registries={}
+            runtime.hook_registries=registries
+    else:
+        registries=_registries.get()
+        if registries is None:
+            registries={}
+            _registries.set(registries)
+    return registries.setdefault(name,{})
 
 
 def set_quick_commands(mapping: dict[str, str] | None) -> None:
@@ -51,13 +65,13 @@ def set_quick_commands(mapping: dict[str, str] | None) -> None:
     after parsing yaml; tests/code can call it directly. Trigger
     matching is case-insensitive on the slash-prefixed form, so
     ``recap`` in yaml matches both ``/recap`` and ``/RECAP``."""
-    _QUICK_COMMANDS.clear()
+    _registry("quick_commands").clear()
     for k, v in (mapping or {}).items():
         if not k or not isinstance(v, str):
             continue
         key = str(k).strip().lstrip("/").lower()
         if key:
-            _QUICK_COMMANDS[key] = v
+            _registry("quick_commands")[key] = v
 
 
 def expand_quick_command(text: str) -> str | None:
@@ -67,13 +81,13 @@ def expand_quick_command(text: str) -> str | None:
     anything after the trigger is preserved and appended (so
     ``/recap last week`` becomes ``<expansion>\nlast week``).
     """
-    if not _QUICK_COMMANDS or not text:
+    if not _registry("quick_commands") or not text:
         return None
     stripped = text.strip()
     if not stripped.startswith("/"):
         return None
     first, _, rest = stripped[1:].partition(" ")
-    expansion = _QUICK_COMMANDS.get(first.lower())
+    expansion = _registry("quick_commands").get(first.lower())
     if expansion is None:
         return None
     rest = rest.strip()
@@ -88,7 +102,7 @@ def expand_quick_command(text: str) -> str | None:
 # Map of event name → shell command string (POSIX). Commands run via
 # ``/bin/sh -c`` with the event payload exposed as env vars prefixed
 # ``OPENAGENT_EVENT_``.
-_HOOKS: dict[str, str] = {}
+
 
 # Sane upper bound to keep a misbehaving hook from blocking forever.
 _HOOK_TIMEOUT_S = 30.0
@@ -100,14 +114,14 @@ def set_hooks(mapping: dict[str, str] | None) -> None:
     server normalises them to lowercase + drops a leading ``on_`` so
     ``on_turn_end`` in yaml matches a ``fire("turn_end", ...)`` call.
     """
-    _HOOKS.clear()
+    _registry("hooks").clear()
     for k, v in (mapping or {}).items():
         if not k or not isinstance(v, str) or not v.strip():
             continue
         key = str(k).strip().lower()
         if key.startswith("on_"):
             key = key[3:]
-        _HOOKS[key] = v.strip()
+        _registry("hooks")[key] = v.strip()
 
 
 def _payload_to_env(payload: dict[str, Any]) -> dict[str, str]:
@@ -133,7 +147,9 @@ def _payload_to_env(payload: dict[str, Any]) -> dict[str, str]:
 
 async def _run_hook(event_name: str, command: str, payload: dict[str, Any]) -> None:
     start = time.monotonic()
-    env = {**os.environ, **_payload_to_env(payload)}
+    from openagent_core.runtime import current_runtime
+    runtime=current_runtime()
+    env = {**(dict(runtime.settings.environment) if runtime is not None else dict(os.environ)), **_payload_to_env(payload)}
     env["OPENAGENT_EVENT_NAME"] = event_name
     try:
         proc = await asyncio.create_subprocess_shell(
@@ -184,9 +200,9 @@ def fire(event_name: str, **payload: Any) -> None:
     asyncio task. Returns immediately — never awaited. Safe to call
     from sync code (asyncio.get_running_loop() handles the dispatch).
     """
-    if not _HOOKS:
+    if not _registry("hooks"):
         return
-    cmd = _HOOKS.get(event_name)
+    cmd = _registry("hooks").get(event_name)
     if not cmd:
         return
     try:
@@ -202,8 +218,8 @@ def fire(event_name: str, **payload: Any) -> None:
 
 # Convenience accessors for tests / debug.
 def registered_quick_commands() -> dict[str, str]:
-    return dict(_QUICK_COMMANDS)
+    return dict(_registry("quick_commands"))
 
 
 def registered_hooks() -> dict[str, str]:
-    return dict(_HOOKS)
+    return dict(_registry("hooks"))

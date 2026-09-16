@@ -223,7 +223,10 @@ def get_pool_strategy(provider: str, providers_config: Any) -> str:
 # Keyed by provider name so cooldown state is shared across every session /
 # NativeProvider that targets the same provider. Lock-guarded because
 # NativeProviders are constructed per member per session on many threads.
-_POOLS: dict[str, CredentialPool] = {}
+from openagent_core.instance_state import registry
+
+def _pools() -> dict:
+    return registry("credential_pools")
 _REGISTRY_LOCK = threading.Lock()
 
 
@@ -277,7 +280,10 @@ def get_or_build_pool(provider: str, provider_cfg: Any) -> CredentialPool | None
         # Fast inert path: don't take the registry lock unless a real pool
         # could exist. A cached pool is only built once accounts len >= 2.
         with _REGISTRY_LOCK:
-            existing = _POOLS.get(provider)
+            from openagent_core.contracts import canonical_json
+            import hashlib
+            key = (provider, hashlib.sha256(canonical_json(provider_cfg).encode()).hexdigest())
+            existing = _pools().get(key)
             if existing is not None:
                 return existing
             accounts = _build_accounts(provider_cfg, metadata)
@@ -285,7 +291,7 @@ def get_or_build_pool(provider: str, provider_cfg: Any) -> CredentialPool | None
                 return None
             strategy = get_pool_strategy(provider, metadata)
             pool = CredentialPool(accounts, strategy=strategy)
-            _POOLS[provider] = pool
+            _pools()[key] = pool
             return pool
     except Exception:
         # Defensive: pooling is an optimisation; a bad config must never
@@ -296,4 +302,4 @@ def get_or_build_pool(provider: str, provider_cfg: Any) -> CredentialPool | None
 def _reset_registry_for_test() -> None:
     """Clear the singleton registry. Test-only — never called in production."""
     with _REGISTRY_LOCK:
-        _POOLS.clear()
+        _pools().clear()

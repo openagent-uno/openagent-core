@@ -7,18 +7,18 @@ import httpx
 from pydantic import BaseModel
 from typing_extensions import Literal
 
-from src.core.runtime_errors import ContextWindowExceededError, ModelAuthenticationError, ModelProviderError
-from src.stream.media import File
-from src.models.providers.base import Model
-from src.models.providers.message import Citations, Message, UrlCitation
-from src.models.providers.metrics import MessageMetrics
-from src.models.providers.response import ModelResponse
-from src.core._run_state.agent import RunOutput
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.log import log_debug, log_error, log_warning
-from src.core._runner.utils.models.openai_responses import images_to_message
-from src.core._runner.utils.models.schema_utils import get_response_schema_for_provider
-from src.core._runner.utils.tokens import count_schema_tokens
+from openagent_core.core.runtime_errors import ContextWindowExceededError, ModelAuthenticationError, ModelProviderError
+from openagent_core.stream.media import File
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.message import Citations, Message, UrlCitation
+from openagent_core.models.providers.metrics import MessageMetrics
+from openagent_core.models.providers.response import ModelResponse
+from openagent_core.core._run_state.agent import RunOutput
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.log import log_debug, log_error, log_warning
+from openagent_core.core._runner.utils.models.openai_responses import images_to_message
+from openagent_core.core._runner.utils.models.schema_utils import get_response_schema_for_provider
+from openagent_core.core._runner.utils.tokens import count_schema_tokens
 
 try:
     from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAI, RateLimitError
@@ -123,7 +123,7 @@ class OpenAIResponses(Model):
         Returns:
             Dict[str, Any]: Client parameters
         """
-        from os import getenv
+        from openagent_core.configuration import getenv
 
         # Fetch API key from env if not already set
         if not self.api_key:
@@ -584,7 +584,7 @@ class OpenAIResponses(Model):
         Returns:
             Dict[str, Any]: The formatted message.
         """
-        from src.core._runner.utils.message import normalize_tool_messages, reformat_tool_call_ids
+        from openagent_core.core._runner.utils.message import normalize_tool_messages, reformat_tool_call_ids
 
         # Backwards compat: expand old Gemini combined tool messages into individual canonical messages
         messages = normalize_tool_messages(messages)

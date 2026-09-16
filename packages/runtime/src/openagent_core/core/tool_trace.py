@@ -40,6 +40,7 @@ a bookkeeping miss must cost a trace, never a turn.
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import contextvars
 import json
 import os
@@ -71,13 +72,13 @@ def _truthy(v: str) -> bool:
 
 
 def _enabled() -> bool:
-    if _truthy(os.environ.get(_ENABLED_ENV, "0")):
+    if _truthy(runtime_environment().get(_ENABLED_ENV, "0")):
         return True
     # The lean local-event reply guard verifies final status/action claims
     # against the tool evidence before sending. Capture is therefore part of
     # execution correctness for this profile, not merely quality telemetry.
     try:
-        from src.core.execution_profile import lean_local_event_active
+        from openagent_core.core.execution_profile import lean_local_event_active
         return lean_local_event_active()
     except Exception:  # noqa: BLE001
         return False

@@ -2,7 +2,7 @@ import json
 import re
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
-from os import getenv
+from openagent_core.configuration import getenv
 from typing import Any, Callable, Dict, List, Literal, NoReturn, Optional, Tuple, Type, Union
 
 import httpx

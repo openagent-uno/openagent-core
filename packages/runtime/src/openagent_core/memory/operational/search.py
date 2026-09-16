@@ -8,6 +8,7 @@ only user-visible/redacted projections.
 
 from __future__ import annotations
 
+from openagent_core.instance_state import InstanceMapping
 import asyncio
 import hashlib
 import json
@@ -67,7 +68,7 @@ _SIGNED_QUERY_RE = re.compile(
     r"(?i)([?&](?:token|api[_-]?key|key|signature|sig|x-amz-signature|x-goog-signature|access_token)=)[^&#\s]+"
 )
 _OPAQUE_TOKEN_RE = re.compile(r"(?<![\w])([A-Za-z0-9_+/=-]{32,})(?![\w])")
-_SYNC_LOCKS: dict[str, asyncio.Lock] = {}
+_SYNC_LOCKS = InstanceMapping('memory/operational/search.py:_SYNC_LOCKS')
 
 
 @dataclass(frozen=True)

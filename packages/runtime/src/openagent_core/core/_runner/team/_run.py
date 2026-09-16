@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from openagent_core.instance_state import InstanceSet
 import asyncio
 import time
 from collections import deque
@@ -22,25 +23,25 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from src.core.runtime_errors import (
+from openagent_core.core.runtime_errors import (
     InputCheckError,
     OutputCheckError,
     RunCancelledException,
 )
-from src.core.execution_origin import create_server_only_task
-from src.core._runner._stubs import FilterExpr
-from src.stream.media import Audio, File, Image, Video
-from src.models.providers.base import Model
-from src.models.providers.fallback import acall_model_with_fallback, call_model_with_fallback
-from src.models.providers.message import Message
-from src.models.providers.metrics import RunMetrics, merge_background_metrics
-from src.models.providers.response import ModelResponse, ToolExecution
-from src.core._run_state import RunContext, RunStatus
-from src.core._run_state.agent import RunOutput, RunOutputEvent
-from src.core._run_state.cancel import (
+from openagent_core.core.execution_origin import create_server_only_task
+from openagent_core.core._runner._stubs import FilterExpr
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.fallback import acall_model_with_fallback, call_model_with_fallback
+from openagent_core.models.providers.message import Message
+from openagent_core.models.providers.metrics import RunMetrics, merge_background_metrics
+from openagent_core.models.providers.response import ModelResponse, ToolExecution
+from openagent_core.core._run_state import RunContext, RunStatus
+from openagent_core.core._run_state.agent import RunOutput, RunOutputEvent
+from openagent_core.core._run_state.cancel import (
     acancel_run as acancel_run_global,
 )
-from src.core._run_state.cancel import (
+from openagent_core.core._run_state.cancel import (
     acleanup_run,
     araise_if_cancelled,
     aregister_run,
@@ -48,19 +49,19 @@ from src.core._run_state.cancel import (
     raise_if_cancelled,
     register_run,
 )
-from src.core._run_state.cancel import (
+from openagent_core.core._run_state.cancel import (
     cancel_run as cancel_run_global,
 )
-from src.core._run_state.messages import RunMessages
-from src.core._run_state.team import (
+from openagent_core.core._run_state.messages import RunMessages
+from openagent_core.core._run_state.team import (
     TaskData,
     TeamRunInput,
     TeamRunOutput,
     TeamRunOutputEvent,
 )
-from src.memory.sessions import TeamSession
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.agent import (
+from openagent_core.memory.sessions import TeamSession
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.agent import (
     await_for_open_threads,
     await_for_thread_tasks_stream,
     collect_background_metrics,
@@ -70,7 +71,7 @@ from src.core._runner.utils.agent import (
     wait_for_open_threads,
     wait_for_thread_tasks_stream,
 )
-from src.core._runner.utils.events import (
+from openagent_core.core._runner.utils.events import (
     add_team_error_event,
     create_team_run_cancelled_event,
     create_team_run_completed_event,
@@ -81,11 +82,11 @@ from src.core._runner.utils.events import (
     create_team_session_summary_started_event,
     handle_event,
 )
-from src.core._runner.utils.hooks import (
+from openagent_core.core._runner.utils.hooks import (
     normalize_post_hooks,
     normalize_pre_hooks,
 )
-from src.core._runner.utils.log import (
+from openagent_core.core._runner.utils.log import (
     log_debug,
     log_error,
     log_info,
@@ -94,11 +95,11 @@ from src.core._runner.utils.log import (
 
 # Strong references to background tasks so they aren't garbage-collected mid-execution.
 # See: https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task
-_background_tasks: set[asyncio.Task[None]] = set()
+_background_tasks = InstanceSet('core/_runner/team/_run.py:_background_tasks')
 
 if TYPE_CHECKING:
-    from src.core._runner.team._run_options import ResolvedRunOptions
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team._run_options import ResolvedRunOptions
+    from openagent_core.core._runner.team.team import Team
 
 
 def cancel_run(run_id: str) -> bool:
@@ -138,8 +139,8 @@ async def _asetup_session(
     run_dispatch() does inline before calling _run()/_run_stream().
     """
     # Read or create session
-    from src.core._runner.team._init import _has_async_db, _initialize_session_state
-    from src.core._runner.team._storage import (
+    from openagent_core.core._runner.team._init import _has_async_db, _initialize_session_state
+    from openagent_core.core._runner.team._storage import (
         _aread_or_create_session,
         _load_session_state,
         _read_or_create_session,
@@ -193,18 +194,18 @@ def _run_tasks(
     The team leader iteratively plans and delegates tasks to members until
     the goal is complete or max_iterations is reached.
     """
-    from src.core._runner.team._hooks import _execute_post_hooks, _execute_pre_hooks
-    from src.core._runner.team._init import _disconnect_connectable_tools
-    from src.core._runner.team._managers import _start_learning_future, _start_memory_future
-    from src.core._runner.team._messages import _get_run_messages
-    from src.core._runner.team._response import (
+    from openagent_core.core._runner.team._hooks import _execute_post_hooks, _execute_pre_hooks
+    from openagent_core.core._runner.team._init import _disconnect_connectable_tools
+    from openagent_core.core._runner.team._managers import _start_learning_future, _start_memory_future
+    from openagent_core.core._runner.team._messages import _get_run_messages
+    from openagent_core.core._runner.team._response import (
         _convert_response_to_structured_format,
         _update_run_response,
         handle_reasoning,
     )
-    from src.core._runner.team._telemetry import log_team_telemetry
-    from src.core._runner.team._tools import _determine_tools_for_model
-    from src.core._runner.team.task import TaskStatus, load_task_list
+    from openagent_core.core._runner.team._telemetry import log_team_telemetry
+    from openagent_core.core._runner.team._tools import _determine_tools_for_model
+    from openagent_core.core._runner.team.task import TaskStatus, load_task_list
 
     log_debug(f"Team Task Run Start: {run_response.run_id}", center=True)
     memory_future = None
@@ -345,7 +346,7 @@ def _run_tasks(
 
             # Check if delegation propagated member HITL requirements
             if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-                from src.core._runner.team import _hooks
+                from openagent_core.core._runner.team import _hooks
 
                 return _hooks.handle_team_run_paused(
                     team, run_response=run_response, session=session, run_context=run_context
@@ -414,7 +415,7 @@ def _run_tasks(
         raise_if_cancelled(run_response.run_id)  # type: ignore
 
         # Generate followups if enabled
-        from src.core._runner.team._response import generate_team_followups
+        from openagent_core.core._runner.team._response import generate_team_followups
 
         generate_team_followups(team, run_response=run_response)
 
@@ -506,20 +507,20 @@ def _run_tasks_stream(
     the goal is complete or max_iterations is reached. Events are yielded
     for each iteration.
     """
-    from src.core._runner.team._hooks import _execute_post_hooks, _execute_pre_hooks
-    from src.core._runner.team._init import _disconnect_connectable_tools
-    from src.core._runner.team._managers import _start_learning_future, _start_memory_future
-    from src.core._runner.team._messages import _get_run_messages
-    from src.core._runner.team._response import (
+    from openagent_core.core._runner.team._hooks import _execute_post_hooks, _execute_pre_hooks
+    from openagent_core.core._runner.team._init import _disconnect_connectable_tools
+    from openagent_core.core._runner.team._managers import _start_learning_future, _start_memory_future
+    from openagent_core.core._runner.team._messages import _get_run_messages
+    from openagent_core.core._runner.team._response import (
         _convert_response_to_structured_format,
         _handle_model_response_stream,
         generate_response_with_output_model_stream,
         handle_reasoning_stream,
     )
-    from src.core._runner.team._telemetry import log_team_telemetry
-    from src.core._runner.team._tools import _determine_tools_for_model
-    from src.core._runner.team.task import TaskStatus, load_task_list
-    from src.core._runner.utils.events import (
+    from openagent_core.core._runner.team._telemetry import log_team_telemetry
+    from openagent_core.core._runner.team._tools import _determine_tools_for_model
+    from openagent_core.core._runner.team.task import TaskStatus, load_task_list
+    from openagent_core.core._runner.utils.events import (
         create_team_task_iteration_completed_event,
         create_team_task_iteration_started_event,
         create_team_task_state_updated_event,
@@ -696,7 +697,7 @@ def _run_tasks_stream(
                     run_context=run_context,
                 ):
                     raise_if_cancelled(run_response.run_id)  # type: ignore
-                    from src.core._run_state.team import IntermediateRunContentEvent, RunContentEvent
+                    from openagent_core.core._run_state.team import IntermediateRunContentEvent, RunContentEvent
 
                     if isinstance(event, RunContentEvent):
                         if stream_events:
@@ -721,7 +722,7 @@ def _run_tasks_stream(
 
             # Check if delegation propagated member HITL requirements
             if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-                from src.core._runner.team import _hooks
+                from openagent_core.core._runner.team import _hooks
 
                 yield from _hooks.handle_team_run_paused_stream(
                     team, run_response=run_response, session=session, run_context=run_context
@@ -873,7 +874,7 @@ def _run_tasks_stream(
         )
 
         # Generate followups if enabled
-        from src.core._runner.team._response import generate_team_followups_stream
+        from openagent_core.core._runner.team._response import generate_team_followups_stream
 
         yield from generate_team_followups_stream(team, run_response=run_response, stream_events=stream_events)
 
@@ -991,22 +992,22 @@ def _run(
     12. Create session summary
     13. Cleanup and store (scrub, stop timer, add to session, calculate metrics, save session)
     """
-    from src.core._runner.team._hooks import _execute_post_hooks, _execute_pre_hooks
-    from src.core._runner.team._init import _disconnect_connectable_tools
-    from src.core._runner.team._managers import _start_learning_future, _start_memory_future
-    from src.core._runner.team._messages import _get_run_messages
-    from src.core._runner.team._response import (
+    from openagent_core.core._runner.team._hooks import _execute_post_hooks, _execute_pre_hooks
+    from openagent_core.core._runner.team._init import _disconnect_connectable_tools
+    from openagent_core.core._runner.team._managers import _start_learning_future, _start_memory_future
+    from openagent_core.core._runner.team._messages import _get_run_messages
+    from openagent_core.core._runner.team._response import (
         _convert_response_to_structured_format,
         _update_run_response,
         handle_reasoning,
         parse_response_with_output_model,
         parse_response_with_parser_model,
     )
-    from src.core._runner.team._telemetry import log_team_telemetry
-    from src.core._runner.team._tools import _determine_tools_for_model
+    from openagent_core.core._runner.team._telemetry import log_team_telemetry
+    from openagent_core.core._runner.team._tools import _determine_tools_for_model
 
     # Dispatch to task mode if applicable
-    from src.core._runner.team.mode import TeamMode
+    from openagent_core.core._runner.team.mode import TeamMode
 
     if team.mode == TeamMode.tasks:
         return _run_tasks(
@@ -1165,7 +1166,7 @@ def _run(
 
                 # 7b. Check if delegation propagated member HITL requirements
                 if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-                    from src.core._runner.team import _hooks
+                    from openagent_core.core._runner.team import _hooks
 
                     return _hooks.handle_team_run_paused(
                         team, run_response=run_response, session=session, run_context=run_context
@@ -1215,7 +1216,7 @@ def _run(
                 raise_if_cancelled(run_response.run_id)  # type: ignore
 
                 # Generate followups if enabled
-                from src.core._runner.team._response import generate_team_followups
+                from openagent_core.core._runner.team._response import generate_team_followups
 
                 generate_team_followups(team, run_response=run_response)
 
@@ -1343,22 +1344,22 @@ def _run_stream(
     9. Create session summary
     10. Cleanup and store (scrub, add to session, calculate metrics, save session)
     """
-    from src.core._runner.team._hooks import _execute_post_hooks, _execute_pre_hooks
-    from src.core._runner.team._init import _disconnect_connectable_tools
-    from src.core._runner.team._managers import _start_learning_future, _start_memory_future
-    from src.core._runner.team._messages import _get_run_messages
-    from src.core._runner.team._response import (
+    from openagent_core.core._runner.team._hooks import _execute_post_hooks, _execute_pre_hooks
+    from openagent_core.core._runner.team._init import _disconnect_connectable_tools
+    from openagent_core.core._runner.team._managers import _start_learning_future, _start_memory_future
+    from openagent_core.core._runner.team._messages import _get_run_messages
+    from openagent_core.core._runner.team._response import (
         _handle_model_response_stream,
         generate_response_with_output_model_stream,
         handle_reasoning_stream,
         parse_response_with_parser_model_stream,
     )
-    from src.core._runner.team._telemetry import log_team_telemetry
-    from src.core._runner.team._tools import _determine_tools_for_model
+    from openagent_core.core._runner.team._telemetry import log_team_telemetry
+    from openagent_core.core._runner.team._tools import _determine_tools_for_model
 
     # Fallback for tasks mode (streaming not yet supported)
     # Dispatch to task mode streaming if applicable
-    from src.core._runner.team.mode import TeamMode
+    from openagent_core.core._runner.team.mode import TeamMode
 
     if team.mode == TeamMode.tasks:
         yield from _run_tasks_stream(
@@ -1527,7 +1528,7 @@ def _run_stream(
                         run_context=run_context,
                     ):
                         raise_if_cancelled(run_response.run_id)  # type: ignore
-                        from src.core._run_state.team import IntermediateRunContentEvent, RunContentEvent
+                        from openagent_core.core._run_state.team import IntermediateRunContentEvent, RunContentEvent
 
                         if isinstance(event, RunContentEvent):
                             if stream_events:
@@ -1553,7 +1554,7 @@ def _run_stream(
 
                 # 6b. Check if delegation propagated member HITL requirements
                 if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-                    from src.core._runner.team import _hooks
+                    from openagent_core.core._runner.team import _hooks
 
                     yield from _hooks.handle_team_run_paused_stream(
                         team, run_response=run_response, session=session, run_context=run_context
@@ -1650,7 +1651,7 @@ def _run_stream(
                 )
 
                 # Generate followups if enabled
-                from src.core._runner.team._response import generate_team_followups_stream
+                from openagent_core.core._runner.team._response import generate_team_followups_stream
 
                 yield from generate_team_followups_stream(team, run_response=run_response, stream_events=stream_events)
 
@@ -1786,10 +1787,10 @@ def run_dispatch(
     **kwargs: Any,
 ) -> Union[TeamRunOutput, Iterator[Union[RunOutputEvent, TeamRunOutputEvent]]]:
     """Run the Team and return the response."""
-    from src.core._runner.team._init import _has_async_db, _initialize_session, _initialize_session_state
-    from src.core._runner.team._response import get_response_format
-    from src.core._runner.team._run_options import resolve_run_options
-    from src.core._runner.team._storage import _load_session_state, _read_or_create_session, _update_metadata
+    from openagent_core.core._runner.team._init import _has_async_db, _initialize_session, _initialize_session_state
+    from openagent_core.core._runner.team._response import get_response_format
+    from openagent_core.core._runner.team._run_options import resolve_run_options
+    from openagent_core.core._runner.team._storage import _load_session_state, _read_or_create_session, _update_metadata
 
     if _has_async_db(team):
         raise Exception("run() is not supported with an async DB. Please use arun() instead.")
@@ -1982,18 +1983,18 @@ async def _arun_tasks(
     The team leader iteratively plans and delegates tasks to members until
     the goal is complete or max_iterations is reached.
     """
-    from src.core._runner.team._hooks import _aexecute_post_hooks, _aexecute_pre_hooks
-    from src.core._runner.team._init import _disconnect_connectable_tools, _disconnect_mcp_tools
-    from src.core._runner.team._managers import _astart_learning_task, _astart_memory_task
-    from src.core._runner.team._messages import _aget_run_messages
-    from src.core._runner.team._response import (
+    from openagent_core.core._runner.team._hooks import _aexecute_post_hooks, _aexecute_pre_hooks
+    from openagent_core.core._runner.team._init import _disconnect_connectable_tools, _disconnect_mcp_tools
+    from openagent_core.core._runner.team._managers import _astart_learning_task, _astart_memory_task
+    from openagent_core.core._runner.team._messages import _aget_run_messages
+    from openagent_core.core._runner.team._response import (
         _convert_response_to_structured_format,
         _update_run_response,
         ahandle_reasoning,
     )
-    from src.core._runner.team._telemetry import alog_team_telemetry
-    from src.core._runner.team._tools import _aget_learning_tools, _check_and_refresh_mcp_tools, _determine_tools_for_model
-    from src.core._runner.team.task import TaskStatus, load_task_list
+    from openagent_core.core._runner.team._telemetry import alog_team_telemetry
+    from openagent_core.core._runner.team._tools import _aget_learning_tools, _check_and_refresh_mcp_tools, _determine_tools_for_model
+    from openagent_core.core._runner.team.task import TaskStatus, load_task_list
 
     log_debug(f"Team Task Run Start: {run_response.run_id}", center=True)
     memory_task = None
@@ -2149,7 +2150,7 @@ async def _arun_tasks(
 
             # Check if delegation propagated member HITL requirements
             if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-                from src.core._runner.team import _hooks
+                from openagent_core.core._runner.team import _hooks
 
                 return await _hooks.ahandle_team_run_paused(
                     team, run_response=run_response, session=team_session, run_context=run_context
@@ -2218,7 +2219,7 @@ async def _arun_tasks(
         await araise_if_cancelled(run_response.run_id)  # type: ignore
 
         # Generate followups if enabled
-        from src.core._runner.team._response import agenerate_team_followups
+        from openagent_core.core._runner.team._response import agenerate_team_followups
 
         await agenerate_team_followups(team, run_response=run_response)
 
@@ -2314,20 +2315,20 @@ async def _arun_tasks_stream(
     the goal is complete or max_iterations is reached. Events are yielded
     for each iteration.
     """
-    from src.core._runner.team._hooks import _aexecute_post_hooks, _aexecute_pre_hooks
-    from src.core._runner.team._init import _disconnect_connectable_tools, _disconnect_mcp_tools
-    from src.core._runner.team._managers import _astart_learning_task, _astart_memory_task
-    from src.core._runner.team._messages import _aget_run_messages
-    from src.core._runner.team._response import (
+    from openagent_core.core._runner.team._hooks import _aexecute_post_hooks, _aexecute_pre_hooks
+    from openagent_core.core._runner.team._init import _disconnect_connectable_tools, _disconnect_mcp_tools
+    from openagent_core.core._runner.team._managers import _astart_learning_task, _astart_memory_task
+    from openagent_core.core._runner.team._messages import _aget_run_messages
+    from openagent_core.core._runner.team._response import (
         _ahandle_model_response_stream,
         _convert_response_to_structured_format,
         agenerate_response_with_output_model_stream,
         ahandle_reasoning_stream,
     )
-    from src.core._runner.team._telemetry import alog_team_telemetry
-    from src.core._runner.team._tools import _aget_learning_tools, _check_and_refresh_mcp_tools, _determine_tools_for_model
-    from src.core._runner.team.task import TaskStatus, load_task_list
-    from src.core._runner.utils.events import (
+    from openagent_core.core._runner.team._telemetry import alog_team_telemetry
+    from openagent_core.core._runner.team._tools import _aget_learning_tools, _check_and_refresh_mcp_tools, _determine_tools_for_model
+    from openagent_core.core._runner.team.task import TaskStatus, load_task_list
+    from openagent_core.core._runner.utils.events import (
         create_team_task_iteration_completed_event,
         create_team_task_iteration_started_event,
         create_team_task_state_updated_event,
@@ -2520,7 +2521,7 @@ async def _arun_tasks_stream(
                     run_context=run_context,
                 ):
                     await araise_if_cancelled(run_response.run_id)  # type: ignore
-                    from src.core._run_state.team import IntermediateRunContentEvent, RunContentEvent
+                    from openagent_core.core._run_state.team import IntermediateRunContentEvent, RunContentEvent
 
                     if isinstance(event, RunContentEvent):
                         if stream_events:
@@ -2545,7 +2546,7 @@ async def _arun_tasks_stream(
 
             # Check if delegation propagated member HITL requirements
             if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-                from src.core._runner.team import _hooks
+                from openagent_core.core._runner.team import _hooks
 
                 async for item in _hooks.ahandle_team_run_paused_stream(  # type: ignore[assignment]
                     team, run_response=run_response, session=team_session, run_context=run_context
@@ -2698,7 +2699,7 @@ async def _arun_tasks_stream(
         )
 
         # Generate followups if enabled
-        from src.core._runner.team._response import agenerate_team_followups_stream
+        from openagent_core.core._runner.team._response import agenerate_team_followups_stream
 
         async for event in agenerate_team_followups_stream(
             team, run_response=run_response, stream_events=stream_events
@@ -2834,22 +2835,22 @@ async def _arun(
     12. Create session summary
     13. Cleanup and store (scrub, add to session, calculate metrics, save session)
     """
-    from src.core._runner.team._hooks import _aexecute_post_hooks, _aexecute_pre_hooks
-    from src.core._runner.team._init import _disconnect_connectable_tools, _disconnect_mcp_tools
-    from src.core._runner.team._managers import _astart_learning_task, _astart_memory_task
-    from src.core._runner.team._messages import _aget_run_messages
-    from src.core._runner.team._response import (
+    from openagent_core.core._runner.team._hooks import _aexecute_post_hooks, _aexecute_pre_hooks
+    from openagent_core.core._runner.team._init import _disconnect_connectable_tools, _disconnect_mcp_tools
+    from openagent_core.core._runner.team._managers import _astart_learning_task, _astart_memory_task
+    from openagent_core.core._runner.team._messages import _aget_run_messages
+    from openagent_core.core._runner.team._response import (
         _convert_response_to_structured_format,
         _update_run_response,
         agenerate_response_with_output_model,
         ahandle_reasoning,
         aparse_response_with_parser_model,
     )
-    from src.core._runner.team._telemetry import alog_team_telemetry
-    from src.core._runner.team._tools import _aget_learning_tools, _check_and_refresh_mcp_tools, _determine_tools_for_model
+    from openagent_core.core._runner.team._telemetry import alog_team_telemetry
+    from openagent_core.core._runner.team._tools import _aget_learning_tools, _check_and_refresh_mcp_tools, _determine_tools_for_model
 
     # Dispatch to task mode if applicable
-    from src.core._runner.team.mode import TeamMode
+    from openagent_core.core._runner.team.mode import TeamMode
 
     if team.mode == TeamMode.tasks:
         return await _arun_tasks(
@@ -2917,7 +2918,7 @@ async def _arun(
                 team.model = cast(Model, team.model)
 
                 # Resolve callable factories (tools, knowledge, members) before tool determination
-                from src.core._runner.team._tools import _aresolve_callable_resources
+                from openagent_core.core._runner.team._tools import _aresolve_callable_resources
 
                 await _aresolve_callable_resources(team, run_context=run_context)
 
@@ -3035,7 +3036,7 @@ async def _arun(
 
                 # 7b. Check if delegation propagated member HITL requirements
                 if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-                    from src.core._runner.team import _hooks
+                    from openagent_core.core._runner.team import _hooks
 
                     return await _hooks.ahandle_team_run_paused(
                         team, run_response=run_response, session=team_session, run_context=run_context
@@ -3083,7 +3084,7 @@ async def _arun(
                 await araise_if_cancelled(run_response.run_id)  # type: ignore
 
                 # Generate followups if enabled
-                from src.core._runner.team._response import agenerate_team_followups
+                from openagent_core.core._runner.team._response import agenerate_team_followups
 
                 await agenerate_team_followups(team, run_response=run_response)
 
@@ -3210,8 +3211,8 @@ async def _arun_background(
 
     Callers can poll for results via team.aget_run_output(run_id, session_id).
     """
-    from src.core._runner.team._session import asave_session
-    from src.core._runner.team._storage import _aread_or_create_session, _update_metadata
+    from openagent_core.core._runner.team._session import asave_session
+    from openagent_core.core._runner.team._storage import _aread_or_create_session, _update_metadata
 
     # 1. Register the run for cancellation tracking (before spawning the task)
     await aregister_run(run_context.run_id)
@@ -3298,8 +3299,8 @@ async def _arun_background_stream(
     The detached task keeps running even if the client disconnects.
     The caller (router) just yields the SSE strings to the client.
     """
-    from src.core._runner.team._session import asave_session
-    from src.core._runner.team._storage import _aread_or_create_session, _update_metadata
+    from openagent_core.core._runner.team._session import asave_session
+    from openagent_core.core._runner.team._storage import _aread_or_create_session, _update_metadata
 
     run_id = run_response.run_id
     if not run_id:
@@ -3320,8 +3321,8 @@ async def _arun_background_stream(
 
     # 3. Spawn detached background task
     async def _background_producer() -> None:
-        from src.core._runner._stubs import event_buffer, sse_subscriber_manager
-        from src.core._runner._stubs import format_sse_event_with_index
+        from openagent_core.core._runner._stubs import event_buffer, sse_subscriber_manager
+        from openagent_core.core._runner._stubs import format_sse_event_with_index
 
         try:
             async for event in _arun_stream(
@@ -3441,22 +3442,22 @@ async def _arun_stream(
     9. Create session summary
     10. Cleanup and store (scrub, add to session, calculate metrics, save session)
     """
-    from src.core._runner.team._hooks import _aexecute_post_hooks, _aexecute_pre_hooks
-    from src.core._runner.team._init import _disconnect_connectable_tools, _disconnect_mcp_tools
-    from src.core._runner.team._managers import _astart_learning_task, _astart_memory_task
-    from src.core._runner.team._messages import _aget_run_messages
-    from src.core._runner.team._response import (
+    from openagent_core.core._runner.team._hooks import _aexecute_post_hooks, _aexecute_pre_hooks
+    from openagent_core.core._runner.team._init import _disconnect_connectable_tools, _disconnect_mcp_tools
+    from openagent_core.core._runner.team._managers import _astart_learning_task, _astart_memory_task
+    from openagent_core.core._runner.team._messages import _aget_run_messages
+    from openagent_core.core._runner.team._response import (
         _ahandle_model_response_stream,
         agenerate_response_with_output_model_stream,
         ahandle_reasoning_stream,
         aparse_response_with_parser_model_stream,
     )
-    from src.core._runner.team._telemetry import alog_team_telemetry
-    from src.core._runner.team._tools import _aget_learning_tools, _check_and_refresh_mcp_tools, _determine_tools_for_model
+    from openagent_core.core._runner.team._telemetry import alog_team_telemetry
+    from openagent_core.core._runner.team._tools import _aget_learning_tools, _check_and_refresh_mcp_tools, _determine_tools_for_model
 
     # Fallback for tasks mode (streaming not yet supported)
     # Dispatch to task mode streaming if applicable
-    from src.core._runner.team.mode import TeamMode
+    from openagent_core.core._runner.team.mode import TeamMode
 
     if team.mode == TeamMode.tasks:
         async for event in _arun_tasks_stream(
@@ -3528,7 +3529,7 @@ async def _arun_stream(
                 team.model = cast(Model, team.model)
 
                 # Resolve callable factories (tools, knowledge, members) before tool determination
-                from src.core._runner.team._tools import _aresolve_callable_resources
+                from openagent_core.core._runner.team._tools import _aresolve_callable_resources
 
                 await _aresolve_callable_resources(team, run_context=run_context)
 
@@ -3644,7 +3645,7 @@ async def _arun_stream(
                         run_context=run_context,
                     ):
                         await araise_if_cancelled(run_response.run_id)  # type: ignore
-                        from src.core._run_state.team import IntermediateRunContentEvent, RunContentEvent
+                        from openagent_core.core._run_state.team import IntermediateRunContentEvent, RunContentEvent
 
                         if isinstance(event, RunContentEvent):
                             if stream_events:
@@ -3670,7 +3671,7 @@ async def _arun_stream(
 
                 # 6b. Check if delegation propagated member HITL requirements
                 if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-                    from src.core._runner.team import _hooks
+                    from openagent_core.core._runner.team import _hooks
 
                     async for item in _hooks.ahandle_team_run_paused_stream(  # type: ignore[assignment]
                         team, run_response=run_response, session=team_session, run_context=run_context
@@ -3770,7 +3771,7 @@ async def _arun_stream(
                 )
 
                 # Generate followups if enabled
-                from src.core._runner.team._response import agenerate_team_followups_stream
+                from openagent_core.core._runner.team._response import agenerate_team_followups_stream
 
                 async for event in agenerate_team_followups_stream(
                     team, run_response=run_response, stream_events=stream_events
@@ -3927,9 +3928,9 @@ def arun_dispatch(  # type: ignore
     """Run the Team asynchronously and return the response."""
 
     # Set the id for the run and register it immediately for cancellation tracking
-    from src.core._runner.team._init import _initialize_session
-    from src.core._runner.team._response import get_response_format
-    from src.core._runner.team._run_options import resolve_run_options
+    from openagent_core.core._runner.team._init import _initialize_session
+    from openagent_core.core._runner.team._response import get_response_format
+    from openagent_core.core._runner.team._run_options import resolve_run_options
 
     run_id = run_id or str(uuid4())
 
@@ -4140,14 +4141,14 @@ def _cleanup_and_store(
 ) -> None:
     import copy
 
-    from src.core._run_state.approval import update_approval_run_status
-    from src.core._runner.team._session import update_session_metrics
+    from openagent_core.core._run_state.approval import update_approval_run_status
+    from openagent_core.core._runner.team._session import update_session_metrics
 
     # Scrub a shallow copy for storage — the original run_response is never
     # mutated so the caller always sees generated media regardless of store_media.
     storage_copy = copy.copy(run_response)
     scrub_run_output_for_storage(team, storage_copy)
-    from src.stream.content_parts import scrub_run_output_carriers_for_storage
+    from openagent_core.stream.content_parts import scrub_run_output_carriers_for_storage
 
     scrub_run_output_carriers_for_storage(storage_copy)
 
@@ -4189,14 +4190,14 @@ async def _acleanup_and_store(
 ) -> None:
     import copy
 
-    from src.core._run_state.approval import aupdate_approval_run_status
-    from src.core._runner.team._session import update_session_metrics
+    from openagent_core.core._run_state.approval import aupdate_approval_run_status
+    from openagent_core.core._runner.team._session import update_session_metrics
 
     # Scrub a shallow copy for storage — the original run_response is never
     # mutated so the caller always sees generated media regardless of store_media.
     storage_copy = copy.copy(run_response)
     scrub_run_output_for_storage(team, storage_copy)
-    from src.stream.content_parts import scrub_run_output_carriers_for_storage
+    from openagent_core.stream.content_parts import scrub_run_output_carriers_for_storage
 
     scrub_run_output_carriers_for_storage(storage_copy)
 
@@ -4235,7 +4236,7 @@ def scrub_run_output_for_storage(team: "Team", run_response: TeamRunOutput) -> b
     Scrub run output based on storage flags before persisting to database.
     Returns True if any scrubbing was done, False otherwise.
     """
-    from src.core._runner.utils.agent import (
+    from openagent_core.core._runner.utils.agent import (
         scrub_history_messages_from_run_output,
         scrub_media_from_run_output,
         scrub_tool_results_from_run_output,
@@ -4264,8 +4265,8 @@ def _scrub_member_responses(team: "Team", member_responses: List[Union[TeamRunOu
     This is called when saving the team session to ensure member data is scrubbed per member settings.
     Recursively handles nested team's member responses.
     """
-    from src.core._runner.team._tools import _find_member_by_id
-    from src.core._runner.team.team import Team
+    from openagent_core.core._runner.team._tools import _find_member_by_id
+    from openagent_core.core._runner.team.team import Team
 
     for member_response in member_responses:
         member_id = None
@@ -4286,7 +4287,7 @@ def _scrub_member_responses(team: "Team", member_responses: List[Union[TeamRunOu
         _, member = member_result
 
         if not member.store_media or not member.store_tool_messages or not member.store_history_messages:
-            from src.core._runner.agent._run import scrub_run_output_for_storage
+            from openagent_core.core._runner.agent._run import scrub_run_output_for_storage
 
             scrub_run_output_for_storage(member, run_response=member_response)  # type: ignore[arg-type]
 
@@ -4417,7 +4418,7 @@ def _get_continue_run_messages(
     if add_history_to_context and session is not None and not input_has_history:
         from copy import deepcopy
 
-        from src.core._runner.utils.message import filter_tool_calls
+        from openagent_core.core._runner.utils.message import filter_tool_calls
 
         skip_role = team.system_message_role if team.system_message_role not in ["user", "assistant", "tool"] else None
 
@@ -4462,7 +4463,7 @@ def _handle_team_tool_call_updates(
     in their type hints but only access duck-typed attributes (``model``, ``name``,
     etc.) that ``Team`` also provides, so passing a ``Team`` is safe at runtime.
     """
-    from src.core._runner.agent._tools import (
+    from openagent_core.core._runner.agent._tools import (
         handle_ask_user_tool_update,
         handle_external_execution_update,
         handle_get_user_input_tool_update,
@@ -4522,7 +4523,7 @@ def _handle_team_tool_call_updates_stream(
     Mirrors agent's handle_tool_call_updates_stream but operates on team-level tools.
     Yields events during tool execution for streaming responses.
     """
-    from src.core._runner.agent._tools import (
+    from openagent_core.core._runner.agent._tools import (
         handle_ask_user_tool_update,
         handle_external_execution_update,
         handle_get_user_input_tool_update,
@@ -4596,7 +4597,7 @@ async def _ahandle_team_tool_call_updates(
 
     See _handle_team_tool_call_updates docstring for the Team/Agent duck-typing note.
     """
-    from src.core._runner.agent._tools import (
+    from openagent_core.core._runner.agent._tools import (
         arun_tool,
         handle_ask_user_tool_update,
         handle_external_execution_update,
@@ -4655,7 +4656,7 @@ async def _ahandle_team_tool_call_updates_stream(
     Mirrors agent's ahandle_tool_call_updates_stream but operates on team-level tools.
     Yields events during tool execution for async streaming responses.
     """
-    from src.core._runner.agent._tools import (
+    from openagent_core.core._runner.agent._tools import (
         arun_tool,
         handle_ask_user_tool_update,
         handle_external_execution_update,
@@ -4725,7 +4726,7 @@ def _normalize_requirements_payload(
     requirements: List[Any],
 ) -> List[Any]:
     """Convert dicts in the requirements list to RunRequirement objects."""
-    from src.core._run_state.requirement import RunRequirement
+    from openagent_core.core._run_state.requirement import RunRequirement
 
     result = []
     for req in requirements:
@@ -4830,8 +4831,8 @@ def _route_requirements_to_members(
     Returns:
         List of member result strings.
     """
-    from src.core._run_state.requirement import RunRequirement
-    from src.core._runner.team._tools import _find_member_route_by_id
+    from openagent_core.core._run_state.requirement import RunRequirement
+    from openagent_core.core._runner.team._tools import _find_member_route_by_id
 
     # Group requirements by member
     member_reqs: Dict[str, List[RunRequirement]] = {}
@@ -4891,7 +4892,7 @@ def _route_requirements_to_members(
 
         # Check if member is still paused (chained HITL)
         if getattr(member_response, "is_paused", False):
-            from src.core._runner.team._tools import _propagate_member_pause
+            from openagent_core.core._runner.team._tools import _propagate_member_pause
 
             _propagate_member_pause(run_response, member, member_response)
         else:
@@ -4931,8 +4932,8 @@ def _route_requirements_to_members_stream(
     Yields:
         Member streaming events (RunOutputEvent, TeamRunOutputEvent).
     """
-    from src.core._run_state.requirement import RunRequirement
-    from src.core._runner.team._tools import _find_member_route_by_id
+    from openagent_core.core._run_state.requirement import RunRequirement
+    from openagent_core.core._runner.team._tools import _find_member_route_by_id
 
     # Group requirements by member
     member_reqs: Dict[str, List[RunRequirement]] = {}
@@ -5008,7 +5009,7 @@ def _route_requirements_to_members_stream(
             log_warning(f"Member {member_id} streaming did not yield a final RunOutput")
             member_results.append(f"[{member.name or member_id}]: Task completed (no final output)")
         elif getattr(member_response, "is_paused", False):
-            from src.core._runner.team._tools import _propagate_member_pause
+            from openagent_core.core._runner.team._tools import _propagate_member_pause
 
             _propagate_member_pause(run_response, member, member_response)
         else:
@@ -5034,8 +5035,8 @@ async def _aroute_requirements_to_members(
     Returns:
         List of member result strings.
     """
-    from src.core._run_state.requirement import RunRequirement
-    from src.core._runner.team._tools import _find_member_route_by_id
+    from openagent_core.core._run_state.requirement import RunRequirement
+    from openagent_core.core._runner.team._tools import _find_member_route_by_id
 
     # Group requirements by member
     member_reqs: Dict[str, List[RunRequirement]] = {}
@@ -5092,7 +5093,7 @@ async def _aroute_requirements_to_members(
             req._member_run_response = None
 
         if getattr(member_response, "is_paused", False):
-            from src.core._runner.team._tools import _propagate_member_pause
+            from openagent_core.core._runner.team._tools import _propagate_member_pause
 
             _propagate_member_pause(run_response, member, member_response)
             return None
@@ -5141,8 +5142,8 @@ async def _aroute_requirements_to_members_stream(
     Yields:
         Member streaming events (RunOutputEvent, TeamRunOutputEvent).
     """
-    from src.core._run_state.requirement import RunRequirement
-    from src.core._runner.team._tools import _find_member_route_by_id
+    from openagent_core.core._run_state.requirement import RunRequirement
+    from openagent_core.core._runner.team._tools import _find_member_route_by_id
 
     # Group requirements by member
     member_reqs: Dict[str, List[RunRequirement]] = {}
@@ -5218,7 +5219,7 @@ async def _aroute_requirements_to_members_stream(
             log_warning(f"Member {member_id} streaming did not yield a final RunOutput")
             member_results.append(f"[{member.name or member_id}]: Task completed (no final output)")
         elif getattr(member_response, "is_paused", False):
-            from src.core._runner.team._tools import _propagate_member_pause
+            from openagent_core.core._runner.team._tools import _propagate_member_pause
 
             _propagate_member_pause(run_response, member, member_response)
         else:
@@ -5304,7 +5305,7 @@ async def _ahandle_model_response_for_continue(
     Shared logic for both team-level and member HITL continuation.
     Returns the run_response if paused (needs to return early), otherwise None.
     """
-    from src.core._runner.team._response import (
+    from openagent_core.core._runner.team._response import (
         _convert_response_to_structured_format,
         _update_run_response,
         agenerate_response_with_output_model,
@@ -5342,7 +5343,7 @@ async def _ahandle_model_response_for_continue(
 
     # Check for new pauses
     if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-        from src.core._runner.team import _hooks
+        from openagent_core.core._runner.team import _hooks
 
         return await _hooks.ahandle_team_run_paused(
             team, run_response=run_response, session=team_session, run_context=run_context
@@ -5376,11 +5377,11 @@ def continue_run_dispatch(
 
     Handles both team-level tool pauses and member-agent tool pauses.
     """
-    from src.core._runner.team._init import _has_async_db, _initialize_session
-    from src.core._runner.team._response import get_response_format
-    from src.core._runner.team._run_options import resolve_run_options
-    from src.core._runner.team._storage import _load_session_state, _read_or_create_session, _update_metadata
-    from src.core._runner.team._tools import _determine_tools_for_model
+    from openagent_core.core._runner.team._init import _has_async_db, _initialize_session
+    from openagent_core.core._runner.team._response import get_response_format
+    from openagent_core.core._runner.team._run_options import resolve_run_options
+    from openagent_core.core._runner.team._storage import _load_session_state, _read_or_create_session, _update_metadata
+    from openagent_core.core._runner.team._tools import _determine_tools_for_model
 
     if run_response is None and run_id is None:
         raise ValueError("Either run_response or run_id must be provided.")
@@ -5477,7 +5478,7 @@ def continue_run_dispatch(
 
         # Also apply any resolved approval
         if run_response.tools:
-            from src.core._run_state.approval import check_and_apply_approval_resolution
+            from openagent_core.core._run_state.approval import check_and_apply_approval_resolution
 
             try:
                 check_and_apply_approval_resolution(team.db, run_id_resolved, run_response)
@@ -5487,7 +5488,7 @@ def continue_run_dispatch(
                     "(or resolve an admin approval first)."
                 )
     elif run_response.tools:
-        from src.core._run_state.approval import check_and_apply_approval_resolution
+        from openagent_core.core._run_state.approval import check_and_apply_approval_resolution
 
         try:
             check_and_apply_approval_resolution(team.db, run_id_resolved, run_response)
@@ -5562,7 +5563,7 @@ def continue_run_dispatch(
 
         # Check if any members are still paused
         if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-            from src.core._runner.team import _hooks
+            from openagent_core.core._runner.team import _hooks
 
             return _hooks.handle_team_run_paused(
                 team, run_response=run_response, session=team_session, run_context=run_context
@@ -5577,7 +5578,7 @@ def continue_run_dispatch(
             if getattr(r, "member_agent_id", None) is None and not r.is_resolved()
         ]
         if unresolved_team:
-            from src.core._runner.team import _hooks
+            from openagent_core.core._runner.team import _hooks
 
             if opts.stream:
                 return _hooks.handle_team_run_paused_stream(
@@ -5751,8 +5752,8 @@ def _continue_run_dispatch_stream_with_member_events(
     This generator first yields all member streaming events from the member routing,
     then proceeds with the normal team continuation (model call, etc.).
     """
-    from src.core._runner.team._response import get_response_format
-    from src.core._runner.team._tools import _determine_tools_for_model
+    from openagent_core.core._runner.team._response import get_response_format
+    from openagent_core.core._runner.team._tools import _determine_tools_for_model
 
     # Phase 1: Yield member streaming events
     yield from member_event_stream
@@ -5762,7 +5763,7 @@ def _continue_run_dispatch_stream_with_member_events(
     run_response.requirements = team_level_reqs + newly_propagated
 
     if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-        from src.core._runner.team import _hooks
+        from openagent_core.core._runner.team import _hooks
 
         yield from _hooks.handle_team_run_paused_stream(
             team, run_response=run_response, session=team_session, run_context=run_context
@@ -5777,7 +5778,7 @@ def _continue_run_dispatch_stream_with_member_events(
             if getattr(r, "member_agent_id", None) is None and not r.is_resolved()
         ]
         if unresolved_team:
-            from src.core._runner.team import _hooks
+            from openagent_core.core._runner.team import _hooks
 
             yield from _hooks.handle_team_run_paused_stream(
                 team, run_response=run_response, session=team_session, run_context=run_context
@@ -5912,16 +5913,16 @@ def _continue_run(
     5. Create session summary
     6. Cleanup and store
     """
-    from src.core._runner.team._hooks import _execute_post_hooks
-    from src.core._runner.team._init import _disconnect_connectable_tools
-    from src.core._runner.team._response import (
+    from openagent_core.core._runner.team._hooks import _execute_post_hooks
+    from openagent_core.core._runner.team._init import _disconnect_connectable_tools
+    from openagent_core.core._runner.team._response import (
         _convert_response_to_structured_format,
         _update_run_response,
         parse_response_with_output_model,
         parse_response_with_parser_model,
     )
-    from src.core._runner.team._telemetry import log_team_telemetry
-    from src.core._runner.utils.events import create_team_run_continued_event
+    from openagent_core.core._runner.team._telemetry import log_team_telemetry
+    from openagent_core.core._runner.utils.events import create_team_run_continued_event
 
     register_run(run_response.run_id)  # type: ignore
 
@@ -5974,7 +5975,7 @@ def _continue_run(
 
                 # Check for new pauses (team-level tools or member propagation)
                 if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-                    from src.core._runner.team import _hooks
+                    from openagent_core.core._runner.team import _hooks
 
                     return _hooks.handle_team_run_paused(
                         team, run_response=run_response, session=session, run_context=run_context
@@ -6090,15 +6091,15 @@ def _continue_run_stream(
     **kwargs: Any,
 ) -> Iterator[Union[TeamRunOutputEvent, RunOutputEvent, TeamRunOutput]]:
     """Continue a paused team run (sync, streaming)."""
-    from src.core._runner.team._hooks import _execute_post_hooks
-    from src.core._runner.team._init import _disconnect_connectable_tools
-    from src.core._runner.team._response import (
+    from openagent_core.core._runner.team._hooks import _execute_post_hooks
+    from openagent_core.core._runner.team._init import _disconnect_connectable_tools
+    from openagent_core.core._runner.team._response import (
         _handle_model_response_stream,
         generate_response_with_output_model_stream,
         parse_response_with_parser_model_stream,
     )
-    from src.core._runner.team._telemetry import log_team_telemetry
-    from src.core._runner.utils.events import create_team_run_continued_event
+    from openagent_core.core._runner.team._telemetry import log_team_telemetry
+    from openagent_core.core._runner.utils.events import create_team_run_continued_event
 
     register_run(run_response.run_id)  # type: ignore
 
@@ -6142,7 +6143,7 @@ def _continue_run_stream(
                         raise_if_cancelled(run_response.run_id)  # type: ignore
                         yield event
                 else:
-                    from src.core._run_state.team import IntermediateRunContentEvent, RunContentEvent
+                    from openagent_core.core._run_state.team import IntermediateRunContentEvent, RunContentEvent
 
                     for event in _handle_model_response_stream(
                         team,
@@ -6179,7 +6180,7 @@ def _continue_run_stream(
 
                 # Check for new pauses
                 if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-                    from src.core._runner.team import _hooks
+                    from openagent_core.core._runner.team import _hooks
 
                     yield from _hooks.handle_team_run_paused_stream(
                         team, run_response=run_response, session=session, run_context=run_context
@@ -6359,9 +6360,9 @@ def acontinue_run_dispatch(  # type: ignore
 
     Routes to _acontinue_run or _acontinue_run_stream based on stream option.
     """
-    from src.core._runner.team._init import _initialize_session
-    from src.core._runner.team._response import get_response_format
-    from src.core._runner.team._run_options import resolve_run_options
+    from openagent_core.core._runner.team._init import _initialize_session
+    from openagent_core.core._runner.team._response import get_response_format
+    from openagent_core.core._runner.team._run_options import resolve_run_options
 
     if run_response is None and run_id is None:
         raise ValueError("Either run_response or run_id must be provided.")
@@ -6465,10 +6466,10 @@ async def _acontinue_run(
     **kwargs: Any,
 ) -> TeamRunOutput:
     """Continue a paused team run (async, non-streaming)."""
-    from src.core._runner.team._hooks import _aexecute_post_hooks
-    from src.core._runner.team._init import _disconnect_connectable_tools, _disconnect_mcp_tools
-    from src.core._runner.team._telemetry import alog_team_telemetry
-    from src.core._runner.team._tools import _aget_learning_tools, _check_and_refresh_mcp_tools, _determine_tools_for_model
+    from openagent_core.core._runner.team._hooks import _aexecute_post_hooks
+    from openagent_core.core._runner.team._init import _disconnect_connectable_tools, _disconnect_mcp_tools
+    from openagent_core.core._runner.team._telemetry import alog_team_telemetry
+    from openagent_core.core._runner.team._tools import _aget_learning_tools, _check_and_refresh_mcp_tools, _determine_tools_for_model
 
     log_debug(f"Team Continue Run: {run_response.run_id if run_response else run_id}", center=True)
 
@@ -6513,7 +6514,7 @@ async def _acontinue_run(
 
                     # Also apply any resolved approval
                     if run_response.tools:
-                        from src.core._run_state.approval import acheck_and_apply_approval_resolution
+                        from openagent_core.core._run_state.approval import acheck_and_apply_approval_resolution
 
                         try:
                             await acheck_and_apply_approval_resolution(
@@ -6525,7 +6526,7 @@ async def _acontinue_run(
                                 "(or resolve an admin approval first)."
                             )
                 elif run_response.tools:
-                    from src.core._run_state.approval import acheck_and_apply_approval_resolution
+                    from openagent_core.core._run_state.approval import acheck_and_apply_approval_resolution
 
                     try:
                         await acheck_and_apply_approval_resolution(
@@ -6544,7 +6545,7 @@ async def _acontinue_run(
                 await aregister_run(run_response.run_id)  # type: ignore
 
                 # Emit RunContinued event (matching streaming variant behaviour)
-                from src.core._runner.utils.events import create_team_run_continued_event
+                from openagent_core.core._runner.utils.events import create_team_run_continued_event
 
                 handle_event(
                     create_team_run_continued_event(run_response),
@@ -6581,7 +6582,7 @@ async def _acontinue_run(
 
                     # Check if still paused
                     if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-                        from src.core._runner.team import _hooks
+                        from openagent_core.core._runner.team import _hooks
 
                         return await _hooks.ahandle_team_run_paused(
                             team, run_response=run_response, session=team_session, run_context=run_context
@@ -6596,7 +6597,7 @@ async def _acontinue_run(
                         if getattr(r, "member_agent_id", None) is None and not r.is_resolved()
                     ]
                     if unresolved_team:
-                        from src.core._runner.team import _hooks
+                        from openagent_core.core._runner.team import _hooks
 
                         return await _hooks.ahandle_team_run_paused(
                             team, run_response=run_response, session=team_session, run_context=run_context
@@ -6800,16 +6801,16 @@ async def _acontinue_run_stream(
     **kwargs: Any,
 ) -> AsyncIterator[Union[TeamRunOutputEvent, RunOutputEvent, TeamRunOutput]]:
     """Continue a paused team run (async, streaming)."""
-    from src.core._runner.team._hooks import _aexecute_post_hooks
-    from src.core._runner.team._init import _disconnect_connectable_tools, _disconnect_mcp_tools
-    from src.core._runner.team._response import (
+    from openagent_core.core._runner.team._hooks import _aexecute_post_hooks
+    from openagent_core.core._runner.team._init import _disconnect_connectable_tools, _disconnect_mcp_tools
+    from openagent_core.core._runner.team._response import (
         _ahandle_model_response_stream,
         agenerate_response_with_output_model_stream,
         aparse_response_with_parser_model_stream,
     )
-    from src.core._runner.team._telemetry import alog_team_telemetry
-    from src.core._runner.team._tools import _aget_learning_tools, _check_and_refresh_mcp_tools, _determine_tools_for_model
-    from src.core._runner.utils.events import create_team_run_continued_event
+    from openagent_core.core._runner.team._telemetry import alog_team_telemetry
+    from openagent_core.core._runner.team._tools import _aget_learning_tools, _check_and_refresh_mcp_tools, _determine_tools_for_model
+    from openagent_core.core._runner.utils.events import create_team_run_continued_event
 
     log_debug(f"Team Continue Run Stream: {run_response.run_id if run_response else run_id}", center=True)
 
@@ -6854,7 +6855,7 @@ async def _acontinue_run_stream(
 
                     # Also apply any resolved approval
                     if run_response.tools:
-                        from src.core._run_state.approval import acheck_and_apply_approval_resolution
+                        from openagent_core.core._run_state.approval import acheck_and_apply_approval_resolution
 
                         try:
                             await acheck_and_apply_approval_resolution(
@@ -6866,7 +6867,7 @@ async def _acontinue_run_stream(
                                 "(or resolve an admin approval first)."
                             )
                 elif run_response.tools:
-                    from src.core._run_state.approval import acheck_and_apply_approval_resolution
+                    from openagent_core.core._run_state.approval import acheck_and_apply_approval_resolution
 
                     try:
                         await acheck_and_apply_approval_resolution(
@@ -6915,7 +6916,7 @@ async def _acontinue_run_stream(
                     run_response.requirements = team_level_reqs + newly_propagated
 
                     if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-                        from src.core._runner.team import _hooks
+                        from openagent_core.core._runner.team import _hooks
 
                         async for item in _hooks.ahandle_team_run_paused_stream(
                             team, run_response=run_response, session=team_session, run_context=run_context
@@ -6933,7 +6934,7 @@ async def _acontinue_run_stream(
                         if getattr(r, "member_agent_id", None) is None and not r.is_resolved()
                     ]
                     if unresolved_team:
-                        from src.core._runner.team import _hooks
+                        from openagent_core.core._runner.team import _hooks
 
                         async for item in _hooks.ahandle_team_run_paused_stream(
                             team, run_response=run_response, session=team_session, run_context=run_context
@@ -7010,7 +7011,7 @@ async def _acontinue_run_stream(
                             await araise_if_cancelled(run_response.run_id)  # type: ignore
                             yield event
                     else:
-                        from src.core._run_state.team import IntermediateRunContentEvent, RunContentEvent
+                        from openagent_core.core._run_state.team import IntermediateRunContentEvent, RunContentEvent
 
                         async for event in _ahandle_model_response_stream(
                             team,
@@ -7047,7 +7048,7 @@ async def _acontinue_run_stream(
 
                     # Check for new pauses
                     if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-                        from src.core._runner.team import _hooks
+                        from openagent_core.core._runner.team import _hooks
 
                         async for item in _hooks.ahandle_team_run_paused_stream(
                             team, run_response=run_response, session=team_session, run_context=run_context
@@ -7127,7 +7128,7 @@ async def _acontinue_run_stream(
                             await araise_if_cancelled(run_response.run_id)  # type: ignore
                             yield event
                     else:
-                        from src.core._run_state.team import IntermediateRunContentEvent, RunContentEvent
+                        from openagent_core.core._run_state.team import IntermediateRunContentEvent, RunContentEvent
 
                         async for event in _ahandle_model_response_stream(
                             team,
@@ -7162,7 +7163,7 @@ async def _acontinue_run_stream(
 
                     # Check for new pauses
                     if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
-                        from src.core._runner.team import _hooks
+                        from openagent_core.core._runner.team import _hooks
 
                         async for item in _hooks.ahandle_team_run_paused_stream(
                             team, run_response=run_response, session=team_session, run_context=run_context

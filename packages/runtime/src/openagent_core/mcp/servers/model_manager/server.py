@@ -23,13 +23,14 @@ Transport: stdio. Storage: the shared OpenAgent SQLite DB via
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import logging
 import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
-from src.memory.db import MemoryDB, VALID_FRAMEWORKS
-from src.mcp.servers._common import run_stdio
+from openagent_core.memory.db import MemoryDB, VALID_FRAMEWORKS
+from openagent_core.mcp.servers._common import run_stdio
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ _db: MemoryDB | None = None
 async def _get_db() -> MemoryDB:
     global _db
     if _db is None:
-        _db = MemoryDB(os.environ.get("OPENAGENT_DB_PATH", "openagent.db"))
+        _db = MemoryDB(runtime_environment().get("OPENAGENT_DB_PATH", "openagent.db"))
         await _db.connect()
     return _db
 
@@ -191,7 +192,7 @@ async def remove_provider(provider_id: int) -> dict[str, Any]:
 
 def _model_row(d: dict[str, Any]) -> dict[str, Any]:
     """Shape an enriched model row for the MCP response."""
-    from src.models.catalog import build_runtime_model_id
+    from openagent_core.models.catalog import build_runtime_model_id
 
     runtime_id = d.get("runtime_id") or build_runtime_model_id(
         d["provider_name"], d["model"], d["framework"],
@@ -257,7 +258,7 @@ async def list_supported_providers() -> list[str]:
     identify a provider; the same vendor can appear twice under both
     frameworks.
     """
-    from src.models.catalog import SUPPORTED_PROVIDERS
+    from openagent_core.models.catalog import SUPPORTED_PROVIDERS
 
     return sorted(SUPPORTED_PROVIDERS)
 
@@ -506,7 +507,7 @@ async def list_available_models(provider_id: int) -> list[dict[str, Any]]:
     back to a bundled catalog otherwise. Returns ``{id, display_name}``
     entries. Read-only: use ``add_model`` to actually register one.
     """
-    from src.models.discovery import list_provider_models
+    from openagent_core.models.discovery import list_provider_models
 
     db = await _get_db()
     provider_row = await db.get_provider(int(provider_id))
@@ -527,7 +528,7 @@ async def test_model(runtime_id: str) -> dict[str, Any]:
     pair, then reuses ``run_provider_smoke_test``. Does NOT write to
     the DB; use this before ``enable_model`` to confirm a new key.
     """
-    from src.models.runtime import run_provider_smoke_test
+    from openagent_core.models.runtime import run_provider_smoke_test
 
     db = await _get_db()
     model_row = await db.get_model_by_runtime_id(runtime_id)

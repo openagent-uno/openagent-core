@@ -13,22 +13,22 @@ import base64
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from os import getenv
+from openagent_core.configuration import getenv
 from typing import Any, ClassVar, Dict, Iterator, List, Literal, Optional, Tuple, Type, Union
 from uuid import uuid4
 
 from pydantic import BaseModel
 
-from src.core.runtime_errors import ModelProviderError
-from src.stream.media import Audio, Image
-from src.models.providers.base import Model
-from src.models.providers.google.utils import media_to_content_item
-from src.models.providers.message import Citations, Message, UrlCitation
-from src.models.providers.metrics import MessageMetrics
-from src.models.providers.response import ModelResponse, ModelResponseEvent, ToolExecution
-from src.core._run_state.agent import RunOutput
-from src.core._runner.utils.gemini import inject_openagent_client_header
-from src.core._runner.utils.log import log_debug, log_error, log_info, log_warning
+from openagent_core.core.runtime_errors import ModelProviderError
+from openagent_core.stream.media import Audio, Image
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.google.utils import media_to_content_item
+from openagent_core.models.providers.message import Citations, Message, UrlCitation
+from openagent_core.models.providers.metrics import MessageMetrics
+from openagent_core.models.providers.response import ModelResponse, ModelResponseEvent, ToolExecution
+from openagent_core.core._run_state.agent import RunOutput
+from openagent_core.core._runner.utils.gemini import inject_openagent_client_header
+from openagent_core.core._runner.utils.log import log_debug, log_error, log_info, log_warning
 
 try:
     from google import genai
@@ -184,8 +184,8 @@ class GeminiInteractions(Model):
 
     Example:
         ```python
-        from src.core._runner.agent import Agent
-        from src.models.providers.google import GeminiInteractions
+        from openagent_core.core._runner.agent import Agent
+        from openagent_core.models.providers.google import GeminiInteractions
 
         agent = Agent(
             model=GeminiInteractions(id="gemini-3-flash-preview"),
@@ -355,7 +355,7 @@ class GeminiInteractions(Model):
         This method receives raw tool objects (Function instances or dicts) from the base class,
         converts them to the Interactions API format.
         """
-        from src.mcp._runtime.function import Function
+        from openagent_core.mcp._runtime.function import Function
 
         formatted_tools: List[Dict[str, Any]] = []
 

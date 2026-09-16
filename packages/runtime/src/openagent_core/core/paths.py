@@ -22,7 +22,9 @@ the YAML config via ``memory.db_path`` / ``memory.vault_path``.
 
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import os
+from contextvars import ContextVar
 import platform
 import textwrap
 from pathlib import Path
@@ -33,74 +35,19 @@ APP_NAME = "openagent"
 # When set, all path functions return paths relative to this directory
 # instead of platform-standard locations.
 
-_agent_dir: Path | None = None
+_agent_dir_context: ContextVar[Path | None] = ContextVar("openagent_agent_directory", default=None)
 
 
 def set_agent_dir(path: Path | None) -> None:
     """Set the active agent directory. Pass ``None`` to reset to defaults."""
-    global _agent_dir
-    _agent_dir = path.resolve() if path is not None else None
+    _agent_dir_context.set(path.resolve() if path is not None else None)
 
 
 def get_agent_dir() -> Path | None:
     """Return the active agent directory, or ``None`` if using defaults."""
-    return _agent_dir
-
-
-_DEFAULT_YAML = textwrap.dedent("""\
-    # OpenAgent agent configuration
-    # See https://github.com/openagent-uno/openagent-server for full reference.
-    #
-    # Providers, models, MCPs, and scheduled tasks are managed exclusively
-    # through the SQLite database (configure them via the desktop app or
-    # the /api/* REST endpoints). This file only holds server-level knobs.
-
-    name: agent
-
-    network:
-      # Path to this agent's Iroh secret key (relative to the agent dir).
-      # Generated automatically on first run. Keep at 0600 — leaking it
-      # impersonates this agent on the entire network.
-      identity_path: ./identity.key
-
-      coordinator:
-        # Path to the coordinator's signing key. Only used when this
-        # agent has been promoted to network coordinator via
-        # ``openagent network init``.
-        key_path: ./coordinator.key
-
-      # Optional: override Iroh's public DERP relay. Empty = use Iroh's
-      # public network. Self-host one for full data locality.
-      derp_url: ""
-
-    channels:
-      # Bridges (telegram, discord, whatsapp) connect as network clients
-      # rather than via host:port. See `openagent network invite --role user`.
-""")
-
-
-def ensure_agent_dir(path: Path) -> Path:
-    """Create an agent directory with default structure if it doesn't exist.
-
-    Creates:
-      <path>/openagent.yaml   (minimal config)
-      <path>/memories/         (memory vault)
-      <path>/logs/             (log files)
-
-    Returns the resolved absolute path.
-    """
-    path = path.resolve()
-    path.mkdir(parents=True, exist_ok=True)
-
-    config_file = path / "openagent.yaml"
-    if not config_file.exists():
-        config_file.write_text(_DEFAULT_YAML)
-
-    (path / "memories").mkdir(exist_ok=True)
-    (path / "logs").mkdir(exist_ok=True)
-    (path / "skills").mkdir(exist_ok=True)
-
-    return path
+    from openagent_core.runtime import current_runtime
+    runtime = current_runtime()
+    return runtime.settings.workspace if runtime is not None else _agent_dir_context.get()
 
 
 # ── Platform path helpers ──
@@ -111,19 +58,20 @@ def _system() -> str:
 
 def _platform_dir(kind: str) -> Path:
     """Resolve the base config/data directory for the current platform."""
-    if _agent_dir is not None:
-        _agent_dir.mkdir(parents=True, exist_ok=True)
-        return _agent_dir
+    agent_dir = get_agent_dir()
+    if agent_dir is not None:
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        return agent_dir
 
     system = _system()
     if system == "Darwin":
         base = Path.home() / "Library" / "Application Support" / "OpenAgent"
     elif system == "Windows":
-        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "OpenAgent"
+        base = Path(runtime_environment().get("APPDATA", Path.home() / "AppData" / "Roaming")) / "OpenAgent"
     else:
         env_name = "XDG_CONFIG_HOME" if kind == "config" else "XDG_DATA_HOME"
         default = Path.home() / ".config" if kind == "config" else Path.home() / ".local" / "share"
-        xdg = os.environ.get(env_name, str(default))
+        xdg = runtime_environment().get(env_name, str(default))
         base = Path(xdg) / APP_NAME
     base.mkdir(parents=True, exist_ok=True)
     return base
@@ -175,7 +123,7 @@ def default_skills_path() -> Path:
     startup (parity with how ``OPENAGENT_VAULT_PATH`` reaches the vault
     subprocess).
     """
-    override = os.environ.get("OPENAGENT_SKILLS_PATH", "").strip()
+    override = runtime_environment().get("OPENAGENT_SKILLS_PATH", "").strip()
     d = Path(override).expanduser() if override else data_dir() / "skills"
     d.mkdir(parents=True, exist_ok=True)
     return d

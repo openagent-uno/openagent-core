@@ -16,6 +16,7 @@ system prompt mid-session.
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import os
 import re
 import shutil
@@ -23,9 +24,9 @@ from pathlib import Path
 
 import yaml
 
-from src.core.paths import default_skills_path
-from src.memory.vault.parser import split_frontmatter
-from src.mcp.servers.skills.registry import SkillsRegistry, parse_skill_file
+from openagent_core.core.paths import default_skills_path
+from openagent_core.memory.vault.parser import split_frontmatter
+from openagent_core.mcp.servers.skills.registry import SkillsRegistry, parse_skill_file
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -48,10 +49,10 @@ def _db_path() -> str:
     Mirrors ``vault_gate/recall.py:_db_path`` — env override first, then the
     packaged default — so this in-process tool and the recall index agree on
     which database keys the shared ``semantic_index_*.db`` cache."""
-    override = os.environ.get("OPENAGENT_DB_PATH")
+    override = runtime_environment().get("OPENAGENT_DB_PATH")
     if override:
         return override
-    from src.core.paths import default_db_path
+    from openagent_core.core.paths import default_db_path
 
     return str(default_db_path())
 
@@ -66,8 +67,8 @@ def _semantic_skill_index():
     this routing existed. The index is a rebuildable DERIVED cache — SKILL.md
     stays the source of truth."""
     try:
-        from src.core.config import load_config
-        from src.memory.semantic_index import SemanticIndex, resolve_embedder
+        from openagent_core.core.config import load_config
+        from openagent_core.memory.semantic_index import SemanticIndex, resolve_embedder
     except Exception:  # noqa: BLE001 — a missing numpy/module must not break search
         return None
     providers = (load_config() or {}).get("providers")
@@ -276,7 +277,7 @@ async def skill_manage(
     # whether a scheduled job can rewrite the playbook eSound answers
     # customers with.
     if action in ("update", "archive", "remove"):
-        from src.mcp.servers.skills.provenance import mutation_refusal
+        from openagent_core.mcp.servers.skills.provenance import mutation_refusal
 
         target_skill = _registry().get(name)
         if target_skill is not None:

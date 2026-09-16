@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from openagent_core.instance_state import InstanceMapping
+from openagent_core.configuration import runtime_environment
 import asyncio
 import json
 import logging
@@ -15,13 +17,13 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import aiosqlite
-from src.memory.schedule import (
+from openagent_core.memory.schedule import (
     ONE_SHOT_PREFIX,
     build_one_shot_expression,
     is_one_shot_expression,
     parse_one_shot_expression,
 )
-from src.models.catalog import (
+from openagent_core.models.catalog import (
     FRAMEWORK_API_BASED,
     LLM_FRAMEWORKS,
     SUPPORTED_FRAMEWORKS,
@@ -61,7 +63,7 @@ _DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 60_000
 def sqlite_busy_timeout_ms() -> int:
     """Milliseconds every connection to the agent DB should wait for the
     writer before giving up. Read live so a redeploy is not needed to retune."""
-    raw = os.environ.get("OPENAGENT_SQLITE_BUSY_TIMEOUT_MS")
+    raw = runtime_environment().get("OPENAGENT_SQLITE_BUSY_TIMEOUT_MS")
     if raw is None:
         return _DEFAULT_SQLITE_BUSY_TIMEOUT_MS
     try:
@@ -87,7 +89,7 @@ def sqlite_busy_timeout_ms() -> int:
 # them. Several modules outside this file take that connection, so it is not
 # a rare state and it is not one this class can rule out.
 def delivery_lock_wait_ms() -> int:
-    raw = os.environ.get("OPENAGENT_DELIVERY_LOCK_WAIT_MS", "").strip()
+    raw = runtime_environment().get("OPENAGENT_DELIVERY_LOCK_WAIT_MS", "").strip()
     try:
         value = int(raw) if raw else 8000
     except ValueError:
@@ -111,7 +113,7 @@ _LEASE_TTL_DEFAULT = 120.0
 
 def _env_bool(name: str, default: bool) -> bool:
     """A boolean env override; unset → ``default``. Off values: 0/false/no/off/''."""
-    raw = os.environ.get(name)
+    raw = runtime_environment().get(name)
     if raw is None:
         return default
     return raw.strip().lower() not in ("0", "false", "no", "off", "")
@@ -120,7 +122,7 @@ def _env_bool(name: str, default: bool) -> bool:
 def _env_float(name: str, default: float) -> float:
     """A float env override that falls back to ``default`` on unset/garbage."""
     try:
-        return float(os.environ.get(name, str(default)))
+        return float(runtime_environment().get(name, str(default)))
     except (TypeError, ValueError):
         return default
 
@@ -128,7 +130,7 @@ def _env_float(name: str, default: float) -> float:
 def _env_int(name: str, default: int) -> int:
     """An int env override that falls back to ``default`` on unset/garbage."""
     try:
-        return int(os.environ.get(name, str(default)))
+        return int(runtime_environment().get(name, str(default)))
     except (TypeError, ValueError):
         return default
 
@@ -139,7 +141,7 @@ def _lease_ttl_seconds() -> float:
 
 
 VALID_MCP_KINDS = ("builtin", "custom", "default")
-# Alias kept for the ``from src.memory.db import VALID_FRAMEWORKS``
+# Alias kept for the ``from openagent_core.memory.db import VALID_FRAMEWORKS``
 # import sites already in the tree; both names point at the canonical
 # tuple defined in :mod:`openagent.models.catalog`.
 VALID_FRAMEWORKS = SUPPORTED_FRAMEWORKS
@@ -764,7 +766,7 @@ CREATE INDEX IF NOT EXISTS idx_invitations_expires ON network_invitations(expire
 
 -- ── Learning tables (DORMANT — no writer, empty everywhere) ────────
 -- Both tables below are empty on every deployment and always have been.
--- Their only writers were ``src.learning.user_profile`` / ``.skills``,
+-- Their only writers were ``openagent_core.learning.user_profile`` / ``.skills``,
 -- whose flush + detector hooks had zero callers; both modules were
 -- deleted in v0.15.11 for being a second, opaque memory system
 -- competing with the vault (§5 wants long-term memory as readable
@@ -837,7 +839,7 @@ CREATE TABLE IF NOT EXISTS conversation_embeddings (
 CREATE INDEX IF NOT EXISTS idx_conv_emb_session ON conversation_embeddings(session_id);
 CREATE INDEX IF NOT EXISTS idx_conv_emb_timestamp ON conversation_embeddings(timestamp);
 -- ``vault_save_reminders`` tracks per-session turn counts so the
--- reminder injector in ``src.learning.vault_reminder`` can fire
+-- reminder injector in ``openagent_core.learning.vault_reminder`` can fire
 -- a memory-checkpoint prompt into the user turn every N turns.
 -- Unlike ``user_profiles``, this table owns only the counter -- no
 -- profile payload -- so the two features can be enabled independently.
@@ -875,7 +877,7 @@ CREATE TABLE IF NOT EXISTS events (
     description        TEXT,
     type               TEXT NOT NULL DEFAULT 'generic',
     enabled            INTEGER NOT NULL DEFAULT 1,
-    -- The per-event secret, ENCRYPTED at rest (see src.core.event_secret).
+    -- The per-event secret, ENCRYPTED at rest (see openagent_core.core.event_secret).
     -- Encryption not hashing, because provider HMAC verification needs the
     -- key in clear. Only ``secret_hint`` (last 4 chars) is unencrypted.
     secret_enc         TEXT NOT NULL,
@@ -1093,7 +1095,7 @@ def _as_epoch(value: Any) -> float:
 # puo' senza mai aspettare nessuno; il WAL si accorcia comunque, solo non
 # sempre fino a zero.
 _WAL_CHECKPOINT_INTERVAL_SECONDS = 300.0
-_LAST_WAL_CHECKPOINT: dict[str, float] = {}
+_LAST_WAL_CHECKPOINT = InstanceMapping('memory/db.py:_LAST_WAL_CHECKPOINT')
 
 
 class MemoryDB:
@@ -1101,7 +1103,9 @@ class MemoryDB:
 
     def __init__(self, db_path: str = "openagent.db"):
         self.db_path = db_path
+        self._module_migrations = []
         self._conn: aiosqlite.Connection | None = None
+        self._owns_connection = True
         # Populated only by the most recent startup orphan reap and consumed
         # by ``requeue_interrupted_task_runs``.  Keeping this boundary in
         # memory is deliberate: historical rows also carry the same durable
@@ -1112,6 +1116,20 @@ class MemoryDB:
         # the instance so the dispatch runner can heartbeat "still mine".
         self.worker_id = WORKER_ID
         self.worker_pid = WORKER_PID
+
+    @classmethod
+    def from_connection(cls, connection, *, db_path: str):
+        """Borrow an existing transaction without migrations or lifecycle I/O."""
+        database = cls(db_path)
+        database._conn = connection
+        database._owns_connection = False
+        return database
+
+    def add_migration(self, migration) -> None:
+        """Register an explicit async module migration before opening storage."""
+        if self._conn is not None:
+            raise RuntimeError("Module migrations must be registered before connect")
+        self._module_migrations.append(migration)
 
     async def connect(self) -> None:
         if self._conn is not None:
@@ -1157,20 +1175,17 @@ class MemoryDB:
         await self._migrate_legacy_agno_sessions_to_sessions()
         await self._conn.executescript(SCHEMA_SQL)
         await self._apply_legacy_alters()
-        # Post-schema migration: reclaim any ``sessions`` row whose owner
-        # was pinned to a value the runtime won't match (legacy
-        # ``'openagent'`` sentinel, device handle, or the ``__bridge``
-        # cert handle), so the runtime can read its history + persist new
-        # runs again. See ``upsert_session`` and ``RUNTIME_SESSION_USER_ID``.
-        await self._migrate_reclaim_session_owners()
-        await self._migrate_claim_ownerless_sessions()
+        # Provider-era user IDs are historical evidence. The authorized
+        # runtime adapter can read their envelopes without rewriting them.
+        # Unattributed historical sessions remain unattributed. Only an
+        # explicit host migration with evidence may assign their owner.
         await self._conn.commit()
         # Additive only: takes a verified SQLite backup before the first v2
         # DDL, installs the downgrade journal, and enters shadow.  Legacy
         # ``sessions.runs`` remains intact and canonical until parity gates
         # promote individual reads.
-        from src import __version__
-        from src.memory.operational.schema import ensure_operational_storage
+        from openagent_core import __version__
+        from openagent_core.memory.operational.schema import ensure_operational_storage
 
         # Capture downgrade-trigger evidence before the additive migrator
         # reinstalls any missing trigger.  A clean promoted boot can trust the
@@ -1200,25 +1215,20 @@ class MemoryDB:
         # Artifact metadata is always owner-private.  Sharing is inherited
         # from live resource links so later ACL revocation/deletion is honored;
         # keep this normalization outside the shipped v2 schema checksum.
-        from src.memory.artifact_acl_migration import ensure_artifact_acl_storage
+        from openagent_core.memory.artifact_acl_migration import ensure_artifact_acl_storage
 
         await ensure_artifact_acl_storage(
             self._conn,
             app_version=__version__,
         )
-        # Custom Views is a separate, additive checksummed migration.  Never
-        # append its DDL to operational_storage_v2.sql: completed v2 ledgers
-        # intentionally reject checksum drift on already-shipped databases.
-        from src.custom_views.migration import ensure_custom_views_storage
-
-        await ensure_custom_views_storage(
-            self._conn,
-            app_version=__version__,
-        )
+        # Product/module schemas are registered by host composition. Existing
+        # tables remain intact; the engine never installs product resources.
+        for migration in self._module_migrations:
+            await migration(self._conn)
         # Ordered content is independent from the provider's legacy message
         # JSON and from the UI definition schema.  Install it last because its
         # foreign keys target both operational v2 and Custom Views tables.
-        from src.memory.message_parts_migration import ensure_message_parts_storage
+        from openagent_core.memory.message_parts_migration import ensure_message_parts_storage
 
         await ensure_message_parts_storage(
             self._conn,
@@ -1228,7 +1238,7 @@ class MemoryDB:
         # build was offline.  Its durable triggers leave pending journal rows;
         # promoted reads must fall back to shadow *before* any runtime writer or
         # scheduler becomes visible, then normal reconciliation can catch up.
-        from src.memory.operational.phase import guard_storage_phase_atomic_async
+        from openagent_core.memory.operational.phase import guard_storage_phase_atomic_async
 
         await guard_storage_phase_atomic_async(
             self._conn,
@@ -1240,7 +1250,7 @@ class MemoryDB:
         # trigger journal and API/search reconciliation; startup never parses
         # the entire historical runs corpus in one blocking transaction.
         try:
-            from src.memory.operational.repository import (
+            from openagent_core.memory.operational.repository import (
                 backfill_batch_async,
                 reconcile_pending_async,
             )
@@ -1256,107 +1266,7 @@ class MemoryDB:
             await self._conn.rollback()
             logger.warning("operational storage startup reconciliation failed: %s", exc)
 
-    async def _migrate_reclaim_session_owners(self) -> None:
-        """One-shot UPDATE: NULL any ``sessions.user_id`` the runtime won't
-        match, so it can reclaim the row and resume the conversation.
 
-        The runtime owns the ``user_id`` column and stamps the single
-        stable ``RUNTIME_SESSION_USER_ID`` ("openagent") sentinel on every
-        session; its history read AND its runs write are gated by
-        ``user_id == 'openagent' OR user_id IS NULL`` (see
-        ``src/memory/store/sqlite/sqlite.py``). Earlier builds let the
-        gateway pin a *different* value here — first the legacy
-        ``'openagent'`` INSERT sentinel, then (after that was "fixed") the
-        authenticated device handle or the ``__bridge`` cert handle every
-        bridge connection carries. Any such row is invisible to the
-        runtime: it can neither load the stored transcript nor append to
-        it, so the agent "forgot" the conversation on every turn (the
-        2026-05 Telegram session-reset bug).
-
-        Setting those owners back to NULL makes the runtime's ``IS NULL``
-        soft-match fire on the next turn — it reads the existing ``runs``
-        (history restored) and re-claims the row as ``'openagent'`` on
-        write. Rows already at ``'openagent'`` or NULL are left untouched.
-        Idempotent; safe to run on every connect. Tenancy is carried by
-        ``session_id`` (e.g. ``tg:<uid>``), never by this column, so
-        collapsing owners to one is correct for the single-tenant agent
-        (vision §17)."""
-        assert self._conn is not None
-        # Literal ``'openagent'`` mirrors ``RUNTIME_SESSION_USER_ID`` in
-        # ``src/models/catalog.py`` — kept as a literal here to avoid the
-        # memory layer importing the models layer. Keep the two in sync.
-        try:
-            await self._conn.execute(
-                "UPDATE sessions SET user_id = NULL "
-                "WHERE user_id IS NOT NULL AND user_id != 'openagent'"
-            )
-        except Exception:
-            # ``sessions`` not present yet on a brand-new DB — the
-            # SCHEMA_SQL CREATE TABLE just above created it but on
-            # legacy paths the migration order may surprise us. Quiet
-            # no-op is the right behaviour here.
-            pass
-
-    async def _migrate_claim_ownerless_sessions(self) -> None:
-        """One-shot UPDATE: give the deployment's owner every ownerless session.
-
-        Ownership lives in ``metadata.client_id``. Rows written before the
-        gateway stamped one — and any row written by a path that still does
-        not — carry no owner, and an ownerless row is invisible twice over:
-        ``list_all_sessions`` filters on that exact field, and the normalized
-        projection files the row as ``quarantined``, which the resource check
-        refuses unconditionally. Since the canonical rows arrived that means
-        every per-session route answers 404 for a chat that is plainly on
-        disk, and no endpoint can repair it, because claiming a session is
-        itself gated on the session being visible.
-
-        The owner adopted here is the deployment's primary owner — the
-        earliest active network user, the same identity automation sessions
-        already inherit. Nothing is claimed on a handle-less deployment, and
-        nothing is claimed once a second person can sign in: leaving a row
-        hidden is safer than handing one member's chat to another.
-        Idempotent; safe on every connect.
-        """
-        assert self._conn is not None
-        if await self._network_has_several_users(self._conn):
-            # More than one person signs in here, and the row records nobody:
-            # adopting it for the earliest of them would hand one member's
-            # chat to another. Leaving it hidden is the safe half of that
-            # trade, and every session written from now on carries its owner.
-            return
-        owner = await self._deployment_owner_handle(self._conn)
-        if not owner:
-            return
-        try:
-            # ``json_extract(metadata, '$')`` normalizes both shapes this
-            # column has held: a JSON object, and the double-encoded JSON
-            # string legacy writers produced.
-            await self._conn.execute(
-                "UPDATE sessions SET metadata = json_set("
-                "COALESCE(json(json_extract(metadata, '$')), json('{}')), "
-                "'$.client_id', ?) "
-                "WHERE (metadata IS NULL OR json_valid(metadata)) AND COALESCE("
-                "json_extract(json_extract(metadata, '$'), '$.client_id'), '') = ''",
-                (owner,),
-            )
-        except Exception:
-            return  # ``sessions`` absent on a brand-new database.
-        principal = owner if owner.startswith(("user:", "agent:")) else f"user:{owner}"
-        try:
-            # The canonical rows were projected from the ownerless metadata, so
-            # they are quarantined already. Repair the two authorization
-            # columns in place rather than reprojecting every transcript at
-            # startup; the next write to a row refreshes the rest of it.
-            await self._conn.execute(
-                "UPDATE sessions_v2 SET owner_principal_id=?, visibility='private' "
-                "WHERE owner_principal_id IS NULL AND visibility='quarantined' "
-                "AND deleted_at_ms IS NULL",
-                (principal,),
-            )
-        except Exception:
-            # Normalized storage is installed later in this same connect; a
-            # first migration projects the rows from the metadata just fixed.
-            pass
 
     async def _migrate_legacy_agno_sessions_to_sessions(self) -> None:
         """One-shot ALTER TABLE: rename ``agno_sessions`` to ``sessions``.
@@ -1393,7 +1303,7 @@ class MemoryDB:
             # Both present — refuse to merge or drop either side. The
             # operator can pick a winner manually.
             try:
-                from src.core.logging import elog
+                from openagent_core.core.logging import elog
                 elog(
                     "memory.sessions_rename_skipped",
                     level="warning",
@@ -1749,7 +1659,7 @@ class MemoryDB:
                 await self._conn.commit()
                 resolved += 1
                 try:
-                    from src.core.logging import elog
+                    from openagent_core.core.logging import elog
                     elog(
                         "guarded_change." + new_status,
                         target=f"{ch['target_kind']}:{ch['target_id']}.{ch['field']}",
@@ -2245,7 +2155,7 @@ class MemoryDB:
         masquerade as a user catalog edit to the hot-reload watcher.
         """
         assert self._conn is not None
-        from src.models.media_capabilities import normalize_model_metadata
+        from openagent_core.models.media_capabilities import normalize_model_metadata
 
         cursor = await self._conn.execute(
             "SELECT m.id, m.model, m.metadata_json, p.name AS provider_name "
@@ -2391,7 +2301,7 @@ class MemoryDB:
         now = time.time()
         # Defer the cron parse to avoid pulling croniter into every boot;
         # only import on actual migration work.
-        from src.memory.schedule import (
+        from openagent_core.memory.schedule import (
             next_run_for_expression,
             validate_schedule_expression,
         )
@@ -2474,7 +2384,8 @@ class MemoryDB:
 
     async def close(self) -> None:
         if self._conn:
-            await self._conn.close()
+            if self._owns_connection:
+                await self._conn.close()
             self._conn = None
 
     async def _maybe_checkpoint_wal(self) -> None:
@@ -2486,7 +2397,7 @@ class MemoryDB:
         pura igiene e non deve far fallire l'operazione che lo ha innescato.
         """
         conn = self._conn
-        if conn is None:
+        if conn is None or not self._owns_connection:
             return
         key = str(self.db_path)
         now = time.monotonic()
@@ -2521,7 +2432,7 @@ class MemoryDB:
         savepoint = f"operational_projection_{uuid.uuid4().hex}"
         await self._conn.execute(f"SAVEPOINT {savepoint}")
         try:
-            from src.memory.operational.repository import (
+            from openagent_core.memory.operational.repository import (
                 project_legacy_session_async,
             )
 
@@ -2545,8 +2456,8 @@ class MemoryDB:
         complete.
         """
 
-        from src import __version__
-        from src.memory.operational.phase import (
+        from openagent_core import __version__
+        from openagent_core.memory.operational.phase import (
             transition_storage_phase_atomic_async,
         )
 
@@ -2661,10 +2572,10 @@ class MemoryDB:
         pre-timezone behaviour). Validated here so a typo can't reach the
         scheduler loop, where it would surface only as a task that mysteriously
         stopped advancing."""
-        from src.memory.schedule import validate_timezone
+        from openagent_core.memory.schedule import validate_timezone
 
         validate_timezone(timezone)
-        from src.core.execution_policy import encode_execution_policy
+        from openagent_core.core.execution_policy import encode_execution_policy
 
         execution_policy_json = encode_execution_policy(execution_policy)
         conn = await self._ensure_connected()
@@ -2704,7 +2615,7 @@ class MemoryDB:
         if not updates:
             return
         if "timezone" in updates:
-            from src.memory.schedule import validate_timezone
+            from openagent_core.memory.schedule import validate_timezone
 
             # Reject at the write. A bad zone that lands in the row makes
             # every next_run recompute raise inside the scheduler tick, which
@@ -2713,7 +2624,7 @@ class MemoryDB:
             validate_timezone(updates["timezone"])
             updates["timezone"] = updates["timezone"] or None
         if "execution_policy_json" in updates:
-            from src.core.execution_policy import encode_execution_policy
+            from openagent_core.core.execution_policy import encode_execution_policy
 
             updates["execution_policy_json"] = encode_execution_policy(
                 updates["execution_policy_json"]
@@ -3096,39 +3007,30 @@ class MemoryDB:
         await conn.commit()
         return req_id
 
-    async def claim_pending_task_requests(self, *, limit: int = 20) -> list[dict]:
-        """Atomically claim up to ``limit`` unclaimed run-now requests.
-
-        Same row-level ``WHERE claimed_at IS NULL`` guard as
-        ``claim_pending_workflow_requests`` — a concurrent claimer that
-        picked the same rows loses the race because its UPDATE filters out
-        already-claimed rows, so no request fires twice.
-        """
-        conn = await self._ensure_connected()
-        now = time.time()
-        cursor = await conn.execute(
-            "SELECT * FROM task_run_requests "
-            "WHERE claimed_at IS NULL ORDER BY created_at ASC LIMIT ?",
-            (int(limit),),
-        )
-        rows = await cursor.fetchall()
-        if not rows:
+    async def _claim_authorized_requests(self, table: str, definition_column: str, *, limit: int,
+                                         definition_ids: tuple[str, ...] | None = None) -> list[dict]:
+        if definition_ids == () or limit <= 0:
             return []
-        ids = [row["id"] for row in rows]
-        placeholders = ",".join("?" for _ in ids)
-        await conn.execute(
-            f"UPDATE task_run_requests SET claimed_at = ? "
-            f"WHERE id IN ({placeholders}) AND claimed_at IS NULL",
-            [now, *ids],
-        )
-        await conn.commit()
-        cursor = await conn.execute(
-            f"SELECT * FROM task_run_requests "
-            f"WHERE id IN ({placeholders}) AND claimed_at = ? "
-            f"ORDER BY created_at ASC",
-            [*ids, now],
-        )
-        return [dict(row) for row in await cursor.fetchall()]
+        if (table, definition_column) not in {("task_run_requests", "task_id"), ("workflow_run_requests", "workflow_id")}:
+            raise ValueError("Invalid request queue")
+        clause = f" AND {definition_column} IN (SELECT value FROM json_each(?))" if definition_ids is not None else ""
+        values = [json.dumps(definition_ids)] if definition_ids is not None else []
+        async with aiosqlite.connect(self.db_path, timeout=sqlite_busy_timeout_s()) as conn:
+            conn.row_factory = aiosqlite.Row
+            await conn.execute("BEGIN IMMEDIATE")
+            cursor = await conn.execute(
+                f"UPDATE {table} SET claimed_at=? WHERE id IN (SELECT id FROM {table} "
+                f"WHERE claimed_at IS NULL{clause} ORDER BY created_at,id LIMIT ?) AND claimed_at IS NULL RETURNING *",
+                [time.time(), *values, int(limit)])
+            rows = [dict(row) for row in await cursor.fetchall()]
+            await conn.commit()
+        return sorted(rows, key=lambda row: (row["created_at"], row["id"]))
+
+    async def claim_pending_task_requests(self, *, limit: int = 20,
+                                         definition_ids: tuple[str, ...] | None = None) -> list[dict]:
+        """Claim only currently authorized definitions; unknown grants stay pending."""
+        return await self._claim_authorized_requests("task_run_requests", "task_id",
+            limit=limit, definition_ids=definition_ids)
 
     async def set_task_request_run_id(self, request_id: str, run_id: str) -> None:
         """Link a claimed request to the ``task_runs`` row it spawned so the
@@ -3152,7 +3054,7 @@ class MemoryDB:
     #
     # An event is an inbound trigger bound to an action (workflow / task /
     # prompt). CRUD mirrors ``scheduled_tasks``; the secret is hashed via
-    # ``src.core.event_secret`` and is NEVER returned by a read — callers get
+    # ``openagent_core.core.event_secret`` and is NEVER returned by a read — callers get
     # ``secret_hint`` only. ``event_deliveries`` is both the run history and
     # the cross-process queue (see ``claim_pending_event_deliveries``).
 
@@ -3169,7 +3071,7 @@ class MemoryDB:
             d["input_schema"] = []
         d["enabled"] = bool(d.get("enabled"))
         d["session_binding_enabled"] = bool(d.get("session_binding_enabled"))
-        from src.core.execution_policy import normalize_execution_policy
+        from openagent_core.core.execution_policy import normalize_execution_policy
 
         d["execution_policy"] = normalize_execution_policy(
             d.pop("execution_policy_json", None)
@@ -3199,7 +3101,7 @@ class MemoryDB:
         max_payload_bytes: int = 262144,
         enabled: bool = True,
     ) -> str:
-        from src.core.execution_policy import encode_execution_policy
+        from openagent_core.core.execution_policy import encode_execution_policy
 
         conn = await self._ensure_connected()
         event_id = str(uuid.uuid4())
@@ -3277,7 +3179,7 @@ class MemoryDB:
                 # store the canonical JSON either way.
                 v = json.dumps(v)
             if k == "execution_policy_json":
-                from src.core.execution_policy import encode_execution_policy
+                from openagent_core.core.execution_policy import encode_execution_policy
 
                 v = encode_execution_policy(v)
             updates[k] = v
@@ -3531,7 +3433,7 @@ class MemoryDB:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
-    async def claim_pending_event_deliveries(self, *, limit: int = 20) -> list[dict]:
+    async def claim_pending_event_deliveries(self, *, limit: int = 20, definition_ids: tuple[str, ...] | None = None) -> list[dict]:
         """Atomically claim up to ``limit`` unclaimed deliveries (those the
         events-manager MCP enqueued out-of-process). Same ``WHERE claimed_at
         IS NULL`` race guard as ``claim_pending_task_requests``.
@@ -3540,6 +3442,8 @@ class MemoryDB:
         ``worker_id``, ``worker_pid``) so the Scheduler's dispatch runner
         heartbeats it while the turn runs and ``reap_expired_event_leases``
         recovers it if the turn freezes."""
+        if definition_ids == () or limit <= 0:
+            return []
         now = time.time()
         claim_expires = now + _lease_ttl_seconds()
         # Its own connection, opened with BEGIN IMMEDIATE — the fourth place
@@ -3565,7 +3469,7 @@ class MemoryDB:
             await conn.execute(f"PRAGMA busy_timeout = {delivery_lock_wait_ms()}")
             await conn.execute("PRAGMA foreign_keys = ON")
             await conn.execute("BEGIN IMMEDIATE")
-            return await self._claim_deliveries_in(conn, limit, now, claim_expires)
+            return await self._claim_deliveries_in(conn, limit, now, claim_expires, definition_ids=definition_ids)
         except sqlite3.OperationalError as e:
             # The lock did not come free in time. This is a drain tick: taking
             # nothing this time round and trying again in a few seconds is the
@@ -3580,8 +3484,11 @@ class MemoryDB:
             await conn.close()
 
     async def _claim_deliveries_in(
-        self, conn, limit: int, now: float, claim_expires: float,
+        self, conn, limit: int, now: float, claim_expires: float, *,
+        definition_ids: tuple[str, ...] | None = None,
     ) -> list[dict]:
+        clause = "AND event_id IN (SELECT value FROM json_each(?)) " if definition_ids is not None else ""
+        values = [json.dumps(definition_ids)] if definition_ids is not None else []
         cursor = await conn.execute(
             # ``finished_at IS NULL`` is load-bearing, not tidiness. The claim
             # orders by ``started_at ASC`` and does NOT look at status, so a row
@@ -3593,8 +3500,8 @@ class MemoryDB:
             # them, and from the outside it looked exactly like "no work".
             "SELECT * FROM event_deliveries "
             "WHERE claimed_at IS NULL AND finished_at IS NULL "
-            "ORDER BY started_at ASC LIMIT ?",
-            (int(limit),),
+            + clause + "ORDER BY started_at ASC LIMIT ?",
+            [*values, int(limit)],
         )
         rows = await cursor.fetchall()
         if not rows:
@@ -3605,7 +3512,7 @@ class MemoryDB:
             f"UPDATE event_deliveries SET claimed_at = ?, claim_expires = ?, "
             f"worker_id = ?, worker_pid = ? "
             f"WHERE id IN ({placeholders}) AND claimed_at IS NULL",
-            [now, claim_expires, WORKER_ID, WORKER_PID, *ids],
+            [now, claim_expires, self.worker_id, self.worker_pid, *ids],
         )
         await conn.commit()
         cursor = await conn.execute(
@@ -3747,7 +3654,7 @@ class MemoryDB:
             logger.info("lease reap skipped: write lock busy")
             return 0
         if requeued or parked:
-            from src.core.logging import elog
+            from openagent_core.core.logging import elog
             elog(
                 "event.orphan_reaped", mode="lease-reap",
                 requeued=requeued, parked=parked, max_attempts=max_attempts,
@@ -3913,7 +3820,7 @@ class MemoryDB:
             now = time.time()
 
             def _flag(name: str, default: bool) -> bool:
-                raw = os.environ.get(name)
+                raw = runtime_environment().get(name)
                 if raw is None:
                     return default
                 return raw.strip().lower() not in ("0", "false", "no", "off", "")
@@ -3929,7 +3836,7 @@ class MemoryDB:
             if max_attempts is None:
                 try:
                     max_attempts = int(
-                        os.environ.get("OPENAGENT_EVENT_REENQUEUE_MAX_ATTEMPTS", "5")
+                        runtime_environment().get("OPENAGENT_EVENT_REENQUEUE_MAX_ATTEMPTS", "5")
                     )
                 except (TypeError, ValueError):
                     max_attempts = 5
@@ -3949,7 +3856,7 @@ class MemoryDB:
                 )
                 n = cursor.rowcount or 0
                 if n:
-                    from src.core.logging import elog
+                    from openagent_core.core.logging import elog
                     elog("event.orphan_reaped", mode="legacy-failed", count=n)
                 return n
 
@@ -3997,7 +3904,7 @@ class MemoryDB:
             requeued = requeue_cur.rowcount or 0
 
             if requeued or parked:
-                from src.core.logging import elog
+                from openagent_core.core.logging import elog
                 elog(
                     "event.orphan_reaped", mode="re-enqueue",
                     requeued=requeued, parked=parked, max_attempts=max_attempts,
@@ -4055,7 +3962,7 @@ class MemoryDB:
             now = time.time()
 
             def _flag(name: str, default: bool) -> bool:
-                raw = os.environ.get(name)
+                raw = runtime_environment().get(name)
                 if raw is None:
                     return default
                 return raw.strip().lower() not in ("0", "false", "no", "off", "")
@@ -4073,7 +3980,7 @@ class MemoryDB:
             if max_attempts is None:
                 try:
                     max_attempts = int(
-                        os.environ.get("OPENAGENT_EVENT_REENQUEUE_MAX_ATTEMPTS", "5")
+                        runtime_environment().get("OPENAGENT_EVENT_REENQUEUE_MAX_ATTEMPTS", "5")
                     )
                 except (TypeError, ValueError):
                     max_attempts = 5
@@ -4130,7 +4037,7 @@ class MemoryDB:
             #    tetto dei tentativi resta quello di sempre.
             try:
                 retry_delay = max(0.0, float(
-                    os.environ.get("OPENAGENT_EVENT_RETRY_DELAY_SECONDS", "300")))
+                    runtime_environment().get("OPENAGENT_EVENT_RETRY_DELAY_SECONDS", "300")))
             except (TypeError, ValueError):
                 retry_delay = 300.0
             retried = 0
@@ -4149,7 +4056,7 @@ class MemoryDB:
                 retried = retry_cur.rowcount or 0
 
             if requeued or parked or retried:
-                from src.core.logging import elog
+                from openagent_core.core.logging import elog
                 elog(
                     "event.orphan_reaped", mode="stale-sweep",
                     requeued=requeued, parked=parked, retried=retried,
@@ -4735,64 +4642,17 @@ class MemoryDB:
         await conn.commit()
         return req_id
 
-    async def claim_pending_workflow_requests(self, *, limit: int = 5) -> list[dict]:
-        """Atomically claim up to ``limit`` unclaimed requests. Each
-        returned row has ``claimed_at`` set so concurrent scheduler
-        ticks (or stray retries) won't run the same request twice.
-
-        The atomicity comes from the row-level ``WHERE claimed_at IS NULL``
-        guard inside the UPDATE — a concurrent claimer that picked the
-        same rows from the SELECT loses the race because their UPDATE
-        filters out already-claimed rows. The previous implementation
-        wrapped the SELECT+UPDATE in an explicit ``BEGIN IMMEDIATE`` /
-        ``COMMIT`` pair, which fought with the ``sqlite3`` driver's
-        auto-managed transaction state on the shared aiosqlite
-        connection: when a sibling coroutine's DML had already
-        auto-begun a transaction, the explicit ``BEGIN IMMEDIATE``
-        produced ``cannot start a transaction within a transaction``
-        and the except branch's ``ROLLBACK`` then chained
-        ``cannot rollback - no transaction is active``.
-        """
-        conn = await self._ensure_connected()
-        now = time.time()
-        cursor = await conn.execute(
-            "SELECT * FROM workflow_run_requests "
-            "WHERE claimed_at IS NULL "
-            "ORDER BY created_at ASC LIMIT ?",
-            (int(limit),),
-        )
-        rows = await cursor.fetchall()
-        if not rows:
-            return []
-        ids = [row["id"] for row in rows]
-        placeholders = ",".join("?" for _ in ids)
-        await conn.execute(
-            f"UPDATE workflow_run_requests SET claimed_at = ? "
-            f"WHERE id IN ({placeholders}) AND claimed_at IS NULL",
-            [now, *ids],
-        )
-        await conn.commit()
-        # Only the rows we won carry our ``now`` marker. Any rows a
-        # concurrent claimer grabbed in between SELECT and UPDATE
-        # filter out via the ``claimed_at IS NULL`` guard above and
-        # don't reappear here.
-        cursor = await conn.execute(
-            f"SELECT * FROM workflow_run_requests "
-            f"WHERE id IN ({placeholders}) AND claimed_at = ? "
-            f"ORDER BY created_at ASC",
-            [*ids, now],
-        )
-        rows = await cursor.fetchall()
-        claimed: list[dict] = []
+    async def claim_pending_workflow_requests(self, *, limit: int = 5,
+                                             definition_ids: tuple[str, ...] | None = None) -> list[dict]:
+        rows = await self._claim_authorized_requests("workflow_run_requests", "workflow_id",
+            limit=limit, definition_ids=definition_ids)
         for row in rows:
-            d = dict(row)
-            raw = d.pop("inputs_json", "{}") or "{}"
+            raw = row.pop("inputs_json", "{}") or "{}"
             try:
-                d["inputs"] = json.loads(raw)
+                row["inputs"] = json.loads(raw)
             except (TypeError, ValueError):
-                d["inputs"] = {}
-            claimed.append(d)
-        return claimed
+                row["inputs"] = {}
+        return rows
 
     async def set_workflow_request_run_id(self, request_id: str, run_id: str) -> None:
         """Link a claimed request back to the ``workflow_runs`` row it
@@ -5523,6 +5383,64 @@ class MemoryDB:
             raise RuntimeError("upsert_provider: row not found after insert")
         return int(row[0])
 
+    async def update_provider_fields(self, provider_id: int, changes: dict[str, Any]) -> dict[str, Any]:
+        """Update one provider identity and migrate its exact session pins atomically."""
+        from openagent_core.models.catalog import build_runtime_model_id
+        allowed = {"name", "framework", "kind", "api_key", "base_url", "enabled", "metadata"}
+        if set(changes) - allowed:
+            raise ValueError("Unknown provider fields")
+        await self._ensure_connected()
+        async with self._isolated_write() as conn:
+            raw = await (await conn.execute("SELECT * FROM providers WHERE id=?", (int(provider_id),))).fetchone()
+            if raw is None: raise LookupError("Provider not found")
+            before = self._row_to_provider(raw)
+            for field in ("framework", "kind"):
+                if field in changes and changes[field] != before.get(field, "llm"):
+                    raise ValueError(f"Provider {field} is immutable")
+            merged = {**before, **changes}
+            name = merged["name"]
+            if not isinstance(name, str) or not name.strip(): raise ValueError("Provider name is required")
+            if not isinstance(merged.get("metadata") or {}, dict): raise ValueError("metadata must be an object")
+            if not isinstance(merged["enabled"], bool): raise ValueError("enabled must be boolean")
+            rows = await (await conn.execute("SELECT model FROM models WHERE provider_id=?", (int(provider_id),))).fetchall()
+            await conn.execute("UPDATE providers SET name=?,api_key=?,base_url=?,enabled=?,metadata_json=?,updated_at=? WHERE id=?",
+                (name.strip(), merged.get("api_key") or None, merged.get("base_url") or None, int(merged["enabled"]), json.dumps(merged.get("metadata") or {}), time.time(), int(provider_id)))
+            if name.strip() != before["name"]:
+                for model in rows:
+                    old_ref = build_runtime_model_id(before["name"], model["model"], before["framework"])
+                    new_ref = build_runtime_model_id(name.strip(), model["model"], before["framework"])
+                    await conn.execute("UPDATE pinned_sessions SET runtime_id=? WHERE runtime_id=?", (new_ref, old_ref))
+            row = await (await conn.execute("SELECT * FROM providers WHERE id=?", (int(provider_id),))).fetchone()
+            return self._row_to_provider(row)
+
+    async def update_model_fields(self, model_id: int, changes: dict[str, Any]) -> dict[str, Any]:
+        """Update one model row while preserving its id, provider, kind and pins."""
+        from openagent_core.models.catalog import build_runtime_model_id
+        from openagent_core.models.media_capabilities import normalize_model_metadata
+        allowed = {"provider_id", "kind", "model", "display_name", "tier_hint", "enabled", "is_classifier", "metadata"}
+        if set(changes) - allowed: raise ValueError("Unknown model fields")
+        await self._ensure_connected()
+        async with self._isolated_write() as conn:
+            raw = await (await conn.execute(self._ENRICHED_MODEL_SELECT + " WHERE m.id=?", (int(model_id),))).fetchone()
+            if raw is None: raise LookupError("Model not found")
+            before = self._shape_enriched(raw)
+            for field in ("provider_id", "kind"):
+                if field in changes and changes[field] != before[field]: raise ValueError(f"Model {field} is immutable")
+            merged = {**before, **changes}
+            model = merged["model"]
+            if not isinstance(model, str) or not model.strip(): raise ValueError("Model name is required")
+            metadata = merged.get("metadata") or {}
+            if not isinstance(metadata, dict): raise ValueError("metadata must be an object")
+            if not isinstance(merged["enabled"], bool) or not isinstance(merged["is_classifier"], bool): raise ValueError("Model flags must be boolean")
+            if before["kind"] == "llm": metadata = normalize_model_metadata(metadata, provider=before["provider_name"], model=model.strip())
+            await conn.execute("UPDATE models SET model=?,display_name=?,tier_hint=?,enabled=?,is_classifier=?,metadata_json=?,updated_at=? WHERE id=?",
+                (model.strip(), merged.get("display_name"), merged.get("tier_hint"), int(merged["enabled"]), int(merged["is_classifier"]), json.dumps(metadata), time.time(), int(model_id)))
+            new_ref = build_runtime_model_id(before["provider_name"], model.strip(), before["framework"])
+            if new_ref != before["runtime_id"]:
+                await conn.execute("UPDATE pinned_sessions SET runtime_id=? WHERE runtime_id=?", (new_ref, before["runtime_id"]))
+            row = await (await conn.execute(self._ENRICHED_MODEL_SELECT + " WHERE m.id=?", (int(model_id),))).fetchone()
+            return self._shape_enriched(row)
+
     async def set_provider_enabled(self, provider_id: int, enabled: bool) -> None:
         conn = await self._ensure_connected()
         await conn.execute(
@@ -5631,7 +5549,7 @@ class MemoryDB:
 
     @staticmethod
     def _shape_enriched(row: aiosqlite.Row) -> dict:
-        from src.models.catalog import build_runtime_model_id
+        from openagent_core.models.catalog import build_runtime_model_id
 
         d = dict(row)
         meta_raw = d.pop("metadata_json", "{}") or "{}"
@@ -5825,7 +5743,7 @@ class MemoryDB:
         as :meth:`list_models_enriched`, or ``None`` when no matching
         (provider_name, framework, model) row exists.
         """
-        from src.models.catalog import framework_of, split_runtime_id
+        from openagent_core.models.catalog import framework_of, split_runtime_id
 
         if not runtime_id:
             return None
@@ -5877,7 +5795,7 @@ class MemoryDB:
             raise ValueError(f"Provider id={provider_id!r} does not exist")
         stored_metadata = dict(metadata or {})
         if kind == "llm":
-            from src.models.media_capabilities import normalize_model_metadata
+            from openagent_core.models.media_capabilities import normalize_model_metadata
 
             stored_metadata = normalize_model_metadata(
                 stored_metadata,
@@ -6022,7 +5940,7 @@ class MemoryDB:
         framework, there is no framework lock anymore — any enabled
         runtime_id can be pinned to any session at any time.
         """
-        from src.models.catalog import framework_of
+        from openagent_core.models.catalog import framework_of
 
         if not session_id or not runtime_id:
             raise ValueError("session_id and runtime_id are required")
@@ -6233,46 +6151,8 @@ class MemoryDB:
             await conn.commit()
         return len(stale)
 
-    async def primary_owner_handle(self) -> str | None:
-        """The agent's primary owner handle — the earliest active network
-        user. Used as the owner for automation child sessions (scheduled-task
-        firings, workflow nodes) that have no human parent, so those rows land
-        in the owner's flat session list. Returns None on a handle-less /
-        coordinator-less deployment (the rows then stay sidebar-hidden, which
-        is the correct fallback rather than leaking to a wrong user)."""
-        conn = await self._ensure_connected()
-        return await self._deployment_owner_handle(conn) or None
 
-    async def _deployment_owner_handle(self, conn) -> str:
-        """The deployment's owner handle, or ``""`` when it has none.
 
-        One lookup for every caller that needs an identity to attribute
-        server-side work to: automation child sessions, and the ownerless
-        session claim below. Takes the connection explicitly because that
-        claim runs mid-``connect``, where re-entering ``_ensure_connected``
-        would checkpoint the WAL in the middle of the migration sequence.
-        """
-        try:
-            cursor = await conn.execute(
-                "SELECT handle FROM network_users WHERE status = 'active' "
-                "ORDER BY created_at ASC LIMIT 1"
-            )
-            row = await cursor.fetchone()
-        except Exception:
-            return ""
-        return str(row[0]).strip() if row and row[0] else ""
-
-    async def _network_has_several_users(self, conn) -> bool:
-        """Whether more than one person could own an unattributed row."""
-        try:
-            cursor = await conn.execute(
-                "SELECT COUNT(*) FROM (SELECT 1 FROM network_users "
-                "WHERE status = 'active' LIMIT 2)"
-            )
-            row = await cursor.fetchone()
-        except Exception:
-            return False
-        return bool(row) and int(row[0]) > 1
 
     async def _pubkeys_for_handle(self, handle: str) -> set[str]:
         """Return every device pubkey (lowercase hex) bound to ``handle``.

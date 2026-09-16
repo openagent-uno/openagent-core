@@ -24,13 +24,13 @@ from typing import Any, Awaitable, Callable
 
 import json
 
-from src.channels.base import is_reasoning_status, parse_compaction_status
-from src.channels.stt_base import BaseSTT, resolve_stt
-from src.channels.tts_base import BaseTTS, resolve_tts
-from src.core.identity_context import human_author
-from src.core.on_behalf_context import OnBehalfIdentity
-from src.core.logging import elog
-from src.stream.events import (
+from openagent_core.media import is_reasoning_status, parse_compaction_status
+from openagent_core.voice.stt_base import BaseSTT
+from openagent_core.voice.tts_base import BaseTTS
+from openagent_core.core.identity_context import human_author
+from openagent_core.core.on_behalf_context import OnBehalfIdentity
+from openagent_core.core.logging import elog
+from openagent_core.stream.events import (
     Attachment,
     AudioChunk,
     Event,
@@ -342,10 +342,8 @@ class StreamSession:
         """Resolve providers, spin up the pumps. Idempotent."""
         if self._dispatch_task is not None:
             return
-        stt_factory = stt_factory or resolve_stt
-        tts_factory = tts_factory or resolve_tts
-        self._stt = await stt_factory(self._db)
-        self._tts = await tts_factory(self._db)
+        self._stt = await stt_factory(self._db) if stt_factory else None
+        self._tts = await tts_factory(self._db) if tts_factory else None
         elog(
             "stream.session.start",
             session_id=self.session_id,
@@ -370,6 +368,7 @@ class StreamSession:
         *,
         attachments: list[dict] | None = None,
         speak: bool = False,
+        tts_factory: Callable[[Any], Awaitable[BaseTTS | None]] | None = None,
         on_status: Callable[[str], Awaitable[None]] | None = None,
     ) -> dict[str, Any]:
         """Drive a single turn without using the inbound queue.
@@ -379,8 +378,8 @@ class StreamSession:
         callers keeping their existing side-channel.
         """
         # Lazy-resolve TTS for callers that skip :meth:`start`.
-        if self._tts is None and not self._dispatch_task:
-            self._tts = await resolve_tts(self._db)
+        if self._tts is None and not self._dispatch_task and tts_factory is not None:
+            self._tts = await tts_factory(self._db)
 
         self._extra_status_cb = on_status
         try:
@@ -654,8 +653,8 @@ class StreamSession:
         product for the library.
         """
         try:
-            from src.core.config import skills_settings
-            from src.core.skill_review import schedule_review, should_review
+            from openagent_core.core.config import skills_settings
+            from openagent_core.core.skill_review import schedule_review, should_review
 
             settings = skills_settings(getattr(self._agent, "config", None) or {})
             if not should_review(settings, reason=reason):
@@ -779,7 +778,7 @@ class StreamSession:
         # — they are re-derivable from the final message and would be the bulk
         # of the volume.
         if isinstance(evt, OutTextFinal):
-            from src.memory.artifacts import public_attachment_ref
+            from openagent_core.memory.artifacts import public_attachment_ref
 
             await self._journal("assistant/message", {
                 "text": (evt.text or "")[:8000],
@@ -1312,7 +1311,7 @@ class StreamSession:
             # Direct/embedded StreamSession users do not pass a Gateway ingress
             # object. Snapshot their constructor-level policy now so even a
             # local caller changing session metadata cannot affect this turn.
-            from src.core.execution_origin import TrustedTurnContext
+            from openagent_core.core.execution_origin import TrustedTurnContext
 
             trusted_turn_context = TrustedTurnContext(
                 on_behalf_identity=self.on_behalf_identity,
@@ -1588,7 +1587,7 @@ class StreamTurnRunner:
     ) -> dict[str, Any]:
         sess = self._session
         if turn_context is None:
-            from src.core.execution_origin import TrustedTurnContext
+            from openagent_core.core.execution_origin import TrustedTurnContext
 
             turn_context = TrustedTurnContext(
                 on_behalf_identity=sess.on_behalf_identity,
@@ -1597,6 +1596,10 @@ class StreamTurnRunner:
                 allow_local_attachment_paths=sess.allow_local_attachment_paths,
             )
         turn_principal = turn_context.on_behalf_identity
+        # The host maps its authenticated identity to canonical storage ACLs.
+        # Keep execution identity separate from these read/write aliases.
+        canonical_access = getattr(self._agent, "canonical_access_context", None)
+        artifact_principal = canonical_access(turn_principal) if callable(canonical_access) else turn_principal
         artifact_db = (
             getattr(self._agent, "memory_db", None)
             or getattr(self._agent, "db", None)
@@ -1604,7 +1607,7 @@ class StreamTurnRunner:
         sequence_floor = {"user": -1, "assistant": -1}
         if artifact_db is not None:
             try:
-                from src.memory.artifacts import latest_message_sequence
+                from openagent_core.memory.artifacts import latest_message_sequence
 
                 user_floor, assistant_floor = await asyncio.gather(
                     latest_message_sequence(artifact_db, session_id, role="user"),
@@ -1629,7 +1632,7 @@ class StreamTurnRunner:
                 return
             await sess._publish(evt, ingress_identity=ingress_identity)
         accumulated: list[str] = []
-        from src.stream.content_parts import ContentMarkerStreamFilter
+        from openagent_core.stream.content_parts import ContentMarkerStreamFilter
         content_stream_filter = ContentMarkerStreamFilter()
         audio_started = False
         audio_chunks = 0
@@ -1730,7 +1733,7 @@ class StreamTurnRunner:
                 # the status handler.
                 if comp["phase"] == "done":
                     try:
-                        from src.core.context_report import build_context_report
+                        from openagent_core.core.context_report import build_context_report
                         report = build_context_report(self._agent, session_id)
                         if report is not None:
                             await publish(ContextReport(
@@ -1781,19 +1784,21 @@ class StreamTurnRunner:
                 await publish(evt)
 
         speaker = asyncio.create_task(speaker_task()) if (speak and self._tts) else None
-        from src.stream.child_stream import (
+        from openagent_core.stream.child_stream import (
             child_frame_to_event, install_child_stream_emitter, reset_child_stream_emitter,
         )
-        from src.core.on_behalf_context import (
+        from openagent_core.core.on_behalf_context import (
             install_on_behalf_identity,
             reset_on_behalf_identity,
         )
         _child_emit_tok = install_child_stream_emitter(child_emit)
         _on_behalf_tok = install_on_behalf_identity(turn_principal)
-        from src.core.execution_origin import (
+        from openagent_core.core.execution_origin import (
             install_execution_origin, reset_execution_origin,
+            install_ingress_identity, reset_ingress_identity,
         )
         _execution_origin_tok = install_execution_origin(execution_origin)
+        _ingress_tok = install_ingress_identity(ingress_identity)
 
         try:
             try:
@@ -1804,6 +1809,7 @@ class StreamTurnRunner:
                     attachments=attachments,
                     on_status=on_status,
                     author=author,
+                    **({"run_id": turn_context.request_id} if getattr(turn_context,"request_id",None) else {}),
                 ):
                     # Engagement signal — soonest reliable indicator
                     # the prompt reached the provider. Idempotent bool,
@@ -1846,7 +1852,7 @@ class StreamTurnRunner:
                             # frames below, so both failure paths — this one
                             # and a generator that actually raised — emit the
                             # same event in the same place.
-                            from src.core.public_errors import RunTurnError
+                            from openagent_core.core.public_errors import RunTurnError
                             detail = str(event.get("text") or "").strip()
                             stream_error = RunTurnError(
                                 str(event.get("error_detail") or detail),
@@ -1900,6 +1906,7 @@ class StreamTurnRunner:
                     await text_q.put(None)
                 logger.warning("stream turn failed: %s", e)
         finally:
+            reset_ingress_identity(_ingress_tok)
             reset_execution_origin(_execution_origin_tok)
             reset_on_behalf_identity(_on_behalf_tok)
             reset_child_stream_emitter(_child_emit_tok)
@@ -1956,7 +1963,7 @@ class StreamTurnRunner:
                     speak=speak,
                 )
 
-            from src.stream.content_parts import parse_response_content
+            from openagent_core.stream.content_parts import parse_response_content
             parsed_content = parse_response_content(
                 full_text,
                 allow_inline_ui=turn_context.supports_client_capability("inline_ui"),
@@ -1965,14 +1972,14 @@ class StreamTurnRunner:
             att_list = [dict(a) for a in parsed_content.attachments]
             content_parts = [dict(part) for part in parsed_content.parts]
             if att_list:
-                from src.memory.artifacts import ArtifactError, persist_output_attachments
+                from openagent_core.memory.artifacts import ArtifactError, persist_output_attachments
 
                 try:
                     persisted = await persist_output_attachments(
                         artifact_db,
                         session_id,
                         att_list,
-                        principal=turn_principal,
+                        principal=artifact_principal,
                     )
                     att_list = [dict(item) for item in persisted]
                     attachment_iter = iter(att_list)
@@ -2009,51 +2016,15 @@ class StreamTurnRunner:
             # the backwards-compatible fallback.
             if any(part.get("kind") == "ui_view" for part in content_parts):
                 validated_parts: list[dict[str, Any]] = []
-                access = None
-                if turn_principal is not None:
-                    try:
-                        from src.memory.operational.access import AccessContext
-
-                        access = AccessContext.from_on_behalf_identity(
-                            turn_principal
-                        )
-                    except PermissionError:
-                        access = None
-                repository = None
-                if access is not None and artifact_db is not None:
-                    from src.custom_views.repository import CustomViewRepository
-
-                    repository = CustomViewRepository(artifact_db)
+                validator = getattr(getattr(self._agent, "extensions", None), "content_validator", None)
                 for part in content_parts:
                     if part.get("kind") != "ui_view":
                         validated_parts.append(part)
-                        continue
-                    if repository is None or access is None:
-                        continue
-                    view_id = str(part.get("view_id") or "")
-                    revision = int(part.get("revision") or 0)
-                    # Validate the immutable inline reference without writing
-                    # its message link yet.  The canonical part transaction
-                    # below owns that write; otherwise a conflicting retry
-                    # could leave an unreferenced UI link behind.
-                    linked = await repository.resolve_inline_ref(
-                        view_id,
-                        revision,
-                        session_id=session_id,
-                        access=access,
-                    )
-                    if linked is None:
-                        continue
-                    validated_parts.append(
-                        {
-                            "kind": "ui_view",
-                            "view_id": view_id,
-                            "revision": revision,
-                            "title": linked.get("title"),
-                            "status": linked.get("status"),
-                            "expires_at": linked.get("expiresAt"),
-                        }
-                    )
+                    elif validator is not None:
+                        validated = await validator(part=part, session_id=session_id,
+                            principal=artifact_principal, db=artifact_db, ingress=ingress_identity)
+                        if validated is not None:
+                            validated_parts.append(dict(validated))
                 content_parts = validated_parts
 
             # Upgrade coarse session links to precise normalized-message links
@@ -2062,14 +2033,14 @@ class StreamTurnRunner:
             # original message rather than reparsing temporary paths.
             if artifact_db is not None and (attachments or att_list):
                 try:
-                    from src.memory.artifacts import link_attachments_to_latest_message
+                    from openagent_core.memory.artifacts import link_attachments_to_latest_message
 
                     await link_attachments_to_latest_message(
                         artifact_db,
                         session_id,
                         attachments,
                         role="user",
-                        principal=turn_principal,
+                        principal=artifact_principal,
                         after_sequence=sequence_floor["user"],
                     )
                     await link_attachments_to_latest_message(
@@ -2077,7 +2048,7 @@ class StreamTurnRunner:
                         session_id,
                         att_list,
                         role="assistant",
-                        principal=turn_principal,
+                        principal=artifact_principal,
                         after_sequence=sequence_floor["assistant"],
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -2092,7 +2063,7 @@ class StreamTurnRunner:
             # projection cannot attach these parts to the preceding turn.
             if artifact_db is not None:
                 try:
-                    from src.memory.message_parts import persist_parts_for_latest_message
+                    from openagent_core.memory.message_parts import persist_parts_for_latest_message
 
                     user_parts: list[dict[str, Any]] = []
                     if text:
@@ -2107,7 +2078,7 @@ class StreamTurnRunner:
                         session_id,
                         role="user",
                         parts=user_parts,
-                        principal=turn_principal,
+                        principal=artifact_principal,
                         after_sequence=sequence_floor["user"],
                     )
                     await persist_parts_for_latest_message(
@@ -2115,7 +2086,7 @@ class StreamTurnRunner:
                         session_id,
                         role="assistant",
                         parts=content_parts,
-                        principal=turn_principal,
+                        principal=artifact_principal,
                         after_sequence=sequence_floor["assistant"],
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -2195,7 +2166,7 @@ class StreamTurnRunner:
             # conversation grows. Best-effort — measurement must never
             # break a turn, and text-only channels simply ignore the frame.
             try:
-                from src.core.context_report import build_context_report
+                from openagent_core.core.context_report import build_context_report
 
                 report = build_context_report(self._agent, session_id)
                 if report is not None:

@@ -56,6 +56,7 @@ answer, and this comment is the ranking note the vault FTS index has for bm25.
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import hashlib
 import os
 import sqlite3
@@ -269,7 +270,7 @@ def resolve_embedder(providers_config: Any = None) -> Optional[Embedder]:
         OPENAGENT_EMBEDDING_MODEL=openai:text-embedding-3-small
     with the key on the ``openai`` provider or ``OPENAGENT_EMBEDDING_API_KEY``.
     """
-    spec = (os.environ.get("OPENAGENT_EMBEDDING_MODEL") or "").strip()
+    spec = (runtime_environment().get("OPENAGENT_EMBEDDING_MODEL") or "").strip()
     if not spec:
         return None
 
@@ -277,8 +278,8 @@ def resolve_embedder(providers_config: Any = None) -> Optional[Embedder]:
     if not sep:  # bare "model" — provider name doubles as the model's home
         provider, model_id = provider, provider
 
-    base_url = (os.environ.get("OPENAGENT_EMBEDDING_BASE_URL") or "").strip() or None
-    api_key = (os.environ.get("OPENAGENT_EMBEDDING_API_KEY") or "").strip() or None
+    base_url = (runtime_environment().get("OPENAGENT_EMBEDDING_BASE_URL") or "").strip() or None
+    api_key = (runtime_environment().get("OPENAGENT_EMBEDDING_API_KEY") or "").strip() or None
 
     if (base_url is None or api_key is None) and providers_config:
         entry = _find_provider_entry(providers_config, provider)
@@ -290,7 +291,7 @@ def resolve_embedder(providers_config: Any = None) -> Optional[Embedder]:
         base_url = _DEFAULT_BASE_URLS.get(provider)
 
     if base_url is None:
-        from src.core.logging import elog
+        from openagent_core.core.logging import elog
         elog(
             "semantic.embedder_unresolved",
             level="warning",
@@ -306,7 +307,7 @@ def resolve_embedder(providers_config: Any = None) -> Optional[Embedder]:
         api_key = "local"
 
     timeout = 30.0
-    raw_to = (os.environ.get("OPENAGENT_EMBEDDING_TIMEOUT") or "").strip()
+    raw_to = (runtime_environment().get("OPENAGENT_EMBEDDING_TIMEOUT") or "").strip()
     if raw_to:
         try:
             timeout = max(1.0, float(raw_to))
@@ -463,7 +464,7 @@ class SemanticIndex:
         self.embedder = embedder
         if index_exclude_prefixes is None:
             index_exclude_prefixes = (
-                os.environ.get("OPENAGENT_SEMANTIC_INDEX_EXCLUDE_PATHS", "")
+                runtime_environment().get("OPENAGENT_SEMANTIC_INDEX_EXCLUDE_PATHS", "")
                 .split(",")
             )
         self.index_exclude_prefixes = tuple(
@@ -472,7 +473,7 @@ class SemanticIndex:
             if p and p.strip().lstrip("/")
         )
         if index_sessions is None:
-            raw_sessions = os.environ.get("OPENAGENT_SEMANTIC_INDEX_SESSIONS", "1")
+            raw_sessions = runtime_environment().get("OPENAGENT_SEMANTIC_INDEX_SESSIONS", "1")
             index_sessions = raw_sessions.strip().lower() not in (
                 "0", "false", "no", "off"
             )
@@ -605,7 +606,7 @@ class SemanticIndex:
                 if len(chunk) == 1:
                     out.append(self._embed_one_shrinking(chunk[0]))
                     continue
-                from src.core.logging import elog as _elog
+                from openagent_core.core.logging import elog as _elog
 
                 _elog(
                     "semantic.batch_split",
@@ -633,7 +634,7 @@ class SemanticIndex:
                 if len(candidate) <= _MIN_EMBED_CHARS:
                     break
                 candidate = candidate[: max(_MIN_EMBED_CHARS, len(candidate) // 2)]
-        from src.core.logging import elog as _elog
+        from openagent_core.core.logging import elog as _elog
 
         _elog(
             "semantic.embed_skipped",
@@ -695,7 +696,7 @@ class SemanticIndex:
             stats.elapsed_ms = int((time.monotonic() - t0) * 1000)
             return stats
 
-        from src.memory.vault.parser import parse_note_text, split_frontmatter
+        from openagent_core.memory.vault.parser import parse_note_text, split_frontmatter
 
         with self._lock:
             existing = {
@@ -818,7 +819,7 @@ class SemanticIndex:
             stats.elapsed_ms = int((time.monotonic() - t0) * 1000)
             return stats
 
-        from src.memory.transcript_index import _iter_run_messages, _loads_maybe_double
+        from openagent_core.memory.transcript_index import _iter_run_messages, _loads_maybe_double
 
         with self._lock:
             src = self._open_source()
@@ -829,7 +830,7 @@ class SemanticIndex:
                 try:
                     live = {
                         r["session_id"]: (int(r["updated_at"] or 0), int(r["runs_len"]))
-                        for r in src.execute(
+                        for r in openagent_core.execute(
                             "SELECT session_id, updated_at, "
                             "COALESCE(length(runs),0) AS runs_len FROM sessions")
                     }
@@ -862,7 +863,7 @@ class SemanticIndex:
                 texts: list[str] = []
                 metas: list[tuple[str, int, int, str, str]] = []
                 for sid in stale:
-                    row = src.execute(
+                    row = openagent_core.execute(
                         "SELECT runs, metadata FROM sessions WHERE session_id = ?",
                         (sid,)).fetchone()
                     if row is None:
@@ -889,7 +890,7 @@ class SemanticIndex:
                 self._commit()
             finally:
                 try:
-                    src.close()
+                    openagent_core.close()
                 except Exception:
                     pass
 
@@ -974,7 +975,7 @@ class SemanticIndex:
                                   int(r["plen"] or 0),
                                   str(r["name"] or ""),
                                   int(r["enabled"] or 0))
-                        for r in src.execute(
+                        for r in openagent_core.execute(
                             "SELECT id, name, enabled, updated_at, "
                             "COALESCE(length(prompt),0) AS plen FROM scheduled_tasks")
                     }
@@ -1011,7 +1012,7 @@ class SemanticIndex:
                 texts: list[str] = []
                 metas: list[tuple[str, float, int, str, int]] = []
                 for tid in stale:
-                    row = src.execute(
+                    row = openagent_core.execute(
                         "SELECT prompt FROM scheduled_tasks WHERE id = ?",
                         (tid,)).fetchone()
                     if row is None:
@@ -1026,7 +1027,7 @@ class SemanticIndex:
                 self._commit()
             finally:
                 try:
-                    src.close()
+                    openagent_core.close()
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -1089,7 +1090,7 @@ class SemanticIndex:
             stats.elapsed_ms = int((time.monotonic() - t0) * 1000)
             return stats
 
-        from src.memory.vault.parser import (
+        from openagent_core.memory.vault.parser import (
             FrontmatterSyntaxError,
             load_frontmatter_yaml,
             split_frontmatter,
@@ -1221,7 +1222,7 @@ class SemanticIndex:
 
     def _log_embed_error(self, source: str, exc: Exception) -> None:
         try:
-            from src.core.logging import elog
+            from openagent_core.core.logging import elog
             elog("semantic.embed_error", level="warning", source=source,
                  model=self.embedder.model_id if self.embedder else "",
                  error=str(exc)[:200])

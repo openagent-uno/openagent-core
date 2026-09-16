@@ -13,11 +13,12 @@ private endpoint may be a subscription proxy for Claude, not local inference.
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import os
 import time
 from typing import Any, Iterable
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 
 _FORCE_LOCAL_ENV = "OPENAGENT_FORCE_LOCAL_ONLY"
@@ -90,7 +91,7 @@ class LocalFallbackPolicy:
         return value in bare_matches
 
     def local_only_active(self, *, now: float | None = None) -> bool:
-        if _truthy(os.environ.get(_FORCE_LOCAL_ENV)):
+        if _truthy(runtime_environment().get(_FORCE_LOCAL_ENV)):
             return True
         return (now if now is not None else time.monotonic()) < self._local_only_until
 
@@ -206,8 +207,8 @@ class LocalFallbackPolicy:
         built: list[Any] = []
         for runtime_id in self.local_models:
             try:
-                from src.core.execution_profile import lean_local_event_scope
-                from src.models.native_provider import NativeProvider
+                from openagent_core.core.execution_profile import lean_local_event_scope
+                from openagent_core.models.native_provider import NativeProvider
 
                 with lean_local_event_scope(True):
                     built.append(NativeProvider(

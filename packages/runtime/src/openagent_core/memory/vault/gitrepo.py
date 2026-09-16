@@ -8,12 +8,13 @@ change (a chat session, a workflow, a scheduled task, …) so the history is
 auditable.
 
 Git is not a hard requirement to run OpenAgent: ``resolve_git_bin`` finds a
-git, ``src.setup.bootstrap.ensure_git`` installs one at setup if missing, and
+git, ``openagent_core.setup.bootstrap.ensure_git`` installs one at setup if missing, and
 if none can be obtained every operation here degrades to a logged no-op — the
 vault still works, just without history.
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import hashlib
 import logging
 import os
@@ -44,11 +45,11 @@ Thumbs.db
 def resolve_git_bin() -> Optional[str]:
     """Locate a usable ``git``: an explicit override, a git shipped inside
     the frozen bundle, then the system PATH."""
-    override = os.environ.get("OPENAGENT_GIT_BIN")
+    override = runtime_environment().get("OPENAGENT_GIT_BIN")
     if override and Path(override).exists():
         return override
     try:
-        from src._frozen import bundle_dir, is_frozen
+        from openagent_core._frozen import bundle_dir, is_frozen
         if is_frozen():
             for cand in (bundle_dir() / "bin" / "git", bundle_dir() / "git" / "bin" / "git"):
                 if cand.exists():
@@ -67,8 +68,8 @@ def _redact_url(text: str) -> str:
 
 
 def _author() -> tuple[str, str]:
-    name = os.environ.get("OPENAGENT_VAULT_GIT_NAME", "OpenAgent")
-    email = os.environ.get("OPENAGENT_VAULT_GIT_EMAIL", "agent@openagent.local")
+    name = runtime_environment().get("OPENAGENT_VAULT_GIT_NAME", "OpenAgent")
+    email = runtime_environment().get("OPENAGENT_VAULT_GIT_EMAIL", "agent@openagent.local")
     return name, email
 
 
@@ -115,7 +116,7 @@ class VaultGit:
         # devnull so a restrictive system config can't re-impose the
         # ownership check. Identity still passed via -c.
         env = {
-            **os.environ,
+            **runtime_environment(),
             "GIT_CONFIG_GLOBAL": str(self._gitconfig),
             "GIT_CONFIG_SYSTEM": os.devnull,
         }

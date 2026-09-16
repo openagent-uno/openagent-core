@@ -60,7 +60,7 @@ class Registry:
 
 class RecordingRuntime(SimpleNamespace):
     def __init__(self, catalog, path, pool):
-        super().__init__(capabilities=catalog, settings=SimpleNamespace(workspace=path),
+        super().__init__(capabilities=catalog, settings=SimpleNamespace(workspace=path,environment=()),
             services=SimpleNamespace(executor=SimpleNamespace(agent=SimpleNamespace(capability_pool=pool)), store=self))
         self.events = []
 
@@ -81,7 +81,7 @@ class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
         set_agent_dir(self.path)
         self.policy = Policy()
         self.catalog = CapabilityCatalog(self.policy)
-        self.runtime = SimpleNamespace(capabilities=self.catalog, settings=SimpleNamespace(workspace=self.path))
+        self.runtime = SimpleNamespace(capabilities=self.catalog, settings=SimpleNamespace(workspace=self.path,environment=()))
         p = PrincipalRef("test", "tenant", "alice")
         self.context = ExecutionContext(p, p, p, "session", "agent", (p,))
         self.calls = []

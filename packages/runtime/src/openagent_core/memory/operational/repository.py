@@ -732,6 +732,28 @@ def project_legacy_session(
     if str(legacy.get("session_id") or "") != session_id:
         raise ValueError("runtime session source row does not match requested id")
 
+    # V1 admission owns run status, authorship, ACLs and message identities.
+    # The provider's compatibility envelope remains its conversation buffer;
+    # projection must never delete queued runs absent from that older buffer
+    # or overwrite accepted author/delegation/cancellation metadata.
+    owned = conn.execute("SELECT metadata_json FROM sessions_v2 WHERE id=?", (session_id,)).fetchone()
+    if owned and json.loads(owned[0] or "{}").get("runtime_contract") == 1:
+        raw_runs = legacy.get("runs") or []
+        if isinstance(raw_runs, str):
+            raw_runs = json.loads(raw_runs)
+        if isinstance(raw_runs, list):
+            for envelope in raw_runs:
+                if not isinstance(envelope, dict):
+                    continue
+                run_id = envelope.get("run_id") or envelope.get("id")
+                if run_id:
+                    conn.execute("UPDATE session_runs SET raw_envelope_json=? WHERE id=? AND session_id=? "
+                                 "AND json_extract(metadata_json,'$.runtime_contract')=1",
+                                 (json.dumps(envelope, ensure_ascii=False), run_id, session_id))
+        _mark_legacy_changes(conn, session_id, now_ms=effective_now,
+                             source_hash=hashlib.sha256(json.dumps(legacy, default=str, sort_keys=True).encode()).hexdigest())
+        return ProjectionWrite(session_id, True, False, 1, "complete", None)
+
     tenant_id = _tenant_id(conn)
     projection = build_session_projection(
         legacy,

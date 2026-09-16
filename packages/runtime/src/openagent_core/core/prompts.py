@@ -8,6 +8,7 @@ act, etc. The user's config is expected to stay short and
 project-specific (identity, key facts, pointers to memory).
 """
 
+from openagent_core.configuration import runtime_environment
 import os
 
 from openagent_core.prompts import default_framework_text
@@ -46,7 +47,7 @@ def _operator_inline_servers() -> frozenset[str]:
     operator-vetted, so the renderer inlines ALL their names with no per-server
     cap — a left-out key is exactly what the model would otherwise hallucinate.
     """
-    raw = os.environ.get("OPENAGENT_INLINE_TOOL_KEYS_SERVERS", "")
+    raw = runtime_environment().get("OPENAGENT_INLINE_TOOL_KEYS_SERVERS", "")
     return frozenset(s.strip() for s in raw.split(",") if s.strip())
 
 

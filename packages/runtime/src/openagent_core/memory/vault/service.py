@@ -11,6 +11,7 @@ index connection instead of reopening (and re-validating) it on every call.
 """
 from __future__ import annotations
 
+from openagent_core.configuration import runtime_environment
 import asyncio
 import os
 from pathlib import Path
@@ -36,7 +37,7 @@ from openagent_core.memory.vault.parser import parse_note_text
 def resolve_vault_root(explicit: str | Path | None = None) -> Path:
     if explicit:
         return Path(explicit).expanduser().resolve()
-    env = os.environ.get("OPENAGENT_VAULT_PATH")
+    env = runtime_environment().get("OPENAGENT_VAULT_PATH")
     if env:
         return Path(env).expanduser().resolve()
     from openagent_core.core.paths import default_vault_path
@@ -56,13 +57,14 @@ def default_index_path(vault_root: Path) -> Path:
 class VaultService:
     def __init__(self, vault_root: str | Path, index_path: str | Path | None = None,
                  journal_root: str = "workspace/journal",
-                 config: GateConfig | None = None):
+                 config: GateConfig | None = None, *, git_enabled: bool | None = None):
         self.vault_root = Path(vault_root)
         self.index_path = Path(index_path) if index_path else default_index_path(self.vault_root)
         self.journal_root = journal_root
         self.config = config or GateConfig.from_env()
         self._index: Optional[VaultIndex] = None
         self._init_lock = asyncio.Lock()
+        self.git_enabled = git_enabled
         self._git: Any = None  # VaultGit | False (tried, unavailable) | None
         # Serializes "change files + commit" against the background autocommit
         # sweep, so an OpenAgent write is always captured by its OWN precise
@@ -85,9 +87,10 @@ class VaultService:
 
     # ── git history (every change is a tracked commit) ────────────────
 
-    @staticmethod
-    def _git_enabled() -> bool:
-        return os.environ.get("OPENAGENT_VAULT_GIT_ENABLED", "1").strip().lower() in (
+    def _git_enabled(self) -> bool:
+        if self.git_enabled is not None:
+            return self.git_enabled
+        return runtime_environment().get("OPENAGENT_VAULT_GIT_ENABLED", "1").strip().lower() in (
             "1", "true", "yes", "on")
 
     async def _ensure_git(self):
@@ -146,7 +149,7 @@ class VaultService:
         the in-process service so the app/CLI get the same enforcement as the
         agent. Set OPENAGENT_VAULT_VALIDATE_WRITES=0 to fall back to the old
         warn-only behaviour."""
-        return os.environ.get(
+        return runtime_environment().get(
             "OPENAGENT_VAULT_VALIDATE_WRITES", "1").strip().lower() in (
             "1", "true", "yes", "on")
 
@@ -628,7 +631,10 @@ class VaultService:
 
 # ── service cache (one open index per vault, reused by the gateway) ────
 
-_SERVICES: dict[str, VaultService] = {}
+from openagent_core.instance_state import registry
+
+def _services() -> dict:
+    return registry("vault_services")
 
 
 def get_service(vault_root: str | Path | None = None,
@@ -636,14 +642,14 @@ def get_service(vault_root: str | Path | None = None,
                 config: GateConfig | None = None) -> VaultService:
     root = resolve_vault_root(vault_root)
     key = str(root)
-    svc = _SERVICES.get(key)
+    svc = _services().get(key)
     if svc is None:
         svc = VaultService(root, journal_root=journal_root, config=config)
-        _SERVICES[key] = svc
+        _services()[key] = svc
     return svc
 
 
 async def close_all() -> None:
-    for svc in list(_SERVICES.values()):
+    for svc in list(_services().values()):
         await svc.close()
-    _SERVICES.clear()
+    _services().clear()

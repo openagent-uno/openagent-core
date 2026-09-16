@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from openagent_core.instance_state import InstanceSet
 import asyncio
 import time
 import warnings
@@ -24,38 +25,38 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from src.core._runner.agent.agent import Agent
+    from openagent_core.core._runner.agent.agent import Agent
 
-from src.core._runner.agent._init import _initialize_session_state
-from src.core._runner.agent._run_options import resolve_run_options
-from src.core._runner.agent._session import initialize_session, update_session_metrics
-from src.core.runtime_errors import (
+from openagent_core.core._runner.agent._init import _initialize_session_state
+from openagent_core.core._runner.agent._run_options import resolve_run_options
+from openagent_core.core._runner.agent._session import initialize_session, update_session_metrics
+from openagent_core.core.runtime_errors import (
     InputCheckError,
     OutputCheckError,
     RunCancelledException,
 )
-from src.core.execution_origin import create_server_only_task
-from src.core._runner._stubs import FilterExpr
-from src.stream.media import Audio, File, Image, Video
-from src.models.providers.base import Model
-from src.models.providers.fallback import acall_model_with_fallback, call_model_with_fallback
-from src.models.providers.message import Message
-from src.models.providers.metrics import RunMetrics, merge_background_metrics
-from src.models.providers.response import ModelResponse, ToolExecution
-from src.core._run_state import RunContext, RunStatus
-from src.core._run_state.agent import (
+from openagent_core.core.execution_origin import create_server_only_task
+from openagent_core.core._runner._stubs import FilterExpr
+from openagent_core.stream.media import Audio, File, Image, Video
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.fallback import acall_model_with_fallback, call_model_with_fallback
+from openagent_core.models.providers.message import Message
+from openagent_core.models.providers.metrics import RunMetrics, merge_background_metrics
+from openagent_core.models.providers.response import ModelResponse, ToolExecution
+from openagent_core.core._run_state import RunContext, RunStatus
+from openagent_core.core._run_state.agent import (
     RunInput,
     RunOutput,
     RunOutputEvent,
 )
-from src.core._run_state.approval import (
+from openagent_core.core._run_state.approval import (
     acreate_approval_from_pause,
     create_approval_from_pause,
 )
-from src.core._run_state.cancel import (
+from openagent_core.core._run_state.cancel import (
     acancel_run as acancel_run_global,
 )
-from src.core._run_state.cancel import (
+from openagent_core.core._run_state.cancel import (
     acleanup_run,
     araise_if_cancelled,
     aregister_run,
@@ -63,14 +64,14 @@ from src.core._run_state.cancel import (
     raise_if_cancelled,
     register_run,
 )
-from src.core._run_state.cancel import (
+from openagent_core.core._run_state.cancel import (
     cancel_run as cancel_run_global,
 )
-from src.core._run_state.messages import RunMessages
-from src.core._run_state.requirement import RunRequirement
-from src.memory.sessions import AgentSession
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.agent import (
+from openagent_core.core._run_state.messages import RunMessages
+from openagent_core.core._run_state.requirement import RunRequirement
+from openagent_core.memory.sessions import AgentSession
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.agent import (
     await_for_open_threads,
     await_for_thread_tasks_stream,
     collect_background_metrics,
@@ -83,7 +84,7 @@ from src.core._runner.utils.agent import (
     wait_for_open_threads,
     wait_for_thread_tasks_stream,
 )
-from src.core._runner.utils.events import (
+from openagent_core.core._runner.utils.events import (
     add_error_event,
     create_run_cancelled_event,
     create_run_completed_event,
@@ -96,21 +97,21 @@ from src.core._runner.utils.events import (
     create_session_summary_started_event,
     handle_event,
 )
-from src.core._runner.utils.hooks import (
+from openagent_core.core._runner.utils.hooks import (
     normalize_post_hooks,
     normalize_pre_hooks,
 )
-from src.core._runner.utils.log import (
+from openagent_core.core._runner.utils.log import (
     log_debug,
     log_error,
     log_info,
     log_warning,
 )
-from src.core._runner.utils.response import get_paused_content
+from openagent_core.core._runner.utils.response import get_paused_content
 
 # Strong references to background tasks so they aren't garbage-collected mid-execution.
 # See: https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task
-_background_tasks: set[asyncio.Task[None]] = set()
+_background_tasks = InstanceSet('core/_runner/agent/_run.py:_background_tasks')
 
 # ---------------------------------------------------------------------------
 # Run dependency resolution
@@ -357,10 +358,10 @@ def _run(
     15. Create session summary
     16. Cleanup and store the run response and session
     """
-    from src.core._runner.agent._hooks import execute_post_hooks, execute_pre_hooks
-    from src.core._runner.agent._init import disconnect_connectable_tools
-    from src.core._runner.agent._messages import get_run_messages
-    from src.core._runner.agent._response import (
+    from openagent_core.core._runner.agent._hooks import execute_post_hooks, execute_pre_hooks
+    from openagent_core.core._runner.agent._init import disconnect_connectable_tools
+    from openagent_core.core._runner.agent._messages import get_run_messages
+    from openagent_core.core._runner.agent._response import (
         convert_response_to_structured_format,
         generate_followups,
         generate_response_with_output_model,
@@ -368,9 +369,9 @@ def _run(
         parse_response_with_parser_model,
         update_run_response,
     )
-    from src.core._runner.agent._storage import load_session_state, read_or_create_session, update_metadata
-    from src.core._runner.agent._telemetry import log_agent_telemetry
-    from src.core._runner.agent._tools import determine_tools_for_model
+    from openagent_core.core._runner.agent._storage import load_session_state, read_or_create_session, update_metadata
+    from openagent_core.core._runner.agent._telemetry import log_agent_telemetry
+    from openagent_core.core._runner.agent._tools import determine_tools_for_model
 
     register_run(run_context.run_id)
     log_debug(f"Agent Run Start: {run_response.run_id}", center=True)
@@ -472,7 +473,7 @@ def _run(
                     log_error("No messages to be sent to the model.")
 
                 # Start memory creation in background thread
-                from src.core._runner.agent import _managers
+                from openagent_core.core._runner.agent import _managers
 
                 memory_future = _managers.start_memory_future(
                     agent,
@@ -747,19 +748,19 @@ def _run_stream(
     12. Create session summary
     13. Cleanup and store the run response and session
     """
-    from src.core._runner.agent._hooks import execute_post_hooks, execute_pre_hooks
-    from src.core._runner.agent._init import disconnect_connectable_tools
-    from src.core._runner.agent._messages import get_run_messages
-    from src.core._runner.agent._response import (
+    from openagent_core.core._runner.agent._hooks import execute_post_hooks, execute_pre_hooks
+    from openagent_core.core._runner.agent._init import disconnect_connectable_tools
+    from openagent_core.core._runner.agent._messages import get_run_messages
+    from openagent_core.core._runner.agent._response import (
         generate_followups_stream,
         generate_response_with_output_model_stream,
         handle_model_response_stream,
         handle_reasoning_stream,
         parse_response_with_parser_model_stream,
     )
-    from src.core._runner.agent._storage import load_session_state, read_or_create_session, update_metadata
-    from src.core._runner.agent._telemetry import log_agent_telemetry
-    from src.core._runner.agent._tools import determine_tools_for_model
+    from openagent_core.core._runner.agent._storage import load_session_state, read_or_create_session, update_metadata
+    from openagent_core.core._runner.agent._telemetry import log_agent_telemetry
+    from openagent_core.core._runner.agent._tools import determine_tools_for_model
 
     register_run(run_context.run_id)
     log_debug(f"Agent Run Start: {run_response.run_id}", center=True)
@@ -862,7 +863,7 @@ def _run_stream(
                     log_error("No messages to be sent to the model.")
 
                 # 7. Start memory creation in background thread
-                from src.core._runner.agent import _managers
+                from openagent_core.core._runner.agent import _managers
 
                 memory_future = _managers.start_memory_future(
                     agent,
@@ -924,7 +925,7 @@ def _run_stream(
                         raise_if_cancelled(run_response.run_id)  # type: ignore
                         yield event
                 else:
-                    from src.core._run_state.agent import (
+                    from openagent_core.core._run_state.agent import (
                         IntermediateRunContentEvent,
                         RunContentEvent,
                     )  # type: ignore
@@ -1246,8 +1247,8 @@ def run_dispatch(
     **kwargs: Any,
 ) -> Union[RunOutput, Iterator[Union[RunOutputEvent, RunOutput]]]:
     """Run the Agent and return the response."""
-    from src.core._runner.agent._init import has_async_db
-    from src.core._runner.agent._response import get_response_format
+    from openagent_core.core._runner.agent._init import has_async_db
+    from openagent_core.core._runner.agent._response import get_response_format
 
     if has_async_db(agent):
         raise RuntimeError("`run` method is not supported with an async database. Please use `arun` method instead.")
@@ -1298,7 +1299,7 @@ def run_dispatch(
 
     # Read existing session and update metadata BEFORE resolving run options,
     # so that session-stored metadata is visible to resolve_run_options.
-    from src.core._runner.agent._storage import read_or_create_session, update_metadata
+    from openagent_core.core._runner.agent._storage import read_or_create_session, update_metadata
 
     agent_session = read_or_create_session(agent, session_id=session_id, user_id=user_id)
     update_metadata(agent, session=agent_session)
@@ -1434,10 +1435,10 @@ async def _arun(
     15. Create session summary
     16. Cleanup and store (scrub, stop timer, save to file, add to session, calculate metrics, save session)
     """
-    from src.core._runner.agent._hooks import aexecute_post_hooks, aexecute_pre_hooks
-    from src.core._runner.agent._init import disconnect_connectable_tools, disconnect_mcp_tools
-    from src.core._runner.agent._messages import aget_run_messages
-    from src.core._runner.agent._response import (
+    from openagent_core.core._runner.agent._hooks import aexecute_post_hooks, aexecute_pre_hooks
+    from openagent_core.core._runner.agent._init import disconnect_connectable_tools, disconnect_mcp_tools
+    from openagent_core.core._runner.agent._messages import aget_run_messages
+    from openagent_core.core._runner.agent._response import (
         agenerate_followups,
         agenerate_response_with_output_model,
         ahandle_reasoning,
@@ -1445,9 +1446,9 @@ async def _arun(
         convert_response_to_structured_format,
         update_run_response,
     )
-    from src.core._runner.agent._storage import aread_or_create_session, load_session_state, update_metadata
-    from src.core._runner.agent._telemetry import alog_agent_telemetry
-    from src.core._runner.agent._tools import determine_tools_for_model
+    from openagent_core.core._runner.agent._storage import aread_or_create_session, load_session_state, update_metadata
+    from openagent_core.core._runner.agent._telemetry import alog_agent_telemetry
+    from openagent_core.core._runner.agent._tools import determine_tools_for_model
 
     await aregister_run(run_context.run_id)
     log_debug(f"Agent Run Start: {run_response.run_id}", center=True)
@@ -1555,7 +1556,7 @@ async def _arun(
                     log_error("No messages to be sent to the model.")
 
                 # 7. Start memory creation as a background task (runs concurrently with the main execution)
-                from src.core._runner.agent import _managers
+                from openagent_core.core._runner.agent import _managers
 
                 memory_task = await _managers.astart_memory_task(
                     agent,
@@ -1844,8 +1845,8 @@ async def _arun_background(
 
     Callers can poll for results via agent.aget_run_output(run_id, session_id).
     """
-    from src.core._runner.agent._session import asave_session
-    from src.core._runner.agent._storage import aread_or_create_session, update_metadata
+    from openagent_core.core._runner.agent._session import asave_session
+    from openagent_core.core._runner.agent._storage import aread_or_create_session, update_metadata
 
     # 1. Register the run for cancellation tracking (before spawning the task)
     await aregister_run(run_context.run_id)
@@ -1935,8 +1936,8 @@ async def _arun_background_stream(
     Similar to how Workflow._arun_background_stream handles WebSocket streaming,
     but uses SSE transport with event_buffer and sse_subscriber_manager.
     """
-    from src.core._runner.agent._session import asave_session
-    from src.core._runner.agent._storage import aread_or_create_session, update_metadata
+    from openagent_core.core._runner.agent._session import asave_session
+    from openagent_core.core._runner.agent._storage import aread_or_create_session, update_metadata
 
     run_id = run_response.run_id
     if not run_id:
@@ -1957,8 +1958,8 @@ async def _arun_background_stream(
 
     # 3. Spawn detached background task
     async def _background_producer() -> None:
-        from src.core._runner._stubs import event_buffer, sse_subscriber_manager
-        from src.core._runner._stubs import format_sse_event_with_index
+        from openagent_core.core._runner._stubs import event_buffer, sse_subscriber_manager
+        from openagent_core.core._runner._stubs import format_sse_event_with_index
 
         try:
             async for event in _arun_stream(
@@ -2080,19 +2081,19 @@ async def _arun_stream(
     12. Create session summary
     13. Cleanup and store (scrub, stop timer, save to file, add to session, calculate metrics, save session)
     """
-    from src.core._runner.agent._hooks import aexecute_post_hooks, aexecute_pre_hooks
-    from src.core._runner.agent._init import disconnect_connectable_tools, disconnect_mcp_tools
-    from src.core._runner.agent._messages import aget_run_messages
-    from src.core._runner.agent._response import (
+    from openagent_core.core._runner.agent._hooks import aexecute_post_hooks, aexecute_pre_hooks
+    from openagent_core.core._runner.agent._init import disconnect_connectable_tools, disconnect_mcp_tools
+    from openagent_core.core._runner.agent._messages import aget_run_messages
+    from openagent_core.core._runner.agent._response import (
         agenerate_followups_stream,
         agenerate_response_with_output_model_stream,
         ahandle_model_response_stream,
         ahandle_reasoning_stream,
         aparse_response_with_parser_model_stream,
     )
-    from src.core._runner.agent._storage import aread_or_create_session, load_session_state, update_metadata
-    from src.core._runner.agent._telemetry import alog_agent_telemetry
-    from src.core._runner.agent._tools import determine_tools_for_model
+    from openagent_core.core._runner.agent._storage import aread_or_create_session, load_session_state, update_metadata
+    from openagent_core.core._runner.agent._telemetry import alog_agent_telemetry
+    from openagent_core.core._runner.agent._tools import determine_tools_for_model
 
     await aregister_run(run_context.run_id)
     log_debug(f"Agent Run Start: {run_response.run_id}", center=True)
@@ -2208,7 +2209,7 @@ async def _arun_stream(
                     log_error("No messages to be sent to the model.")
 
                 # 7. Start memory creation as a background task (runs concurrently with the main execution)
-                from src.core._runner.agent import _managers
+                from openagent_core.core._runner.agent import _managers
 
                 memory_task = await _managers.astart_memory_task(
                     agent,
@@ -2262,7 +2263,7 @@ async def _arun_stream(
                         await araise_if_cancelled(run_response.run_id)  # type: ignore
                         yield event
                 else:
-                    from src.core._run_state.agent import (
+                    from openagent_core.core._run_state.agent import (
                         IntermediateRunContentEvent,
                         RunContentEvent,
                     )  # type: ignore
@@ -2626,7 +2627,7 @@ def arun_dispatch(  # type: ignore
     """Async Run the Agent and return the response."""
 
     # Set the id for the run and register it immediately for cancellation tracking
-    from src.core._runner.agent._response import get_response_format
+    from openagent_core.core._runner.agent._response import get_response_format
 
     run_id = run_id or str(uuid4())
 
@@ -2675,12 +2676,12 @@ def arun_dispatch(  # type: ignore
     # so that session-stored metadata is visible to resolve_run_options.
     # Note: arun_dispatch is NOT async, so we can only pre-read with a sync DB.
     # For async DB, _arun/_arun_stream will handle the session read themselves.
-    from src.core._runner.agent._init import has_async_db
-    from src.core._runner.agent._storage import update_metadata
+    from openagent_core.core._runner.agent._init import has_async_db
+    from openagent_core.core._runner.agent._storage import update_metadata
 
     _pre_session: Optional[AgentSession] = None
     if not has_async_db(agent):
-        from src.core._runner.agent._storage import read_or_create_session
+        from openagent_core.core._runner.agent._storage import read_or_create_session
 
         _pre_session = read_or_create_session(agent, session_id=session_id, user_id=user_id)
         update_metadata(agent, session=_pre_session)
@@ -2866,11 +2867,11 @@ def continue_run_dispatch(
         metadata: The metadata to use for the run.
         debug_mode: Whether to enable debug mode.
     """
-    from src.core._runner.agent._init import has_async_db, set_default_model
-    from src.core._runner.agent._messages import get_continue_run_messages
-    from src.core._runner.agent._response import get_response_format
-    from src.core._runner.agent._storage import load_session_state, read_or_create_session, update_metadata
-    from src.core._runner.agent._tools import determine_tools_for_model
+    from openagent_core.core._runner.agent._init import has_async_db, set_default_model
+    from openagent_core.core._runner.agent._messages import get_continue_run_messages
+    from openagent_core.core._runner.agent._response import get_response_format
+    from openagent_core.core._runner.agent._storage import load_session_state, read_or_create_session, update_metadata
+    from openagent_core.core._runner.agent._tools import determine_tools_for_model
 
     if run_response is None and run_id is None:
         raise ValueError("Either run_response or run_id must be provided.")
@@ -2973,7 +2974,7 @@ def continue_run_dispatch(
 
         # If no tools/requirements provided, check for resolved admin approval
         elif run_response.tools:
-            from src.core._run_state.approval import check_and_apply_approval_resolution
+            from openagent_core.core._run_state.approval import check_and_apply_approval_resolution
 
             try:
                 # This will apply resolution_data to tools if approval is resolved
@@ -3087,17 +3088,17 @@ def _continue_run(
     8. Cleanup and store (scrub, stop timer, save to file, add to session, calculate metrics, save session)
     """
     # Register run for cancellation tracking
-    from src.core._runner.agent._hooks import execute_post_hooks
-    from src.core._runner.agent._init import disconnect_connectable_tools
-    from src.core._runner.agent._response import (
+    from openagent_core.core._runner.agent._hooks import execute_post_hooks
+    from openagent_core.core._runner.agent._init import disconnect_connectable_tools
+    from openagent_core.core._runner.agent._response import (
         convert_response_to_structured_format,
         generate_followups,
         generate_response_with_output_model,
         parse_response_with_parser_model,
         update_run_response,
     )
-    from src.core._runner.agent._telemetry import log_agent_telemetry
-    from src.core._runner.agent._tools import handle_tool_call_updates
+    from openagent_core.core._runner.agent._telemetry import log_agent_telemetry
+    from openagent_core.core._runner.agent._tools import handle_tool_call_updates
 
     register_run(run_response.run_id)  # type: ignore
 
@@ -3299,15 +3300,15 @@ def _continue_run_stream(
     6. Cleanup and store the run response and session
     """
 
-    from src.core._runner.agent._hooks import execute_post_hooks
-    from src.core._runner.agent._init import disconnect_connectable_tools
-    from src.core._runner.agent._response import (
+    from openagent_core.core._runner.agent._hooks import execute_post_hooks
+    from openagent_core.core._runner.agent._init import disconnect_connectable_tools
+    from openagent_core.core._runner.agent._response import (
         generate_followups_stream,
         handle_model_response_stream,
         parse_response_with_parser_model_stream,
     )
-    from src.core._runner.agent._telemetry import log_agent_telemetry
-    from src.core._runner.agent._tools import handle_tool_call_updates_stream
+    from openagent_core.core._runner.agent._telemetry import log_agent_telemetry
+    from openagent_core.core._runner.agent._tools import handle_tool_call_updates_stream
 
     register_run(run_response.run_id)  # type: ignore
 
@@ -3600,7 +3601,7 @@ def acontinue_run_dispatch(  # type: ignore
         yield_run_output: Whether to yield the run response.
         (deprecated) updated_tools: Use 'requirements' instead.
     """
-    from src.core._runner.agent._response import get_response_format
+    from openagent_core.core._runner.agent._response import get_response_format
 
     if run_response is None and run_id is None:
         raise ValueError("Either run_response or run_id must be provided.")
@@ -3634,11 +3635,11 @@ def acontinue_run_dispatch(  # type: ignore
 
     # Read existing session and update metadata BEFORE resolving run options,
     # so that session-stored metadata is visible to resolve_run_options.
-    from src.core._runner.agent._init import has_async_db
+    from openagent_core.core._runner.agent._init import has_async_db
 
     _session_state: Dict[str, Any] = {}
     if not has_async_db(agent):
-        from src.core._runner.agent._storage import load_session_state, read_or_create_session, update_metadata
+        from openagent_core.core._runner.agent._storage import load_session_state, read_or_create_session, update_metadata
 
         _pre_session = read_or_create_session(agent, session_id=session_id, user_id=user_id)
         update_metadata(agent, session=_pre_session)
@@ -3762,8 +3763,8 @@ async def _acontinue_run_background_stream(
     3. Buffers events (via event_buffer) and publishes to SSE subscribers
     4. Yields SSE-formatted strings via an asyncio.Queue
     """
-    from src.core._runner.agent._session import asave_session
-    from src.core._runner.agent._storage import aread_or_create_session, update_metadata
+    from openagent_core.core._runner.agent._session import asave_session
+    from openagent_core.core._runner.agent._storage import aread_or_create_session, update_metadata
 
     _run_id = run_id or (run_response.run_id if run_response else None)
     if not _run_id:
@@ -3786,8 +3787,8 @@ async def _acontinue_run_background_stream(
 
     # 3. Spawn detached background task
     async def _background_producer() -> None:
-        from src.core._runner._stubs import event_buffer, sse_subscriber_manager
-        from src.core._runner._stubs import format_sse_event_with_index
+        from openagent_core.core._runner._stubs import event_buffer, sse_subscriber_manager
+        from openagent_core.core._runner._stubs import format_sse_event_with_index
 
         try:
             async for event in _acontinue_run_stream(
@@ -3908,19 +3909,19 @@ async def _acontinue_run(
     13. Create session summary
     14. Cleanup and store (scrub, stop timer, save to file, add to session, calculate metrics, save session)
     """
-    from src.core._runner.agent._hooks import aexecute_post_hooks
-    from src.core._runner.agent._init import disconnect_connectable_tools, disconnect_mcp_tools
-    from src.core._runner.agent._messages import get_continue_run_messages
-    from src.core._runner.agent._response import (
+    from openagent_core.core._runner.agent._hooks import aexecute_post_hooks
+    from openagent_core.core._runner.agent._init import disconnect_connectable_tools, disconnect_mcp_tools
+    from openagent_core.core._runner.agent._messages import get_continue_run_messages
+    from openagent_core.core._runner.agent._response import (
         agenerate_followups,
         agenerate_response_with_output_model,
         aparse_response_with_parser_model,
         convert_response_to_structured_format,
         update_run_response,
     )
-    from src.core._runner.agent._storage import aread_or_create_session, load_session_state, update_metadata
-    from src.core._runner.agent._telemetry import alog_agent_telemetry
-    from src.core._runner.agent._tools import ahandle_tool_call_updates, determine_tools_for_model
+    from openagent_core.core._runner.agent._storage import aread_or_create_session, load_session_state, update_metadata
+    from openagent_core.core._runner.agent._telemetry import alog_agent_telemetry
+    from openagent_core.core._runner.agent._tools import ahandle_tool_call_updates, determine_tools_for_model
 
     log_debug(f"Agent Run Continue: {run_response.run_id if run_response else run_id}", center=True)  # type: ignore
     agent_session: Optional[AgentSession] = None
@@ -3988,7 +3989,7 @@ async def _acontinue_run(
 
                     # If no tools/requirements provided, check for resolved admin approval
                     elif run_response.tools:
-                        from src.core._run_state.approval import acheck_and_apply_approval_resolution
+                        from openagent_core.core._run_state.approval import acheck_and_apply_approval_resolution
 
                         try:
                             # This will apply resolution_data to tools if approval is resolved
@@ -4284,18 +4285,18 @@ async def _acontinue_run_stream(
     10. Execute post-hooks
     11. Cleanup and store the run response and session
     """
-    from src.core._runner.agent._hooks import aexecute_post_hooks
-    from src.core._runner.agent._init import disconnect_connectable_tools, disconnect_mcp_tools
-    from src.core._runner.agent._messages import get_continue_run_messages
-    from src.core._runner.agent._response import (
+    from openagent_core.core._runner.agent._hooks import aexecute_post_hooks
+    from openagent_core.core._runner.agent._init import disconnect_connectable_tools, disconnect_mcp_tools
+    from openagent_core.core._runner.agent._messages import get_continue_run_messages
+    from openagent_core.core._runner.agent._response import (
         agenerate_followups_stream,
         agenerate_response_with_output_model_stream,
         ahandle_model_response_stream,
         aparse_response_with_parser_model_stream,
     )
-    from src.core._runner.agent._storage import aread_or_create_session, load_session_state, update_metadata
-    from src.core._runner.agent._telemetry import alog_agent_telemetry
-    from src.core._runner.agent._tools import ahandle_tool_call_updates_stream, determine_tools_for_model
+    from openagent_core.core._runner.agent._storage import aread_or_create_session, load_session_state, update_metadata
+    from openagent_core.core._runner.agent._telemetry import alog_agent_telemetry
+    from openagent_core.core._runner.agent._tools import ahandle_tool_call_updates_stream, determine_tools_for_model
 
     log_debug(f"Agent Run Continue: {run_response.run_id if run_response else run_id}", center=True)  # type: ignore
 
@@ -4362,7 +4363,7 @@ async def _acontinue_run_stream(
 
                     # If no tools/requirements provided, check for resolved admin approval
                     elif run_response.tools:
-                        from src.core._run_state.approval import acheck_and_apply_approval_resolution
+                        from openagent_core.core._run_state.approval import acheck_and_apply_approval_resolution
 
                         try:
                             # This will apply resolution_data to tools if approval is resolved
@@ -4451,7 +4452,7 @@ async def _acontinue_run_stream(
                         await araise_if_cancelled(run_response.run_id)  # type: ignore
                         yield event
                 else:
-                    from src.core._run_state.agent import (
+                    from openagent_core.core._run_state.agent import (
                         IntermediateRunContentEvent,
                         RunContentEvent,
                     )  # type: ignore
@@ -4808,14 +4809,14 @@ def cleanup_and_store(
 ) -> None:
     import copy
 
-    from src.core._runner.agent import _session
-    from src.core._run_state.approval import update_approval_run_status
+    from openagent_core.core._runner.agent import _session
+    from openagent_core.core._run_state.approval import update_approval_run_status
 
     # Scrub a shallow copy for storage — the original run_response is never
     # mutated so the caller always sees generated media regardless of store_media.
     storage_copy = copy.copy(run_response)
     scrub_run_output_for_storage(agent, storage_copy)
-    from src.stream.content_parts import scrub_run_output_carriers_for_storage
+    from openagent_core.stream.content_parts import scrub_run_output_carriers_for_storage
 
     scrub_run_output_carriers_for_storage(storage_copy)
 
@@ -4869,14 +4870,14 @@ async def acleanup_and_store(
 ) -> None:
     import copy
 
-    from src.core._runner.agent import _session
-    from src.core._run_state.approval import aupdate_approval_run_status
+    from openagent_core.core._runner.agent import _session
+    from openagent_core.core._run_state.approval import aupdate_approval_run_status
 
     # Scrub a shallow copy for storage — the original run_response is never
     # mutated so the caller always sees generated media regardless of store_media.
     storage_copy = copy.copy(run_response)
     scrub_run_output_for_storage(agent, storage_copy)
-    from src.stream.content_parts import scrub_run_output_carriers_for_storage
+    from openagent_core.stream.content_parts import scrub_run_output_carriers_for_storage
 
     scrub_run_output_carriers_for_storage(storage_copy)
 
@@ -4921,7 +4922,7 @@ async def acleanup_and_store(
 
 
 # ---------------------------------------------------------------------------
-# Run cancellation — re-export from src.core._run_state.cancel
+# Run cancellation — re-export from openagent_core.core._run_state.cancel
 # ---------------------------------------------------------------------------
 
 cancel_run = cancel_run_global
