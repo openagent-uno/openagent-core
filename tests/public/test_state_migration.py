@@ -63,6 +63,9 @@ class StateMigration(unittest.IsolatedAsyncioTestCase):
             await prepare_migration(source,root/'backup',root/'candidate',databases=('state.sqlite3',),quiesce=quiesce,migrate=migrate)
             before=(root/'backup'/'state.sqlite3').read_bytes()
             identity=inspect_snapshot_identity(root/'backup','state.sqlite3')
+            from openagent_storage_sqlite.migration import check_storage_tenant
+            check_storage_tenant(root/'candidate'/'state.sqlite3','legacy-network')
+            with self.assertRaises(PermissionError):check_storage_tenant(root/'candidate'/'state.sqlite3','current-workspace')
             self.assertEqual(identity['tenant_ids'],['legacy-network'])
             self.assertEqual(identity['fence_id'],'verified-pvc-fence')
             self.assertEqual((root/'backup'/'state.sqlite3').read_bytes(),before)

@@ -139,6 +139,26 @@ def inspect_snapshot_identity(snapshot: str|Path, database: str) -> dict[str,Any
             'database_sha256':manifest['files'][relative]['sha256']}
 
 
+def check_storage_tenant(database: str|Path, expected_tenant: str) -> None:
+    """Fail closed when an existing canonical store belongs to another tenant.
+
+    A fresh empty store may use the host's selected namespace. Existing opaque
+    tenant IDs require an attested host mapping, never a silent new namespace.
+    This reads the WAL through SQLite and never rewrites ownership.
+    """
+    path=Path(database).absolute()
+    if not isinstance(expected_tenant,str) or not expected_tenant.strip():raise ValueError('Expected tenant is required')
+    if not path.exists():return
+    with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as db:
+        tables=[row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        for table in tables:
+            quoted='"'+table.replace('"','""')+'"'
+            if 'tenant_id' not in {row[1] for row in db.execute('PRAGMA table_info('+quoted+')')}:continue
+            tenants={str(row[0]) for row in db.execute('SELECT DISTINCT tenant_id FROM '+quoted+' WHERE tenant_id IS NOT NULL') if row[0]}
+            if tenants-{expected_tenant}:
+                raise PermissionError('Canonical storage tenant requires an attested host identity mapping')
+
+
 async def prepare_migration(source: str|Path,backup: str|Path,candidate: str|Path,*,databases: tuple[str,...],quiesce,migrate):
     """Fence via a trusted product context manager, back up, then migrate a copy.
 
