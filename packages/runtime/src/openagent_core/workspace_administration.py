@@ -134,6 +134,31 @@ class SessionInspection:
             if len(result)>=max(1,min(int(limit),200)):break
         return {"sessions":result}
 
+    async def live_runs(self,context,session_id,*,limit=8):
+        """Bounded canonical stream snapshots, without authority/credential data.
+
+        This is an observation API; reading or reconnecting never executes a
+        run. Authorization is checked before data access and before publication.
+        """
+        await self.authorize(context,session_id)
+        conn=await self.db._ensure_connected()
+        rows=await (await conn.execute("SELECT id,status,input_json,output_json,created_at_ms,finished_at_ms,metadata_json FROM session_runs WHERE tenant_id=? AND session_id=? AND json_extract(metadata_json,'$.runtime_contract')=1 ORDER BY ordinal DESC LIMIT ?",(context.tenant_id,session_id,max(1,min(int(limit),8))))).fetchall()
+        result=[];revision=0
+        for row in reversed(rows):
+            metadata=json.loads(row["metadata_json"])
+            author=metadata.get("execution_context",{}).get("author",{})
+            events=await (await conn.execute("SELECT sequence,event_type,metadata_json,occurred_at_ms FROM domain_events WHERE tenant_id=? AND session_id=? AND run_id=? ORDER BY sequence LIMIT 2001",(context.tenant_id,session_id,row["id"]))).fetchall()
+            # A monotonically increasing journal cursor survives reconnects and
+            # restarts. Large streams retain their final canonical output too.
+            latest=await (await conn.execute("SELECT max(sequence) FROM domain_events WHERE tenant_id=? AND run_id=?",(context.tenant_id,row["id"]))).fetchone()
+            revision=max(revision,int(latest[0] or 0))
+            result.append({"id":row["id"],"status":row["status"],"input":json.loads(row["input_json"]),"output":json.loads(row["output_json"]) if row["output_json"] else None,
+                "created_at_ms":row["created_at_ms"],"finished_at_ms":row["finished_at_ms"],
+                "author":{key:author[key] for key in ("authority","tenant_id","subject_id","kind") if isinstance(author.get(key),str)},
+                "events":[{"cursor":e["sequence"],"kind":e["event_type"],"payload":json.loads(e["metadata_json"]),"timestamp_ms":e["occurred_at_ms"]} for e in events[:2000] if e["event_type"] in {"run.stream","run.status","run.delta"}],"truncated":len(events)>2000})
+        await self.authorize(context,session_id)
+        return {"session_id":session_id,"revision":revision,"runs":result}
+
     async def transcript(self,context,session_id,*,limit=20):
         await self.authorize(context,session_id)
         runs=await self.db.list_session_runs(session_id,limit=max(1,min(int(limit),100)))
