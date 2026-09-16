@@ -1,0 +1,37 @@
+{
+  "module": "vault",
+  "node": ">=20",
+  "source": "openagent_core/mcp/servers/vault",
+  "artifacts": [
+    {
+      "file": "dist/server.mjs",
+      "bytes": 1441032,
+      "sha256": "3714c257686a2f40d53c6b6574c36402e5f76a690f2c0a520d4063d0f9e693e2"
+    },
+    {
+      "file": "dist/server.mjs.LEGAL.txt",
+      "bytes": 1576,
+      "sha256": "0b718b1fac3f53a8ed800fb75296f4aafbb7bfc2086a1bccf8c2c6b3d29ad247"
+    },
+    {
+      "file": "dist/macos-trash",
+      "bytes": 726312,
+      "sha256": "cc802989bab3f97ce608b5b88838302dda65f1481bb8775b3c342830677bde68"
+    },
+    {
+      "file": "dist/windows-trash.exe",
+      "bytes": 28672,
+      "sha256": "06f2f20edd22757be8667348050f3aa92b3cd23b05d9e21815dca83f453ceb78"
+    },
+    {
+      "file": "package.json",
+      "bytes": 1885,
+      "sha256": "3ad4719bb5a073ee76d292a18949a69f4e6ce2e641a64a2eb0072f1e9a1ae6e4"
+    },
+    {
+      "file": "THIRD_PARTY_NOTICES.txt",
+      "bytes": 93611,
+      "sha256": "ba0e7e5608d9ea2d6cf6e8df9efe2324c35be3e17ba55ac96a40fc85dda204e4"
+    }
+  ]
+}
