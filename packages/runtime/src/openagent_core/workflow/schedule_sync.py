@@ -65,6 +65,7 @@ async def sync_workflow_schedules(
         node_id = node.get("id")
         cfg = node.get("config") or {}
         cron = cfg.get("cron_expression")
+        timezone = cfg.get("timezone") or None
         if not node_id or not cron:
             # Block exists but has no cron yet — don't create a row.
             # Any previous row keyed to this node_id will be pruned
@@ -72,13 +73,13 @@ async def sync_workflow_schedules(
             # from ``keep_node_ids``).
             continue
         try:
-            validate_schedule_expression(cron)
+            validate_schedule_expression(cron, timezone)
         except ValueError:
             summary["invalid"] += 1
             continue
         keep_node_ids.append(node_id)
         try:
-            nxt = next_run_for_expression(cron)
+            nxt = next_run_for_expression(cron, timezone=timezone)
         except ValueError:
             summary["invalid"] += 1
             continue
@@ -92,6 +93,8 @@ async def sync_workflow_schedules(
             node_id=node_id,
             cron_expression=cron,
             next_run_at=nxt,
+            timezone=timezone,
+            enabled=cfg.get("enabled",True),
         )
 
     removed = await db.delete_schedules_not_in(workflow_id, keep_node_ids)

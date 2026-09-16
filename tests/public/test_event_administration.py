@@ -65,3 +65,15 @@ class EventTests(unittest.IsolatedAsyncioTestCase):
         for fields in ({"authority":"forged"},{"rate_limit_per_min":0},{"session_binding_enabled":True},{"enabled":"false"}):
             with self.assertRaises(ValueError):await self.service.write(self.context,{"name":"Invalid","action_kind":"prompt","prompt_template":"Rules",**fields})
         self.assertEqual([],await self.db.list_events())
+
+    async def test_batch_delivery_capture_is_atomic_and_does_not_reassign_definition(self):
+        event=await self.create();definition_captures=len(self.captures);attempts=[]
+        async def delivery_capture(kind,row,delivery_id,context,connection):
+            attempts.append(delivery_id)
+            if len(attempts)==2:raise PermissionError("Second delivery grant denied")
+        self.service.capture_delivery=delivery_capture
+        with self.assertRaises(PermissionError):
+            await self.service.enqueue(self.context,event["id"],[{"number":1},{"number":2}],source="agent")
+        self.assertEqual([],await self.db.list_event_deliveries(event["id"]))
+        self.assertIsNone((await self.db.get_event(event["id"]))["last_triggered_at"])
+        self.assertEqual(definition_captures,len(self.captures))

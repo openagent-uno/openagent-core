@@ -611,6 +611,7 @@ CREATE TABLE IF NOT EXISTS workflow_schedules (
     workflow_id     TEXT NOT NULL REFERENCES workflow_tasks(id) ON DELETE CASCADE,
     node_id         TEXT NOT NULL,
     cron_expression TEXT NOT NULL,
+    timezone        TEXT,
     next_run_at     REAL NOT NULL,
     last_run_at     REAL,
     enabled         INTEGER NOT NULL DEFAULT 1,
@@ -1423,6 +1424,7 @@ class MemoryDB:
         await self._migrate_task_runs_session_id()
         await self._migrate_scheduled_tasks_model_column()
         await self._migrate_scheduled_tasks_timezone_column()
+        await self._migrate_workflow_schedules_timezone_column()
         await self._migrate_scheduled_tasks_execution_policy_column()
         await self._migrate_events_session_binding()
         await self._migrate_events_precondition()
@@ -1699,6 +1701,13 @@ class MemoryDB:
                 "ALTER TABLE scheduled_tasks ADD COLUMN model TEXT"
             )
             await self._conn.commit()
+
+    async def _migrate_workflow_schedules_timezone_column(self) -> None:
+        conn = await self._ensure_connected()
+        cursor = await conn.execute("PRAGMA table_info(workflow_schedules)")
+        if "timezone" not in {row[1] for row in await cursor.fetchall()}:
+            await conn.execute("ALTER TABLE workflow_schedules ADD COLUMN timezone TEXT")
+            await conn.commit()
 
     async def _migrate_scheduled_tasks_timezone_column(self) -> None:
         """A scheduled task can now name the IANA timezone its cron is read
@@ -4264,13 +4273,16 @@ class MemoryDB:
         cron_expression: str,
         next_run_at: float,
         enabled: bool = True,
+        timezone: str | None = None,
     ) -> str:
         """Insert or update the schedule row for a given
         (workflow_id, node_id). Returns the row id."""
+        from openagent_core.memory.schedule import validate_timezone
+        validate_timezone(timezone)
         conn = await self._ensure_connected()
         now = time.time()
         cursor = await conn.execute(
-            "SELECT id, cron_expression, next_run_at FROM workflow_schedules "
+            "SELECT id, cron_expression, next_run_at, timezone FROM workflow_schedules "
             "WHERE workflow_id = ? AND node_id = ?",
             (workflow_id, node_id),
         )
@@ -4279,14 +4291,14 @@ class MemoryDB:
             # Preserve next_run_at when only metadata changed and cron
             # is identical — avoids rolling the scheduler forward on
             # every graph save.
-            keep_next = existing["cron_expression"] == cron_expression
+            keep_next = existing["cron_expression"] == cron_expression and (existing["timezone"] or None) == (timezone or None)
             await conn.execute(
-                "UPDATE workflow_schedules SET cron_expression = ?, "
+                "UPDATE workflow_schedules SET cron_expression = ?, timezone = ?, "
                 "next_run_at = ?, enabled = ?, updated_at = ? "
                 "WHERE id = ?",
                 (
                     cron_expression,
-                    existing["next_run_at"] if keep_next else next_run_at,
+                    timezone or None,                    existing["next_run_at"] if keep_next else next_run_at,
                     1 if enabled else 0,
                     now,
                     existing["id"],
@@ -4297,14 +4309,15 @@ class MemoryDB:
         sid = str(uuid.uuid4())
         await conn.execute(
             "INSERT INTO workflow_schedules "
-            "(id, workflow_id, node_id, cron_expression, next_run_at, "
+            "(id, workflow_id, node_id, cron_expression, timezone, next_run_at, "
             " enabled, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 sid,
                 workflow_id,
                 node_id,
                 cron_expression,
+                timezone or None,
                 next_run_at,
                 1 if enabled else 0,
                 now,
@@ -4315,7 +4328,10 @@ class MemoryDB:
         return sid
 
     async def update_schedule(self, schedule_id: str, **kwargs: Any) -> None:
-        allowed = {"cron_expression", "next_run_at", "last_run_at", "enabled"}
+        allowed = {"cron_expression", "next_run_at", "last_run_at", "enabled", "timezone"}
+        if "timezone" in kwargs:
+            from openagent_core.memory.schedule import validate_timezone
+            validate_timezone(kwargs["timezone"])
         updates: dict[str, Any] = {}
         for k, v in kwargs.items():
             if k not in allowed:

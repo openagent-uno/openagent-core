@@ -1,0 +1,15 @@
+# Automation host contract
+
+A host composes `AutomationRuntime` with an execution service; the scheduler never creates an identity or default delegation. Every firing is admitted using `Runtime.execute_operation`, and each model turn uses the same runtime and its canonical child relation. The automation tables are projections and durable input queues; `session_runs` remains the run authority.
+
+`AutomationRuntime.launch(kind, row, request_id=..., inputs=...)` starts a tracked manual firing without attaching its lifetime to HTTP. `cancel_runs(kind, definition_id, run_ids)` flags only the exact host-authorized projected IDs and preserves the scheduler's cancellation drain. Hosts check each execution's immutable access scope before exposing output or stopping it. Cancellation has been verified on both the workflow projection and canonical run.
+
+`execution_service.schedule_authorized(workflow, schedule)` is an optional policy check before a scheduled occurrence is advanced or dispatched. Hosts that use distinct trigger owners implement it; otherwise the scheduler uses `definition_authorized("workflow", row)`. The resulting firing must retain that exact trigger reference during credential renewal. Manual occurrence references are separate from the definition grant.
+
+`EventAdministration.enqueue` accepts one or several payloads under one transaction. With `capture_delivery`, the host captures each occurrence's delegation before any queue row becomes visible. Failure rolls back the entire batch and `last_triggered_at`. `capture` remains the fallback for hosts whose current contract captures the definition at manual trigger. Encrypted webhook secrets and definition ownership remain unchanged when the host uses occurrence capture.
+
+`WebhookIngress` verifies original bytes and a fresh host policy, then serializes deduplication, rate limits, timestamp update and unclaimed delivery creation in one transaction. Transport/workload authentication belongs to the host. It creates no session, actor or execution credential. `webhook_auth` imports without model, database or cryptography initialization; encryption is loaded only when authenticating.
+
+`automation_definitions` exposes graph validation, block specifications and timezone-aware schedule calculations/projection. `workflow_schedules.timezone` is an additive nullable column. Migration retains previous IDs and deadlines; synchronizing an unchanged cron and timezone retains the deadline. Changing the timezone recalculates the next occurrence using IANA/DST rules. Historical rows without a zone retain UTC behavior.
+
+Evidence: public webhook authentication 4 tests, event administration 5 tests including batch rollback, workflow timezone 3 tests including migration/reopen and DST. GlassPalace's native HTTP test also runs a queued event, disabled task manually, workflow AI block, exact retry, cancellation, and a scheduled trigger authorized by a different actor through the real scheduler and NativeProvider with a deterministic authenticated local HTTP model endpoint. This does not assert commercial-provider or Kubernetes acceptance.

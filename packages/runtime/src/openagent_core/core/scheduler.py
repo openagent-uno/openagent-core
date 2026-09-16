@@ -372,7 +372,12 @@ class Scheduler:
             schedules = []
         for sched in schedules:
             workflow = await self.db.get_workflow(sched['workflow_id'])
-            if workflow is None or self.execution_service is None or not await self.execution_service.definition_authorized('workflow',workflow):
+            if workflow is None or self.execution_service is None:
+                continue
+            schedule_policy = getattr(self.execution_service, "schedule_authorized", None)
+            authorized = (await schedule_policy(workflow, sched) if schedule_policy is not None else
+                          await self.execution_service.definition_authorized("workflow", workflow))
+            if not authorized:
                 continue
             cron = sched.get("cron_expression")
             if not cron:
@@ -385,7 +390,7 @@ class Scheduler:
                         )
                     continue
                 await self.db.update_schedule(
-                    sched["id"], next_run_at=self._next_run(cron, now),
+                    sched["id"], next_run_at=self._next_run(cron, now, sched.get("timezone")),
                 )
             except ValueError as e:
                 elog(
@@ -1429,7 +1434,12 @@ class Scheduler:
                 # FK cascade should prevent this, but guard anyway.
                 await self.db.delete_schedule(sched["id"])
                 continue
-            if self.execution_service is None or not await self.execution_service.definition_authorized("workflow", wf):
+            if self.execution_service is None:
+                continue
+            schedule_policy = getattr(self.execution_service, "schedule_authorized", None)
+            authorized = (await schedule_policy(wf, sched) if schedule_policy is not None else
+                          await self.execution_service.definition_authorized("workflow", wf))
+            if not authorized:
                 continue
             elog(
                 "scheduler.schedule_due",
@@ -1447,7 +1457,7 @@ class Scheduler:
                     await self.db.update_schedule(
                         sched["id"],
                         last_run_at=now,
-                        next_run_at=self._next_run(cron, now),
+                        next_run_at=self._next_run(cron, now, sched.get("timezone")),
                     )
             except ValueError as e:
                 elog(

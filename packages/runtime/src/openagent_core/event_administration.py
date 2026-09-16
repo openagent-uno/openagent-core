@@ -15,11 +15,12 @@ from .core.execution_policy import normalize_execution_policy,encode_execution_p
 _FIELDS=frozenset({"name","description","type","slug","enabled","input_schema","action_kind","action_ref","prompt_template","model","session_binding_enabled","session_binding_path","execution_policy","rate_limit_per_min","max_payload_bytes"})
 
 class EventAdministration:
-    def __init__(self,db,authorizer,*,capture,public_url=None,queue_ready=None):
+    def __init__(self,db,authorizer,*,capture,public_url=None,queue_ready=None,capture_delivery=None):
         self.db,self.authorizer,self.capture=db,authorizer,capture
         self.repository=AutomationRepository(db.db_path)
         self.public_url=(public_url or "").rstrip("/") or None
         self.queue_ready=queue_ready
+        self.capture_delivery=capture_delivery
 
     async def authorize(self,context,action,identifier=None):
         await require_authorized(self.authorizer,context,action,ResourceRef("event" if identifier else "agent",context.tenant_id,identifier or context.agent_id))
@@ -127,6 +128,19 @@ class EventAdministration:
         await self.authorize(context,"event.trigger",identifier)
         if not isinstance(payload or {},dict) or source not in {"manual","peer","agent"}:raise ValueError("Invalid event payload/source")
         if not isinstance(wait,bool) or not isinstance(timeout_s,int) or not 1<=timeout_s<=600:raise ValueError("Invalid event wait")
+        delivery=(await self.enqueue(context,identifier,[payload or {}],source=source))[0]
+        if wait:
+            deadline=asyncio.get_running_loop().time()+timeout_s
+            while asyncio.get_running_loop().time()<deadline:
+                row=await self.delivery(context,delivery)
+                if row.get("status") not in {"received","running"}:return row
+                await asyncio.sleep(.1)
+        return {"delivery_id":delivery,"status":"running"}
+
+    async def enqueue(self,context,identifier,payloads,*,source="manual"):
+        await self.authorize(context,"event.trigger",identifier)
+        if not isinstance(payloads,list) or any(not isinstance(p,dict) for p in payloads) or source not in {"manual","peer","agent"}:raise ValueError("Invalid batch payload/source")
+        if not payloads:return []
         if self.queue_ready is None or not await self.queue_ready():raise RuntimeError("Event executor is unavailable")
         async with self.repository.transaction() as connection:
             await self.authorize(context,"event.trigger",identifier)
@@ -136,15 +150,16 @@ class EventAdministration:
             if not row["enabled"]:raise ValueError("Event is disabled")
             # Reattest the current definition for the authenticated manual
             # initiator before inserting into the existing durable queue.
-            await self.capture("event",row,context,connection)
-            delivery=await db.add_event_delivery(event_id=identifier,source=source,payload=payload or {},claimed=False)
-        if wait:
-            deadline=asyncio.get_running_loop().time()+timeout_s
-            while asyncio.get_running_loop().time()<deadline:
-                row=await self.delivery(context,delivery)
-                if row.get("status") not in {"received","running"}:return row
-                await asyncio.sleep(.1)
-        return {"delivery_id":delivery,"status":"running"}
+            if self.capture_delivery is None:await self.capture("event",row,context,connection)
+            import uuid
+            deliveries=[]
+            for payload in payloads:
+                delivery=str(uuid.uuid4())
+                if self.capture_delivery is not None:await self.capture_delivery("event",row,delivery,context,connection)
+                await db.add_event_delivery(event_id=identifier,source=source,payload=payload,claimed=False,delivery_id=delivery)
+                deliveries.append(delivery)
+        return deliveries
+
 
     async def visible_delivery(self,context,row):
         await self.authorize(context,"event.read",row["event_id"])
