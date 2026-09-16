@@ -49,8 +49,10 @@ class Registry:
         self.list_servers(origin)
         return {"name": "read", "description": "device", "input_schema": {"type": "object"}}
 
-    async def call_tool(self, origin, server, tool, arguments, *, session_id):
+    async def call_tool(self, origin, server, tool, arguments, *, session_id, execution_context, source_id):
         self.list_servers(origin)
+        assert execution_context.session_id == session_id
+        assert source_id.endswith('/files')
         self.calls.append((origin, session_id, arguments))
         return {"content": [{"type": "text", "text": "device"}], "structuredContent": {"device": origin.device_id},
                 "_meta": {"complete": True}, "child_session_id": "child"}

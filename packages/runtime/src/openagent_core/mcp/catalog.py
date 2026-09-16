@@ -49,8 +49,8 @@ class PoolCapabilitySource:
 
 
 class InteractiveCapabilitySource:
-    def __init__(self, origin: TurnExecutionOrigin, server_name: str) -> None:
-        self.origin, self.server_name = origin, server_name
+    def __init__(self, origin: TurnExecutionOrigin, server_name: str, source_id: str) -> None:
+        self.origin, self.server_name, self.source_id = origin, server_name, source_id
 
     def _check(self, context: ExecutionContext) -> None:
         current = current_execution_origin()
@@ -77,7 +77,8 @@ class InteractiveCapabilitySource:
     async def call_tool(self, name: str, arguments: dict, context: ExecutionContext) -> Any:
         self._check(context)
         return await self.origin.registry.call_tool(self.origin, self.server_name, name,
-                                                    arguments, session_id=context.session_id)
+                                                    arguments, session_id=context.session_id,
+                                                    execution_context=context, source_id=self.source_id)
 
 
 def register_interactive_capabilities(catalog: CapabilityCatalog, origin: TurnExecutionOrigin,
@@ -98,7 +99,7 @@ def register_interactive_capabilities(catalog: CapabilityCatalog, origin: TurnEx
         source_id = f"{source_namespace}/{name}"
         lease = CapabilityLease(source_id, origin.client_instance_id,
                                 f"{origin.generation}:{origin.auth_epoch}")
-        adapter = InteractiveCapabilitySource(origin, name)
+        adapter = InteractiveCapabilitySource(origin, name, source_id)
         catalog.register(source_id, adapter, adapter, target_label=origin.device_label, lease=lease)
         leases.append(lease)
     return tuple(leases)
