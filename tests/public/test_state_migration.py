@@ -50,6 +50,26 @@ class StateMigration(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ValueError):verify_snapshot(root/'backup')
             finally:writer.close()
 
+    async def test_snapshot_identity_preserves_historical_tenant_and_author(self):
+        from openagent_storage_sqlite.migration import inspect_snapshot_identity
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);source=root/'source';source.mkdir()
+            with sqlite3.connect(source/'state.sqlite3') as db:
+                db.execute('CREATE TABLE sessions_v2(id TEXT,tenant_id TEXT,owner_principal_id TEXT)')
+                db.execute('INSERT INTO sessions_v2 VALUES(?,?,?)',('session','legacy-network','unresolved-author'))
+            @contextlib.asynccontextmanager
+            async def quiesce():yield 'verified-pvc-fence'
+            async def migrate(_):return None
+            await prepare_migration(source,root/'backup',root/'candidate',databases=('state.sqlite3',),quiesce=quiesce,migrate=migrate)
+            before=(root/'backup'/'state.sqlite3').read_bytes()
+            identity=inspect_snapshot_identity(root/'backup','state.sqlite3')
+            self.assertEqual(identity['tenant_ids'],['legacy-network'])
+            self.assertEqual(identity['fence_id'],'verified-pvc-fence')
+            self.assertEqual((root/'backup'/'state.sqlite3').read_bytes(),before)
+            with sqlite3.connect(root/'candidate'/'state.sqlite3') as db:
+                self.assertEqual(db.execute('SELECT * FROM sessions_v2').fetchone(),('session','legacy-network','unresolved-author'))
+            with self.assertRaises(ValueError):inspect_snapshot_identity(root/'backup','../state.sqlite3')
+
     async def test_no_fence_means_no_backup_or_migration(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);(root/'source').mkdir()

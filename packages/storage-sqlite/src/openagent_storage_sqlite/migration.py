@@ -103,6 +103,42 @@ def restore_to_new_directory(snapshot: str|Path,destination: str|Path) -> dict[s
     return manifest
 
 
+def inspect_snapshot_identity(snapshot: str|Path, database: str) -> dict[str,Any]:
+    """Inspect canonical tenant IDs without rewriting historical ownership.
+
+    The product attests which workspace/agent/PVC supplied this verified
+    backup. These opaque storage tenants are not inferred from a client body
+    and are not replaced with whichever user currently opens the product.
+    """
+    root=Path(snapshot).resolve()
+    manifest=verify_snapshot(root)
+    relative=str(_relative(database))
+    if relative not in manifest['databases'] or manifest['files'][relative]['kind']!='sqlite':
+        raise ValueError('Identity inspection requires a declared canonical database')
+    tenants=set();instance=None
+    with closing(sqlite3.connect((root/relative).as_uri()+'?mode=ro&immutable=1',uri=True)) as db:
+        tables=[row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        for table in tables:
+            quoted='"'+table.replace('"','""')+'"'
+            columns={row[1] for row in db.execute('PRAGMA table_info('+quoted+')')}
+            if 'tenant_id' in columns:
+                tenants.update(str(row[0]) for row in db.execute('SELECT DISTINCT tenant_id FROM '+quoted+' WHERE tenant_id IS NOT NULL') if row[0])
+        if 'operational_storage_state' in tables:
+            row=db.execute('SELECT db_instance_id FROM operational_storage_state WHERE singleton_id=1').fetchone()
+            instance=str(row[0]) if row is not None else None
+        # An empty installation can still have an established canonical
+        # namespace that will be reused by its legacy projection adapter.
+        if not tenants:
+            if 'network' in tables:
+                row=db.execute("SELECT network_id FROM network WHERE network_id IS NOT NULL AND network_id<>'' LIMIT 1").fetchone()
+                if row:tenants.add(str(row[0]))
+            if not tenants and instance:tenants.add('installation:'+instance)
+    verify_snapshot(root)
+    return {'tenant_ids':sorted(tenants),'db_instance_id':instance,
+            'backup_sha256':_digest(root/MANIFEST),'fence_id':manifest['fence_id'],
+            'database_sha256':manifest['files'][relative]['sha256']}
+
+
 async def prepare_migration(source: str|Path,backup: str|Path,candidate: str|Path,*,databases: tuple[str,...],quiesce,migrate):
     """Fence via a trusted product context manager, back up, then migrate a copy.
 
