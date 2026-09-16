@@ -144,7 +144,11 @@ async def _elevenlabs_stream(
     )
 
     try:
-        ws = await websockets.connect(url, max_size=None)
+        import inspect
+        # New websockets versions inherit proxy credentials from the process
+        # unless disabled; older versions do not implement automatic proxies.
+        options = {"proxy": None} if "proxy" in inspect.signature(websockets.connect).parameters else {}
+        ws = await websockets.connect(url, max_size=None, **options)
     except Exception as e:  # noqa: BLE001
         elog(
             "tts.elevenlabs_ws.connect_failed",
