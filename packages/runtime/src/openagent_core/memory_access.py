@@ -79,7 +79,7 @@ def memory_resource(hit: Mapping[str,Any], tenant_id: str) -> ResourceRef | None
             kind,identifier='vault-note',hit.get('path')
             if (not isinstance(identifier,str) or PurePosixPath(identifier).is_absolute()
                 or PureWindowsPath(identifier).is_absolute() or '\\' in identifier
-                or any(part in {'.','..'} for part in identifier.split('/'))):
+                or any(part in {'','.','..'} for part in identifier.split('/'))):
                 return None
         elif kind=='session': identifier=hit.get('session_id')
         elif kind=='skill': identifier=hit.get('name')

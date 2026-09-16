@@ -2,6 +2,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+import sqlite3
 
 from openagent_core import PrincipalRef, ExecutionContext, RunRequest
 from openagent_core.memory_access import CanonicalHistorySearch, HistoryAccess
@@ -23,7 +24,7 @@ class RuntimeSearchOutbox(unittest.IsolatedAsyncioTestCase):
                 request = RunRequest('run', 'session', 'run', 'orchid question')
                 # A failing outbox write must roll back the accepted message and run.
                 store.connection.execute("CREATE TRIGGER fail_search BEFORE INSERT ON search_outbox BEGIN SELECT RAISE(ABORT, 'fixture'); END")
-                with self.assertRaises(Exception):
+                with self.assertRaises(sqlite3.IntegrityError):
                     await store.accept(request, context)
                 self.assertIsNone(await store.get('run'))
                 self.assertEqual(store.connection.execute('SELECT count(*) FROM session_messages').fetchone()[0], 0)
