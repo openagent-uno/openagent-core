@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from openagent_core.capabilities import CapabilityCatalog, CapabilityUnavailable
-from openagent_core.contracts import ExecutionContext, PrincipalRef
+from openagent_core.contracts import ExecutionContext, PrincipalRef, require_authorized
 from openagent_core.runtime import execution_scope
 from openagent_core.core.execution_origin import TurnExecutionOrigin, execution_origin_scope
 from openagent_core.core.paths import set_agent_dir
@@ -56,6 +56,22 @@ class Registry:
                 "_meta": {"complete": True}, "child_session_id": "child"}
 
 
+class RecordingRuntime(SimpleNamespace):
+    def __init__(self, catalog, path, pool):
+        super().__init__(capabilities=catalog, settings=SimpleNamespace(workspace=path),
+            services=SimpleNamespace(executor=SimpleNamespace(agent=SimpleNamespace(capability_pool=pool)), store=self))
+        self.events = []
+
+    async def authorize(self, context, action, resource, *, audience=()):
+        await require_authorized(self.capabilities.authorizer, context, action, resource, audience=audience)
+
+    async def begin_tool(self, run_id, call_id, descriptor, arguments):
+        self.events.append(("begin", run_id, call_id, descriptor, arguments))
+
+    async def finish_tool(self, run_id, call_id, **payload):
+        self.events.append(("finish", run_id, call_id, payload))
+
+
 class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = TemporaryDirectory()
@@ -71,7 +87,7 @@ class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
         self.pool._connected = True
         self.pool._toolkit_by_name = {name: self.toolkit(name) for name in ("left", "right")}
         self.pool.bind_capability_catalog(self.catalog)
-        self.runtime.services = SimpleNamespace(executor=SimpleNamespace(agent=SimpleNamespace(capability_pool=self.pool)))
+        self.runtime = RecordingRuntime(self.catalog, self.path, self.pool)
 
     async def asyncTearDown(self):
         await self.pool.close_all()
@@ -212,8 +228,7 @@ mcp.run(transport="stdio")
 ''')
         pool = MCPPool.from_config([{"name": "stdio", "command": [sys.executable, str(fixture)]}], include_defaults=False)
         catalog = CapabilityCatalog(self.policy)
-        runtime = SimpleNamespace(capabilities=catalog, settings=self.runtime.settings,
-            services=SimpleNamespace(executor=SimpleNamespace(agent=SimpleNamespace(capability_pool=pool))))
+        runtime = RecordingRuntime(catalog, self.path, pool)
         try:
             await pool.connect_all()
             pool.bind_capability_catalog(catalog)
@@ -267,6 +282,33 @@ mcp.run(transport="stdio")
             MCPPool([_ServerSpec("same"), _ServerSpec("same")])
         with self.assertRaises(ValueError):
             MCPPool.from_config([{"builtin": "not-a-module"}], include_defaults=False)
+
+    async def test_trusted_product_resolver_survives_reload_and_can_exclude_rows(self):
+        class DB:
+            async def list_mcps(self, **kwargs):
+                return [{"name":"managed", "kind":"custom", "command":["untrusted"]},
+                        {"name":"retired", "kind":"builtin", "builtin_name":"retired"}]
+        def resolve(row, db_path):
+            if row['name']=='retired': return False
+            return {'name':'managed', 'in_process':True, 'adapter_module':'trusted.product.module'}
+        pool=await MCPPool.from_db(DB(),host_spec_resolver=resolve)
+        self.assertEqual([(s.name,s.adapter_module) for s in pool.specs], [('managed','trusted.product.module')])
+        rebuilt=await pool.rebuild_specs()
+        self.assertEqual([(s.name,s.adapter_module) for s in rebuilt], [('managed','trusted.product.module')])
+        self.assertIsNone(rebuilt[0].command)
+
+    async def test_trusted_ownership_change_revokes_existing_handles(self):
+        catalog=CapabilityCatalog(self.policy,allow_dynamic=True)
+        pool=MCPPool([])
+        pool._toolkit_by_name={'installed':self.toolkit('installed')}
+        pool.bind_capability_catalog(catalog)
+        before=(await catalog.discover(self.context))[0]
+        pool.set_catalog_user_sources({'installed'})
+        after=(await catalog.discover(self.context))[0]
+        self.assertNotEqual(before.tool_ref,after.tool_ref)
+        with self.assertRaises(CapabilityUnavailable):
+            await catalog.call_tool(before.tool_ref,{},self.context)
+        await catalog.remove('installed',self.context)
 
 
 if __name__ == "__main__":

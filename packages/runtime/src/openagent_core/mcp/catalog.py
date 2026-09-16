@@ -122,6 +122,17 @@ class PoolCatalogBinding:
         self.user_sources = frozenset(user_sources)
         self.sources: dict[str, PoolCapabilitySource] = {}
 
+    def set_user_sources(self, names) -> None:
+        """Apply a trusted ownership update and invalidate affected handles."""
+        current = frozenset(names)
+        if current and not self.catalog.allow_dynamic:
+            raise PermissionError("This host has a fixed capability catalog")
+        for name in self.user_sources.symmetric_difference(current):
+            if name in self.sources:
+                self.catalog.revoke(name)
+                del self.sources[name]
+        self.user_sources = current
+
     def sync(self) -> None:
         current = {name: toolkit for name, toolkit in self.pool._toolkit_by_name.items()
                    if name != "tool-search"}

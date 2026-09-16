@@ -399,7 +399,7 @@ def _resolve_specs(
     return specs
 
 
-async def _specs_from_db(db: Any, db_path: str | None) -> list[_ServerSpec]:
+async def _specs_from_db(db: Any, db_path: str | None, host_spec_resolver=None) -> list[_ServerSpec]:
     """Translate ``mcps`` table rows into resolved specs.
 
     Each row keeps the same kwargs shape that ``DEFAULT_MCPS`` entries or
@@ -415,6 +415,17 @@ async def _specs_from_db(db: Any, db_path: str | None) -> list[_ServerSpec]:
         kind = row.get("kind")
         name = row.get("name") or ""
         try:
+            if host_spec_resolver is not None:
+                resolved = host_spec_resolver(dict(row), db_path)
+                if inspect.isawaitable(resolved):
+                    resolved = await resolved
+                if resolved is False:
+                    continue
+                if resolved is not None:
+                    if resolved.get("name") != name:
+                        raise ValueError("Host module resolver must preserve the exact source identity")
+                    specs.append(_spec_from_kwargs(dict(resolved)))
+                    continue
             if kind == "default":
                 # Reconstruct the minimal dict shape ``resolve_default_entry``
                 # expects. ``source='yaml-default'`` rows use the builtin
@@ -570,6 +581,7 @@ class MCPPool:
         # ``from_config`` callers (tests) — reload is a no-op in that mode.
         self._db: Any = None
         self._db_path: str | None = None
+        self._host_spec_resolver = None
         # Live process objects for principal-bound management MCPs. They are
         # never serialized into subprocess MCPs; in-process adapters resolve
         # them lazily at call time so pool construction can still precede the
@@ -595,9 +607,17 @@ class MCPPool:
         if self._capability_binding is not None:
             if self._capability_binding.catalog is not catalog:
                 raise ValueError("An MCP pool cannot belong to multiple runtime catalogs")
+            self._capability_binding.set_user_sources(user_sources)
             self._capability_binding.sync()
             return
         self._capability_binding = PoolCatalogBinding(self, catalog, trusted_modules=tuple(trusted_modules), target_label=target_label, user_sources=frozenset(user_sources))
+        self._capability_binding.sync()
+
+    def set_catalog_user_sources(self, names) -> None:
+        """Refresh ownership from the host registry; never infer it from MCP rows."""
+        if self._capability_binding is None:
+            raise RuntimeError("Bind a runtime catalog before updating ownership")
+        self._capability_binding.set_user_sources(names)
         self._capability_binding.sync()
 
     def bind_agent_runtime(self, agent: Any | None) -> None:
@@ -639,6 +659,7 @@ class MCPPool:
         db: Any,
         *,
         db_path: str | None = None,
+        host_spec_resolver=None,
     ) -> "MCPPool":
         """Build a pool from the ``mcps`` table in the DB.
 
@@ -649,10 +670,11 @@ class MCPPool:
         same ``_resolve_specs``-style normalization that ``from_config``
         uses (absolute-path resolution, messaging-token injection).
         """
-        specs = await _specs_from_db(db, db_path)
+        specs = await _specs_from_db(db, db_path, host_spec_resolver)
         pool = cls(specs)
         pool._db = db
         pool._db_path = db_path
+        pool._host_spec_resolver = host_spec_resolver
         return pool
 
     async def rebuild_specs(self) -> list[_ServerSpec]:
@@ -664,7 +686,7 @@ class MCPPool:
         """
         if self._db is None:
             return list(self.specs)
-        return await _specs_from_db(self._db, self._db_path)
+        return await _specs_from_db(self._db, self._db_path, self._host_spec_resolver)
 
     async def reload(self) -> None:
         """Rebuild the pool in-place without a process restart.
