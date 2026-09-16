@@ -363,7 +363,10 @@ class SqliteRuntimeStore:
             metadata.get('deadline_seconds'),tuple(metadata.get('attachments',())),
             metadata.get('model_ref'),metadata.get('steer_run_id'))
         return AcceptedRunRequest(request,PrincipalRef(**context['author']),
-            PrincipalRef(**context['initiator']),PrincipalRef(**context['authority']))
+            PrincipalRef(**context['initiator']),PrincipalRef(**context['authority']),
+            tuple(PrincipalRef(**p) for p in context['audience']),tuple(context.get('scopes',())),
+            context.get('delegation_id'),context.get('ingress_id'),
+            context.get('parent_run_id'),bool(context.get('deferred',False)))
 
     # Public asynchronous operations share one per-instance transaction lane.
     start = _serialized(_start)

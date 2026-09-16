@@ -158,10 +158,17 @@ TERMINAL_STATUSES = frozenset({"success", "failed", "cancelled", "rejected", "in
 
 @dataclass(frozen=True, slots=True)
 class AcceptedRunRequest:
+    """Immutable admission evidence, without reusable credentials or leases."""
     request: RunRequest
     author: PrincipalRef
     initiator: PrincipalRef
     authority: PrincipalRef
+    audience: tuple[PrincipalRef, ...] = ()
+    scopes: tuple[str, ...] = ()
+    delegation_id: str | None = None
+    ingress_id: str | None = None
+    parent_run_id: str | None = None
+    deferred: bool = False
 
 
 @dataclass(frozen=True, slots=True)
