@@ -501,39 +501,27 @@ async def t_index_crlf_incremental(ctx: TestContext) -> None:
 
 @test("vault_gate", "rest: write/read reject path traversal")
 async def t_rest_path_traversal(ctx: TestContext) -> None:
-    import json as _json
-    import openagent_server.gateway.api.vault as V
-
+    from openagent_core.administration import ManagementContext
+    from openagent_core.contracts import PrincipalRef
+    from openagent_core.vault_administration import VaultAdministration
+    class Policy:
+        async def authorize(self, *args, **kwargs): return True
     d, vault, idxp = _mkvault()
-    (vault / "ok.md").write_text(_note(links=[], title="OK"))
-    secret = d / "secret.txt"
-    secret.write_text("TOP SECRET")
-
-    class _GW:
-        def __init__(self, vp): self.vault_path = str(vp)
-        async def broadcast_resource(self, *a, **k): pass
-
-    class _App(dict):
-        pass
-
-    class _Req:
-        def __init__(self, app, match=None, body=None):
-            self.app = app; self.match_info = match or {}; self.query = {}; self._b = body
-        async def json(self): return self._b
-
+    service = VaultAdministration(vault, Policy(), index_path=idxp)
+    context = ManagementContext(PrincipalRef("test", "tenant", "alice"), "agent")
+    secret = d / "secret.txt"; secret.write_text("TOP SECRET")
     try:
-        app = _App(); app["gateway"] = _GW(vault)
-        # traversal read
-        r = await V.handle_read(_Req(app, match={"path": "../secret.txt"}))
-        assert r.status == 400, r.status
-        # traversal write must not escape the vault
-        w = await V.handle_write(_Req(app, match={"path": "../escaped.md"},
-                                      body={"content": "x"}))
-        assert w.status == 400, w.status
+        for operation, path, body in [("read", "../secret.txt", {}),
+                ("write", "../escaped.md", {"content":"x"})]:
+            try:
+                await service.execute(context, operation, path=path, body=body)
+                raise AssertionError("Path traversal was accepted")
+            except ValueError:
+                pass
         assert not (d / "escaped.md").exists()
-        from openagent_core.memory.vault.service import close_all
-        await close_all()
+        assert secret.read_text() == "TOP SECRET"
     finally:
+        await service.close()
         shutil.rmtree(d, ignore_errors=True)
 
 
@@ -548,20 +536,14 @@ async def t_graph_matches_index(ctx: TestContext) -> None:
     where the index breaks them by ``ORDER BY path`` — so ``[[dup]]`` pointed
     at a different note in the picture than in the gate. Both shapes are here.
     """
-    import json as _json
-    import openagent_server.gateway.api.vault as V
-
+    from openagent_core.administration import ManagementContext
+    from openagent_core.contracts import PrincipalRef
+    from openagent_core.vault_administration import VaultAdministration
+    class Policy:
+        async def authorize(self, *args, **kwargs): return True
     d, vault, idxp = _mkvault()
-
-    class _GW:
-        def __init__(self, vp): self.vault_path = str(vp)
-
-    class _App(dict):
-        pass
-
-    class _Req:
-        def __init__(self, app):
-            self.app = app; self.match_info = {}; self.query = {}
+    service = VaultAdministration(vault, Policy(), index_path=idxp)
+    context = ManagementContext(PrincipalRef("test", "tenant", "alice"), "agent")
 
     try:
         (vault / "aaa").mkdir()
@@ -576,9 +558,7 @@ async def t_graph_matches_index(ctx: TestContext) -> None:
         (vault / "_showcase" / "showcase.md").write_text(
             _note(links=["dup"], title="Showcase"))
 
-        app = _App(); app["gateway"] = _GW(vault)
-        resp = await V.handle_graph(_Req(app))
-        graph = _json.loads(resp.body.decode())
+        graph = await service.execute(context, "graph")
         node_ids = {n["id"] for n in graph["nodes"]}
         edges = {(e["source"], e["target"]) for e in graph["edges"]}
 
@@ -586,7 +566,7 @@ async def t_graph_matches_index(ctx: TestContext) -> None:
         assert not any(n.startswith("_showcase/") for n in node_ids), sorted(node_ids)
 
         # 2. the graph's node set is exactly the index's
-        svc = _service_for(vault, idxp)
+        svc = service._service()
         idx = await svc._ensure_index()
         await asyncio.to_thread(idx.sync, False)
         assert node_ids == {n.path for n in idx.all_notes()}, node_ids
@@ -595,8 +575,7 @@ async def t_graph_matches_index(ctx: TestContext) -> None:
         assert ("aaa/openagent_core.md", idx.resolve_link("dup")) in edges, edges
         assert idx.resolve_link("dup") == "aaa/dup.md", idx.resolve_link("dup")
 
-        from openagent_core.memory.vault.service import close_all
-        await close_all()
+        await service.close()
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -932,8 +911,10 @@ async def t_vault_dream(ctx: TestContext) -> None:
         await svc._ensure_git()  # existing repo so dream fixes are real commits
         # a messy note: missing frontmatter + an orphan + a broken link
         (vault / "e" / "messy.md").write_text("just notes about [[ghost]]\n")
-        res = await svc.maintenance(apply_fixes=True, regenerate=True)
-        commit = await svc.autocommit(origin={"kind": "dream", "tool": "vault_dream"})
+        origin = {"kind": "dream", "tool": "vault_dream"}
+        res = await svc.maintenance(apply_fixes=True, regenerate=True, origin=origin)
+        commit = res["commit"]
+        assert await svc.autocommit(origin=origin) is None, "maintenance must commit its own effects"
         # mechanical fixes applied (frontmatter scaffolded) + suggestions surfaced
         assert res["files_changed"] >= 1, res
         rules = {s["rule"] for s in res["open_suggestions"]}
@@ -968,7 +949,9 @@ async def t_vault_history_ops(ctx: TestContext) -> None:
         await svc.write_note("e/a.md", fm.format(t="A", b="EDITED"),
                              origin={"kind": "chat", "session": "s1"})
         log = await svc.git_log(20)
-        assert len(log) == 3, log
+        assert len(log) == 4, log
+        assert log[2]["provenance"].get("session") == "s1", "first write must retain its author"
+        assert log[3]["provenance"].get("action") == "git-init"
         target = log[1]["hash"]  # state where a.md == 'alpha'
 
         # show: files + diff + provenance
@@ -982,13 +965,13 @@ async def t_vault_history_ops(ctx: TestContext) -> None:
         assert r["ok"] and r["changed"], r
         assert (vault / "e" / "a.md").read_text().strip().endswith("alpha")
         log2 = await svc.git_log(20)
-        assert len(log2) == 4, "restore must preserve history (+1 commit)"
+        assert len(log2) == 5, "restore must preserve history (+1 commit)"
         assert log2[0]["provenance"].get("action") == "restore"
 
         # reset: destructive — deletes commits after target
         rr = await svc.reset_to(target)
         assert rr.get("ok") and rr["deleted"] == 2, rr
-        assert len(await svc.git_log(20)) == 2
+        assert len(await svc.git_log(20)) == 3
 
         # ancestor guard: resetting forward to a now-unreachable commit fails
         bad = await svc.reset_to(log[0]["hash"])

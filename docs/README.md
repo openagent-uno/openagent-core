@@ -7,6 +7,7 @@ implementation branch; it is not a qualified release or a production cutover.
 - [Implementation and acceptance ledger](migration/implementation.md)
 - [Uniform capability catalog](tool-catalog.md)
 - [Memory visibility and durable indexing](memory-access.md)
+- [Authorized vault administration](vault-administration.md)
 - [Vault/tool parity evidence](migration/vault-tool-parity.md)
 - [Prompt rule inventory](migration/prompts.md)
 - [Source and Git provenance](migration/sources.json)

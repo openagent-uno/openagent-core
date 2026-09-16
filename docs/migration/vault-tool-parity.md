@@ -62,6 +62,15 @@ authenticated discovery entrypoint and verifies distinct opaque references.
 
 ## Reproduction
 
+The follow-up vault administration extraction repeats all 130 cases successfully
+(`parity-*-vault-administration` evidence). Graph, traversal and frontmatter
+checks now call the public core service shared by both products. Git expectations
+include a separate initial baseline: the first note now retains its own author.
+Dream maintenance commits its own effects and provenance under the mutation lock,
+so a subsequent sweep correctly reports no remaining changes. Five additional
+public service tests and three authenticated GlassPalace HTTP cases cover the
+management API and authorization. See [vault administration](../vault-administration.md).
+
 Use a virtual environment containing the engine, SQLite store, modules, shell
 and standalone gateway dependencies. From the core checkout:
 

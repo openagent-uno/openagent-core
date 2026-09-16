@@ -267,11 +267,12 @@ async def vault_dream() -> dict:
     suggestions by writing/merging/linking notes, then call vault_gate (or
     vault_dream) again to confirm the vault improved."""
     svc = get_service()
-    summary = await svc.maintenance(apply_fixes=True, regenerate=True)
+    origin = {**_origin("vault_dream"), "kind": "dream"}
+    summary = await svc.maintenance(apply_fixes=True, regenerate=True, origin=origin)
     try:
-        # Commit the mechanical fixes (the derived files were committed by the
-        # pass) with dream provenance.
-        await svc.autocommit(origin={**_origin("vault_dream"), "kind": "dream"})
+        # Capture only remaining external edits; maintenance committed its
+        # own changes under the mutation lock with the same dream provenance.
+        await svc.autocommit(origin=origin)
     except Exception:  # noqa: BLE001
         pass
     return summary

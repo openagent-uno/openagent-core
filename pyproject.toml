@@ -12,7 +12,7 @@ license = "MIT"
 dependencies = []
 
 [project.optional-dependencies]
-engine = ["mcp>=1.27,<2", "pyyaml>=6", "aiosqlite>=0.20", "sqlalchemy[asyncio]>=2", "croniter>=2", "jinja2>=3.1", "httpx>=0.24", "packaging>=21", "pydantic>=2", "jsonschema>=4.20", "rich>=13", "certifi", "docstring-parser>=0.16"]
+engine = ["mcp>=1.27,<2", "pyyaml>=6", "aiosqlite>=0.20", "sqlalchemy[asyncio]>=2", "croniter>=2", "jinja2>=3.1", "httpx>=0.24", "packaging>=21", "pydantic>=2", "jsonschema>=4.20", "regex>=2024.11.6", "rich>=13", "certifi", "docstring-parser>=0.16"]
 providers = ["openai>=1", "anthropic>=0.34", "google-genai>=1", "groq>=0.4"]
 audio = ["litellm>=1.60,<2"]
 retrieval = ["numpy>=1.24", "pypdf>=5"]

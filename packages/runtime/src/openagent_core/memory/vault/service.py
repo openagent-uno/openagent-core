@@ -236,11 +236,10 @@ class VaultService:
                          rel, self.config.excluded_folders,
                          self.config.raw_prefixes, self.config.journal_root))
             if gated:
-                try:
-                    content, errors, warnings, applied = await self._enforce_write(
-                        rel, content, is_new=not existed)
-                except Exception:  # noqa: BLE001 — a validator fault must never block
-                    errors = []
+                # A failed validator cannot authorize an unvalidated write.
+                # Hosts retain the submitted text and return a retryable error.
+                content, errors, warnings, applied = await self._enforce_write(
+                    rel, content, is_new=not existed)
                 if errors:
                     return {"ok": False, "blocked": True, "existed": existed,
                             "errors": errors, "warnings": warnings}
@@ -249,6 +248,9 @@ class VaultService:
                 abs_path.parent.mkdir(parents=True, exist_ok=True)
                 abs_path.write_text(content)
 
+            # Capture the pre-change baseline first. Initialising Git after
+            # writing would attribute the first note to repository setup.
+            await self._ensure_git()
             await asyncio.to_thread(_write)  # critical: the note must land
             try:
                 await self.index_note(rel, content)
@@ -268,6 +270,7 @@ class VaultService:
         abs_path = self.vault_root / rel
         async with self._mutation_lock:
             existed = abs_path.exists()
+            await self._ensure_git()
             if existed:
                 await asyncio.to_thread(abs_path.unlink)
             await self.deindex_note(rel)
@@ -436,6 +439,7 @@ class VaultService:
             # Hold the lock across the file writes AND the commit so the
             # autocommit sweep can't grab the fixes first.
             async with self._mutation_lock:
+                await self._ensure_git()
                 fix = await asyncio.to_thread(
                     apply_mechanical_fixes, self.vault_root, before, idx, True)
                 if fix.files_changed:
@@ -467,6 +471,7 @@ class VaultService:
             (sc_dir / "showcase.md").write_text(showcase)
 
         async with self._mutation_lock:
+            await self._ensure_git()
             await asyncio.to_thread(_write)
             commit = await self.commit_paths(
                 ["llms.txt", "_showcase/showcase.md"],
@@ -486,11 +491,12 @@ class VaultService:
         + canon workspace + templates). Idempotent."""
         from openagent_core.memory.vault.scaffold import scaffold
         async with self._mutation_lock:
+            await self._ensure_git()
             res = await asyncio.to_thread(scaffold, self.vault_root, self.journal_root)
             await self.sync()
             if res.get("created"):
                 res["commit"] = await self.commit_paths(
-                    [c.rstrip("/") for c in res["created"]],
+                    [c for c in res["created"] if not c.endswith("/")],
                     "vault: scaffold folder system", origin or {"kind": "init"})
         return res
 
@@ -571,6 +577,7 @@ class VaultService:
             return {"rewritten": rewritten}
 
         async with self._mutation_lock:
+            await self._ensure_git()
             result = await asyncio.to_thread(_apply)
             # 3. Reconcile the index (picks up the moved files + rebuilds graph).
             await asyncio.to_thread(idx.sync, False)
@@ -601,26 +608,37 @@ class VaultService:
     # ── dream-mode maintenance ────────────────────────────────────────
 
     async def maintenance(self, apply_fixes: bool = True,
-                          regenerate: bool = True) -> dict:
+                          regenerate: bool = True,
+                          origin: dict | None = None) -> dict:
         """One maintenance pass for dream mode: reconcile the index, run the
         gate, mechanically fix what code can, regenerate derived artifacts,
         and return a summary (the curator turns this into a dream-log)."""
         idx = await self._ensure_index()
         await asyncio.to_thread(idx.sync, False)
         report = await asyncio.to_thread(run_gate, idx, self.config)
-        fix = await asyncio.to_thread(
-            apply_mechanical_fixes, self.vault_root, report, idx, apply_fixes
-        )
+        commit = None
+        maintenance_origin = origin or {"kind": "doctor", "action": "maintenance"}
+        async with self._mutation_lock:
+            if apply_fixes:
+                await self._ensure_git()
+            fix = await asyncio.to_thread(
+                apply_mechanical_fixes, self.vault_root, report, idx, apply_fixes
+            )
+            if apply_fixes and fix.files_changed:
+                commit = await self.commit_paths(
+                    [f["path"] for f in fix.fixed], "vault: maintenance auto-fix",
+                    maintenance_origin)
         after = None
         if apply_fixes and fix.files_changed:
             await asyncio.to_thread(idx.sync, False)
             after = await asyncio.to_thread(run_gate, idx, self.config)
-        derived = await self.regenerate_derived() if regenerate else None
+        derived = await self.regenerate_derived(origin=maintenance_origin) if regenerate else None
         final = after or report
         return {
             "before": report.summary_line(),
             "after": final.summary_line(),
             "files_changed": fix.files_changed,
+            "commit": commit,
             "fixes": fix.fixed,
             "open_suggestions": fix.suggestions[:50],
             "open_suggestion_count": len(fix.suggestions),

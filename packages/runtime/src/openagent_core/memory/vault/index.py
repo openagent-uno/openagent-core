@@ -298,10 +298,11 @@ class VaultIndex:
 
     def _walk_md(self) -> Iterator[Path]:
         for dirpath, dirnames, filenames in os.walk(self.vault_root):
-            dirnames[:] = [d for d in dirnames if d not in _PRUNE_DIRS]
+            dirnames[:] = [d for d in dirnames if d not in _PRUNE_DIRS and not (Path(dirpath) / d).is_symlink()]
             for fn in filenames:
-                if fn.lower().endswith(".md"):
-                    yield Path(dirpath) / fn
+                path = Path(dirpath) / fn
+                if fn.lower().endswith(".md") and not path.is_symlink():
+                    yield path
 
     def sync(self, force: bool = False) -> SyncStats:
         """Reconcile the index with the files on disk. Only changed files are

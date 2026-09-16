@@ -481,7 +481,15 @@ async def t_gateway_uses_the_one_parser(ctx: TestContext) -> None:
     the whole note — while ``_FrontmatterLoader`` reads it and lets
     ``date_format`` report the date, which is the rule that names it.
     """
-    from openagent_server.gateway.api.vault import _parse_frontmatter
+    from openagent_core.vault_administration import VaultAdministration
+    import tempfile
+    from pathlib import Path
+    def _parse_frontmatter(content):
+        with tempfile.TemporaryDirectory() as root:
+            vault = Path(root)
+            (vault / "note.md").write_text(content)
+            value = VaultAdministration(vault, None)._read("note.md")
+            return value["frontmatter"], value["body"]
 
     # A note the OLD parser blanked completely.
     meta, body = _parse_frontmatter(
@@ -516,9 +524,9 @@ async def t_gateway_uses_the_one_parser(ctx: TestContext) -> None:
     import ast
     import inspect
 
-    import openagent_server.gateway.api.vault as gv
+    import textwrap
 
-    tree = ast.parse(inspect.getsource(gv._parse_frontmatter))
+    tree = ast.parse(textwrap.dedent(inspect.getsource(VaultAdministration._read)))
     calls = {
         f"{ast.unparse(n.func)}"
         for n in ast.walk(tree) if isinstance(n, ast.Call)
