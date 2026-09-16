@@ -43,7 +43,10 @@ class PromptContractTests(unittest.TestCase):
     def test_dream_instructions_preserved(self):
         from openagent_core.memory.vault.prompts import DREAM_MODE_PROMPT
         baseline = (ROOT / "tests/fixtures/prompts/dream-v0.21.8.txt").read_text()
-        self.assertEqual(DREAM_MODE_PROMPT, baseline)
+        # Preserve every byte except the explicit protocol migration recorded
+        # in the inventory: the in-process scheduler has no transport prefix.
+        adapted = baseline.replace("scheduler_list_scheduled_tasks", "list_scheduled_tasks")
+        self.assertEqual(DREAM_MODE_PROMPT, adapted)
         manifest = json.loads((ROOT / "docs/migration/prompt-rule-inventory.json").read_text())
         self.assertEqual(" ".join(baseline.split()), " ".join(
             " ".join(row["behavior"] for row in manifest["maintenance_rules"]).split()))

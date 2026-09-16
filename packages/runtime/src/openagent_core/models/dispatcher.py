@@ -349,7 +349,6 @@ async def _arun_runtime_collect(
         name = getattr(tc, "tool_name", None)
         if name:
             tools_used.append(str(name))
-        vault_recall.record_tool(name, getattr(tc, "tool_args", None))
         tool_trace.record_execution(tc)
         if on_delegate is not None:
             member_id = _extract_delegated_member_id(tc)
@@ -601,14 +600,8 @@ async def _arun_runtime_stream(
                 await _emit_status(tool, phase="started")
             elif isinstance(event, tool_complete_event_types):
                 tool = getattr(event, "tool", None)
-                # Vault recall on the TEAM streaming path. A delegated member
-                # reading a note counts: it is the same vault (§4 — a child
-                # session "shares the parent's world"), and the note informed
-                # the turn the parent will be judged on.
-                vault_recall.record_tool(
-                    getattr(tool, "tool_name", None),
-                    getattr(tool, "tool_args", None),
-                )
+                # Recall is recorded by the authorized capability catalog;
+                # a provider event alone proves neither provenance nor success.
                 tool_trace.record_execution(tool)
                 await _emit_status(tool)
                 for marker in _output_media_markers(

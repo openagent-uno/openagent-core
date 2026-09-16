@@ -149,8 +149,10 @@ async def t_no_body_in_sink(ctx: TestContext) -> None:
 
     sink, token = vr.open_sink()
     try:
-        vr.record_tool("vault_write_note", {"path": "a.md", "content": body})
-        vr.record_tool("vault_read_note", {"path": "Real/note.md"})
+        vr.record_tool("vault_write_note", {"path": "a.md", "content": body},
+                       semantics=vr.VaultToolSemantics("write", "path"), result={"ok": True})
+        vr.record_tool("vault_read_note", {"path": "Real/note.md"},
+                       semantics=vr.VaultToolSemantics("read", "path", True), result={"ok": True})
         recorded = vr.recorded_paths(sink)
     finally:
         vr.close_sink(token)
@@ -184,7 +186,8 @@ async def t_dedupe(ctx: TestContext) -> None:
     sink, token = vr.open_sink()
     try:
         for _ in range(5):
-            vr.record_tool("vault_read_note", {"path": "a.md"})
+            vr.record_tool("vault_read_note", {"path": "a.md"},
+                           semantics=vr.VaultToolSemantics("read", "path", True), result={"ok": True})
         assert vr.recorded_paths(sink) == {"a.md": "vault_read_note"}
     finally:
         vr.close_sink(token)
@@ -303,6 +306,25 @@ class _FakeRuntime:
         note, fail, hang = self._note, self._fail, self._hang
 
         async def _gen():
+            # Use the real public catalog and trusted registration observer.
+            # The provider event below cannot itself attest a successful read.
+            from openagent_core.capabilities import CapabilityCatalog, FunctionSource, ToolDefinition
+            from openagent_core.contracts import ExecutionContext, PrincipalRef
+            from openagent_core.core.vault_recall import observe_vault_effect
+            class Policy:
+                async def authorize(self, context, action, resource, *, audience=()):
+                    return audience == (context.initiator,)
+            async def read(arguments, context):
+                return {"content": [{"type": "text", "text": "Temporary fixture note"}]}
+            effects = frozenset({"vault.read", "vault.recall.path"})
+            source = FunctionSource((ToolDefinition("read", "Read fixture", {}, effects),), {"read": read})
+            catalog = CapabilityCatalog(Policy(), observers=(observe_vault_effect,))
+            catalog.register("vault", source, source, target_label="Test memory",
+                             trusted_effects={"read": effects})
+            principal = PrincipalRef("test", "fixture", "reader")
+            context = ExecutionContext(principal, principal, principal, "fixture-session", "fixture-agent", (principal,))
+            reference = (await catalog.discover(context))[0].tool_ref
+            await catalog.call_tool(reference, {"path": note}, context, call_id="recall")
             yield ToolCallCompletedEvent(
                 tool=ToolExecution(
                     tool_name="vault_read_note", tool_args={"path": note},

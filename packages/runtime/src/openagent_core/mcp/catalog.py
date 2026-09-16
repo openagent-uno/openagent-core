@@ -147,9 +147,19 @@ class PoolCatalogBinding:
                 continue
             effects = {}
             spec = specs.get(name)
-            if name == "vault" and name in self.trusted_modules and getattr(spec, "trusted_module", None) == "vault":
-                effects = {tool: frozenset({"vault.write"}) for tool in
-                           ("write_note", "patch_note", "vault_write_note", "vault_patch_note")}
+            if (name in {"vault", "vault-gate"} and "vault" in self.trusted_modules
+                    and getattr(spec, "trusted_module", None) == name):
+                from openagent_core.core.vault_recall import vault_tool_semantics
+                from .servers.tool_search.adapters import _functions_dict
+                for tool in _functions_dict(toolkit):
+                    canonical = tool if tool.startswith("vault_") else "vault_" + tool
+                    semantics = vault_tool_semantics(canonical)
+                    if semantics is None:
+                        continue
+                    tags = {"vault." + semantics.operation}
+                    if semantics.recalls_content and semantics.path_argument:
+                        tags.add("vault.recall." + semantics.path_argument)
+                    effects[tool] = frozenset(tags)
             source = PoolCapabilitySource(self.pool, name, toolkit, effects=effects)
             if name in self.user_sources:
                 self.catalog.register_user_source(name, source, source, target_label=self.target_label)

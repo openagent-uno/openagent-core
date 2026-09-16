@@ -186,32 +186,20 @@ def note_paths_from_tool(tool_name: Any, tool_args: Any) -> list[str]:
     return []
 
 
-def record_tool(tool_name: Any, tool_args: Any) -> None:
-    """Note one executed tool call, if it recalled a vault note.
+def record_tool(tool_name: Any, tool_args: Any, *, semantics=None,
+                result: Any = None, call_id: str | None = None) -> None:
+    """Compatibility hook requiring trusted metadata and a successful result.
 
-    A no-op when no sink is open — a provider streaming outside the dispatcher
-    (a test, a direct call) must not blow up on telemetry. Never raises: a
-    bookkeeping miss must cost a counter, never a turn.
+    Provider events and tool names do not establish vault provenance. Existing
+    name-only integrations therefore record nothing. Public runtime execution
+    is recorded exactly once by ``observe_vault_effect`` after catalog dispatch.
+    Direct trusted adapters can supply their registration's semantics explicitly.
     """
-    sink = _SINK.get()
-    if sink is None:
+    from openagent_core.runtime import current_runtime
+    if current_runtime() is not None or not isinstance(semantics, VaultToolSemantics):
         return
-    try:
-        paths = note_paths_from_tool(tool_name, tool_args)
-    except Exception:  # noqa: BLE001
-        return
-    if not paths:
-        return
-    seen: dict[str, str] = sink["paths"]
-    for path in paths:
-        if path in seen:
-            continue
-        if len(seen) >= _MAX_PATHS_PER_RUN:
-            return
-        # First tool to surface a note owns the attribution. Re-reading the
-        # same note twice in a turn is one recall, not two — otherwise a
-        # retry loop would weight a note purely by how badly the turn went.
-        seen[path] = str(tool_name)
+    record_semantic_tool(semantics, tool_args, result,
+                         tool_ref=str(tool_name), call_id=call_id)
 
 
 def recorded_paths(sink: dict | None) -> dict[str, str]:

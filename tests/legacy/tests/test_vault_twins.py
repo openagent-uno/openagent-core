@@ -188,9 +188,12 @@ def _node_available() -> bool:
 def _run_node(cases: list) -> dict:
     """Run the TS write gate over ``cases`` via tsx (the SOURCE, so the
     fixtures can never be graded against a stale dist/ build)."""
-    harness = _VAULT_MCP / "_twins_harness.mjs"
-    harness.write_text(_NODE_HARNESS)
-    try:
+    # The checkout and installed module directory are read-only test inputs.
+    # The temporary harness imports the real source by absolute file URL.
+    with tempfile.TemporaryDirectory(prefix="vault-twins-") as root:
+        harness = Path(root) / "twins.mjs"
+        harness.write_text(_NODE_HARNESS.replace(
+            '"./src/validate.ts"', json.dumps((_VAULT_MCP / "src/validate.ts").as_uri())))
         proc = subprocess.run(
             [str(_VAULT_MCP / "node_modules" / ".bin" / "tsx"), str(harness),
              json.dumps(cases), _TODAY],
@@ -202,8 +205,6 @@ def _run_node(cases: list) -> dict:
             raise AssertionError(
                 f"node harness failed ({proc.returncode}):\n{proc.stderr[-3000:]}")
         return {r["id"]: r for r in json.loads(proc.stdout.strip().splitlines()[-1])}
-    finally:
-        harness.unlink(missing_ok=True)
 
 
 # ── scope: one declaration, three consumers ───────────────────────────

@@ -1974,6 +1974,19 @@
       "describe_tool": "tool_ref returned by list_tools",
       "call_tool": "tool_ref returned by list_tools, plus args",
       "test": "tests/prompts/test_prompt_contract.py::test_uniform_discovery_signatures"
+    },
+    "dream_tool_names": {
+      "scheduler_list_scheduled_tasks": "list_scheduled_tasks",
+      "reason": "Scheduler is an in-process module. Discover its current opaque tool_ref and call the exact listed name; the maintenance action is unchanged.",
+      "test": "tests/legacy/tests/test_prompt_tool_names.py::t_dream_prompt_tools_exist"
+    },
+    "vault_effect_accounting": {
+      "behavior": "Successful reads and saves are attributed by trusted module metadata after authorized catalog dispatch; provider events and matching names cannot claim an effect. Failed saves do not satisfy the reminder.",
+      "test": "tests/parity/test_vault_runtime_regressions.py::ProviderAttribution"
+    },
+    "manual_dream_child": {
+      "behavior": "The real dream mission is an awaited runtime child preserving initiator and authority. It returns the exact durable child identifiers and confirmed terminal state without creating a hidden scheduled definition or a second task-run record.",
+      "test": "tests/parity/test_vault_runtime_regressions.py::ManualDream"
     }
   },
   "maintenance_rules": [
@@ -2170,7 +2183,8 @@
       },
       "behavior": "Look for problems and act on them:\n   - **Broken scheduled tasks**: tasks that errored or produced empty\n     output. Inspect them via the `scheduler` MCP\n     (`scheduler_list_scheduled_tasks`), confirm whether the prompt is\n     still accurate, and fix, reschedule, or retire the task.\n   - **Broken workflows**: workflow runs that failed or stalled.\n     Inspect via the `workflow-manager` MCP and repair the definition,\n     or clearly report the failure if you cannot fix it.\n   - **Recurring errors**: model-call failures, MCP errors, federation\n     or channel errors that repeat. Diagnose the cause, fix what is in\n     your power (a stale path, a misconfigured task), and log what\n     still needs a human.",
       "destination": "memory.vault.prompts.DREAM_MODE_PROMPT",
-      "test": "tests/prompts/test_prompt_contract.py::test_dream_instructions_preserved"
+      "test": "tests/prompts/test_prompt_contract.py::test_dream_instructions_preserved",
+      "adaptation": "protocol_adaptations.dream_tool_names; only the obsolete scheduler transport prefix changes"
     },
     {
       "id": "OA-DREAM-015",

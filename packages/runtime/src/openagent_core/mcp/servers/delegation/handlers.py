@@ -278,145 +278,54 @@ async def delegate_task(
 
 
 async def run_dream_mode() -> dict[str, Any]:
-    """Run a full DREAM-MODE memory-maintenance pass as a SEPARATE session.
+    """Run the full maintenance mission in a durable, authorized child session.
 
-    Unlike ``vault_dream`` (which runs the maintenance INLINE in the current
-    chat), this spawns the real dream-mode routine as its own durable child
-    session — it appears in the sidebar as a scheduled run and as a clickable
-    card in this chat, exactly like the nightly automated firing. The agent's
-    full reasoning lives in that separate session, keeping this conversation
-    clean. Use this whenever the user asks you to "run dream mode".
-
-    Returns ``status`` plus the spawned ``child_session_id`` (the card target).
+    This manual, awaited operation belongs to the current turn. A scheduled
+    overnight firing obtains its own durable delegation from the host. The
+    runtime's child/run events are authoritative for both history and status;
+    invoking this tool never creates or rewrites a scheduled definition.
     """
-    import time
-    import uuid as _uuid
-
-    parent_session_id = _session_id_var.get()
-    db = _db_var.get()
-    agent = _agent_var.get()
-    owner_handle = _owner_handle_var.get()
-
-    if agent is None or db is None:
-        return {
-            "status": "error",
-            "error": (
-                "run_dream_mode called outside an agent turn — the runtime "
-                "didn't install a delegation context."
-            ),
-        }
-
+    import uuid
+    from openagent_core.runtime import current_runtime, current_execution_context, current_run_id
     from openagent_core.core.builtin_tasks import DREAM_MODE_TASK_NAME
     from openagent_core.core.child_session import mint_child_session_id, run_child_session
     from openagent_core.core.identity_context import agent_author
-    from openagent_core.core.server import DREAM_MODE_PROMPT
-    from openagent_core.stream.resource_events import emit_resource_event
+    from openagent_core.memory.vault.prompts import DREAM_MODE_PROMPT
 
-    run_id = _uuid.uuid4().hex[:8]
-    child_sid = mint_child_session_id(
-        "scheduler", {"task_id": DREAM_MODE_TASK_NAME, "run_id": run_id},
-    )
+    runtime, context = current_runtime(), current_execution_context()
+    parent_run_id = current_run_id()
+    parent_session_id = _session_id_var.get()
+    db, agent = _db_var.get(), _agent_var.get()
+    if (runtime is None or context is None or parent_run_id is None
+            or parent_session_id != context.session_id or agent is None or db is None):
+        return {"status": "error", "error": "Dream mode requires a live authorized agent turn"}
 
-    # Best-effort: record a task_runs row so the firing also surfaces in the
-    # task run-history screen. The FK needs the dream-mode scheduled_tasks row
-    # to exist (it's a framework builtin, present when dream mode is enabled);
-    # when absent we just skip the row — the child session alone already gives
-    # the in-chat card and the sidebar entry.
-    task_run_id: str | None = None
-    dream_task_id: str | None = None
-    try:
-        tasks = await db.get_tasks()
-        dream_task = next(
-            (t for t in tasks if t.get("name") == DREAM_MODE_TASK_NAME), None,
-        )
-        if dream_task is None:
-            # Self-heal: dream mode is "toggleable but not removable" (vision
-            # §12), but the row is only seeded when the feature has been enabled
-            # at least once. Create it DISABLED so a manual firing always has a
-            # ``scheduled_tasks`` row to record its ``task_runs`` history on —
-            # otherwise the run never surfaces in the app's "Recent" feed.
-            # Disabled means the scheduler never auto-fires it.
-            try:
-                new_id = await db.add_task(
-                    DREAM_MODE_TASK_NAME, "0 3 * * *", DREAM_MODE_PROMPT,
-                )
-                await db.update_task(new_id, enabled=0, next_run=None)
-                dream_task = await db.get_task(new_id)
-            except Exception as e:  # noqa: BLE001
-                logger.debug("run_dream_mode: dream-mode row self-heal failed: %s", e)
-        if dream_task is not None:
-            dream_task_id = dream_task["id"]
-            task_run_id = await db.add_task_run(
-                task_id=dream_task_id, trigger="manual",
-                run_id=run_id, session_id=child_sid,
-            )
-            # Flip the "Recent" feed live the moment the firing opens — the
-            # same ``scheduled_task`` resource event the cron path broadcasts
-            # from ``Scheduler.run_task``, so a manual run shows up in the
-            # sidebar exactly like a nightly one (not only on the next reload).
-            emit_resource_event("scheduled_task", "updated", dream_task_id)
-    except Exception as e:  # noqa: BLE001
-        logger.debug("run_dream_mode: task_run record skipped: %s", e)
-
-    elog("dream.manual_start", session_id=parent_session_id,
-         child_session_id=child_sid)
-
+    origin_ref = {"task_id": DREAM_MODE_TASK_NAME, "run_id": uuid.uuid4().hex}
+    child_sid = mint_child_session_id("scheduler", origin_ref)
+    elog("dream.manual_start", session_id=parent_session_id, child_session_id=child_sid)
     try:
         result = await run_child_session(
-            agent=agent,
-            db=db,
-            parent_session_id=parent_session_id,
-            origin="scheduler",
-            origin_ref={"task_id": DREAM_MODE_TASK_NAME, "run_id": run_id},
-            title="Dream mode",
-            prompt=DREAM_MODE_PROMPT,
-            owner_client_id=owner_handle,
-            author=agent_author(
-                "Dream mode", agent_name=getattr(agent, "name", None),
-            ),
-            # Stream the firing live so its card / run screen fills in
-            # token-by-token, exactly like the nightly cron firing
-            # (``scheduler.run_task`` also passes ``stream=True``). Without
-            # this the child ran through the non-streaming ``agent.run``
-            # branch and its transcript only appeared once fully finished.
-            stream=True,
+            agent=agent, db=db, parent_session_id=parent_session_id,
+            origin="scheduler", origin_ref=origin_ref, title="Dream mode",
+            prompt=DREAM_MODE_PROMPT, owner_client_id=context.authority.key,
+            author=agent_author("Dream mode", agent_name=getattr(agent, "name", None)),
+            stream=True, session_id=child_sid, inherit_execution_origin=True,
         )
-    except Exception as e:  # noqa: BLE001
-        if task_run_id is not None:
-            try:
-                await db.update_task_run(
-                    task_run_id, status="failed",
-                    finished_at=time.time(), error=f"{type(e).__name__}: {e}",
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            # Flip the feed's run status off "running".
-            emit_resource_event("scheduled_task", "updated", dream_task_id)
-        elog("dream.manual_error", level="error",
-             session_id=parent_session_id, error=str(e))
-        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
-
-    if task_run_id is not None:
-        try:
-            await db.update_task_run(
-                task_run_id, status="success",
-                finished_at=time.time(), output=(result.text or "")[:2000],
-            )
-        except Exception:  # noqa: BLE001
-            pass
-        # Re-broadcast so the feed picks up the terminal status.
-        emit_resource_event("scheduled_task", "updated", dream_task_id)
+        children = await runtime.children(parent_run_id, context)
+        child = next((row for row in children if row.session_id == result.session_id), None)
+        if child is None or child.status != "success":
+            return {"status": "error", "child_session_id": result.session_id,
+                    "error": "Dream mode did not complete successfully"}
+    except Exception as error:
+        elog("dream.manual_error", level="error", session_id=parent_session_id,
+             error=type(error).__name__)
+        return {"status": "error", "error": "Dream mode could not complete"}
 
     elog("dream.manual_complete", session_id=parent_session_id,
          child_session_id=result.session_id, chars=len(result.text or ""))
-    return {
-        "status": "ok",
-        "child_session_id": result.session_id,
-        "answer": (
-            "Dream mode is running as its own session — open the card above to "
-            "follow along as it works through the vault."
-        ),
-    }
+    return {"status": "ok", "child_session_id": result.session_id,
+            "child_run_id": child.run_id,
+            "answer": "Dream mode completed in its own session; open its card to review the result."}
 
 
 async def list_delegatable_models() -> dict[str, Any]:

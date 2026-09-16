@@ -160,6 +160,12 @@ def _registered_keys_by_server() -> tuple[dict[str, set[str]], list[str]]:
         pfx = _safe_prefix(name) + "_"
         by_server[name] = {pfx + t for t in _TS_TOOL_NAME.findall(src.read_text())}
 
+    # 4. Device tools are an independently installed package supplied by the
+    # host. Inspect its public manifest, without starting a process or device
+    # host, so extraction does not hide a misspelt shell name from the test.
+    from openagent_shell import ShellServer
+    by_server["shell"] = {tool.name for tool in ShellServer.manifest.tools}
+
     return by_server, notes
 
 
@@ -168,6 +174,7 @@ def _registered_tool_keys() -> tuple[set[str], list[str]]:
     :func:`_registered_keys_by_server` plus the runtime-injected tools.
     """
     by_server, notes = _registered_keys_by_server()
+
     keys: set[str] = set(_RUNTIME_TOOLS)
     for server_keys in by_server.values():
         keys |= server_keys
@@ -309,14 +316,13 @@ def _counter_example_names(text: str) -> dict[str, list[int]]:
 def _resolves(name: str, keys: set[str]) -> bool:
     """True if ``name`` is usable as-typed.
 
-    Two accepted shapes, mirroring ``tool_search``'s ``_candidate_names``:
+    Two accepted shapes for descriptive prose (never invocation routing):
       * the exact registered key (``vault_write_note``, ``shell_exec``);
-      * a bare leaf the resolver repairs by adding a server prefix
+      * a bare leaf documenting a registered domain-qualified name
         (``patch_note`` → ``vault_patch_note``), which the prompt uses
         legitimately in prose.
-    A DOUBLED prefix (``shell_shell_exec``) is deliberately NOT accepted:
-    the resolver forgives it, but the prompt's own rule is "copy the
-    registered key verbatim", so advertising one is still a defect.
+    Actual invocation requires an opaque reference discovered in the current
+    context. Neither a bare name nor a doubled prefix is a routing alias.
     """
     if name in keys:
         return True
@@ -407,6 +413,25 @@ async def t_inlined_tool_lists_are_complete(_ctx: TestContext) -> None:
 
     by_server, notes = _registered_keys_by_server()
 
+    from openagent_core import (CapabilityCatalog, ExecutionContext, FunctionSource,
+                                PrincipalRef, Runtime, RuntimeServices, RuntimeSettings, ToolDefinition)
+    from openagent_core.mcp.pool import MCPPool
+    from openagent_core.mcp.servers.tool_search.adapters import _list_scoped_tools_impl
+    from openagent_core.runtime import execution_scope
+    class PrivatePolicy:
+        async def authorize(self, context, action, resource, *, audience=()):
+            return audience == (context.initiator,)
+    async def discovery_only(arguments, context):
+        raise AssertionError("This fixture must only inspect the registered contract")
+    policy = PrivatePolicy()
+    catalog = CapabilityCatalog(policy)
+    pool = MCPPool([])
+    pool.bind_capability_catalog(catalog)
+    principal = PrincipalRef("fixture", "tenant", "alice")
+    context = ExecutionContext(principal, principal, principal, "s", "agent", (principal,))
+    runtime = Runtime(RuntimeSettings("agent", _ctx.test_dir),
+                      RuntimeServices(None, None, policy, catalog))
+
     # NOTE: deliberately no exact tool-COUNT pin here, unlike the version
     # of this test that guarded the hand-written list. That pin existed so
     # a newly-registered tool couldn't be silently missing from the prose;
@@ -443,6 +468,19 @@ async def t_inlined_tool_lists_are_complete(_ctx: TestContext) -> None:
             f"the rendered MCP catalog omits registered {server} tool(s): "
             f"{missing}. The model can only copy a key it has seen."
         )
+
+        # The effective model API delivers an opaque reference alongside each
+        # exact name. This checks the same authenticated discovery entrypoint
+        # used by tool_search, not only the compatibility prompt renderer.
+        source = FunctionSource(tuple(ToolDefinition(name, "Real registration", {}) for name in sorted(real)),
+                                {name: discovery_only for name in real})
+        catalog.register(server, source, source, target_label=server)
+        with execution_scope(runtime, context, "discovery-only"):
+            discovered = await _list_scoped_tools_impl(pool, server)
+        assert {tool["name"] for tool in discovered} == real
+        refs = {tool["tool_ref"] for tool in discovered}
+        assert len(refs) == len(real) and not refs.intersection(real)
+        assert all(not ref.startswith(("client:", "server:")) for ref in refs)
 
 
 @test("prompt_tool_names", "the counter-example keys are still genuinely wrong")
