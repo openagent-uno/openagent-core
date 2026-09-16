@@ -1,7 +1,7 @@
 """Programmatic Tool Calling (PTC) — the ``run_python`` tool.
 
 The model writes a Python script that reaches the agent's OWN tools through a
-local RPC bridge (``call_tool(server, tool, args)``), the script runs on the
+local RPC bridge (``call_tool(tool_ref, args)``), the script runs on the
 sandbox exec backend, and only its stdout returns to the model. This collapses
 a multi-tool pipeline (fan-out → filter → aggregate) into ONE model turn: the
 per-call round-trips happen in code, not as separate model steps.
@@ -12,7 +12,7 @@ inert — the ``ptc`` builtin spec is never seeded (see ``config_gated_mcp_entri
 path stay byte-identical to a build without this feature.
 
 The bridge can only reach tools the agent already has: the RPC handler dispatches
-through ``tool_search.adapters._call_tool_impl`` (the same entrypoint the
+through ``tool_search.adapters._call_scoped_tool_impl`` (the same entrypoint the
 ``tool_search_call_tool`` tool uses), so there is no privilege escalation and
 dry-run stamping propagates for free.
 """

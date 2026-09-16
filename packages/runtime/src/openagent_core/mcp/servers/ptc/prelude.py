@@ -3,7 +3,7 @@
 Two artefacts land in the per-run tmpdir:
 
   * ``openagent_tools.py`` — a stdlib-only bridge MODULE (:data:`_BRIDGE_MODULE`)
-    exposing ``call_tool(server, tool, args)``. It reads ``OPENAGENT_PTC_SOCKET``
+    exposing ``call_tool(tool_ref, args)``. It reads ``OPENAGENT_PTC_SOCKET``
     and ``OPENAGENT_PTC_TOKEN`` from the environment and does one locked,
     blocking newline-delimited-JSON round-trip over the Unix socket for each
     call. The gateway process answers on the other end (see ``handlers``).
@@ -27,7 +27,7 @@ import os
 _BRIDGE_MODULE = r'''"""Auto-generated OpenAgent PTC bridge — do not edit.
 
 Reaches the agent's own tools over a local RPC socket. Import is injected for
-you, so a PTC script can just call ``call_tool(server, tool, args)``.
+you, so a PTC script can just call ``call_tool(tool_ref, args)``.
 """
 import json
 import os
@@ -43,17 +43,17 @@ class PtcError(RuntimeError):
     """Raised when a call_tool round-trip fails (transport or tool error)."""
 
 
-def call_tool(server, tool, args=None):
+def call_tool(tool_ref, args=None):
     """Invoke one of the agent's tools and return its JSON-coerced result.
 
-    ``server`` / ``tool`` are the same names you would pass to
+    ``tool_ref`` is the same opaque reference you would pass to
     ``tool_search_call_tool``; ``args`` is a dict of tool arguments. Raises
     ``PtcError`` on an unknown tool, a rejected call, or a transport failure.
     """
     if not _SOCK or not _TOKEN:
         raise PtcError("PTC bridge is not configured (no socket/token in env)")
     payload = json.dumps(
-        {"token": _TOKEN, "server": server, "tool": tool, "args": args or {}}
+        {"token": _TOKEN, "tool_ref": tool_ref, "args": args or {}}
     ) + "\n"
     with _LOCK:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -88,7 +88,7 @@ _DOCKER_BRIDGE_MODULE = r'''"""Auto-generated OpenAgent PTC bridge (docker) — 
 
 Reaches the agent's own tools over request/response files in a per-run dir that
 a host-side poller services. Import is injected for you, so a PTC script can just
-call ``call_tool(server, tool, args)``.
+call ``call_tool(tool_ref, args)``.
 """
 import json
 import os
@@ -108,10 +108,10 @@ class PtcError(RuntimeError):
     """Raised when a call_tool round-trip fails (transport or tool error)."""
 
 
-def call_tool(server, tool, args=None):
+def call_tool(tool_ref, args=None):
     """Invoke one of the agent's tools and return its JSON-coerced result.
 
-    ``server`` / ``tool`` are the same names you would pass to
+    ``tool_ref`` is the same opaque reference you would pass to
     ``tool_search_call_tool``; ``args`` is a dict of tool arguments. Writes a
     request file and blocks until the host poller writes the matching response
     file. Raises ``PtcError`` on an unknown tool, a rejected call, or a
@@ -125,7 +125,7 @@ def call_tool(server, tool, args=None):
     req_path = os.path.join(_RUNDIR, "req_%d.json" % seq)
     resp_path = os.path.join(_RUNDIR, "resp_%d.json" % seq)
     payload = json.dumps(
-        {"token": _TOKEN, "server": server, "tool": tool, "args": args or {}, "seq": seq}
+        {"token": _TOKEN, "tool_ref": tool_ref, "args": args or {}, "seq": seq}
     )
     tmp = req_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:

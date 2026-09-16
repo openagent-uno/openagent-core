@@ -5,27 +5,15 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-import socket
-import subprocess
 import sys
-import tempfile
-import threading
-import hashlib
 from pathlib import Path
 from typing import Any
 
 import platform
 
-from openagent_host_tools import sidecar_source
-
-from src._frozen import bundle_dir, is_frozen
+from openagent_core._frozen import bundle_dir, is_frozen
 
 logger = logging.getLogger(__name__)
-
-_AGENT_CHROME_PORT_LOCK = threading.Lock()
-_AGENT_CHROME_PORTS: dict[str, tuple[int, Any]] = {}
-_AGENT_CHROME_PORT_MIN = 18800
-_AGENT_CHROME_PORT_COUNT = 1000
 
 if is_frozen():
     # Frozen layout: PyInstaller extracts the source tree at
@@ -48,205 +36,21 @@ else:
     PACKAGE_PARENT_DIR = Path(__file__).resolve().parent.parent.parent
 
 # CRITICAL: ``PACKAGE_PARENT_DIR`` is exported as PYTHONPATH for Python MCP
-# subprocesses so they can ``import src.mcp.servers.*``. It MUST be the
+# subprocesses so they can ``import openagent_core.mcp.servers.*``. It MUST be the
 # directory that *contains* ``src/`` — never ``src/`` itself, since that
-# would expose ``src.mcp`` as a top-level ``mcp`` and shadow the
+# would expose ``openagent_core.mcp`` as a top-level ``mcp`` and shadow the
 # third-party MCP SDK, causing a circular import in src/mcp/client.py.
 
 
-def _native_binary_target() -> str:
-    """Return the canonical host-tools release platform key."""
-    system = platform.system()
-    machine = platform.machine().lower()
-    os_key = {"Darwin": "darwin", "Linux": "linux", "Windows": "win32"}.get(
-        system
-    )
-    arch_key = (
-        "arm64"
-        if machine in ("arm64", "aarch64")
-        else "x64"
-        if machine in ("x86_64", "amd64")
-        else None
-    )
-    if os_key is None or arch_key is None:
-        raise RuntimeError(f"Unsupported native MCP target: {system}/{machine}")
-    return f"{os_key}-{arch_key}"
-
-
-def _resolve_native_binary(name: str) -> str:
-    """Resolve a prebuilt native MCP binary for the host. Returns abs path.
-
-    Resolution order:
-
-    1. **Sidecar** next to ``sys.executable``. In a packaged release the
-       ``openagent`` PyInstaller binary lives at e.g. ``/usr/local/bin/
-       openagent`` and the ``openagent-<name>`` sidecar lives right
-       beside it. This path is deliberately *outside* the PyInstaller
-       archive so its Developer-ID signature on macOS stays intact —
-       PyInstaller strips signatures from nested Mach-O binaries and
-       re-signs them ad-hoc, which makes TCC unable to record a
-       persistent Accessibility / Screen Recording grant. (Observed
-       on v0.6.4: the Accessibility prompt fires but no toggle ever
-       appears in System Settings because the per-build ad-hoc
-       identifier has no stable TCC identity.) See ``openagent.spec``
-       for the matching exclude.
-
-    2. **Bundled** under ``src/mcp/servers/<name>/bin/<target>/``.
-       Used by dev installs that ``pip install -e .`` from source and
-       have run ``bash scripts/build-<name>.sh`` to stage the artifact.
-
-    3. **Cargo build from source**. Only fires when a ``Cargo.toml``
-       exists *and* the host has ``cargo`` available — i.e. a source
-       checkout on a dev machine. Never triggered inside a release
-       build because the sidecar is always present there.
-    """
-    target = _native_binary_target()
-    bin_name = "openagent-" + name + (".exe" if platform.system() == "Windows" else "")
-
-    # 1a. macOS: ``.app`` bundle sidecar next to sys.executable. This is
-    #     the preferred layout on macOS because TCC (Transparency,
-    #     Consent, Control) only triggers permission prompts and
-    #     registers persistent grants for processes that look like a
-    #     proper app bundle. A bare CLI binary, even with a reverse-DNS
-    #     code-sign identifier, silently fails TCC checks when spawned
-    #     by launchd and never appears in Privacy & Security settings.
-    #     Bundle layout inside the signed server app:
-    #     ``Contents/Helpers/openagent-<name>.app/Contents/MacOS/openagent-<name>``.
-    try:
-        if platform.system() == "Darwin":
-            executable_dir = Path(sys.executable).resolve().parent
-            app_binary = (
-                executable_dir.parent
-                / "Helpers"
-                / f"openagent-{name}.app"
-                / "Contents"
-                / "MacOS"
-                / f"openagent-{name}"
-            )
-            if app_binary.is_file():
-                return str(app_binary)
-            # Legacy packages placed the helper app beside the main binary.
-            legacy_app_binary = (
-                executable_dir
-                / f"openagent-{name}.app"
-                / "Contents"
-                / "MacOS"
-                / f"openagent-{name}"
-            )
-            if legacy_app_binary.is_file():
-                return str(legacy_app_binary)
-    except Exception:  # noqa: BLE001 — sys.executable resolution is best-effort
-        pass
-
-    # 1b. Sidecar bare binary next to sys.executable (Linux / Windows,
-    #     or macOS installs from before the .app bundle layout).
-    try:
-        sidecar = Path(sys.executable).resolve().parent / bin_name
-        if sidecar.is_file():
-            return str(sidecar)
-    except Exception:  # noqa: BLE001 — sys.executable resolution is best-effort
-        pass
-
-    # 2. Staged by the versioned openagent-host-tools package.  The server and
-    # local client host must never build subtly different copies of this MCP.
-    source_root = sidecar_source(name)
-    # ``win32-*`` is the public host-tools platform vocabulary. Retain one
-    # legacy ``windows-*`` lookup for source trees staged by older builds.
-    legacy_target = target.replace("win32-", "windows-")
-    candidates = (
-        source_root / "bin" / target / bin_name,
-        source_root / "bin" / legacy_target / bin_name,
-        source_root / "target" / "release" / bin_name,
-    )
-    path = next((candidate for candidate in candidates if candidate.exists()), candidates[0])
-    if path.exists():
-        return str(path)
-
-    # 3. Build from source (dev-machine fallback only).
-    #
-    # SKIP in CI / test runs. A cold ``cargo build --release`` of a native
-    # MCP (e.g. computer-control -> enigo -> wayland-sys/xkbcommon on Linux)
-    # can burn ~60s before it even fails on a bare runner that lacks the
-    # system libs. That is non-fatal (we ``raise FileNotFoundError`` and the
-    # caller skips the optional MCP), but the wall-clock cost alone blows
-    # per-test timeouts (see t_pool_loads_vault). In CI the native binary is
-    # always pre-staged (step 2) or genuinely absent, so building from source
-    # buys nothing — short-circuit straight to the not-found path.
-    _skip_native_build = os.environ.get("OPENAGENT_SKIP_NATIVE_BUILD") or os.environ.get("CI")
-    cargo_toml = source_root / "Cargo.toml"
-    if not _skip_native_build and cargo_toml.exists() and command_exists("cargo"):
-        logger.info("Native MCP '%s' binary missing — building from source...", name)
-        # Non-fatal: the crate can pull system libs (e.g. enigo -> wayland /
-        # xkbcommon on Linux) that a bare CI runner or minimal host lacks. A
-        # failed native build must NOT abort bootstrap / the whole test suite
-        # — we just skip this optional MCP, exactly like the other fallbacks.
-        proc = subprocess.run(
-            ["cargo", "build", "--release"],
-            cwd=source_root,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode != 0:
-            # Raise the same signal as a genuinely-absent binary so the
-            # caller (resolve_builtin_entry -> pool/bootstrap) skips this
-            # optional MCP gracefully instead of getting a ``[None]`` argv.
-            logger.warning(
-                "Native MCP '%s' build failed (skipping this optional MCP): %s",
-                name,
-                (proc.stderr or "").strip()[-500:],
-            )
-            raise FileNotFoundError(
-                f"Native MCP '{name}' build failed; skipping. "
-                f"stderr tail: {(proc.stderr or '').strip()[-300:]}"
-            )
-        built = source_root / "target" / "release" / bin_name
-        if built.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            import shutil as _sh
-            _sh.copy2(built, path)
-            try:
-                path.chmod(0o755)
-            except Exception:  # noqa: BLE001 — chmod harmless on platforms that refuse
-                pass
-            return str(path)
-
-    raise FileNotFoundError(
-        f"Native MCP '{name}' binary not found. Checked:\n"
-        f"  - sidecar: {Path(sys.executable).resolve().parent / bin_name}\n"
-        f"  - bundled: {path}\n"
-        f"Run: bash scripts/build-{name}.sh"
-    )
-
-
 BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
-    "computer-control": {
-        "dir": "computer-control",
-        "native": True,
-        # No DISPLAY env — the Rust binary picks the right backend per OS.
-        "description": (
-            "screen, keyboard, and mouse control on the host. Use for "
-            "GUI tasks on apps without an MCP of their own"
-        ),
-    },
-    "shell": {
-        "in_process": True,
-        "adapter_module": "src.mcp.servers.shell.adapters",
-        "runtime_toolkit_factory": "build_runtime_toolkit",
-        "description": (
-            "execute bash commands on the host, foreground or "
-            "backgrounded. Preferred for file ops, builds, and ad-hoc "
-            "scripts when no specialised MCP fits"
-        ),
-    },
     "tool-search": {
         "in_process": True,
-        "adapter_module": "src.mcp.servers.tool_search.adapters",
+        "adapter_module": "openagent_core.mcp.servers.tool_search.adapters",
         "runtime_toolkit_factory": "build_runtime_toolkit",
     },
     "vault-gate": {
         "in_process": True,
-        "adapter_module": "src.mcp.servers.vault_gate.adapters",
+        "adapter_module": "openagent_core.mcp.servers.vault_gate.adapters",
         "runtime_toolkit_factory": "build_runtime_toolkit",
         "description": (
             "evaluate and repair your memory vault — run the quality gate "
@@ -257,7 +61,7 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
     },
     "attachments": {
         "in_process": True,
-        "adapter_module": "src.mcp.servers.attachments.adapters",
+        "adapter_module": "openagent_core.mcp.servers.attachments.adapters",
         "runtime_toolkit_factory": "build_runtime_toolkit",
         "description": (
             "read and write files attached to the current turn — "
@@ -276,7 +80,7 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
     # ever seeds a row for — so the running system is byte-identical.
     "skills": {
         "in_process": True,
-        "adapter_module": "src.mcp.servers.skills.adapters",
+        "adapter_module": "openagent_core.mcp.servers.skills.adapters",
         "runtime_toolkit_factory": "build_runtime_toolkit",
         "description": (
             "your file-backed skills — SKILL.md playbooks surfaced by an "
@@ -295,11 +99,11 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
     # for — so the running system is byte-identical.
     "ptc": {
         "in_process": True,
-        "adapter_module": "src.mcp.servers.ptc.adapters",
+        "adapter_module": "openagent_core.mcp.servers.ptc.adapters",
         "runtime_toolkit_factory": "build_runtime_toolkit",
         "description": (
             "run_python(code) — write a Python script that reaches your own "
-            "tools via call_tool(server, tool, args); the script runs in a "
+            "tools via call_tool(tool_ref, args); the script runs in a "
             "sandbox and only its stdout returns to you. Collapses a multi-step "
             "tool pipeline into one turn"
         ),
@@ -311,7 +115,7 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
     # for the scheduler / model-manager subprocess MCPs (resolve_default_entry).
     "logs": {
         "in_process": True,
-        "adapter_module": "src.mcp.servers.logs.adapters",
+        "adapter_module": "openagent_core.mcp.servers.logs.adapters",
         "runtime_toolkit_factory": "build_runtime_toolkit",
         "description": (
             "query your own unified event log — search past events by "
@@ -319,54 +123,6 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
             "wrong and what it cost; read the events surrounding a "
             "failure. Reach for it to diagnose your own behaviour "
             "instead of tailing events.jsonl through the shell"
-        ),
-    },
-    "web-search": {
-        "dir": "web-search",
-        "command": ["node", "dist/index.js"],
-        "build": ["npm", "run", "build"],
-        "install": ["npm", "install"],
-        # No TLS override. This spec used to force
-        # ``NODE_TLS_REJECT_UNAUTHORIZED=0``, which disables certificate
-        # verification for *every* HTTPS request the Node process makes —
-        # search queries and page fetches alike — so anything on the path
-        # could substitute the content the agent then reasons over, and the
-        # agent had no way to tell. An operator who genuinely must reach a
-        # host with an untrusted certificate sets the variable on their own
-        # web-search MCP row (``resolve_builtin_entry`` merges a row's env
-        # over the spec's), which keeps the exception explicit, per-install
-        # and visible in the MCP manager instead of silently on for everyone.
-        "description": (
-            "search the live web and fetch page contents. Use whenever "
-            "the answer depends on current information you may not have"
-        ),
-    },
-    "filesystem": {
-        "in_process": True,
-        "adapter_module": "src.mcp.servers.host_tools.adapters",
-        "runtime_toolkit_factory": "build_filesystem_runtime_toolkit",
-        "description": (
-            "server filesystem tools backed by the same versioned core used "
-            "by client capability hosts"
-        ),
-    },
-    "editor": {
-        "in_process": True,
-        "adapter_module": "src.mcp.servers.host_tools.adapters",
-        "runtime_toolkit_factory": "build_editor_runtime_toolkit",
-        "description": (
-            "structured file editing — read, write, patch, search. "
-            "Preferred over raw shell ``cat`` / ``sed`` for code changes"
-        ),
-    },
-    "agent-in-chrome": {
-        "dir": "agent-in-chrome/host",
-        "command": ["node", "./mcp-server.js"],
-        "install": ["npm", "install"],
-        "description": (
-            "drive a Chrome browser session (navigate, click, type, "
-            "screenshot, read the DOM). Use for live web tasks beyond "
-            "static web-search"
         ),
     },
     "messaging": {
@@ -400,7 +156,7 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
     },
     "scheduler": {
         "dir": "scheduler",
-        "command": ["python", "-m", "src.mcp.servers.scheduler.server"],
+        "command": ["python", "-m", "openagent_core.mcp.servers.scheduler.server"],
         "python": True,
         "description": (
             "create, list, update, and remove cron-scheduled prompts. "
@@ -409,7 +165,7 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
     },
     "mcp-manager": {
         "dir": "mcp_manager",
-        "command": ["python", "-m", "src.mcp.servers.mcp_manager.server"],
+        "command": ["python", "-m", "openagent_core.mcp.servers.mcp_manager.server"],
         "python": True,
         "description": (
             "inspect and manage MCP servers — list connected ones, add "
@@ -418,7 +174,7 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
     },
     "model-manager": {
         "dir": "model_manager",
-        "command": ["python", "-m", "src.mcp.servers.model_manager.server"],
+        "command": ["python", "-m", "openagent_core.mcp.servers.model_manager.server"],
         "python": True,
         "description": (
             "manage the registered LLM models — list, enable/disable, "
@@ -431,7 +187,7 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
         # and Gateway. A subprocess would need a reusable owner credential and
         # could only edit YAML without updating the running identity.
         "in_process": True,
-        "adapter_module": "src.mcp.servers.agent_manager.adapters",
+        "adapter_module": "openagent_core.mcp.servers.agent_manager.adapters",
         "runtime_toolkit_factory": "build_runtime_toolkit",
         "description": (
             "inspect and update this agent's display name and user-defined "
@@ -441,7 +197,7 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
     },
     "workflow-manager": {
         "dir": "workflow_manager",
-        "command": ["python", "-m", "src.mcp.servers.workflow_manager.server"],
+        "command": ["python", "-m", "openagent_core.mcp.servers.workflow_manager.server"],
         "python": True,
         "description": (
             "create and run multi-step workflows. Use for repeatable "
@@ -451,7 +207,7 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
     },
     "events-manager": {
         "dir": "events_manager",
-        "command": ["python", "-m", "src.mcp.servers.events_manager.server"],
+        "command": ["python", "-m", "openagent_core.mcp.servers.events_manager.server"],
         "python": True,
         "description": (
             "create, list, update, and remove webhook events, and fire one on "
@@ -463,7 +219,7 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
     },
     "budget-manager": {
         "dir": "budget_manager",
-        "command": ["python", "-m", "src.mcp.servers.budget_manager.server"],
+        "command": ["python", "-m", "openagent_core.mcp.servers.budget_manager.server"],
         "python": True,
         "description": (
             "inspect and adjust your own spend caps — list budgets, read "
@@ -475,7 +231,7 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
     },
     "media-gen": {
         "dir": "media_gen",
-        "command": ["python", "-m", "src.mcp.servers.media_gen.server"],
+        "command": ["python", "-m", "openagent_core.mcp.servers.media_gen.server"],
         "python": True,
         # Was "images, audio, or video" — but the server only ever registered
         # generate_image (OpenAI) and generate_video (Fal); there is no audio
@@ -494,31 +250,17 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
         # would need a reusable principal-bearing token and could not safely
         # recheck canonical ACLs for the current turn.
         "in_process": True,
-        "adapter_module": "src.mcp.servers.memory_search.adapters",
+        "adapter_module": "openagent_core.mcp.servers.memory_search.adapters",
         "description": (
             "authorized full-text search across chats, tools, workflows, "
             "scheduled runs and events. Complements the separate Markdown "
             "vault; matches redacted words, not meaning"
         ),
     },
-    "ui-manager": {
-        # In-process is an authorization boundary.  Mutations are performed on
-        # behalf of the authenticated turn principal and refresh/action calls
-        # need the live view runtime; neither can be delegated safely to a
-        # reusable-credential subprocess.
-        "in_process": True,
-        "adapter_module": "src.mcp.servers.ui_manager.adapters",
-        "runtime_toolkit_factory": "build_runtime_toolkit",
-        "description": (
-            "create and manage safe OA-UI Custom Views — durable sidebar "
-            "dashboards or revision-pinned inline chat artifacts, with "
-            "dynamic data sources and typed server-side actions"
-        ),
-    },
     "delegation": {
         "dir": "delegation",
         "in_process": True,
-        "adapter_module": "src.mcp.servers.delegation.adapters",
+        "adapter_module": "openagent_core.mcp.servers.delegation.adapters",
         "description": (
             "hand a sub-task to another registered model and get its "
             "answer back. Use when a different model is cheaper, "
@@ -528,7 +270,7 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
     "agent-federation": {
         "dir": "agent_federation",
         "in_process": True,
-        "adapter_module": "src.mcp.servers.agent_federation.adapters",
+        "adapter_module": "openagent_core.mcp.servers.agent_federation.adapters",
         "description": (
             "talk to a federated PEER OpenAgent agent over native Iroh — "
             "list_agents() lists the peers this agent has joined; "
@@ -539,17 +281,13 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
     },
     "skill-data": {
         "dir": "skill_data",
-        "command": ["python", "-m", "src.mcp.servers.skill_data.server"],
+        "command": ["python", "-m", "openagent_core.mcp.servers.skill_data.server"],
         "python": True,
     },
 }
 
 DEFAULT_MCPS: list[dict[str, Any]] = [
     {"builtin": "vault", "_default": True},
-    {"builtin": "filesystem", "_default": True},
-    {"builtin": "editor", "_default": True},
-    {"builtin": "web-search", "_default": True},
-    {"builtin": "shell", "_default": True},
     {"builtin": "tool-search", "_default": True},
     {"builtin": "vault-gate", "_default": True},
     {"builtin": "attachments", "_default": True},
@@ -573,9 +311,6 @@ DEFAULT_MCPS: list[dict[str, Any]] = [
     #
     # In-process registration is effectively free until tool discovery/use.
     {"builtin": "memory-search", "_default": True},
-    {"builtin": "ui-manager", "_default": True},
-    {"builtin": "computer-control", "_default": True},
-    {"builtin": "agent-in-chrome", "_default": True},
     {"builtin": "messaging", "_default": True},
     {"builtin": "scheduler", "_default": True},
     {"builtin": "mcp-manager", "_default": True},
@@ -619,7 +354,7 @@ def config_gated_mcp_entries(config: dict | None) -> list[dict[str, Any]]:
     Today this is the native Skills subsystem (``skills.enabled``) and
     Programmatic Tool Calling (``ptc.enabled``).
     """
-    from src.core.config import ptc_settings, skills_settings
+    from openagent_core.core.config import ptc_settings, skills_settings
 
     entries: list[dict[str, Any]] = []
     if skills_settings(config).enabled:
@@ -629,201 +364,8 @@ def config_gated_mcp_entries(config: dict | None) -> list[dict[str, Any]]:
     return entries
 
 
-def _default_filesystem_roots() -> list[str]:
-    """Roots handed to ``@modelcontextprotocol/server-filesystem`` by default.
-
-    The MCP spec lets clients announce *Roots* dynamically (``roots/list``),
-    but the Claude Agent SDK we ship with doesn't advertise the capability
-    yet, so the reference filesystem server falls back to the directory
-    arguments we pass at launch. Those arguments form a hard allowlist:
-    every tool-call path is rejected unless its realpath starts with one of
-    the roots.
-
-    **Default: the whole filesystem (``/``).** Rationale:
-    - The MCP's allowlist is a *second* security layer. The first layer —
-      file ownership, TCC on macOS, SIP, Linux user caps — still applies
-      and is what actually protects the user. An extra in-MCP allowlist
-      that only covers ``$HOME`` creates false negatives (agent can't read
-      ``/etc/hosts`` for a diagnostic, can't open ``/tmp/foo`` from an
-      attachment, can't inspect a project outside ``$HOME``) without
-      adding any real protection against a compromised tool call.
-    - LLM UX: the Claude / runtime tools see stable, uniform descriptions
-      regardless of which machine the agent runs on. There's no "oops,
-      the path is outside the sandbox" surprise that forces a
-      re-prompt.
-
-    **Override**: set ``OPENAGENT_FILESYSTEM_ROOTS`` to a
-    ``os.pathsep``-separated list of absolute directories to tighten the
-    sandbox (e.g. ``/Users/alice:/projects/work``). Each entry is
-    ``os.path.expanduser``-expanded and must exist on disk — missing
-    entries are dropped with a warning rather than failing the launch.
-    Alternatively, set an explicit ``args:`` list on the ``filesystem``
-    entry in ``openagent.yaml`` — that takes priority over this default.
-
-    The implementation follows the MCP standard: we pass directory
-    arguments exactly as the reference server expects, and we don't
-    replace its tool surface — ``read_text_file``, ``write_file``,
-    ``list_directory``, etc. remain the same canonical names LLMs have
-    been trained on.
-    """
-    override = os.environ.get("OPENAGENT_FILESYSTEM_ROOTS", "").strip()
-    if override:
-        roots: list[str] = []
-        for raw in override.split(os.pathsep):
-            raw = raw.strip()
-            if not raw:
-                continue
-            expanded = os.path.expanduser(raw)
-            if os.path.isdir(expanded):
-                roots.append(expanded)
-            else:
-                logger.warning(
-                    "OPENAGENT_FILESYSTEM_ROOTS entry %r is not an existing "
-                    "directory — skipping", raw,
-                )
-        if roots:
-            logger.info("filesystem MCP roots (from env): %s", roots)
-            return roots
-        logger.warning(
-            "OPENAGENT_FILESYSTEM_ROOTS set but no entry resolved to a valid "
-            "directory — falling back to default (/)",
-        )
-
-    # Unbounded: the whole filesystem.
-    return ["/"]
-
-
 def command_exists(cmd: str) -> bool:
     return shutil.which(cmd) is not None
-
-
-def _try_lock_agent_chrome_port(path: Path) -> Any | None:
-    """Acquire a process-lifetime, cross-process advisory port claim."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle = path.open("a+b")
-    try:
-        if os.name == "nt":
-            import msvcrt
-
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                handle.write(b"0")
-                handle.flush()
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except (OSError, BlockingIOError):
-        handle.close()
-        return None
-    return handle
-
-
-def _profile_marker_claims_port(profile_dir: Path | None, port: int) -> bool:
-    """Return whether Chrome's profile-owned marker claims ``port``.
-
-    This permits a server process to adopt its dedicated browser after a
-    server restart. Endpoint/path ownership is still verified by browser.js
-    before CDP is used, so an arbitrary listener can never be adopted merely
-    because the TCP port is busy.
-    """
-
-    if profile_dir is None:
-        return False
-    try:
-        lines = (profile_dir / "DevToolsActivePort").read_text().splitlines()
-        return len(lines) >= 2 and int(lines[0].strip()) == port and (
-            lines[1].strip().startswith("/devtools/browser/")
-        )
-    except (OSError, ValueError):
-        return False
-
-
-def _claim_agent_chrome_port(
-    scope: str,
-    *,
-    profile_dir: Path | None = None,
-) -> int:
-    """Claim a free loopback CDP port deterministically for one scope.
-
-    The advisory lock prevents two OpenAgent processes owned by the same OS
-    user from selecting one port. A bind probe also skips ports held by other
-    applications. The browser side verifies ``DevToolsActivePort`` before it
-    ever reuses an endpoint, closing the remaining check/launch race safely.
-    """
-
-    with _AGENT_CHROME_PORT_LOCK:
-        existing = _AGENT_CHROME_PORTS.get(scope)
-        if existing is not None:
-            return existing[0]
-        digest = hashlib.sha256(scope.encode("utf-8")).digest()
-        offset = int.from_bytes(digest[:4], "big") % _AGENT_CHROME_PORT_COUNT
-        # ``tempfile.gettempdir()`` is normally per-user on Windows, but using
-        # the process id here would defeat cross-process exclusion. A stable
-        # home-directory digest works on every supported OS without exposing
-        # the account name in a shared temp directory.
-        user_marker = hashlib.sha256(
-            str(Path.home().resolve()).encode("utf-8")
-        ).hexdigest()[:16]
-        lock_root = (
-            Path(tempfile.gettempdir())
-            / f"openagent-agent-in-chrome-{user_marker}"
-        )
-        for step in range(_AGENT_CHROME_PORT_COUNT):
-            port = _AGENT_CHROME_PORT_MIN + (
-                (offset + step) % _AGENT_CHROME_PORT_COUNT
-            )
-            handle = _try_lock_agent_chrome_port(lock_root / f"{port}.lock")
-            if handle is None:
-                continue
-            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            try:
-                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
-                probe.bind(("127.0.0.1", port))
-            except OSError:
-                if not _profile_marker_claims_port(profile_dir, port):
-                    handle.close()
-                    continue
-            finally:
-                probe.close()
-            handle.seek(0)
-            handle.truncate()
-            handle.write(f"pid={os.getpid()} scope={scope}\n".encode("utf-8"))
-            handle.flush()
-            _AGENT_CHROME_PORTS[scope] = (port, handle)
-            return port
-    raise RuntimeError("no collision-free Agent in Chrome CDP port is available")
-
-
-def agent_chrome_network_env(
-    network_id: str | None,
-    *,
-    db_path: str | None = None,
-) -> dict[str, str]:
-    """Return profile/extension/CDP settings isolated to one server network."""
-
-    resolved_db = str(Path(db_path).expanduser().resolve()) if db_path else ""
-    identity = str(network_id or "").strip() or f"standalone:{resolved_db}"
-    scope = hashlib.sha256(f"{identity}\0{resolved_db}".encode("utf-8")).hexdigest()
-    if db_path:
-        base = Path(db_path).expanduser().resolve().parent
-    else:
-        from src.core.paths import data_dir
-
-        base = data_dir()
-    root = base / "agent-in-chrome" / scope[:20]
-    profile_dir = root / "profile"
-    return {
-        "OPENAGENT_NETWORK_ID": identity,
-        "OPENAGENT_CHROME_PROFILE_DIR": str(profile_dir),
-        "OPENAGENT_CHROME_EXTENSIONS_DIR": str(root / "extensions"),
-        "OPENAGENT_CHROME_CDP_PORT": str(
-            _claim_agent_chrome_port(scope, profile_dir=profile_dir)
-        ),
-    }
 
 
 def _find_node_binary() -> str | None:
@@ -871,6 +413,7 @@ def resolve_builtin_entry(name: str, env: dict[str, str] | None = None) -> dict[
     if spec.get("in_process"):
         resolved = {
             "name": name,
+            "_trusted_module": name,
             "in_process": True,
             "adapter_module": spec["adapter_module"],
             "runtime_toolkit_factory": spec.get("runtime_toolkit_factory", "build_runtime_toolkit"),
@@ -884,63 +427,29 @@ def resolve_builtin_entry(name: str, env: dict[str, str] | None = None) -> dict[
             resolved["env"] = dict(env)
         return resolved
 
-    mcp_dir = (
-        sidecar_source("agent-in-chrome") / "host"
-        if name == "agent-in-chrome"
-        else BUILTIN_MCPS_DIR / spec["dir"]
-    )
-    is_native = spec.get("native", False)
-
-    # Native-binary MCPs don't need a bundled directory — they ship as a
-    # sidecar next to ``openagent`` (see ``_resolve_native_binary``). The
-    # source tree is excluded from the PyInstaller bundle on purpose so
-    # the binary's Developer-ID signature on macOS stays intact. Node /
-    # Python MCPs still need their dist/ + node_modules/ / requirements,
-    # so keep the directory check for those.
-    if not is_native and not mcp_dir.exists():
+    if name == "vault":
+        try:
+            from openagent_modules import module_assets
+        except ImportError as exc:
+            raise RuntimeError("The vault module requires the optional openagent-modules package") from exc
+        mcp_dir = module_assets("vault")
+    else:
+        mcp_dir = BUILTIN_MCPS_DIR / spec["dir"]
+    if not mcp_dir.exists():
         raise FileNotFoundError(f"Built-in MCP '{name}' directory not found at {mcp_dir}")
 
-    if is_native:
-        binary = _resolve_native_binary(name)
-        merged_env = dict(spec.get("env") or {})
-        if env:
-            merged_env.update(env)
-        return {
-            "name": name,
-            "command": [binary],
-            "env": merged_env if merged_env else None,
-            # cwd = directory containing the binary. For a sidecar this is
-            # ``$PREFIX``; for a dev-install bundled path this is the
-            # per-target ``bin/`` folder. Either is a real directory the
-            # subprocess module can chdir into.
-            "_cwd": str(Path(binary).parent),
-        }
-
     is_python = spec.get("python", False)
-    if is_python:
-        reqs = mcp_dir / "requirements.txt"
-        if reqs.exists() and "install" in spec:
-            marker = mcp_dir / ".installed"
-            if not marker.exists():
-                logger.info("Installing built-in MCP '%s' dependencies...", name)
-                subprocess.run(spec["install"], cwd=mcp_dir, check=True, capture_output=True)
-                marker.touch()
-    else:
-        node_modules = mcp_dir / "node_modules"
-        if not node_modules.exists():
-            logger.info("Installing built-in MCP '%s'...", name)
-            subprocess.run(spec["install"], cwd=mcp_dir, check=True, capture_output=True)
-
-        dist_dir = mcp_dir / "dist"
-        if not dist_dir.exists() and "build" in spec:
-            logger.info("Building built-in MCP '%s'...", name)
-            subprocess.run(spec["build"], cwd=mcp_dir, check=True, capture_output=True)
-
-        # agent-in-chrome launches its dedicated browser lazily, on the
-        # first browser tool call (see host/mcp-server.js) — never at server
-        # startup. Nothing to auto-set-up here.
+    if not is_python:
+        # Dependency installation and compilation belong to product packaging.
+        # Resolving a runtime module never downloads or edits its installed code.
+        if not (mcp_dir / "dist").exists():
+            raise FileNotFoundError(
+                f"Built-in MCP '{name}' needs prebuilt Node resources; provision them in the host package"
+            )
 
     cmd_list = list(spec["command"])
+    if name == "vault":
+        cmd_list = ["node", "dist/server.mjs"]
     if is_python and cmd_list and cmd_list[0] in ("python3", "python"):
         exe_basename = os.path.basename(sys.executable).lower()
         if is_frozen() or "python" not in exe_basename:
@@ -970,6 +479,7 @@ def resolve_builtin_entry(name: str, env: dict[str, str] | None = None) -> dict[
 
     return {
         "name": name,
+        "_trusted_module": name,
         "command": full_command,
         "env": merged_env if merged_env else None,
         "_cwd": str(mcp_dir),
@@ -1018,7 +528,7 @@ def resolve_default_entry(entry: dict[str, Any], db_path: str | None = None) -> 
         if db_path:
             extra_env.setdefault("OPENAGENT_DB_PATH", os.path.abspath(db_path))
         else:
-            from src.core.paths import default_db_path
+            from openagent_core.core.paths import default_db_path
 
             extra_env.setdefault("OPENAGENT_DB_PATH", str(default_db_path()))
 
@@ -1028,7 +538,7 @@ def resolve_default_entry(entry: dict[str, Any], db_path: str | None = None) -> 
         # Operational memory-search is deliberately separate and in-process;
         # it never opens the Markdown vault or its index.
         if entry["builtin"] == "vault" and "OPENAGENT_VAULT_PATH" not in extra_env:
-            from src.core.paths import default_vault_path
+            from openagent_core.core.paths import default_vault_path
 
             extra_env["OPENAGENT_VAULT_PATH"] = str(default_vault_path())
 
@@ -1038,11 +548,9 @@ def resolve_default_entry(entry: dict[str, Any], db_path: str | None = None) -> 
             logger.warning("Skipping default MCP '%s': %s", name, exc)
             return None
 
-    from src.core.paths import default_vault_path
+    from openagent_core.core.paths import default_vault_path
 
     args = entry.get("args") or []
-    if name == "filesystem" and not args:
-        args = _default_filesystem_roots()
     if name == "vault" and not args:
         args = [str(default_vault_path())]
 

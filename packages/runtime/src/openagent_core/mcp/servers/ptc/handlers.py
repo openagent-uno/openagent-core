@@ -16,7 +16,7 @@ Flow of one ``run_python(code)`` call (LOCAL path):
      environment (socket + token + PYTHONPATH; secret-looking host vars blanked).
   5. The child's ``call_tool`` blocks on the socket for each tool call; the
      handler coroutine answers on the gateway loop, dispatching through
-     ``tool_search.adapters._call_tool_impl`` (so PTC can only reach tools the
+     ``tool_search.adapters._call_scoped_tool_impl`` (so PTC can only reach tools the
      agent already has, and dry-run stamping propagates for free). Each call is
      counted against ``max_tool_calls`` and, optionally, intersected with
      ``allowed_tools``.
@@ -41,12 +41,14 @@ import tempfile
 import time
 from typing import Any
 
-from src.core.dry_run import dry_run_scope
-from src.core.logging import elog
-from src.core.tool_output import cap_tool_output
-from src.mcp.servers.shell.backends import get_exec_backend
-from src.mcp.servers.shell.shells import BackgroundShell
-from src.mcp.servers.tool_search.adapters import _call_tool_impl, _candidate_names
+from openagent_core.core.dry_run import dry_run_scope
+from openagent_core.core.logging import elog
+from openagent_core.core.tool_output import cap_tool_output
+from openagent_core.mcp.servers.shell.backends import get_exec_backend
+from openagent_core.mcp.servers.shell.shells import BackgroundShell
+from openagent_core.mcp.servers.tool_search.adapters import _call_scoped_tool_impl, _decode_tool_args
+from openagent_core.runtime import current_runtime, current_execution_context, current_run_id, execution_scope
+from openagent_core.core.execution_origin import current_execution_origin, execution_origin_scope
 
 # Guard on a single request line so a malformed/hostile child cannot make the
 # handler buffer without bound. A tool call's JSON args are tiny; 4 MB is
@@ -106,50 +108,14 @@ def _make_rpc_handler(
 ):
     """Build the per-connection coroutine served by ``start_unix_server``.
 
-    Requests are newline-delimited JSON ``{"token","server","tool","args"}``;
+    Requests are newline-delimited JSON ``{"token","tool_ref","args"}``;
     responses are ``{"ok":true,"result":...}`` or ``{"ok":false,"error":...}``.
     One connection may carry several requests (the bridge opens a fresh one per
     call, but the loop tolerates either). All handler coroutines share ``state``
     on the single gateway loop, so ``state["calls"] += 1`` needs no lock.
     """
-    allowed = set(allowed_tools) if allowed_tools is not None else None
-
-    async def _dispatch(req: Any) -> dict[str, Any]:
-        if not isinstance(req, dict) or req.get("token") != token:
-            return {"ok": False, "error": "unauthorized"}
-        server = req.get("server")
-        tool = req.get("tool")
-        args = req.get("args") or {}
-        if allowed is not None:
-            cands = set(_candidate_names(server or "", tool or ""))
-            if not (cands & allowed):
-                return {
-                    "ok": False,
-                    "error": (
-                        f"tool {tool!r} on server {server!r} is not in "
-                        "ptc.allowed_tools"
-                    ),
-                }
-        state["calls"] += 1
-        if state["calls"] > max_tool_calls:
-            return {
-                "ok": False,
-                "error": (
-                    f"PTC max_tool_calls ({max_tool_calls}) exceeded in this "
-                    "run_python call"
-                ),
-            }
-        try:
-            # Capture-at-entry dry-run is re-applied here because the handler
-            # runs in its own task (the accept loop copies a context that never
-            # saw the run's scope), so the ContextVar would not propagate on its
-            # own. Wrapping the proxied call makes call_meta() stamp downstream
-            # MCP writes exactly as a normal tool call would.
-            with dry_run_scope(dry_run):
-                result = await _call_tool_impl(pool, server, tool, args)
-            return {"ok": True, "result": result}
-        except Exception as exc:  # noqa: BLE001 — surface tool errors to the child
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    dispatch = _make_dispatch(pool=pool, token=token, dry_run=dry_run,
+                              allowed_tools=allowed_tools, max_tool_calls=max_tool_calls, state=state)
 
     async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
@@ -169,7 +135,7 @@ def _make_rpc_handler(
                 except Exception as exc:  # noqa: BLE001
                     await _write_response(writer, {"ok": False, "error": f"bad request: {exc}"})
                     continue
-                await _write_response(writer, await _dispatch(req))
+                await _write_response(writer, await dispatch(req))
         except (ConnectionResetError, BrokenPipeError):
             pass
         finally:
@@ -233,7 +199,7 @@ async def run_python_impl(
     """Core of the ``run_python`` tool. Always returns a dict (never raises for
     an expected condition), so the model gets a clean result either way.
 
-    ``settings`` is a :class:`src.core.config.PtcSettings`. ``pool`` is the live
+    ``settings`` is a :class:`openagent_core.core.config.PtcSettings`. ``pool`` is the live
     ``MCPPool``. ``dry_run`` is ``is_dry_run()`` captured at the tool entry.
     """
     t0 = time.monotonic()
@@ -275,7 +241,7 @@ async def _run_local(
     dry_run: bool,
     t0: float,
 ) -> dict[str, Any]:
-    from src.mcp.servers.ptc.prelude import write_prelude
+    from openagent_core.mcp.servers.ptc.prelude import write_prelude
 
     tmpdir = tempfile.mkdtemp(prefix="oa-ptc-")
     sock_path = os.path.join(tmpdir, "rpc.sock")
@@ -341,7 +307,7 @@ async def _run_local(
 # request file per ``call_tool`` and blocks on the matching response file, while a
 # host-side poller task services those files via the backend's container-fs
 # helpers (``docker exec`` list/read/write). Each proxied call runs through the
-# SAME ``_call_tool_impl`` the local path uses, inside a re-applied
+# SAME ``_call_scoped_tool_impl`` the local path uses, inside a re-applied
 # ``dry_run_scope`` — so there is no privilege escalation and dry-run stamping
 # propagates identically. The container itself is the shared, long-lived one from
 # the exec backend (reaped at hub shutdown); only the per-run dir is created and
@@ -369,45 +335,44 @@ def _make_file_dispatch(
 
     Byte-for-byte the same policy as the UDS ``_dispatch`` in
     :func:`_make_rpc_handler` (token check → optional ``allowed_tools``
-    intersection → ``max_tool_calls`` cap → ``_call_tool_impl`` inside a
+    intersection → ``max_tool_calls`` cap → ``_call_scoped_tool_impl`` inside a
     re-applied ``dry_run_scope``). Kept as a separate function so the LOCAL UDS
     path stays untouched.
     """
-    allowed = set(allowed_tools) if allowed_tools is not None else None
+    return _make_dispatch(pool=pool, token=token, dry_run=dry_run,
+                          allowed_tools=allowed_tools, max_tool_calls=max_tool_calls, state=state)
 
-    async def _dispatch(req: Any) -> dict[str, Any]:
+
+def _make_dispatch(*, pool, token, dry_run, allowed_tools, max_tool_calls, state):
+    runtime, context, run_id = current_runtime(), current_execution_context(), current_run_id()
+    origin = current_execution_origin()
+    if runtime is None or context is None or run_id is None:
+        raise PermissionError("PTC requires an authenticated runtime execution")
+    allowed = frozenset(allowed_tools) if allowed_tools is not None else None
+
+    async def dispatch(req):
         if not isinstance(req, dict) or req.get("token") != token:
             return {"ok": False, "error": "unauthorized"}
-        server = req.get("server")
-        tool = req.get("tool")
-        args = req.get("args") or {}
-        if allowed is not None:
-            cands = set(_candidate_names(server or "", tool or ""))
-            if not (cands & allowed):
-                return {
-                    "ok": False,
-                    "error": (
-                        f"tool {tool!r} on server {server!r} is not in "
-                        "ptc.allowed_tools"
-                    ),
-                }
         state["calls"] += 1
         if state["calls"] > max_tool_calls:
-            return {
-                "ok": False,
-                "error": (
-                    f"PTC max_tool_calls ({max_tool_calls}) exceeded in this "
-                    "run_python call"
-                ),
-            }
+            return {"ok": False, "error": f"PTC max_tool_calls ({max_tool_calls}) exceeded"}
         try:
-            with dry_run_scope(dry_run):
-                result = await _call_tool_impl(pool, server, tool, args)
+            reference = req.get("tool_ref")
+            if not isinstance(reference, str) or not reference:
+                raise ValueError("PTC requires the exact opaque tool_ref returned by discovery")
+            with execution_scope(runtime, context, run_id), execution_origin_scope(origin), dry_run_scope(dry_run):
+                descriptors = [tool for tool in await runtime.capabilities.discover(context) if tool.tool_ref == reference]
+                if len(descriptors) != 1:
+                    raise LookupError("Unknown or revoked tool reference")
+                descriptor = descriptors[0]
+                if allowed is not None and not ({reference, descriptor.name, descriptor.source_id + "/" + descriptor.name} & allowed):
+                    raise PermissionError("Tool is outside ptc.allowed_tools")
+                result = await _call_scoped_tool_impl(pool, reference, _decode_tool_args(req.get("args")))
             return {"ok": True, "result": result}
-        except Exception as exc:  # noqa: BLE001 — surface tool errors to the child
+        except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
-    return _dispatch
+    return dispatch
 
 
 async def _poll_rundir(backend: Any, rundir: str, dispatch: Any) -> None:
@@ -454,7 +419,7 @@ async def _run_docker(
     t0: float,
     backend: Any,
 ) -> dict[str, Any]:
-    from src.mcp.servers.ptc.prelude import (
+    from openagent_core.mcp.servers.ptc.prelude import (
         _BRIDGE_FILENAME,
         _DOCKER_BRIDGE_MODULE,
         _SCRIPT_FILENAME,

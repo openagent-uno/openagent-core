@@ -48,14 +48,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
-from src.memory.db import MemoryDB
-from src.workflow.blocks import BLOCK_CATALOG, get_block_spec
-from src.workflow.templating import (
+from openagent_core.memory.db import MemoryDB
+from openagent_core.workflow.blocks import BLOCK_CATALOG, get_block_spec
+from openagent_core.workflow.templating import (
     TemplateError,
     evaluate_expression,
     resolve_templates,
 )
-from src.workflow.validate import (
+from openagent_core.workflow.validate import (
     _safe_prefix,
     mcp_callability_from_pool,
     mcp_errors_from_pool,
@@ -280,7 +280,7 @@ class WorkflowExecutor:
             # here propagate into the ``asyncio.gather`` node tasks the
             # walker spawns (they copy the current context at creation),
             # so parallel and looped mcp-tool nodes inherit it too.
-            from src.mcp.servers.delegation.handlers import (
+            from openagent_core.mcp.servers.delegation.handlers import (
                 install_context as install_delegation_context,
                 reset_context as reset_delegation_context,
             )
@@ -808,55 +808,10 @@ async def _h_mcp_tool(
     pool = getattr(exe.agent, "_mcp", None)
     if pool is None:
         raise RuntimeError("mcp-tool: agent has no MCP pool attached")
-    toolkit = pool.toolkit_by_name(mcp_name)
-    if toolkit is None:
-        raise RuntimeError(
-            f"mcp-tool: MCP {mcp_name!r} is not loaded. Known MCPs: "
-            f"{sorted(pool._toolkit_by_name)}"
-        )
-    # Merge sync + async function dicts: subprocess MCPs populate
-    # ``functions``, in-process Toolkits with async-only callables use
-    # ``async_functions``. ``list_mcp_tools`` does the same merge — keeping
-    # introspection and dispatch in sync.
-    functions = {
-        **(getattr(toolkit, "functions", {}) or {}),
-        **(getattr(toolkit, "async_functions", {}) or {}),
-    }
-    fn = functions.get(tool_name)
-    if fn is None:
-        # the runtime prefixes remote tools with the SAFE MCP name
-        # (non-alnum → "_", so ``aaa-support`` → ``aaa_support_…``).
-        # LLM-authored workflows often emit the bare upstream name; auto-
-        # repair that one specific mismatch instead of failing. Use the
-        # safe prefix or a hyphenated MCP name never matches.
-        prefixed = f"{_safe_prefix(mcp_name)}_{tool_name}"
-        if prefixed in functions:
-            tool_name = prefixed
-            fn = functions[tool_name]
-    if fn is None:
-        raise RuntimeError(
-            f"mcp-tool: MCP {mcp_name!r} has no tool {tool_name!r}. "
-            f"Available: {sorted(functions)}"
-        )
     if not isinstance(args, dict):
-        raise ValueError(
-            f"mcp-tool: 'args' must be an object, got {type(args).__name__}"
-        )
-    # the runtime ``MCPTools`` registers remote tools as ``Function``
-    # descriptors (Pydantic models with no ``__call__``); the actual
-    # callable lives on ``.entrypoint`` (the runtime binds ``tool_name`` via
-    # ``functools.partial`` so a bare ``(**args)`` call works). In-
-    # process toolkits register raw callables. Mirror the established
-    # pattern from ``tool_search/adapters.py:129``.
-    callable_fn = getattr(fn, "entrypoint", None) or fn
-    if not callable(callable_fn):
-        raise RuntimeError(
-            f"mcp-tool: tool {mcp_name!r}.{tool_name!r} resolved to a "
-            f"non-callable {type(fn).__name__}"
-        )
-    result = callable_fn(**args)
-    if inspect.isawaitable(result):
-        result = await result
+        raise ValueError("mcp-tool: args must be an object")
+    from openagent_core.engine import call_tool
+    result = await call_tool(pool, mcp_name, tool_name, args)
     return {"result": _coerce_to_jsonable(result)}
 
 
@@ -891,9 +846,9 @@ async def _h_ai_prompt(
     # run, so keeping the durable row can't leak transcript into a re-run);
     # ``shared`` runs every node on one ``workflow:{wf}:{run}`` session so
     # successive nodes chain thought through the persisted history.
-    from src.core.child_session import run_child_session
-    from src.core.execution_origin import current_execution_origin
-    from src.core.identity_context import agent_author
+    from openagent_core.core.child_session import run_child_session
+    from openagent_core.core.execution_origin import current_execution_origin
+    from openagent_core.core.identity_context import agent_author
 
     db = getattr(exe.agent, "_db", None) or exe.db
     owner = None
@@ -1169,7 +1124,7 @@ def _coerce_to_jsonable(value: Any) -> Any:
     reducing runtime ``ToolResult`` objects to their string representation.
     """
 
-    from src.mcp.servers.tool_search.adapters import (
+    from openagent_core.mcp.servers.tool_search.adapters import (
         coerce_mcp_result_to_jsonable,
     )
 

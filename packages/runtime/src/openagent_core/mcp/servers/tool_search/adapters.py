@@ -30,13 +30,6 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.mcp.tool_providers import (
-    SERVER_EXECUTION_HOST,
-    InteractiveClientMCPProvider,
-    ServerMCPProvider,
-    ToolCatalogProvider,
-    ToolDispatcher,
-)
 
 
 # ── Shared helpers (provider-agnostic implementation) ───────────────
@@ -117,6 +110,10 @@ def _coerce_json_value(value: Any, depth: int, state: _JsonCoercionState) -> Any
         return _coerce_mapping(value, depth, state)
     if isinstance(value, (list, tuple)):
         return _coerce_sequence(value, depth, state)
+    to_wire = getattr(value, "to_wire", None)
+    if callable(to_wire):
+        with _ActiveValue(value, state):
+            return _coerce_json_value(to_wire(), depth + 1, state)
     # Runtime ``ToolResult`` keeps the original CallToolResult here because its
     # display ``content`` is intentionally a string. Prefer that envelope, then
     # enrich it with runtime-only media/child-session fields.
@@ -436,7 +433,7 @@ async def _ensure_functions_loaded(toolkit: Any, server: str) -> dict[str, Any]:
 
 def _require_server_allowed(server: str) -> None:
     """Fail closed when a broker call targets a family outside this run."""
-    from src.core.tool_scope import current_tool_allowlist, normalize_family
+    from openagent_core.core.tool_scope import current_tool_allowlist, normalize_family
 
     allow = current_tool_allowlist()
     if allow is not None and normalize_family(server) not in allow:
@@ -446,7 +443,7 @@ def _require_server_allowed(server: str) -> None:
 
 
 def _list_servers_impl(pool: Any) -> list[dict[str, Any]]:
-    from src.core.tool_scope import current_tool_allowlist, normalize_family
+    from openagent_core.core.tool_scope import current_tool_allowlist, normalize_family
 
     allow = current_tool_allowlist()
     out: list[dict[str, Any]] = []
@@ -464,91 +461,44 @@ def _list_servers_impl(pool: Any) -> list[dict[str, Any]]:
     return out
 
 
-def _server_execution_host() -> dict[str, Any]:
-    return dict(SERVER_EXECUTION_HOST)
+def _authorized_catalog(pool):
+    from openagent_core.runtime import current_runtime, current_execution_context
+    runtime, context = current_runtime(), current_execution_context()
+    if runtime is None or context is None:
+        raise PermissionError("Tool discovery and calls require an authenticated runtime execution")
+    binding = getattr(pool, "_capability_binding", None)
+    if binding is None or binding.catalog is not runtime.capabilities:
+        raise PermissionError("MCP pool belongs to another runtime")
+    return runtime.capabilities, context
 
 
-def _split_server_location(server: str) -> tuple[str, str]:
-    """Return ``(location, bare_name)`` for a canonical/legacy MCP id.
-
-    Bare ids remain a compatibility alias for server MCPs. Unknown prefixes
-    are rejected rather than being stripped: location is a security boundary,
-    not a fuzzy naming hint.
-    """
-
-    value = str(server or "").strip()
-    if value.startswith("server:"):
-        return "server", value[len("server:"):]
-    if value.startswith("client:"):
-        return "client", value[len("client:"):]
-    if ":" in value:
-        raise ValueError(f"Unknown MCP execution location in {server!r}")
-    return "server", value
+async def _list_scoped_servers_impl(pool: Any) -> list[dict[str, Any]]:
+    catalog, context = _authorized_catalog(pool)
+    groups = {}
+    for tool in await catalog.discover(context):
+        entry = groups.setdefault(tool.source_id, {"name": tool.source_id, "source_ref": tool.source_id,
+                                                  "target_label": tool.target_label, "tool_count": 0})
+        entry["tool_count"] += 1
+    return sorted(groups.values(), key=lambda value: (value["target_label"], value["name"]))
 
 
-def _list_scoped_servers_impl(pool: Any) -> list[dict[str, Any]]:
-    """Per-turn canonical catalog: server MCPs plus this turn's client host."""
-
-    providers: list[ToolCatalogProvider] = [ServerMCPProvider(pool)]
-    from src.core.execution_origin import current_execution_origin
-
-    origin = current_execution_origin()
-    if origin is not None:
-        providers.append(InteractiveClientMCPProvider(origin.registry))
-    out = [item for provider in providers for item in provider.list_servers()]
-    # The child-run allowlist is location-agnostic: a family omitted from a
-    # delegated child's grant must not reappear merely because the interactive
-    # client exposes another implementation of it.
-    filtered: list[dict[str, Any]] = []
-    for item in out:
-        _location, bare_server = _split_server_location(str(item.get("name", "")))
-        try:
-            _require_server_allowed(bare_server)
-        except PermissionError:
-            continue
-        filtered.append(item)
-    out = filtered
-    out.sort(key=lambda item: item["name"])
-    return out
+def _descriptor_wire(tool):
+    return {"tool_ref": tool.tool_ref, "name": tool.name, "description": tool.description,
+            "input_schema": dict(tool.input_schema), "source_ref": tool.source_id,
+            "target_label": tool.target_label}
 
 
-def _provider_for_location(pool: Any, location: str) -> Any:
-    """Build the location backend for the current turn.
-
-    This function never searches available providers: the canonical prefix is
-    the routing decision.  In particular, an unavailable client backend is an
-    explicit failure rather than a server fallback.
-    """
-
-    if location == "server":
-        return ServerMCPProvider(pool)
-    if location == "client":
-        from src.core.execution_origin import current_execution_origin
-
-        origin = current_execution_origin()
-        if origin is None:
-            raise PermissionError(
-                "Client MCPs are unavailable: this is a server-owned turn or "
-                "the originating client did not advertise local capabilities."
-            )
-        return InteractiveClientMCPProvider(origin.registry)
-    raise ValueError(f"Unknown MCP execution location {location!r}")
+async def _list_scoped_tools_impl(pool: Any, source_ref: str) -> list[dict[str, Any]]:
+    catalog, context = _authorized_catalog(pool)
+    return [_descriptor_wire(tool) for tool in await catalog.discover(context) if tool.source_id == source_ref]
 
 
-def _list_scoped_tools_impl(pool: Any, server: str) -> list[dict[str, Any]]:
-    location, bare_server = _split_server_location(server)
-    _require_server_allowed(bare_server)
-    provider: ToolCatalogProvider = _provider_for_location(pool, location)
-    return provider.list_tools(bare_server)
-
-
-def _describe_scoped_tool_impl(
-    pool: Any, server: str, tool: str,
-) -> dict[str, Any]:
-    location, bare_server = _split_server_location(server)
-    _require_server_allowed(bare_server)
-    provider: ToolCatalogProvider = _provider_for_location(pool, location)
-    return provider.describe_tool(bare_server, tool)
+async def _describe_scoped_tool_impl(pool: Any, tool_ref: str) -> dict[str, Any]:
+    catalog, context = _authorized_catalog(pool)
+    tools = [tool for tool in await catalog.discover(context) if tool.tool_ref == tool_ref]
+    if len(tools) != 1:
+        raise LookupError("Unknown or revoked reference; discover the current tools")
+    return _descriptor_wire(tools[0])
 
 
 def _list_tools_impl(pool: Any, server: str) -> list[dict[str, Any]]:
@@ -578,7 +528,7 @@ def _list_tools_impl(pool: Any, server: str) -> list[dict[str, Any]]:
         # fails validation is indistinguishable from one that never ran. One
         # short line here removes a describe_tool round-trip AND the guess.
         try:
-            from src.core.execution_profile import lean_local_event_active
+            from openagent_core.core.execution_profile import lean_local_event_active
 
             if lean_local_event_active():
                 params = getattr(fn, "parameters", None) or {}
@@ -652,7 +602,7 @@ async def _resolve_tool(
     return None, None
 
 
-async def _call_tool_impl(
+async def _invoke_registered_tool(
     pool: Any, server: str, tool: str, args: dict | str | None,
 ) -> Any:
     _require_server_allowed(server)
@@ -669,7 +619,7 @@ async def _call_tool_impl(
         if {"run_workflow", "workflow_manager_run_workflow"} & candidates:
             if _tool_is_denied(server, tool):
                 _deny_tool(server, tool)
-            from src.core.execution_origin import current_execution_origin
+            from openagent_core.core.execution_origin import current_execution_origin
 
             call_args = _decode_tool_args(args)
             runner = getattr(pool, "_interactive_workflow_runner", None)
@@ -724,39 +674,14 @@ async def _call_tool_impl(
     # ``scripts/tests/test_mcp.py``) and fall back to direct call for
     # plain functions.
     callable_to_call = getattr(fn, "entrypoint", None) or fn
-    # Small local models sometimes copy optional filters from another search
-    # surface (observed: ``tags``/``include`` on vault_search). For a read-only
-    # tool, dropping keys that the actual callable signature does not accept is
-    # safe and avoids spending another complete model round-trip. Never do this
-    # for mutations: silently dropping ``dryRun``, confirmation, amount, or an
-    # idempotency key could change external state.
-    low_tool = str(tool or getattr(fn, "name", "") or "").lower()
-    leaf = low_tool.rsplit("_", 1)[-1]
-    read_only = (
-        any(marker in low_tool for marker in (
-            "_get_", "_list_", "_search", "_read_", "_lookup", "_detect",
-            "_describe", "_stats", "_brief",
-        ))
-        or leaf in {"get", "list", "search", "read", "lookup", "detect", "describe", "stats", "brief"}
-    )
-    if read_only and args:
-        try:
-            sig = inspect.signature(callable_to_call)
-            accepts_kwargs = any(
-                p.kind is inspect.Parameter.VAR_KEYWORD
-                for p in sig.parameters.values()
-            )
-            if not accepts_kwargs:
-                allowed = set(sig.parameters)
-                args = {key: value for key, value in args.items() if key in allowed}
-        except (TypeError, ValueError):
-            pass
+    # The caller used the exact discovered reference and schema. Never silently
+    # drop unknown arguments, including confirmations or idempotency keys.
 
     # Runtime Functions must pass through FunctionCall so their pre/post/tool
     # hooks, run context, media context and error semantics remain identical to
     # a directly model-invoked tool. Lightweight adapter/test callables keep
     # the compatibility path below.
-    from src.mcp._runtime.function import Function, FunctionCall
+    from openagent_core.mcp._runtime.function import Function, FunctionCall
 
     if isinstance(fn, Function):
         execution = await FunctionCall(function=fn, arguments=args).aexecute()
@@ -852,22 +777,16 @@ def _stamp_execution_host(value: Any, host: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _call_scoped_tool_impl(
-    pool: Any, server: str, tool: str, args: dict | str | None,
-) -> dict[str, Any]:
-    location, bare_server = _split_server_location(server)
-    _require_server_allowed(bare_server)
-    args = _decode_tool_args(args)
-    dispatcher: ToolDispatcher = _provider_for_location(pool, location)
-    if location == "client":
-        from src.mcp.servers.shell.adapters import current_session_id
+async def _call_scoped_tool_impl(pool: Any, tool_ref: str, args: dict | str | None = None) -> Any:
+    catalog, context = _authorized_catalog(pool)
+    result = await catalog.call_tool(tool_ref, _decode_tool_args(args), context)
+    return coerce_mcp_result_to_jsonable(result)
 
-        session_id = current_session_id()
-    else:
-        session_id = None
-    return await dispatcher.call_tool(
-        bare_server, tool, args, session_id=session_id,
-    )
+
+async def _call_tool_impl(pool: Any, source_ref: str, tool: str, args: dict | str | None = None) -> Any:
+    """Compatibility logical binding; all authorization uses the public catalog."""
+    from openagent_core.engine import call_tool
+    return await call_tool(pool, source_ref, tool, _decode_tool_args(args))
 
 
 def _json_dump(value: Any) -> str:
@@ -886,7 +805,7 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
     in-process Toolkits skip that step (no ``tool_name_prefix``
     constructor arg), so we apply the prefix manually.
     """
-    from src.mcp._runtime import Toolkit
+    from openagent_core.mcp._runtime import Toolkit
 
     if pool is None:
         raise RuntimeError("tool-search runtime adapter requires a pool kwarg")
@@ -897,34 +816,33 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
         Start here to discover tools beyond the upfront tool list — the
         OpenAgent runtime trims MCPs above the provider's tool budget.
         """
-        return _list_scoped_servers_impl(pool)
+        return await _list_scoped_servers_impl(pool)
 
-    async def tool_search_list_tools(server: str) -> list[dict[str, Any]]:
-        """List the tools of a single MCP (name + 1-line description)."""
-        return _list_scoped_tools_impl(pool, server)
+    async def tool_search_list_tools(source_ref: str) -> list[dict[str, Any]]:
+        """List tools, opaque references and schemas for one discovered source."""
+        return await _list_scoped_tools_impl(pool, source_ref)
 
-    async def tool_search_describe_tool(server: str, tool: str) -> dict[str, Any]:
-        """Return the full description and JSON schema of a specific tool."""
-        return _describe_scoped_tool_impl(pool, server, tool)
+    async def tool_search_describe_tool(tool_ref: str) -> dict[str, Any]:
+        """Return the current description and JSON schema for an exact tool reference."""
+        return await _describe_scoped_tool_impl(pool, tool_ref)
 
     async def tool_search_call_tool(
-        server: str, tool: str, args: dict | str | None = None,
+        tool_ref: str, args: dict | str | None = None,
     ) -> Any:
         """Invoke any tool on any connected MCP and return its result.
 
         Use this when the tool you need was trimmed from the upfront list.
 
         Args:
-            server: Connected MCP server name.
-            tool: Exact tool name returned by list_tools.
+            tool_ref: Exact opaque reference returned by discovery. It fixes the target and tool.
             args: Target tool arguments as a nested object. Copy required
                 properties from describe_tool's input_schema into this object.
                 A JSON-encoded object string is also accepted for provider
                 compatibility.
         """
-        return await _call_scoped_tool_impl(pool, server, tool, args)
+        return await _call_scoped_tool_impl(pool, tool_ref, args)
 
-    return Toolkit(
+    toolkit = Toolkit(
         name="tool-search",
         tools=[
             tool_search_list_servers,
@@ -933,3 +851,6 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
             tool_search_call_tool,
         ],
     )
+    for function in _functions_dict(toolkit).values():
+        function.process_entrypoint()
+    return toolkit

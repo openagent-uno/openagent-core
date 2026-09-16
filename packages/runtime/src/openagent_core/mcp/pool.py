@@ -33,8 +33,8 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.core.logging import elog
-from src.mcp.builtins import (
+from openagent_core.core.logging import elog
+from openagent_core.mcp.builtins import (
     BUILTIN_MCP_SPECS,
     DEFAULT_MCPS,
     resolve_builtin_entry,
@@ -296,6 +296,7 @@ class _ServerSpec:
     in_process: bool = False
     adapter_module: str | None = None
     runtime_toolkit_factory: str = "build_runtime_toolkit"
+    trusted_module: str | None = None
 
     @property
     def is_stdio(self) -> bool:
@@ -377,11 +378,9 @@ def _resolve_specs(
         if "builtin" in entry:
             try:
                 kwargs = resolve_builtin_entry(entry["builtin"], env=entry.get("env"))
-                if entry["builtin"] == "filesystem":
-                    kwargs["args"] = list(entry.get("args") or [])
                 specs.append(_spec_from_kwargs(kwargs))
             except Exception as exc:
-                logger.error("Failed to load built-in MCP '%s': %s", entry["builtin"], exc)
+                raise ValueError(f"Cannot configure selected module {entry['builtin']!r}: {exc}") from exc
         else:
             specs.append(_ServerSpec(
                 name=entry.get("name", ""),
@@ -411,33 +410,6 @@ async def _specs_from_db(db: Any, db_path: str | None) -> list[_ServerSpec]:
     of being duplicated.
     """
     rows = await db.list_mcps(enabled_only=True)
-    chrome_scope_env: dict[str, str] = {}
-    if any(
-        (row.get("builtin_name") or row.get("name")) == "agent-in-chrome"
-        for row in rows
-    ):
-        network_id: str | None = None
-        try:
-            from src.network.coordinator.store import CoordinatorStore
-
-            network = await CoordinatorStore(db).get_network_role()
-            if network is not None:
-                network_id = str(network.get("network_id") or "").strip() or None
-        except Exception as exc:  # noqa: BLE001 - standalone/test DBs may lack network tables
-            logger.debug("Agent in Chrome network scope lookup failed: %s", exc)
-        from src.mcp.builtins import agent_chrome_network_env
-
-        chrome_scope_env = agent_chrome_network_env(network_id, db_path=db_path)
-
-    def _builtin_env(name: str, raw: Any) -> dict[str, str] | None:
-        values = dict(raw or {})
-        if name == "agent-in-chrome":
-            # Profile, extension directory and port are security boundaries,
-            # not operator hints: trusted network-derived values win over a
-            # stale/global MCP row.
-            values.update(chrome_scope_env)
-        return values or None
-
     specs: list[_ServerSpec] = []
     for row in rows:
         kind = row.get("kind")
@@ -451,18 +423,7 @@ async def _specs_from_db(db: Any, db_path: str | None) -> list[_ServerSpec]:
                 if row.get("builtin_name"):
                     entry = {
                         "builtin": row["builtin_name"],
-                        "env": _builtin_env(
-                            row["builtin_name"], row.get("env"),
-                        ),
-                        "args": row.get("args") or [],
-                    }
-                elif name == "filesystem":
-                    # Existing databases predate the shared host-tools core and
-                    # stored filesystem as a raw npx default. Route those rows
-                    # through the same in-process adapter as fresh installs.
-                    entry = {
-                        "builtin": "filesystem",
-                        "env": row.get("env") or None,
+                        "env": dict(row.get("env") or {}),
                         "args": row.get("args") or [],
                     }
                 else:
@@ -474,14 +435,10 @@ async def _specs_from_db(db: Any, db_path: str | None) -> list[_ServerSpec]:
                         "env": row.get("env") or None,
                     }
                 kwargs = resolve_default_entry(entry, db_path=db_path)
-                if kwargs and entry.get("builtin") == "filesystem":
-                    kwargs["args"] = list(entry.get("args") or [])
                 if kwargs:
                     specs.append(_spec_from_kwargs(kwargs))
             elif kind == "builtin":
                 extra_env = dict(row.get("env") or {})
-                if row.get("builtin_name") == "agent-in-chrome":
-                    extra_env.update(chrome_scope_env)
                 if row.get("builtin_name") in ("scheduler", "mcp-manager", "model-manager"):
                     # Mirror the db-path injection that resolve_default_entry
                     # does for the scheduler so runtime-created builtin rows
@@ -492,8 +449,6 @@ async def _specs_from_db(db: Any, db_path: str | None) -> list[_ServerSpec]:
                     row["builtin_name"],
                     env=extra_env or None,
                 )
-                if row.get("builtin_name") == "filesystem":
-                    kwargs["args"] = list(row.get("args") or [])
                 specs.append(_spec_from_kwargs(kwargs))
             else:  # custom
                 specs.append(_ServerSpec(
@@ -517,6 +472,7 @@ def _spec_from_kwargs(kwargs: dict[str, Any]) -> _ServerSpec:
     """Convert ``resolve_*_entry``'s loose dict into a typed ``_ServerSpec``."""
     return _ServerSpec(
         name=kwargs.get("name", ""),
+        trusted_module=kwargs.get("_trusted_module"),
         command=kwargs.get("command"),
         args=kwargs.get("args") or [],
         url=kwargs.get("url"),
@@ -571,7 +527,11 @@ class MCPPool:
     """
 
     def __init__(self, specs: list[_ServerSpec]):
+        names = [spec.name for spec in specs]
+        if any(not name for name in names) or len(set(names)) != len(names):
+            raise ValueError("MCP source names must be nonempty and unique")
         self.specs: list[_ServerSpec] = specs
+        self._capability_binding = None
         # Lazily populated on connect_all. Each toolkit gets its *own*
         # supervisor task (parallel arrays, ``_runtime_toolkits[i]`` is owned
         # by ``_toolkit_supervisors[i]``). The supervisor holds the
@@ -628,6 +588,17 @@ class MCPPool:
         # may change ``self._tool_counts``. The render is a 1-2ms walk
         # that adds up across every prompt construction.
         self._catalog_summary_cache: str | None = None
+
+    def bind_capability_catalog(self, catalog, *, trusted_modules=(), target_label="Agent workspace", user_sources=frozenset()):
+        """Bind this pool to one public catalog; only host code establishes trust."""
+        from .catalog import PoolCatalogBinding
+        if self._capability_binding is not None:
+            if self._capability_binding.catalog is not catalog:
+                raise ValueError("An MCP pool cannot belong to multiple runtime catalogs")
+            self._capability_binding.sync()
+            return
+        self._capability_binding = PoolCatalogBinding(self, catalog, trusted_modules=tuple(trusted_modules), target_label=target_label, user_sources=frozenset(user_sources))
+        self._capability_binding.sync()
 
     def bind_agent_runtime(self, agent: Any | None) -> None:
         """Attach the one live Agent to in-process management toolkits."""
@@ -885,6 +856,8 @@ class MCPPool:
             # the cached catalog summary so the next prompt render
             # rebuilds it.
             self._catalog_summary_cache = None
+            if self._capability_binding is not None:
+                self._capability_binding.sync()
 
     async def close_all(self) -> None:
         """Close every connected toolkit. Per-toolkit supervisors are closed
@@ -906,6 +879,8 @@ class MCPPool:
             self._runtime_toolkits.clear()
             self._in_process_runtime_toolkits.clear()
             self._toolkit_by_name.clear()
+            if self._capability_binding is not None:
+                self._capability_binding.close()
             self._connected = False
         # Close in reverse registration order so toolkits that share
         # resources tear down the way AsyncExitStack would have.
@@ -973,6 +948,8 @@ class MCPPool:
             return 0
         self._runtime_toolkits.append(new_toolkit)
         self._toolkit_by_name[spec.name] = new_toolkit
+        if self._capability_binding is not None:
+            self._capability_binding.sync()
         count = len(getattr(new_toolkit, "functions", {}) or {})
         # If the FRESH toolkit also stealth-fails, run recovery one more
         # time — but do NOT recurse into another re-spawn. A second-spawn
@@ -1347,11 +1324,11 @@ class MCPPool:
         try:
             # Import directly from the submodule (not via the package
             # ``__init__``) so test fakes installed in ``sys.modules`` at
-            # ``src.mcp._runtime.mcp.mcp`` are picked up — going through
+            # ``openagent_core.mcp._runtime.mcp.mcp`` are picked up — going through
             # the package re-uses the real class cached at first
             # import-time.
-            from src.mcp._runtime.mcp.mcp import MCPTools
-            from src.mcp._runtime.mcp.params import StreamableHTTPClientParams
+            from openagent_core.mcp._runtime.mcp.mcp import MCPTools
+            from openagent_core.mcp._runtime.mcp.params import StreamableHTTPClientParams
             from mcp import StdioServerParameters
         except ImportError as exc:
             logger.error("Cannot build MCP toolkits — runtime or mcp SDK missing: %s", exc)
@@ -1401,12 +1378,12 @@ class MCPPool:
 
     @property
     def runtime_toolkits(self) -> list[Any]:
-        """Connected ``MCPTools`` instances plus in-process Toolkits.
+        """Authorized model surface; raw leaf toolkits never leave the pool.
 
-        Pass directly to ``Agent(tools=...)``; both subprocess MCPTools and
-        in-process Toolkit objects satisfy the same runtime interface.
+        All tools are discovered and called through the same catalog dispatcher,
+        including callers that still use this pre-v1 provider accessor.
         """
-        return list(self._runtime_toolkits) + list(self._in_process_runtime_toolkits)
+        return self.runtime_toolkits_tool_search_only()
 
     def toolkit_by_name(self, mcp_name: str) -> Any | None:
         """Resolve a connected toolkit by MCP name, or ``None`` when
@@ -1414,22 +1391,7 @@ class MCPPool:
         toolkits — used by the workflow executor to dispatch
         ``mcp-tool`` blocks.
         """
-        toolkit = self._toolkit_by_name.get(mcp_name)
-        if toolkit is not None:
-            return toolkit
-        # A model that read "BillingBear" in a note will ask for
-        # "BillingBear". Exact-match only turned that into "MCP is not loaded"
-        # and cost a whole round-trip to recover from - measured on a local
-        # model, which then wandered off the tool entirely. Server names are
-        # identities, not case-sensitive secrets: fall back to a normalised
-        # match before declaring the MCP absent.
-        wanted = _normalized_mcp_name(mcp_name)
-        if not wanted:
-            return None
-        for name, candidate in self._toolkit_by_name.items():
-            if _normalized_mcp_name(name) == wanted:
-                return candidate
-        return None
+        return self._toolkit_by_name.get(mcp_name)
 
     def list_mcp_tools(self) -> list[dict[str, Any]]:
         """Shape-for-UI list of every loaded MCP and the tool names it
@@ -1497,41 +1459,8 @@ class MCPPool:
         return ""
 
     def runtime_toolkits_under_budget(self, budget: int) -> list[Any]:
-        """Subset of ``runtime_toolkits`` whose combined tool count fits ``budget``.
-
-        In-process toolkits (including ``tool-search``) are always
-        included — they're cheap and ``tool-search`` is the recovery
-        channel for trimmed MCPs. Subprocess toolkits are added in
-        alphabetical name order; the next one is dropped when adding it
-        would push the total over ``budget``. Dropped MCPs remain
-        invocable via ``tool-search.call_tool``.
-
-        Pass ``budget < 0`` to skip trimming entirely (legacy callers /
-        tests).
-        """
-        if budget < 0:
-            return self.runtime_toolkits
-
-        in_process = list(self._in_process_runtime_toolkits)
-        used = sum(self._toolkit_tool_count(tk) for tk in in_process)
-        remaining = max(0, budget - used)
-
-        subprocess_pairs = sorted(
-            ((self._toolkit_name(tk), tk) for tk in self._runtime_toolkits),
-            key=lambda p: _mcp_priority_key(p[0]),
-        )
-        kept: list[Any] = []
-        for _, tk in subprocess_pairs:
-            n = self._toolkit_tool_count(tk)
-            # n == 0 means the subprocess connected but contributed no
-            # tools (or failed to connect). Including it would sneak past
-            # any budget — keeping the noisy tail of dead subprocess MCPs
-            # even on the tightest cap. Only keep when there's something
-            # to contribute and the budget can absorb it.
-            if n > 0 and n <= remaining:
-                kept.append(tk)
-                remaining -= n
-        return kept + in_process
+        """Compatibility provider view: all leaves use the authorized catalog."""
+        return self.runtime_toolkits_tool_search_only()
 
     # ── Defer-all view (v0.14+) ─────────────────────────────────────────
     #
@@ -1628,9 +1557,9 @@ class MCPPool:
         if not summary:
             return "_(no MCPs connected.)_"
         # Delegate the markdown shape to the shared renderer in
-        # ``src.core.prompts`` so the pool's cached output and the
+        # ``openagent_core.core.prompts`` so the pool's cached output and the
         # duck-typed test fallback can't drift apart.
-        from src.core.prompts import _render_catalog_summary_lines
+        from openagent_core.core.prompts import _render_catalog_summary_lines
 
         return _render_catalog_summary_lines(
             summary, self.server_descriptions(), self.server_tool_names()
