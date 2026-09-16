@@ -26,6 +26,9 @@ def __getattr__(name: str):
     if name == 'MCPPool':
         from .mcp.pool import MCPPool
         return MCPPool
+    if name == 'PoolCapabilitySource':
+        from .mcp.catalog import PoolCapabilitySource
+        return PoolCapabilitySource
     raise AttributeError(name)
 
 
