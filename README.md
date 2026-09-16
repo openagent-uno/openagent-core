@@ -1,125 +1,23 @@
-<p align="center">
-  <img src="assets/openagent-logo.png" alt="OpenAgent" width="360" />
-</p>
+# OpenAgent core
 
-<p align="center">
-  Persistent AI agent framework with MCP tools, long-term memory, and multi-channel support.
-  <br />
-  Model agnostic by design, with three independent apps: Agent Server, CLI Client, and Desktop App.
-</p>
+OpenAgent is an embeddable Python agent runtime. The minimum package exposes
+identity, authorization, capability, prompt, lifecycle, and durable run contracts
+without installing the standalone product or computer tools.
 
-<p align="center">
-  <a href="https://openagent.uno/">Website</a>
-  ·
-  <a href="https://openagent.uno/downloads">Downloads</a>
-  ·
-  <a href="https://openagent.uno/guide/">Documentation</a>
-  ·
-  <a href="https://github.com/openagent-uno/openagent-server/releases">Releases</a>
-</p>
+The optional engine preserves OpenAgent's agent algorithms and memory vault.
+Products supply authentication, system instructions, resources, tools, and policy.
+GlassPalace builds its own worker and sandbox from pinned core packages; the
+standalone app/CLI/server are maintained in the `openagent` product monorepo.
 
-<p align="center">
-  <a href="https://pypi.org/project/openagent-framework/"><img alt="PyPI" src="https://img.shields.io/pypi/v/openagent-framework?style=flat-square&color=ef4136" /></a>
-  <a href="https://github.com/openagent-uno/openagent-server/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/openagent-uno/openagent-server?style=flat-square&color=f26b3d" /></a>
-  <a href="https://github.com/openagent-uno/openagent-server/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/openagent-uno/openagent-server?style=flat-square&color=fbb040" /></a>
-</p>
+This isolated `1.0.0b1` migration branch is **under implementation**. See the
+[documentation](docs/README.md) and [acceptance ledger](docs/migration/implementation.md)
+for verified behavior and the remaining release gates.
 
-## Overview
-
-OpenAgent turns an LLM into a persistent agent that can remember, act, and stay reachable across different client surfaces. It is model agnostic by design: Claude CLI/API, Z.ai GLM, Ollama, LM Studio, vLLM, and OpenAI-compatible providers all use the same MCP tools, memory model, channels, and clients.
-
-## Why OpenAgent
-
-- Model-agnostic execution with Claude CLI/API, Z.ai GLM, Ollama, LM Studio, vLLM, and OpenAI-compatible endpoints
-- **P2P networking** over Iroh QUIC with coordinator-signed device certificates — no shared tokens, no open ports
-- Bundled MCP tools for filesystem, editor, shell, web search, browser automation, messaging, scheduling, and vault operations
-- Obsidian-compatible markdown memory with wikilinks, frontmatter, and graph-friendly notes
-- Native service installation, cron scheduling, dream mode maintenance, and auto-update support
-- Shared desktop app built with Electron and React Native Web for chat, configuration, MCPs, and memory exploration
-
-## Three Independent Apps
-
-- **Agent Server**: the persistent runtime in `openagent/`, available as a standalone executable or pip package (`openagent-framework`)
-- **CLI Client**: the terminal client, installed as `openagent-cli`
-- **Desktop App**: the Electron UI, distributed as platform-specific binaries
-
-Tagged GitHub releases are the shared download point for all three.
-
-## Quick Start
-
-### Option A: Standalone Executable (recommended)
-
-Download the latest executable for your platform from [GitHub Releases](https://github.com/openagent-uno/openagent-server/releases) and run:
-
-```bash
-./openagent serve ./my-agent
+```sh
+pip install openagent-core openagent-storage-sqlite
+# Hosts that need the full algorithm select the relevant extras:
+pip install 'openagent-core[engine,providers,modules,retrieval]'
 ```
 
-This creates a self-contained agent directory at `./my-agent` with default config, database, and memory vault. No Python required.
-
-### Option B: pip install
-
-```bash
-pip install openagent-framework[all]
-openagent serve
-```
-
-### Multi-Agent
-
-Run multiple independent agents in parallel, each with its own data directory:
-
-```bash
-./openagent serve ./agent-work
-./openagent serve ./agent-home
-```
-
-Each directory contains its own `openagent.yaml`, database, memories, and logs. Each agent gets its own Iroh identity and network configuration.
-
-### Connecting to your agent
-
-On first run, `openagent serve` prints an invite ticket (`oa1...`). Paste this into the desktop app or CLI to connect securely over Iroh P2P. No port forwarding, no shared tokens.
-
-## Desktop App
-
-Download packaged desktop builds from [GitHub Releases](https://github.com/openagent-uno/openagent-server/releases) or from the [OpenAgent downloads page](https://openagent.uno/downloads). To build locally:
-
-```bash
-cd app
-./setup.sh
-./start.sh macos
-```
-
-## Documentation
-
-The canonical documentation now lives on the website:
-
-- [Getting Started](https://openagent.uno/guide/getting-started)
-- [Invitation System & Networking](https://openagent.uno/guide/invitation-system)
-- [Desktop App](https://openagent.uno/guide/desktop-app)
-- [Models](https://openagent.uno/guide/models)
-- [MCP Tools](https://openagent.uno/guide/mcp)
-- [Memory & Vault](https://openagent.uno/guide/memory)
-- [Configuration Reference](https://openagent.uno/guide/config-reference)
-
-## Repository Layout
-
-```text
-OpenAgent/
-├── openagent/          # Python framework runtime
-├── app/                # Universal app + Electron wrapper
-├── cli/                # Terminal client package
-├── docs/               # VitePress website and documentation source
-├── scripts/            # Build and release scripts
-└── assets/             # Shared branding assets
-```
-
-Gateway integration: [shared sessions, steering, replay and presence](docs/collaboration.md).
-
-Session model lookup accepts the same provider-qualified identities exposed by
-the catalog, including vendor IDs with colons or slashes. A differently shaped
-legacy row cannot shadow a qualified model, and disabled models/providers remain
-disabled when resolving a pin.
-
-## License
-
-MIT
+Packages shown above are distribution names; this prerelease is not yet
+published. Local qualification installs built wheels from the migration wheelhouse.
