@@ -19,6 +19,7 @@ import functools
 from openagent_core.persistence import run_sync
 
 from .search import enqueue_source, restore_runtime_search_intents
+from .ancestry import ensure_delegated_ancestry
 
 from openagent_core.contracts import (AcceptedRunRequest, PrincipalRef, ExecutionContext, IdempotencyConflict, RunEvent,
     RunRecord, RunRequest, TERMINAL_STATUSES, canonical_json)
@@ -97,6 +98,7 @@ class SqliteRuntimeStore:
             self._db.execute('PRAGMA journal_mode=WAL')
             self._db.execute('PRAGMA synchronous=FULL')
             with self._transaction() as db:
+                ensure_delegated_ancestry(db)
                 restore_runtime_search_intents(db, int(time.time()*1000))
         except BaseException:
             self._close()
@@ -126,7 +128,7 @@ class SqliteRuntimeStore:
         metadata = json.loads(row['metadata_json'])
         return RunRecord(row['id'],row['session_id'],row['tenant_id'],row['status'],
                          metadata.get('request_digest',''), json.loads(row['output_json']) if row['output_json'] else None,
-                         metadata.get('cancel_requested',False))
+                         metadata.get('cancel_requested',False),row['delegated_parent_run_id'])
 
     def _get(self, run_id: str) -> RunRecord | None:
         row = self.connection.execute('SELECT * FROM session_runs WHERE id=?',(run_id,)).fetchone()
@@ -194,7 +196,7 @@ class SqliteRuntimeStore:
                       'deadline_seconds':request.deadline_seconds,'cancel_requested':bool(reservation),
                       'attachments':request.attachments,'model_ref':request.model_ref,'steer_run_id':request.steer_run_id}
             db.execute('''INSERT INTO session_runs(id,tenant_id,session_id,ordinal,idempotency_key,runner_kind,
-                agent_id,status,status_raw,input_json,metadata_json,raw_envelope_json,raw_envelope_schema,created_at_ms,parent_run_id)
+                agent_id,status,status_raw,input_json,metadata_json,raw_envelope_json,raw_envelope_schema,created_at_ms,delegated_parent_run_id)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(request.run_id,context.tenant_id,request.session_id,ordinal,
                 request.idempotency_key,'agent',context.agent_id,'queued','accepted',canonical_json(request.input),
                 canonical_json(metadata),'{}',1,now,context.parent_run_id))
@@ -364,7 +366,7 @@ class SqliteRuntimeStore:
             self._transition(row[0],'interrupted',output={'reason':'runtime_restarted','effects':'unknown','retry_allowed':False})
 
     def _children(self,run_id: str) -> tuple[RunRecord,...]:
-        rows=self.connection.execute("SELECT * FROM session_runs WHERE json_extract(metadata_json,'$.execution_context.parent_run_id')=? ORDER BY created_at_ms,id",(run_id,))
+        rows=self.connection.execute("SELECT * FROM session_runs WHERE delegated_parent_run_id=? ORDER BY created_at_ms,id",(run_id,))
         return tuple(self._record(row) for row in rows)
 
     def _accepted_request(self, run_id: str) -> AcceptedRunRequest:

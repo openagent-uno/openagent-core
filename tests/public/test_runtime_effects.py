@@ -105,7 +105,9 @@ class Effects(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([r.run_id for r in await self.runtime.children('parent',self.ctx)],['child'])
         row=self.store.connection.execute("SELECT parent_session_id,root_session_id FROM sessions_v2 WHERE id='child-session'").fetchone()
         self.assertEqual(tuple(row),('session','session'))
-        self.assertEqual(self.store.connection.execute("SELECT parent_run_id FROM session_runs WHERE id='child'").fetchone()[0],'parent')
+        self.assertEqual((await self.runtime.get_run('child',self.ctx)).parent_run_id,'parent')
+        self.assertEqual(self.store.connection.execute("SELECT delegated_parent_run_id FROM session_runs WHERE id='child'").fetchone()[0],'parent')
+        self.assertIsNone(self.store.connection.execute("SELECT parent_run_id FROM session_runs WHERE id='child'").fetchone()[0])
 
     async def test_automatic_operation_uses_refreshed_delegation_and_same_run_authority(self):
         token=ContextVar('test_ephemeral_token',default=None);active={'allowed':True}

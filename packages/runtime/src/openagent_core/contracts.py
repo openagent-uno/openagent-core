@@ -180,6 +180,7 @@ class RunRecord:
     request_digest: str
     output: Any = None
     cancel_requested: bool = False
+    parent_run_id: str | None = None
 
     @property
     def terminal(self) -> bool:
