@@ -3326,13 +3326,18 @@ class MemoryDB:
         # turn instead of being refused. Isolating it on its own connection
         # also means a long statement elsewhere cannot make an inbound webhook
         # queue behind it.
-        conn = await aiosqlite.connect(
+        # A host management transaction already owns BEGIN IMMEDIATE. Opening
+        # a second writer would deadlock against it and detach authorization
+        # from the enqueue; borrow without committing/closing its connection.
+        borrowed = not self._owns_connection
+        conn = self._conn if borrowed else await aiosqlite.connect(
             self.db_path, timeout=delivery_lock_wait_ms() / 1000.0,
         )
         try:
-            await conn.execute(f"PRAGMA busy_timeout = {delivery_lock_wait_ms()}")
-            await conn.execute("PRAGMA foreign_keys = ON")
-            await conn.execute("BEGIN IMMEDIATE")
+            if not borrowed:
+                await conn.execute(f"PRAGMA busy_timeout = {delivery_lock_wait_ms()}")
+                await conn.execute("PRAGMA foreign_keys = ON")
+                await conn.execute("BEGIN IMMEDIATE")
             await conn.execute(
                 "INSERT INTO event_deliveries "
                 "(id, event_id, source, external_id, status, payload_json, started_at, "
@@ -3348,9 +3353,11 @@ class MemoryDB:
             await conn.execute(
                 "UPDATE events SET last_triggered_at = ? WHERE id = ?", (now, event_id),
             )
-            await conn.commit()
+            if not borrowed:
+                await conn.commit()
         finally:
-            await conn.close()
+            if not borrowed:
+                await conn.close()
         return did
 
     async def update_event_delivery(self, delivery_id: str, **kwargs: Any) -> None:
