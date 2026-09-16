@@ -34,11 +34,11 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
-from src.core import tool_trace, vault_recall
-from src.core.logging import elog
-from src.core.tool_scope import current_tool_allowlist, normalize_family
-from src.models.base import BaseModel, ModelResponse
-from src.models.catalog import (
+from openagent_core.core import tool_trace, vault_recall
+from openagent_core.core.logging import elog
+from openagent_core.core.tool_scope import current_tool_allowlist, normalize_family
+from openagent_core.models.base import BaseModel, ModelResponse
+from openagent_core.models.catalog import (
     DEFAULT_CEREBRAS_BASE_URL,
     DEFAULT_MISTRAL_BASE_URL,
     DEFAULT_MOONSHOT_BASE_URL,
@@ -55,7 +55,7 @@ from src.models.catalog import (
     normalize_runtime_model_id,
     split_runtime_id,
 )
-from src.models.credential_pool import get_or_build_pool
+from openagent_core.models.credential_pool import get_or_build_pool
 
 logger = logging.getLogger(__name__)
 
@@ -97,12 +97,12 @@ _DEFAULT_MAX_TOOL_CALLS_PER_RUN = 60
 
 
 def _max_tool_calls_per_run() -> Optional[int]:
-    from src.core.execution_policy import current_max_tool_calls
+    from openagent_core.core.execution_policy import current_max_tool_calls
 
     policy_limit = current_max_tool_calls()
     if policy_limit is not None:
         return policy_limit
-    from src.core.execution_profile import (
+    from openagent_core.core.execution_profile import (
         lean_local_event_active,
         lean_local_task_active,
     )
@@ -147,7 +147,7 @@ def _execution_cache_key(system: str | None) -> tuple[str, str]:
     while the synthetic cache suffix must never leak into the model prompt.
     """
     system_text = (system or "").strip()
-    from src.core.execution_policy import current_execution_policy
+    from openagent_core.core.execution_policy import current_execution_policy
 
     policy = current_execution_policy()
     allow = current_tool_allowlist()
@@ -241,7 +241,7 @@ def _capture_log_errors():
 # generate() call which was global-state thrash on the hot path.
 os.environ.setdefault("AGNO_LOG_TRACEBACKS", "true")
 try:
-    from src.core._runner.utils.log import set_log_tracebacks as _agno_set_log_tracebacks
+    from openagent_core.core._runner.utils.log import set_log_tracebacks as _agno_set_log_tracebacks
     _agno_set_log_tracebacks(True)
 except Exception:  # noqa: BLE001
     pass
@@ -286,7 +286,7 @@ def _agno_event_types() -> dict[str, tuple]:
     ``tool_completed``, ``tool_error``. Team types are silently
     omitted on runtime builds that don't ship the team module.
     """
-    from src.core._run_state.agent import (
+    from openagent_core.core._run_state.agent import (
         RunCompletedEvent as AgentRunCompletedEvent,
         RunContentEvent as AgentRunContentEvent,
         ToolCallStartedEvent as AgentToolCallStartedEvent,
@@ -299,7 +299,7 @@ def _agno_event_types() -> dict[str, tuple]:
     tool_error: tuple = (AgentToolCallErrorEvent,)
     run_completed: tuple = (AgentRunCompletedEvent,)
     try:
-        from src.core._run_state.team import (
+        from openagent_core.core._run_state.team import (
             RunCompletedEvent as TeamRunCompletedEvent,
             RunContentEvent as TeamRunContentEvent,
             ToolCallStartedEvent as TeamToolCallStartedEvent,
@@ -325,7 +325,7 @@ def _agno_event_types() -> dict[str, tuple]:
 
 def _evict_oldest(cache: OrderedDict[str, Any], max_size: int) -> None:
     """Dispose and pop old runtimes so eviction also releases SQLite readers."""
-    from src.models.runtime_db_lifecycle import close_runtime_databases
+    from openagent_core.models.runtime_db_lifecycle import close_runtime_databases
 
     while len(cache) > max_size:
         _key, runtime = cache.popitem(last=False)
@@ -340,9 +340,9 @@ def _system_cache_key(system: str | None) -> str:
     string, so ``_agno_agents`` / ``_agno_teams`` would miss on every
     session AND grow unbounded with session count.
     """
-    if not system:
-        return ""
-    return _SESSION_ID_TAG_RE.sub("", system).strip()
+    from openagent_core.prompts import split_prompt
+
+    return split_prompt(system or "")[0].strip()
 _INCOMPATIBLE_TOOL_FAMILIES_BY_PROVIDER: dict[str, frozenset[str]] = {
     # DeepSeek v4 flash/pro chat completions are text-only on the official
     # API, so computer-control screenshot artifacts (image parts) fail
@@ -563,7 +563,7 @@ def _is_error_status(status_obj: Any) -> bool:
     if status_obj is None:
         return False
     try:
-        from src.core._run_state.base import RunStatus
+        from openagent_core.core._run_state.base import RunStatus
         if status_obj == RunStatus.error:
             return True
     except Exception:  # noqa: BLE001
@@ -713,7 +713,7 @@ def _thinking_kwarg(provider_name: str, model_id: str) -> dict[str, Any]:
         return {}
     if budget < 1024:
         return {}
-    from src.models.providers.anthropic import Claude
+    from openagent_core.models.providers.anthropic import Claude
 
     if not Claude.supports_extended_thinking(model_id):
         return {}
@@ -772,13 +772,13 @@ RUNTIME_PROVIDER_CLASSES: dict[str, tuple[str, str, dict[str, Any]]] = {
     # opt-in and no breakpoints to place. Anthropic is the only provider on this
     # path where caching is something the caller must explicitly ask for.
     "anthropic": (
-        "src.models.providers.anthropic",
+        "openagent_core.models.providers.anthropic",
         "Claude",
         {"cache_system_prompt": True, "cache_tools": True},
     ),
-    "openai": ("src.models.providers.openai", "OpenAIChat", {}),
-    "google": ("src.models.providers.google", "Gemini", {}),
-    "groq": ("src.models.providers.groq", "Groq", {}),
+    "openai": ("openagent_core.models.providers.openai", "OpenAIChat", {}),
+    "google": ("openagent_core.models.providers.google", "Gemini", {}),
+    "groq": ("openagent_core.models.providers.groq", "Groq", {}),
     # ``_provider_overrides.DeepSeekTextOnly`` rewrites multimodal
     # attachments to text before they hit DeepSeek's chat completions
     # API — the official endpoint rejects ``{type:"file"}`` /
@@ -787,8 +787,8 @@ RUNTIME_PROVIDER_CLASSES: dict[str, tuple[str, str, dict[str, Any]]] = {
     # inline ``<attachment>`` blocks (or a placeholder for binaries);
     # images / audio become a single ``<media-omitted>`` block listing
     # what was stripped.
-    "deepseek": ("src.models._provider_overrides", "DeepSeekTextOnly", {}),
-    "zai": ("src.models.providers.openai.like", "OpenAILike", {"name": "ZAI"}),
+    "deepseek": ("openagent_core.models._provider_overrides", "DeepSeekTextOnly", {}),
+    "zai": ("openagent_core.models.providers.openai.like", "OpenAILike", {"name": "ZAI"}),
     # OpenAI-compatible providers — same OpenAILike base as ZAI, each with a
     # default base_url resolved in ``_resolved_base_url`` via
     # ``PROVIDER_DEFAULT_BASE_URLS``. ``moonshot`` serves Kimi
@@ -796,21 +796,21 @@ RUNTIME_PROVIDER_CLASSES: dict[str, tuple[str, str, dict[str, Any]]] = {
     # ``openrouter`` / ``cerebras`` were already advertised in
     # SUPPORTED_PROVIDERS + discovery but had no driver and raised at build
     # time — these entries close that gap.
-    "moonshot": ("src.models.providers.openai.like", "OpenAILike", {"name": "Moonshot"}),
-    "qwen": ("src.models.providers.openai.like", "OpenAILike", {"name": "Qwen"}),
-    "openrouter": ("src.models.providers.openai.like", "OpenAILike", {"name": "OpenRouter"}),
-    "cerebras": ("src.models.providers.openai.like", "OpenAILike", {"name": "Cerebras"}),
+    "moonshot": ("openagent_core.models.providers.openai.like", "OpenAILike", {"name": "Moonshot"}),
+    "qwen": ("openagent_core.models.providers.openai.like", "OpenAILike", {"name": "Qwen"}),
+    "openrouter": ("openagent_core.models.providers.openai.like", "OpenAILike", {"name": "OpenRouter"}),
+    "cerebras": ("openagent_core.models.providers.openai.like", "OpenAILike", {"name": "Cerebras"}),
     # xAI (Grok) and Mistral are OpenAI-compatible too. Mistral ships a
     # native SDK upstream, but its ``/v1`` chat+tools endpoint speaks the
     # OpenAI schema, so OpenAILike covers the common path.
-    "xai": ("src.models.providers.openai.like", "OpenAILike", {"name": "xAI"}),
-    "mistral": ("src.models.providers.openai.like", "OpenAILike", {"name": "Mistral"}),
+    "xai": ("openagent_core.models.providers.openai.like", "OpenAILike", {"name": "xAI"}),
+    "mistral": ("openagent_core.models.providers.openai.like", "OpenAILike", {"name": "Mistral"}),
     # Self-hosted OpenAI-compatible servers (Ollama / vLLM / LM Studio /
     # llama.cpp). No default base_url — the operator supplies one via the
     # provider's ``base_url`` (enforced in ``_resolved_base_url``). Keyless
     # servers get a placeholder api_key in ``_resolved_api_key`` so the
     # OpenAI SDK client still initialises.
-    "local": ("src.models.providers.openai.like", "OpenAILike", {"name": "Local"}),
+    "local": ("openagent_core.models.providers.openai.like", "OpenAILike", {"name": "Local"}),
 }
 
 
@@ -919,7 +919,7 @@ class NativeProvider(BaseModel):
 
     def _clear_runtime_caches(self) -> None:
         """Dispose runtime session stores before dropping cache references."""
-        from src.models.runtime_db_lifecycle import close_runtime_databases
+        from openagent_core.models.runtime_db_lifecycle import close_runtime_databases
 
         seen: set[int] = set()
         for runtime in [*self._agno_agents.values(), *self._agno_teams.values()]:
@@ -957,7 +957,7 @@ class NativeProvider(BaseModel):
         if not session_id:
             return
         try:
-            from src.memory.store.sqlite import SqliteDb
+            from openagent_core.memory.store.sqlite import SqliteDb
         except ImportError:
             return
 
@@ -1088,7 +1088,7 @@ class NativeProvider(BaseModel):
         db_path = getattr(self, "_db_path", None)
         if db_path:
             return str(db_path)
-        from src.core.paths import default_db_path
+        from openagent_core.core.paths import default_db_path
 
         return str(default_db_path())
 
@@ -1413,7 +1413,7 @@ class NativeProvider(BaseModel):
             return None
         if not configured:
             return None
-        return ("src.models.providers.openai.like", "OpenAILike", {"name": provider_name})
+        return ("openagent_core.models.providers.openai.like", "OpenAILike", {"name": provider_name})
 
     def build_runtime_model(self) -> Any:
         """Construct the underlying ``Model`` instance for this runtime.
@@ -1439,7 +1439,7 @@ class NativeProvider(BaseModel):
             # OpenAILike and forwarded as ``chat_template_kwargs`` by
             # llama.cpp. Scope it narrowly to self-hosted Qwen aliases so cloud
             # providers and non-Qwen local templates stay untouched.
-            from src.core.execution_profile import lean_local_event_active
+            from openagent_core.core.execution_profile import lean_local_event_active
             if (
                 lean_local_event_active()
                 and self._self_hosted_spec(provider_name) is not None
@@ -1457,7 +1457,7 @@ class NativeProvider(BaseModel):
                 # argument objects; a support reply is a few sentences. One
                 # budget for both truncated a tool call mid-JSON, and the run
                 # died on a parse error rather than on anything it did wrong.
-                from src.core.execution_profile import lean_local_task_active
+                from openagent_core.core.execution_profile import lean_local_task_active
 
                 is_task = lean_local_task_active()
                 # 2500, not 1200: a tool call carrying an object argument
@@ -1510,7 +1510,7 @@ class NativeProvider(BaseModel):
                 model._openagent_cred_pool = pool
             return model
 
-        from src.models.providers.utils import get_model
+        from openagent_core.models.providers.utils import get_model
 
         return get_model(self.model)
 
@@ -1543,8 +1543,8 @@ class NativeProvider(BaseModel):
             self._agno_agents.move_to_end(cache_key)
             return cached
         try:
-            from src.core._runner.agent import Agent as RuntimeAgent
-            from src.memory.store.sqlite import SqliteDb
+            from openagent_core.core._runner.agent import Agent as RuntimeAgent
+            from openagent_core.memory.store.sqlite import SqliteDb
         except ImportError as exc:
             raise RuntimeError(self._missing_dependency_hint(exc)) from exc
 
@@ -1557,11 +1557,11 @@ class NativeProvider(BaseModel):
                 runner="agent",
             )
         agent_tools: list[Any] = list(compatible_toolkits)
-        from src.core.execution_profile import lean_local_event_active
+        from openagent_core.core.execution_profile import lean_local_event_active
         summaries_enabled = not lean_local_event_active()
-        from src.core.execution_profile import strict_local_only_active
+        from openagent_core.core.execution_profile import strict_local_only_active
 
-        from src.core.execution_profile import stateless_completion_active
+        from openagent_core.core.execution_profile import stateless_completion_active
 
         stateless = stateless_completion_active()
         agent = RuntimeAgent(
@@ -1654,9 +1654,9 @@ class NativeProvider(BaseModel):
             )
 
         try:
-            from src.core._runner.agent import Agent as RuntimeAgent
-            from src.memory.store.sqlite import SqliteDb
-            from src.core._runner.team import Team, TeamMode
+            from openagent_core.core._runner.agent import Agent as RuntimeAgent
+            from openagent_core.memory.store.sqlite import SqliteDb
+            from openagent_core.core._runner.team import Team, TeamMode
         except ImportError as exc:
             # Older runtime builds without the team module — fall back to
             # single-agent transparently instead of crashing the session.
@@ -2089,11 +2089,11 @@ class NativeProvider(BaseModel):
         """Forward a runtime ``ToolExecution`` as a JSON status frame.
 
         Thin wrapper that delegates to the shared
-        :func:`src.models._tool_status.emit_tool_status` so live
+        :func:`openagent_core.models._tool_status.emit_tool_status` so live
         streaming, generate-time emissions, and the dispatcher's
         team-path emitter all use the same encoder + error handling.
         """
-        from src.models._tool_status import emit_tool_status
+        from openagent_core.models._tool_status import emit_tool_status
 
         await emit_tool_status(
             on_status, tool_exec, error_text=error_text, phase=phase,
@@ -2235,7 +2235,7 @@ class NativeProvider(BaseModel):
                         # The streamed run's tokens. Without this the whole
                         # streaming path is invisible to usage_log — see
                         # src/models/stream_usage.py.
-                        from src.models import stream_usage
+                        from openagent_core.models import stream_usage
 
                         _ev_metrics = getattr(event, "metrics", None)
                         inp, out = stream_usage.metrics_to_tokens(_ev_metrics)

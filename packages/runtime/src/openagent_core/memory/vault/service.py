@@ -16,13 +16,13 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-from src.memory.vault import taxonomy
-from src.memory.vault.derived import generate_llms_txt, generate_showcase
-from src.memory.vault.doctor import apply_mechanical_fixes
-from src.memory.vault.gate import _is_valid_iso, run_gate
-from src.memory.vault.index import VaultIndex
-from src.memory.vault.model import GateConfig, GateReport
-from src.memory.vault.parser import parse_note_text
+from openagent_core.memory.vault import taxonomy
+from openagent_core.memory.vault.derived import generate_llms_txt, generate_showcase
+from openagent_core.memory.vault.doctor import apply_mechanical_fixes
+from openagent_core.memory.vault.gate import _is_valid_iso, run_gate
+from openagent_core.memory.vault.index import VaultIndex
+from openagent_core.memory.vault.model import GateConfig, GateReport
+from openagent_core.memory.vault.parser import parse_note_text
 
 # ``validate_note`` below used to own a private ``_DATE_RE`` that checked only
 # the SHAPE (``^\d{4}-\d{2}-\d{2}$``) — a third hand-kept copy of the gate's
@@ -39,7 +39,7 @@ def resolve_vault_root(explicit: str | Path | None = None) -> Path:
     env = os.environ.get("OPENAGENT_VAULT_PATH")
     if env:
         return Path(env).expanduser().resolve()
-    from src.core.paths import default_vault_path
+    from openagent_core.core.paths import default_vault_path
     return default_vault_path().resolve()
 
 
@@ -48,7 +48,7 @@ def default_index_path(vault_root: Path) -> Path:
     folder pristine) — under the agent data dir, keyed by vault root so two
     vaults don't share one cache."""
     import hashlib
-    from src.core.paths import data_dir
+    from openagent_core.core.paths import data_dir
     h = hashlib.sha1(str(vault_root).encode()).hexdigest()[:10]
     return data_dir() / f"vault_index_{h}.db"
 
@@ -97,7 +97,7 @@ class VaultService:
             if not self._git_enabled():
                 self._git = False
             else:
-                from src.memory.vault.gitrepo import VaultGit
+                from openagent_core.memory.vault.gitrepo import VaultGit
                 g = VaultGit(self.vault_root)
                 ok = await asyncio.to_thread(g.ensure_repo)
                 self._git = g if ok else False
@@ -108,7 +108,7 @@ class VaultService:
         g = await self._ensure_git()
         if not g or not paths:
             return None
-        from src.memory.vault.vault_origin import trailers
+        from openagent_core.memory.vault.vault_origin import trailers
         return await asyncio.to_thread(g.commit, list(paths), summary, trailers(origin))
 
     async def autocommit(self, origin: dict | None = None,
@@ -125,7 +125,7 @@ class VaultService:
         g = await self._ensure_git()
         if not g:
             return None
-        from src.memory.vault.vault_origin import recent_origin, trailers
+        from openagent_core.memory.vault.vault_origin import recent_origin, trailers
         if origin is not None:
             o = origin
         else:
@@ -157,8 +157,8 @@ class VaultService:
         (validate.ts). Pure CPU; runs in a thread. Returns
         ``(fixed_content, errors, warnings, applied)``."""
         import datetime
-        from src.memory.vault.doctor import fix_note_content, _FIXABLE_RULES
-        from src.memory.vault.parser import (
+        from openagent_core.memory.vault.doctor import fix_note_content, _FIXABLE_RULES
+        from openagent_core.memory.vault.parser import (
             FrontmatterSyntaxError,
             load_frontmatter_yaml,
             split_frontmatter,
@@ -294,7 +294,7 @@ class VaultService:
         g = await self._ensure_git()
         if not g:
             return {"error": "git is disabled for this vault"}
-        from src.memory.vault.vault_origin import trailers
+        from openagent_core.memory.vault.vault_origin import trailers
         o = dict(origin or {})
         o.setdefault("kind", "tool")
         o["action"] = "restore"
@@ -481,7 +481,7 @@ class VaultService:
     async def init_taxonomy(self, origin: dict | None = None) -> dict:
         """Create the Company-Brain folder system (11 folders + journal tree
         + canon workspace + templates). Idempotent."""
-        from src.memory.vault.scaffold import scaffold
+        from openagent_core.memory.vault.scaffold import scaffold
         async with self._mutation_lock:
             res = await asyncio.to_thread(scaffold, self.vault_root, self.journal_root)
             await self.sync()
@@ -501,7 +501,7 @@ class VaultService:
         For a folder, every note underneath moves and all inbound links to
         any of them are rewritten. Link style is preserved (path stays a
         path, bare stem stays a stem) along with ``|alias`` / ``#anchor``."""
-        from src.memory.vault.parser import rewrite_wikilinks
+        from openagent_core.memory.vault.parser import rewrite_wikilinks
 
         idx = await self._ensure_index()
         await asyncio.to_thread(idx.sync, False)

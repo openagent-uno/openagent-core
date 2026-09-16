@@ -16,15 +16,15 @@ from pathlib import Path
 
 from ._framework import TestContext, TestSkip, test
 
-from src.memory.vault.doctor import (
+from openagent_core.memory.vault.doctor import (
     _coerce_date, apply_mechanical_fixes, fix_note_content,
 )
-from src.memory.vault.derived import generate_llms_txt, generate_showcase
-from src.memory.vault.gate import _is_valid_iso, run_gate
-from src.memory.vault.index import VaultIndex
-from src.memory.vault.model import GateConfig
-from src.memory.vault.parser import parse_note_text
-from src.memory.vault.service import VaultService
+from openagent_core.memory.vault.derived import generate_llms_txt, generate_showcase
+from openagent_core.memory.vault.gate import _is_valid_iso, run_gate
+from openagent_core.memory.vault.index import VaultIndex
+from openagent_core.memory.vault.model import GateConfig
+from openagent_core.memory.vault.parser import parse_note_text
+from openagent_core.memory.vault.service import VaultService
 
 
 # ── helpers ───────────────────────────────────────────────────────────
@@ -39,7 +39,7 @@ def _mkvault() -> tuple[Path, Path, Path]:
 def _service_for(vault: Path, idxp: Path) -> VaultService:
     """The gateway resolves its service via ``get_service(vault_root)``; use
     the same cached instance so the test reads the index the endpoint built."""
-    from src.memory.vault.service import get_service
+    from openagent_core.memory.vault.service import get_service
     return get_service(vault)
 
 
@@ -293,7 +293,7 @@ async def t_doctor_output_is_valid_yaml(ctx: TestContext) -> None:
     Whatever the doctor writes must survive ``yaml.safe_load``.
     """
     import yaml
-    from src.memory.vault.parser import split_frontmatter
+    from openagent_core.memory.vault.parser import split_frontmatter
 
     src = ('---\ntitle: X\nsummary: s\ntags: [e]\nstatus: active\n'
            'created: 2026-06-09\nupdated: 2026-06-09\n'
@@ -323,7 +323,7 @@ async def t_loose_strict_parity(ctx: TestContext) -> None:
     real vault was a good ISO date read as ``"'2026-06-02'"``.
     """
     import yaml
-    from src.memory.vault.parser import _loose_frontmatter
+    from openagent_core.memory.vault.parser import _loose_frontmatter
 
     for raw_fm in (
         "title: X\nupdated: '2026-06-02'\ncreated: 2026-06-29\n",
@@ -502,7 +502,7 @@ async def t_index_crlf_incremental(ctx: TestContext) -> None:
 @test("vault_gate", "rest: write/read reject path traversal")
 async def t_rest_path_traversal(ctx: TestContext) -> None:
     import json as _json
-    import src.gateway.api.vault as V
+    import openagent_server.gateway.api.vault as V
 
     d, vault, idxp = _mkvault()
     (vault / "ok.md").write_text(_note(links=[], title="OK"))
@@ -531,7 +531,7 @@ async def t_rest_path_traversal(ctx: TestContext) -> None:
                                       body={"content": "x"}))
         assert w.status == 400, w.status
         assert not (d / "escaped.md").exists()
-        from src.memory.vault.service import close_all
+        from openagent_core.memory.vault.service import close_all
         await close_all()
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -549,7 +549,7 @@ async def t_graph_matches_index(ctx: TestContext) -> None:
     at a different note in the picture than in the gate. Both shapes are here.
     """
     import json as _json
-    import src.gateway.api.vault as V
+    import openagent_server.gateway.api.vault as V
 
     d, vault, idxp = _mkvault()
 
@@ -571,7 +571,7 @@ async def t_graph_matches_index(ctx: TestContext) -> None:
         # resolve the SAME way here as in the gate (alphabetically-first path).
         (vault / "aaa" / "dup.md").write_text(_note(links=[], title="Dup A"))
         (vault / "zzz" / "dup.md").write_text(_note(links=[], title="Dup Z"))
-        (vault / "aaa" / "src.md").write_text(_note(links=["dup"], title="Src"))
+        (vault / "aaa" / "openagent_core.md").write_text(_note(links=["dup"], title="Src"))
         # A derived artifact the index prunes — it must not become a node.
         (vault / "_showcase" / "showcase.md").write_text(
             _note(links=["dup"], title="Showcase"))
@@ -592,10 +592,10 @@ async def t_graph_matches_index(ctx: TestContext) -> None:
         assert node_ids == {n.path for n in idx.all_notes()}, node_ids
 
         # 3. the collision resolves the same way the index resolves it
-        assert ("aaa/src.md", idx.resolve_link("dup")) in edges, edges
+        assert ("aaa/openagent_core.md", idx.resolve_link("dup")) in edges, edges
         assert idx.resolve_link("dup") == "aaa/dup.md", idx.resolve_link("dup")
 
-        from src.memory.vault.service import close_all
+        from openagent_core.memory.vault.service import close_all
         await close_all()
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -757,13 +757,13 @@ async def t_init_scaffold(ctx: TestContext) -> None:
 # ── git-backed vault ──────────────────────────────────────────────────
 
 def _has_git() -> bool:
-    from src.memory.vault.gitrepo import resolve_git_bin
+    from openagent_core.memory.vault.gitrepo import resolve_git_bin
     return resolve_git_bin() is not None
 
 
 @test("vault_gate", "git: provenance trailers render in commit-message order")
 async def t_git_trailers(ctx: TestContext) -> None:
-    from src.memory.vault.vault_origin import trailers
+    from openagent_core.memory.vault.vault_origin import trailers
     assert trailers({"kind": "chat", "session": "S1", "tool": "vault_rename_note"}) == [
         "Origin: chat", "Session: S1", "Tool: vault_rename_note"]
     assert trailers(None) == ["Origin: system"]
@@ -776,7 +776,7 @@ async def t_git_trailers(ctx: TestContext) -> None:
 async def t_git_repo(ctx: TestContext) -> None:
     if not _has_git():
         raise TestSkip("git not installed")
-    from src.memory.vault.gitrepo import VaultGit
+    from openagent_core.memory.vault.gitrepo import VaultGit
     d, vault, _idxp = _mkvault()
     try:
         (vault / "a.md").write_text("# A\n")
@@ -851,7 +851,7 @@ async def t_git_autocommit_attr(ctx: TestContext) -> None:
     if not _has_git():
         raise TestSkip("git not installed")
     import subprocess
-    from src.memory.vault import vault_origin
+    from openagent_core.memory.vault import vault_origin
     d, vault, idxp = _mkvault()
     try:
         svc = VaultService(vault, index_path=idxp)
@@ -878,7 +878,7 @@ async def t_git_autocommit_attr(ctx: TestContext) -> None:
 async def t_git_safe_directory(ctx: TestContext) -> None:
     if not _has_git():
         raise TestSkip("git not installed")
-    from src.memory.vault.gitrepo import VaultGit
+    from openagent_core.memory.vault.gitrepo import VaultGit
     d, vault, _idxp = _mkvault()
     try:
         (vault / "a.md").write_text("# A\n")
@@ -1059,7 +1059,7 @@ async def t_repair_inline_related(ctx: TestContext) -> None:
     and the test would pass against a no-op.
     """
     import yaml
-    from src.memory.vault.doctor import _repair_frontmatter_yaml
+    from openagent_core.memory.vault.doctor import _repair_frontmatter_yaml
 
     raw = ("title: X\nsummary: s\ntags: [e]\nstatus: active\n"
            "created: 2026-07-01\nupdated: 2026-07-01\n"
@@ -1084,7 +1084,7 @@ async def t_repair_inline_related_spaces(ctx: TestContext) -> None:
     ``_inherited-from-lyra/features/youtube-embed-playback.md``). A repair
     that only handled commas would leave them broken forever."""
     import yaml
-    from src.memory.vault.doctor import _repair_frontmatter_yaml
+    from openagent_core.memory.vault.doctor import _repair_frontmatter_yaml
 
     raw = "title: X\nrelated: [[a]] [[b]] [[c]]\n"
     fixed, changed = _repair_frontmatter_yaml(raw)
@@ -1106,7 +1106,7 @@ async def t_repair_unquoted_colon(ctx: TestContext) -> None:
     human reads in Obsidian (§5), so that is what this pins.
     """
     import yaml
-    from src.memory.vault.doctor import _repair_frontmatter_yaml
+    from openagent_core.memory.vault.doctor import _repair_frontmatter_yaml
 
     raw = ("title: Bug: App crashes after 2 songs — Fix Applied\n"
            'summary: "Bug: App crashes after 2 songs — Fix Applied"\n'
@@ -1129,7 +1129,7 @@ async def t_repair_guard(ctx: TestContext) -> None:
     agent still cannot read. Here the inline `related` IS repairable but the
     tab-indented mapping next to it is not, so the whole repair must be
     abandoned rather than half-applied."""
-    from src.memory.vault.doctor import _repair_frontmatter_yaml
+    from openagent_core.memory.vault.doctor import _repair_frontmatter_yaml
 
     raw = "title: X\nrelated: [[a]], [[b]]\nbad:\n\t- \tx: [\n"
     fixed, changed = _repair_frontmatter_yaml(raw)
@@ -1143,7 +1143,7 @@ async def t_repair_mixed_related_untouched(ctx: TestContext) -> None:
     the prose would be data loss, so the doctor must decline. (Measured: 0
     such notes in the real vault, but the guard is what makes the 27 it DOES
     repair trustworthy.)"""
-    from src.memory.vault.doctor import _repair_frontmatter_yaml
+    from openagent_core.memory.vault.doctor import _repair_frontmatter_yaml
 
     raw = "title: X\nrelated: [[a]], some prose\n"
     fixed, changed = _repair_frontmatter_yaml(raw)
@@ -1199,7 +1199,7 @@ async def t_write_damaged_note_repaired(ctx: TestContext) -> None:
         assert "repaired frontmatter into valid YAML" in res["applied"], res["applied"]
 
         import yaml
-        from src.memory.vault.parser import split_frontmatter
+        from openagent_core.memory.vault.parser import split_frontmatter
         raw_fm, _ = split_frontmatter((vault / "e" / "x.md").read_text())
         meta = yaml.safe_load(raw_fm)     # what landed on disk must parse
         assert meta["title"] == "Bug: it broke", meta

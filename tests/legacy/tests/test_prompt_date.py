@@ -27,7 +27,7 @@ def _combined(session_id: str | None = "sess-1", persona: str = "") -> str:
     """
     from types import SimpleNamespace
 
-    from src.core.agent import Agent
+    from openagent_core.core.agent import Agent
 
     agent = Agent.__new__(Agent)
     agent.system_prompt = persona
@@ -36,7 +36,7 @@ def _combined(session_id: str | None = "sess-1", persona: str = "") -> str:
     # assembly (framework + persona + date + tag) without a live pool.
     agent._resolve_vault_path = lambda: "/tmp/vault"
     agent._resolve_db_path = lambda: "/tmp/db"
-    import src.core.agent as agent_mod
+    import openagent_core.core.agent as agent_mod
 
     orig = agent_mod.build_mcp_catalog_summary
     agent_mod.build_mcp_catalog_summary = lambda _pool: "(catalog)"
@@ -48,7 +48,7 @@ def _combined(session_id: str | None = "sess-1", persona: str = "") -> str:
 
 @test("prompt_date", "the combined system prompt states today's date")
 async def t_date_is_present(ctx: TestContext) -> None:
-    from src.core.agent import _now_local
+    from openagent_core.core.agent import _now_local
 
     out = _combined()
     today = _now_local().strftime("%Y-%m-%d")
@@ -77,11 +77,11 @@ async def t_no_clock_time(ctx: TestContext) -> None:
 
 @test("prompt_date", "the session-id tag stays last, so the cache split still works")
 async def t_split_survives(ctx: TestContext) -> None:
-    from src.models.providers.anthropic.claude import _split_session_id_tag
+    from openagent_core.models.providers.anthropic.claude import _split_session_id_tag
 
     out = _combined(session_id="tg:42")
     body, tag = _split_session_id_tag(out)
-    assert "<execution-host>" in tag
+    assert "<openagent-turn-context>" in tag
     assert tag.endswith("<session-id>tg:42</session-id>"), (
         "the runtime execution-host + session-id tail is no longer isolated "
         "from the cacheable framework prefix"
@@ -93,7 +93,7 @@ async def t_split_survives(ctx: TestContext) -> None:
 
 @test("prompt_date", "no session id: date still injected, no trailing tag")
 async def t_no_session(ctx: TestContext) -> None:
-    from src.models.providers.anthropic.claude import _split_session_id_tag
+    from openagent_core.models.providers.anthropic.claude import _split_session_id_tag
 
     out = _combined(session_id=None)
     assert "The current date is" in out
@@ -101,12 +101,13 @@ async def t_no_session(ctx: TestContext) -> None:
     # bare substring check is wrong — assert there is no TRAILING tag, which is
     # what actually gets emitted as an uncached per-session block.
     _body, tag = _split_session_id_tag(out)
-    assert tag == "", f"a trailing session-id tag appeared with no session: {tag!r}"
+    assert "<session-id>" not in tag, f"session-id appeared without a session: {tag!r}"
+    assert "<openagent-turn-context>" in tag
 
 
-@test("prompt_date", "lean local event gets the compact prompt and full persona")
+@test("prompt_date", "lean local event keeps the complete framework and persona")
 async def t_lean_local_prompt(ctx: TestContext) -> None:
-    from src.core.execution_profile import lean_local_event_scope
+    from openagent_core.core.execution_profile import lean_local_event_scope
 
     persona = "PRODUCT_RULE_SENTINEL: never promise a future release."
     normal = _combined(persona=persona)
@@ -114,14 +115,14 @@ async def t_lean_local_prompt(ctx: TestContext) -> None:
         lean = _combined(persona=persona)
 
     assert persona in lean
-    assert "Work as a single agent" in lean
-    assert "Sub-agents — ALWAYS" not in lean
-    assert len(lean) < len(normal) * 0.35, (len(lean), len(normal))
+    assert "BEFORE any non-trivial action" in lean
+    assert "### Default = SAVE." in lean
+    assert lean == normal, "provider profile must never replace mandatory module rules"
 
 
 @test("prompt_date", "lean event profile activates only for private self-hosted URLs")
 async def t_lean_local_detection(ctx: TestContext) -> None:
-    from src.core.execution_profile import (
+    from openagent_core.core.execution_profile import (
         should_use_lean_local_event,
         should_use_lean_local_scheduled_task,
     )

@@ -40,11 +40,13 @@ from pathlib import Path
 
 from ._framework import TestContext, TestSkip, test
 
-from src.memory.vault import taxonomy
-from src.memory.vault.model import GateConfig
-from src.memory.vault.service import VaultService
+from openagent_core.memory.vault import taxonomy
+from openagent_core.memory.vault.model import GateConfig
+from openagent_core.memory.vault.service import VaultService
 
-_VAULT_MCP = Path(__file__).resolve().parents[2] / "src" / "mcp" / "servers" / "vault"
+from openagent_core.mcp.builtins import BUILTIN_MCPS_DIR
+
+_VAULT_MCP = BUILTIN_MCPS_DIR / "vault"
 _SCOPE_TS = _VAULT_MCP / "src" / "scope.generated.ts"
 
 
@@ -220,7 +222,7 @@ async def t_scope_not_drifted(ctx: TestContext) -> None:
     got = _SCOPE_TS.read_text()
     assert got == want, (
         "scope.generated.ts has DRIFTED from the Python declaration.\n"
-        "Regenerate: .venv/bin/python -m src.memory.vault.taxonomy")
+        "Regenerate: .venv/bin/python -m openagent_core.memory.vault.taxonomy")
 
 
 @test("vault_gate", "twins: Python and TS agree on the write scope, path by path")
@@ -392,7 +394,7 @@ async def t_yaml_dialect_divergence_pinned(ctx: TestContext) -> None:
     """
     if not _node_available():
         raise TestSkip("node/tsx not available")
-    from src.memory.vault.parser import load_frontmatter_yaml
+    from openagent_core.memory.vault.parser import load_frontmatter_yaml
 
     harness = _VAULT_MCP / "_dialect_harness.mjs"
     harness.write_text(
@@ -442,8 +444,8 @@ async def t_autofix_byte_parity(ctx: TestContext) -> None:
     node = _run_node([list(c) for c in _CORPUS])
 
     import datetime
-    from src.memory.vault.doctor import _FIXABLE_RULES, fix_note_content
-    from src.memory.vault.parser import parse_note_text
+    from openagent_core.memory.vault.doctor import _FIXABLE_RULES, fix_note_content
+    from openagent_core.memory.vault.parser import parse_note_text
 
     assert _TODAY != datetime.date.today().isoformat() or True  # today injected
     diffs = []
@@ -478,7 +480,7 @@ async def t_gateway_uses_the_one_parser(ctx: TestContext) -> None:
     the whole note — while ``_FrontmatterLoader`` reads it and lets
     ``date_format`` report the date, which is the rule that names it.
     """
-    from src.gateway.api.vault import _parse_frontmatter
+    from openagent_server.gateway.api.vault import _parse_frontmatter
 
     # A note the OLD parser blanked completely.
     meta, body = _parse_frontmatter(
@@ -513,7 +515,7 @@ async def t_gateway_uses_the_one_parser(ctx: TestContext) -> None:
     import ast
     import inspect
 
-    import src.gateway.api.vault as gv
+    import openagent_server.gateway.api.vault as gv
 
     tree = ast.parse(inspect.getsource(gv._parse_frontmatter))
     calls = {
@@ -557,8 +559,8 @@ async def t_schema_bump_drops_stale_tables(ctx: TestContext) -> None:
     import tempfile
     from pathlib import Path
 
-    from src.memory.vault import index as index_mod
-    from src.memory.vault.index import VaultIndex
+    from openagent_core.memory.vault import index as index_mod
+    from openagent_core.memory.vault.index import VaultIndex
 
     tmp = Path(tempfile.mkdtemp())
     vault = tmp / "memories"

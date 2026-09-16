@@ -1,0 +1,155 @@
+You are running in Dream Mode — OpenAgent's nightly self-maintenance
+routine. You run while the agent is otherwise idle. Work through both
+missions below in order, then write a single dream-log at the end. Be
+thorough but non-destructive: when in doubt, skip rather than delete,
+and log the uncertainty.
+
+## Mission 1 — Evaluate and correct the memory vault
+
+Curate the memory vault via the `vault` MCP — do NOT cat/grep the
+.md files directly.
+
+**First, run the mechanical pass: `vault_dream()`.** One call does
+sync → gate → doctor (auto-fix) → regenerate derived. It is
+deterministic, offline, and it will not touch a judgement call — so
+there is no reason to skip it and no reason to hand-do any of it. It
+returns the violations code could NOT fix, which is your actual work
+list for this mission. Everything below is about those.
+
+Do not spend the pass re-deciding what the doctor already fixed. If you
+want the detail: `vault_gate()` grades, `vault_doctor(apply=False)`
+previews. `vault_regenerate_derived()` rebuilds `llms.txt` and the
+showcase — `vault_dream()` already did it.
+
+**Then `vault_contradiction_candidates()`.** Vision §5 requires
+contradictions to be "flagged and reconciled rather than silently
+overwritten" — this is the flagging half, and reconciling is your job.
+It is candidate generation, not detection: code matched opposing wording
+about a shared subject and never read either note, so expect roughly
+half to be false positives. Read BOTH notes in full, then fix or retire
+whichever is genuinely stale. An empty result is not proof the vault
+agrees with itself — it only sees explicitly deprecated/forbidden
+wording. Never delete on this signal alone.
+
+**Then `vault_recall_stats`.** It tells you which notes were
+actually read during real runs and how those runs ended, so you spend
+this pass on the notes that carry weight instead of walking the vault
+alphabetically. Read its `caveat` and believe it: `ok_rate` is
+ASSOCIATION, NOT CAUSATION. A run that read six notes and failed credits
+all six; a low `ok_rate` is evidence about a note, never a verdict on it.
+
+Use it to decide **where to look**, then judge the note on its content:
+   - **Read often, low `ok_rate`** — look here first. Open the note and
+     ask why: is it stale, ambiguous, contradicted elsewhere, or missing
+     the caveat that would have prevented the failure? Fix what you can
+     verify. If the note reads fine, leave it and say so in the log —
+     the correlation may be the task's difficulty, not the note.
+   - **Read often, high `ok_rate`** — this note is load-bearing. Do not
+     merge it away casually, and make sure it is well cross-linked so it
+     keeps getting found.
+   - **Never read** — a candidate for the orphan/duplicate checks below,
+     NOT a reason to delete on its own. A note can be correct, niche,
+     and simply not needed yet.
+   - **Absent from the stats entirely** — the table only fills as runs
+     happen, so on a fresh deployment it is empty. That means "no
+     evidence yet", not "no value". Fall back to the checks below.
+
+Never delete a note for a bad number alone. The stats point; you read.
+
+   - Use `list_directory` and `search_notes` to survey the vault.
+   - Identify notes that cover the same topic and **merge duplicates**
+     into a single canonical note with `write_note` or `patch_note`,
+     then `delete_note` the redundant ones.
+   - Update any outdated information you can verify from the
+     environment (tool versions, paths, hosts that no longer exist,
+     etc.).
+   - Remove trivially short or empty notes (< 20 words) that add no
+     value.
+   - **Cross-link related notes with `[[wikilinks]]`**. For every note
+     you touch, search the vault for related topics and add backlinks
+     where the relationship is meaningful. If a group of notes shares a
+     theme, make sure each one links to the others. Prefer
+     `patch_note` to add links in place rather than rewriting whole
+     notes.
+   - **Reconcile contradictions**: when a newer note contradicts an
+     older one, fix or retire the stale entry rather than leaving both.
+   - Keep frontmatter `tags:` consistent so related notes share tags
+     and surface together in future searches.
+
+## Mission 2 — Analyze the last day of logs and fix what is broken
+
+Read OpenAgent's own event log for roughly the last 24 hours and find
+issues to fix. Use the `logs` MCP — never `find`/`tail` over
+`events.jsonl` by hand. It resolves the log path itself, so there is no
+OS-specific path to guess, and it summarises the *whole* window instead
+of whatever fits in a tail:
+
+   - `logs_summary(since="24h")` — start here. One call: totals, the
+     top failing events, and sample lines.
+   - `logs_query(event=..., errors_only=true, since="24h")` — drill
+     into one failing event.
+   - `logs_context(ts=...)` — read the lines around a failure. The
+     error says *what* broke; the lines before it say *why*.
+
+Note `error_like` mixes two schemas. Entries written since the severity
+fix carry a real level and are authoritative; older entries predate it,
+so their severity is guessed from the event name and can over-report
+failures that actually recovered. `logs_summary` reports the split and
+says which case this log is in — when a verdict is a guess, confirm it
+from the event's own payload before acting on it.
+
+Look for problems and act on them:
+   - **Broken scheduled tasks**: tasks that errored or produced empty
+     output. Inspect them via the `scheduler` MCP
+     (`scheduler_list_scheduled_tasks`), confirm whether the prompt is
+     still accurate, and fix, reschedule, or retire the task.
+   - **Broken workflows**: workflow runs that failed or stalled.
+     Inspect via the `workflow-manager` MCP and repair the definition,
+     or clearly report the failure if you cannot fix it.
+   - **Recurring errors**: model-call failures, MCP errors, federation
+     or channel errors that repeat. Diagnose the cause, fix what is in
+     your power (a stale path, a misconfigured task), and log what
+     still needs a human.
+
+## Mission 3 — Notice what should be automated, and say so
+
+You are expected to be proactive: surface the patterns you notice
+rather than waiting to be asked. You already have the week in front of
+you from Mission 2, so use it.
+
+   - **Recurring work**: widen to `logs_summary(since="7d")`. Did the
+     same kind of task run three or more times with only minor
+     variation? That is a scheduled task or a workflow that doesn't
+     exist yet. Propose it concretely — the exact prompt and cron, or
+     the block outline — via the `scheduler` / `workflow-manager` MCPs.
+   - **Promises that never landed**: search the vault for notes tagged
+     `pending-automation` or `followup`. For each, decide: is the
+     pattern still live? Then schedule it now. Is it dead? Then archive
+     the note. A followup note that survives untouched for months is a
+     decision nobody made.
+   - **Things you said you'd remember**: skim the recent sessions for
+     "I'll remember that", "next time", "we decided" that never became
+     a note. Write the missing notes.
+
+Propose, don't impose. Creating a scheduled task that spends money on
+the user's behalf every night is a decision they should make — write
+what you would automate and why into the dream-log, and create it only
+when the pattern is unambiguous and cheap.
+
+## Log the dream
+
+Use `write_note` to save a concise summary under
+`dream-logs/dream-log-YYYY-MM-DD.md` with frontmatter `type: dream-log`
+and `date:` set to today. Record, per mission: what you
+merged/updated/cross-linked/removed in the vault, which log issues you
+found, what you fixed, what you would automate and why, and what still
+needs the user's decision.
+
+Include the recall findings explicitly: which notes `vault_recall_stats`
+sent you to, what you concluded when you actually read them, and — this
+one matters — which ones you examined and found FINE despite a low
+`ok_rate`. Without that, the next run re-investigates the same note
+forever and the number slowly reads as guilt rather than as a pointer.
+
+Use the `vault` MCP's tools for all vault access — never shell out for
+anything under the memory vault.

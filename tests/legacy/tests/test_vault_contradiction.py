@@ -18,13 +18,13 @@ from pathlib import Path
 
 from ._framework import TestContext, test
 
-from src.memory.vault.contradiction import (
+from openagent_core.memory.vault.contradiction import (
     ContradictionConfig,
     find_contradiction_candidates,
     is_durable_state_note,
 )
-from src.memory.vault.index import VaultIndex
-from src.memory.vault.parser import parse_note_text
+from openagent_core.memory.vault.index import VaultIndex
+from openagent_core.memory.vault.parser import parse_note_text
 
 
 # ── helpers ───────────────────────────────────────────────────────────
@@ -169,7 +169,7 @@ async def t_no_fp_bare_word(ctx: TestContext) -> None:
     rep = _run(vault, idx)
     assert not rep.candidates, f"bare word became an anchor: {rep.to_dict()}"
     # And pin the predicate directly, so the filter cannot be quietly removed.
-    from src.memory.vault.contradiction import _is_specific_anchor
+    from openagent_core.memory.vault.contradiction import _is_specific_anchor
     cfg = ContradictionConfig()
     for word in ("vault", "docker", "npx", "cat"):
         assert not _is_specific_anchor(word, cfg), f"{word!r} is a word, not a subject"
@@ -239,7 +239,7 @@ async def t_no_provider_required(ctx: TestContext) -> None:
     operational. The generator must therefore contain no model call at all —
     asserted structurally, not just by "it happened to work"."""
     import inspect
-    from src.memory.vault import contradiction
+    from openagent_core.memory.vault import contradiction
 
     src = inspect.getsource(contradiction)
     # Strip the module docstring: it DISCUSSES models/providers deliberately.

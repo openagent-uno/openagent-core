@@ -35,11 +35,34 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass
 from typing import Any, Optional
 
-from src.core.logging import elog
+from openagent_core.core.logging import elog
 
 _DEFAULT_EVERY = 3
+
+
+@dataclass(frozen=True, slots=True)
+class VaultReminderSettings:
+    """Instance-owned configuration; environment mapping belongs to the host."""
+
+    enabled: bool = True
+    every_n_turns: int = _DEFAULT_EVERY
+
+    def __post_init__(self) -> None:
+        if self.every_n_turns < 1:
+            raise ValueError("vault reminder cadence must be positive")
+
+    @classmethod
+    def from_config(cls, config: dict) -> "VaultReminderSettings":
+        values = (config.get("memory") or {}).get("vault_reminder") or {}
+        try:
+            interval = max(1, int(values.get("every_n_turns", _DEFAULT_EVERY)))
+        except (TypeError, ValueError):
+            interval = _DEFAULT_EVERY
+        return cls(enabled=values.get("enabled", True) is not False,
+                   every_n_turns=interval)
 
 _REMINDER_TEMPLATE = (
     "[Memory checkpoint (turn {n}) — ALWAYS save what matters. Before "
@@ -109,14 +132,21 @@ async def _bump_turn_count(db: Any, session_id: str) -> int:
     return new_count
 
 
-async def maybe_render_reminder(db: Any, session_id: str) -> Optional[str]:
+async def maybe_render_reminder(
+    db: Any, session_id: str, *, settings: VaultReminderSettings | None = None,
+) -> Optional[str]:
     """Increment the turn counter and return a reminder string when the
     configured interval is reached, otherwise ``None``.
 
     Safe to call unconditionally — early-exits when the feature is off,
     ``session_id`` is falsy, or ``db`` is unavailable.
     """
-    if not _is_enabled() or not session_id or not db:
+    # Environment fallback is retained only for legacy direct callers. Agent
+    # always passes its own settings, so cohosted runtimes cannot affect each
+    # other's cadence by mutating a process-wide variable.
+    enabled = settings.enabled if settings is not None else _is_enabled()
+    every = settings.every_n_turns if settings is not None else _every()
+    if not enabled or not session_id or not db:
         return None
     try:
         new_count = await _bump_turn_count(db, session_id)
@@ -124,7 +154,7 @@ async def maybe_render_reminder(db: Any, session_id: str) -> Optional[str]:
         elog("vault_reminder.bump_error", session_id=session_id, error=str(e)[:200])
         return None
     # Fire on the very first turn, then on every Nth turn after.
-    if new_count == 0 or not (new_count == 1 or new_count % _every() == 0):
+    if new_count == 0 or not (new_count == 1 or new_count % every == 0):
         return None
     # Update last_reminded_at.
     conn = getattr(db, "_conn", None)

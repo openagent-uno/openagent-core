@@ -40,6 +40,9 @@ and it is why recording happens at the tool-execution sites below instead.
 from __future__ import annotations
 
 import contextvars
+from contextlib import contextmanager
+from dataclasses import dataclass
+import json
 from typing import Any, Optional
 
 # Terminal state of the run a recall happened inside. Deliberately three
@@ -116,11 +119,26 @@ _MAX_PATHS_PER_RUN = 64
 _SINK: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
     "openagent_vault_recall_sink", default=None
 )
+_ACTIVITY: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "openagent_vault_activity", default=None,
+)
+
+
+@contextmanager
+def vault_activity_scope():
+    """Collect a public run's effects even when a provider opens a recall sink."""
+    sink = {"paths": {}, "successful_reads": set(), "successful_writes": set()}
+    token = _ACTIVITY.set(sink)
+    try:
+        yield sink
+    finally:
+        _ACTIVITY.reset(token)
 
 
 def open_sink() -> tuple[dict, contextvars.Token]:
     """Start collecting vault recalls for one call."""
-    sink: dict[str, Any] = {"paths": {}}
+    sink: dict[str, Any] = {"paths": {}, "successful_reads": set(),
+                            "successful_writes": set()}
     return sink, _SINK.set(sink)
 
 
@@ -204,6 +222,133 @@ def recorded_paths(sink: dict | None) -> dict[str, str]:
     return dict(paths) if isinstance(paths, dict) else {}
 
 
+@dataclass(frozen=True, slots=True)
+class VaultToolSemantics:
+    """Trusted vault registration metadata, independent of names and routing.
+
+    The catalog attaches this metadata to the real vault module registration.
+    Model arguments and similarly named third-party tools cannot claim it.
+    """
+
+    operation: str
+    path_argument: str | None = None
+    recalls_content: bool = False
+
+    def __post_init__(self) -> None:
+        if self.operation not in {"read", "write", "search", "inspect"}:
+            raise ValueError("unknown vault operation")
+
+
+def vault_tool_semantics(tool_name: str) -> VaultToolSemantics | None:
+    """Metadata for the canonical vault adapter to attach at registration."""
+    if tool_name in _RECALL_TOOL_ARGS:
+        return VaultToolSemantics("read", _RECALL_TOOL_ARGS[tool_name], True)
+    if tool_name in {"vault_write_note", "vault_patch_note", "vault_update_frontmatter",
+                     "vault_delete_note", "vault_move_note", "vault_manage_tags",
+                     "vault_rename_note"}:
+        return VaultToolSemantics("write", "path")
+    if tool_name in {"vault_search", "vault_search_notes"}:
+        return VaultToolSemantics("search")
+    if tool_name.startswith("vault_"):
+        return VaultToolSemantics("inspect")
+    return None
+
+
+def tool_result_succeeded(result: Any) -> bool:
+    """A transport completion or attempted save is not a successful operation."""
+    if result is None:
+        return False
+    if not isinstance(result, dict):
+        if getattr(result, "isError", False) or getattr(result, "is_error", False):
+            return False
+        raw = getattr(result, "mcp_result", None)
+        return tool_result_succeeded(raw) if raw is not None else True
+    if (result.get("isError") or result.get("is_error") or result.get("error")
+            or result.get("success") is False or result.get("ok") is False):
+        return False
+    structured = result.get("structuredContent", result.get("structured_content"))
+    if isinstance(structured, dict) and not tool_result_succeeded(structured):
+        return False
+    # Some existing vault MCPs report application errors in JSON text content
+    # while their outer transport envelope has no isError flag.
+    content = result.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "text":
+                continue
+            text = block.get("text", "")
+            if isinstance(text, str) and len(text) < 65536:
+                try:
+                    decoded = json.loads(text)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(decoded, dict) and not tool_result_succeeded(decoded):
+                    return False
+    return True
+
+
+def record_semantic_tool(
+    semantics: VaultToolSemantics | None,
+    tool_args: Any,
+    result: Any,
+    *,
+    tool_ref: str,
+    call_id: str | None = None,
+) -> None:
+    """Record a completed authorized vault operation on stream and normal paths.
+
+    Root catalog dispatch calls this once with its trusted registration metadata.
+    A failed save never satisfies the write check; search hits are never booked
+    as recalled content. Call IDs deduplicate retry/result delivery.
+    """
+    sinks = [sink for sink in (_SINK.get(), _ACTIVITY.get()) if sink is not None]
+    if not sinks or semantics is None or not tool_result_succeeded(result):
+        return
+    key = call_id or tool_ref
+    for sink in sinks:
+        if semantics.operation == "write":
+            sink.setdefault("successful_writes", set()).add(key)
+        elif semantics.operation in {"read", "search", "inspect"}:
+            sink.setdefault("successful_reads", set()).add(key)
+        if not semantics.recalls_content or not semantics.path_argument or not isinstance(tool_args, dict):
+            continue
+        raw = tool_args.get(semantics.path_argument)
+        paths = [raw] if isinstance(raw, str) else raw if isinstance(raw, (list, tuple)) else ()
+        seen = sink.setdefault("paths", {})
+        for raw_path in paths:
+            path = _clean_path(raw_path)
+            if path and path not in seen and len(seen) < _MAX_PATHS_PER_RUN:
+                seen[path] = tool_ref
+
+
+async def observe_vault_effect(descriptor, arguments, result, context, call_id) -> None:
+    """CapabilityCatalog observer using only trusted registration effect tags.
+
+    ``vault.recall.path`` and ``vault.recall.paths`` explicitly mark arguments
+    whose note contents were returned. Read/search alone does not imply recall.
+    Names, source labels and model-supplied fields never classify an operation.
+    """
+    del context
+    effects = descriptor.effects
+    operation = next((op for op in ("write", "read", "search", "inspect")
+                      if f"vault.{op}" in effects), None)
+    if operation is None:
+        return
+    path_argument = next((key for key in ("path", "paths")
+                          if f"vault.recall.{key}" in effects), None)
+    semantics = VaultToolSemantics(operation, path_argument, path_argument is not None)
+    record_semantic_tool(semantics, arguments, result,
+                         tool_ref=descriptor.tool_ref, call_id=call_id)
+
+
+def vault_activity(sink: dict | None) -> dict[str, int]:
+    """Successful operation counts; attempted/failed saves are excluded."""
+    sink = sink or {}
+    return {"reads": len(sink.get("successful_reads", ())),
+            "writes": len(sink.get("successful_writes", ())),
+            "recalled_notes": len(sink.get("paths", {}))}
+
+
 def outcome_for_exception(exc: BaseException | None) -> str:
     """Classify how a run ended.
 
@@ -261,7 +406,7 @@ async def flush(
             )
             written += 1
         except Exception as e:  # noqa: BLE001
-            from src.core.logging import elog
+            from openagent_core.core.logging import elog
 
             elog(
                 "vault.recall_record_error",

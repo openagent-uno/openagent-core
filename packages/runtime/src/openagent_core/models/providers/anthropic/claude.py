@@ -8,15 +8,15 @@ from typing import Any, Callable, Dict, List, Literal, NoReturn, Optional, Tuple
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from src.core.runtime_errors import ModelProviderError, ModelRateLimitError
-from src.models.providers.base import Model
-from src.models.providers.message import Citations, DocumentCitation, Message, UrlCitation
-from src.models.providers.metrics import MessageMetrics
-from src.models.providers.response import ModelResponse
-from src.core._run_state.agent import RunOutput
-from src.mcp._runtime.function import Function
-from src.core._runner.utils.log import log_debug, log_error, log_warning
-from src.core._runner.utils.models.claude import (
+from openagent_core.core.runtime_errors import ModelProviderError, ModelRateLimitError
+from openagent_core.models.providers.base import Model
+from openagent_core.models.providers.message import Citations, DocumentCitation, Message, UrlCitation
+from openagent_core.models.providers.metrics import MessageMetrics
+from openagent_core.models.providers.response import ModelResponse
+from openagent_core.core._run_state.agent import RunOutput
+from openagent_core.mcp._runtime.function import Function
+from openagent_core.core._runner.utils.log import log_debug, log_error, log_warning
+from openagent_core.core._runner.utils.models.claude import (
     MCPServerConfiguration,
     _validate_cache_ttl_order,
     build_system_blocks,
@@ -24,7 +24,7 @@ from src.core._runner.utils.models.claude import (
     format_tools_for_model,
     supports_prefill,
 )
-from src.core._runner.utils.tokens import count_schema_tokens
+from openagent_core.core._runner.utils.tokens import count_schema_tokens
 
 try:
     from anthropic import Anthropic as AnthropicClient
@@ -76,12 +76,12 @@ except ImportError as e:
 _MAX_CACHE_BREAKPOINTS = 4
 
 # The ``<session-id>`` tag the orchestrator appends to the framework system
-# prompt (``src.core.agent.Agent._combined_system_prompt``). It is the ONLY
+# prompt (``openagent_core.core.agent.Agent._combined_system_prompt``). It is the ONLY
 # per-session bytes in an otherwise deployment-wide prompt, so it decides
 # whether the ~10.8k framework prefix is cached once per box or once per
 # session. ``_split_session_id_tag`` moves it past the breakpoint.
 #
-# Duplicated from ``src.models.native_provider`` / ``src.models.dispatcher``,
+# Duplicated from ``openagent_core.models.native_provider`` / ``openagent_core.models.dispatcher``,
 # which strip the same tag to key their Agent caches. Three copies of one
 # regex is a wart; the tag is a stable orchestrator↔provider contract, so
 # they have not drifted. Consolidate if a fourth appears.
@@ -97,10 +97,9 @@ def _split_session_id_tag(system_message: str) -> Tuple[str, str]:
     Returns ``(body, tag)``. ``tag`` is ``""`` when there is no tag, in which
     case ``body`` is the input unchanged and callers behave exactly as before.
     """
-    match = _SESSION_ID_TAG_RE.search(system_message)
-    if not match:
-        return system_message, ""
-    return system_message[: match.start()], match.group(0).strip()
+    from openagent_core.prompts import split_prompt
+
+    return split_prompt(system_message)
 
 
 class SystemPromptBlock(BaseModel):

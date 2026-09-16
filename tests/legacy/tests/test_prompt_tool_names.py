@@ -109,7 +109,7 @@ def _registered_keys_by_server() -> tuple[dict[str, set[str]], list[str]]:
     union, while "the catalog must inline every key of THIS server" needs
     to know which server a key belongs to.
     """
-    from src.mcp.builtins import BUILTIN_MCP_SPECS, BUILTIN_MCPS_DIR
+    from openagent_core.mcp.builtins import BUILTIN_MCP_SPECS, BUILTIN_MCPS_DIR
 
     by_server: dict[str, set[str]] = {}
     notes: list[str] = []
@@ -143,7 +143,7 @@ def _registered_keys_by_server() -> tuple[dict[str, set[str]], list[str]]:
         # 2. Python subprocess MCPs go through the pool's prefixing.
         if spec.get("python"):
             try:
-                mod = importlib.import_module(f"src.mcp.servers.{spec['dir']}.server")
+                mod = importlib.import_module(f"openagent_core.mcp.servers.{spec['dir']}.server")
                 registry = mod.mcp._tool_manager.list_tools()
             except Exception as exc:  # noqa: BLE001
                 notes.append(f"{name}: not introspectable ({type(exc).__name__})")
@@ -205,7 +205,7 @@ _NON_TOOL_TOKENS: frozenset[str] = frozenset({
     "logs",
     # -- tool PARAMETERS / result fields --
     "model_id", "runtime_id", "top_k", "session_binding_path", "task",
-    "query", "path", "tool", "marker", "shell_id", "open_suggestions",
+    "query", "path", "tool", "tool_ref", "marker", "shell_id", "open_suggestions",
     "child_session_id", "id",
     # ``search_past_conversations`` params, and the ``index`` field of its
     # reply — the prompt names that field because an empty result must be
@@ -350,14 +350,14 @@ def _assert_prompt_tools_exist(text: str, label: str) -> None:
 
 @test("prompt_tool_names", "every tool named in FRAMEWORK_SYSTEM_PROMPT is registered")
 async def t_framework_prompt_tools_exist(_ctx: TestContext) -> None:
-    from src.core.prompts import FRAMEWORK_SYSTEM_PROMPT
+    from openagent_core.core.prompts import FRAMEWORK_SYSTEM_PROMPT
 
     _assert_prompt_tools_exist(FRAMEWORK_SYSTEM_PROMPT, "FRAMEWORK_SYSTEM_PROMPT")
 
 
 @test("prompt_tool_names", "the prominent memory rules distinguish vault from history")
 async def t_prominent_memory_rules_name_both_layers(_ctx: TestContext) -> None:
-    from src.core.prompts import FRAMEWORK_SYSTEM_PROMPT
+    from openagent_core.core.prompts import FRAMEWORK_SYSTEM_PROMPT
 
     memory_rules = FRAMEWORK_SYSTEM_PROMPT.split(
         "## Memory vault — non-negotiable", 1,
@@ -371,7 +371,7 @@ async def t_prominent_memory_rules_name_both_layers(_ctx: TestContext) -> None:
 
 @test("prompt_tool_names", "every tool named in DREAM_MODE_PROMPT is registered")
 async def t_dream_prompt_tools_exist(_ctx: TestContext) -> None:
-    from src.core.server import DREAM_MODE_PROMPT
+    from openagent_core.memory.vault.prompts import DREAM_MODE_PROMPT
 
     _assert_prompt_tools_exist(DREAM_MODE_PROMPT, "DREAM_MODE_PROMPT")
 
@@ -399,7 +399,7 @@ async def t_inlined_tool_lists_are_complete(_ctx: TestContext) -> None:
     model stops seeing the keys — this fails, exactly as it would have
     before.
     """
-    from src.core.prompts import (
+    from openagent_core.core.prompts import (
         _INLINE_TOOL_KEYS_CAP,
         _INLINE_TOOL_KEYS_SERVERS,
         _render_catalog_summary_lines,
@@ -455,8 +455,8 @@ async def t_counter_examples_still_wrong(_ctx: TestContext) -> None:
     away from a key that works. Assert every name the prose marks as
     wrong is in fact unregistered.
     """
-    from src.core.prompts import FRAMEWORK_SYSTEM_PROMPT
-    from src.core.server import DREAM_MODE_PROMPT
+    from openagent_core.core.prompts import FRAMEWORK_SYSTEM_PROMPT
+    from openagent_core.memory.vault.prompts import DREAM_MODE_PROMPT
 
     keys, _ = _registered_tool_keys()
 
