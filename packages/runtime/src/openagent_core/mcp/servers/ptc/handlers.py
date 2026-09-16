@@ -1,31 +1,8 @@
-"""The ``run_python`` implementation: the UDS RPC bridge + sandboxed child.
+"""PTC dispatch through the host's explicitly supplied code executor.
 
-Flow of one ``run_python(code)`` call (LOCAL path):
-
-  1. Refuse fast if the sandbox policy is not satisfied (fail-closed — never
-     run on the host when ``require_sandbox`` is set and the docker backend
-     is not active).
-  2. Make a per-run tmpdir, a per-run random token, and a Unix socket in it.
-     Start ``asyncio.start_unix_server`` on the RUNNING gateway loop; ``chmod
-     0600`` the socket.
-  3. Write the bridge module + the script (import header + user code) into the
-     tmpdir (see ``prelude``).
-  4. Spawn ``python <script>`` through ``BackgroundShell.run_with_timeout`` —
-     reusing the sandbox backend routing, the 1 MB output drain, the timeout
-     and killpg tree-kill, and ``ForegroundResult`` — with a SCRUBBED child
-     environment (socket + token + PYTHONPATH; secret-looking host vars blanked).
-  5. The child's ``call_tool`` blocks on the socket for each tool call; the
-     handler coroutine answers on the gateway loop, dispatching through
-     ``tool_search.adapters._call_scoped_tool_impl`` (so PTC can only reach tools the
-     agent already has, and dry-run stamping propagates for free). Each call is
-     counted against ``max_tool_calls`` and, optionally, intersected with
-     ``allowed_tools``.
-  6. Only the child's stdout is returned to the model, capped by
-     ``cap_tool_output``.
-
-The child's ``call_tool`` calls do NOT count against the agentic-loop
-``autoloop_cap``: they never enter the model loop — they are internal to this
-one ``run_python`` tool call and bounded only by ``max_tool_calls``.
+Core owns the authenticated RPC bridge and tool budget. The consumer supplies
+process execution and storage; no provider credentials or ambient environment
+are inherited, and a missing/unavailable sandbox never falls back to the host.
 """
 from __future__ import annotations
 
@@ -36,7 +13,6 @@ import posixpath
 import secrets
 import shlex
 import shutil
-import sys
 import tempfile
 import time
 from typing import Any
@@ -44,11 +20,9 @@ from typing import Any
 from openagent_core.core.dry_run import dry_run_scope
 from openagent_core.core.logging import elog
 from openagent_core.core.tool_output import cap_tool_output
-from openagent_core.mcp.servers.shell.backends import get_exec_backend
-from openagent_core.mcp.servers.shell.shells import BackgroundShell
 from openagent_core.mcp.servers.tool_search.adapters import _call_scoped_tool_impl, _decode_tool_args
 from openagent_core.runtime import current_runtime, current_execution_context, current_run_id, execution_scope
-from openagent_core.core.execution_origin import current_execution_origin, execution_origin_scope
+from openagent_core.core.execution_origin import current_execution_origin, execution_origin_scope, current_ingress_identity, ingress_identity_scope
 
 # Guard on a single request line so a malformed/hostile child cannot make the
 # handler buffer without bound. A tool call's JSON args are tiny; 4 MB is
@@ -71,22 +45,11 @@ def _is_secret_key(name: str) -> bool:
     return any(marker in low for marker in _SECRET_NAME_MARKERS)
 
 
-def _child_env(*, tmpdir: str, sock_path: str, token: str) -> dict[str, str]:
-    """The per-command env overlay handed to ``BackgroundShell``.
-
-    ``LocalBackend`` merges this ON TOP of ``os.environ.copy()``, so we (a) add
-    the socket/token/PYTHONPATH the bridge needs and (b) OVERRIDE every
-    secret-looking host var to "" — a real scrub, since the value the child
-    reads is gone. The socket/token/PYTHONPATH are set LAST so a var named
-    ``OPENAGENT_PTC_TOKEN`` (which matches the "token" marker) is not itself
-    blanked.
-    """
-    env: dict[str, str] = {}
-    for name in os.environ:
-        if _is_secret_key(name):
-            env[name] = ""
-    host_pp = os.environ.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = tmpdir + (os.pathsep + host_pp if host_pp else "")
+def _child_env(*, environment, tmpdir: str, sock_path: str, token: str) -> dict[str, str]:
+    # Only the host-provided environment can cross this seam. The process-wide
+    # environment is not consulted, even for non-secret-looking variables.
+    env = {name: value for name, value in environment.items() if not _is_secret_key(name)}
+    env["PYTHONPATH"] = tmpdir
     env["OPENAGENT_PTC_SOCKET"] = sock_path
     env["OPENAGENT_PTC_TOKEN"] = token
     return env
@@ -206,31 +169,25 @@ async def run_python_impl(
     if not code or not code.strip():
         return _refuse("run_python: code must be a non-empty string", t0=t0)
 
-    backend = get_exec_backend()
-
-    # Docker: the host UDS is unreachable from a ``--network none`` container
-    # and the host tmpdir is not visible, so the LOCAL bridge cannot work.
-    # Instead we ship the script + a file-transport bridge INTO the container and
-    # service its request/response files from the host over ``docker exec`` (see
-    # ``_run_docker``) — the container keeps its network isolation. A failure to
-    # bring the container up STILL fails closed (never falls back to the host).
-    if backend.name == "docker":
-        return await _run_docker(
-            code, pool=pool, settings=settings, dry_run=dry_run, t0=t0, backend=backend
-        )
-
-    # require_sandbox is satisfied ONLY by the docker backend. Any other backend
-    # here (local / unknown-fails-safe-to-local) means we would run on the host,
-    # which the policy forbids.
-    if getattr(settings, "require_sandbox", True):
-        return _refuse(
-            "PTC requires a sandbox (ptc.require_sandbox=true) but "
-            "OPENAGENT_SANDBOX_BACKEND is not 'docker'. Set a docker sandbox, "
-            "or set ptc.require_sandbox=false to allow host execution.",
-            t0=t0,
-        )
-
-    return await _run_local(code, pool=pool, settings=settings, dry_run=dry_run, t0=t0)
+    runtime, context = current_runtime(), current_execution_context()
+    if runtime is None or context is None:
+        return _refuse("PTC requires an authenticated runtime execution", t0=t0)
+    executor = runtime.services.code_executor
+    if executor is None:
+        return _refuse("The host has not configured a code executor", t0=t0)
+    if getattr(settings, "require_sandbox", True) and executor.isolated is not True:
+        return _refuse("PTC requires an isolated executor supplied by the host", t0=t0)
+    if executor.bridge_transport not in {"unix", "files"}:
+        return _refuse("The configured executor has no supported RPC transport", t0=t0)
+    try:
+        await executor.prepare(context)
+    except Exception as exc:
+        return _refuse(f"The configured code executor is unavailable ({type(exc).__name__}: {exc})", t0=t0)
+    if executor.bridge_transport == "files":
+        return await _run_files(code, pool=pool, settings=settings, dry_run=dry_run,
+                                t0=t0, executor=executor, context=context)
+    return await _run_local(code, pool=pool, settings=settings, dry_run=dry_run,
+                            t0=t0, executor=executor, context=context)
 
 
 async def _run_local(
@@ -240,6 +197,8 @@ async def _run_local(
     settings: Any,
     dry_run: bool,
     t0: float,
+    executor: Any,
+    context: Any,
 ) -> dict[str, Any]:
     from openagent_core.mcp.servers.ptc.prelude import write_prelude
 
@@ -257,15 +216,11 @@ async def _run_local(
             max_tool_calls=int(getattr(settings, "max_tool_calls", 50)),
         )
         script_path = write_prelude(tmpdir, code)
-        command = f"{shlex.quote(sys.executable)} {shlex.quote(script_path)}"
-        shell = BackgroundShell(
-            shell_id=f"ptc_{secrets.token_hex(3)}",
-            command=command,
-            cwd=tmpdir,
-            env=_child_env(tmpdir=tmpdir, sock_path=sock_path, token=token),
-        )
-        result = await shell.run_with_timeout(
-            timeout_seconds=float(getattr(settings, "timeout_s", 120)),
+        command = f"{shlex.quote(executor.python_executable)} {shlex.quote(script_path)}"
+        result = await executor.run(
+            command=command, cwd=tmpdir,
+            env=_child_env(environment=executor.environment, tmpdir=tmpdir, sock_path=sock_path, token=token),
+            timeout_seconds=float(getattr(settings, "timeout_s", 120)), context=context,
         )
         calls = state["calls"]
         ok = (result.exit_code == 0) and not result.timed_out
@@ -300,23 +255,9 @@ async def _run_local(
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-# ── Docker path: file-based RPC over ``docker exec`` ────────────────────
-#
-# A ``--network none`` container cannot reach the host Unix socket the local
-# bridge uses, so PTC talks to it through FILES: the sandboxed script writes one
-# request file per ``call_tool`` and blocks on the matching response file, while a
-# host-side poller task services those files via the backend's container-fs
-# helpers (``docker exec`` list/read/write). Each proxied call runs through the
-# SAME ``_call_scoped_tool_impl`` the local path uses, inside a re-applied
-# ``dry_run_scope`` — so there is no privilege escalation and dry-run stamping
-# propagates identically. The container itself is the shared, long-lived one from
-# the exec backend (reaped at hub shutdown); only the per-run dir is created and
-# removed here.
-
-# Interpreter invoked inside the container. The sandbox image must provide it:
-# the default ``debian:stable-slim`` ships no Python, so an operator enabling
-# PTC-over-docker must point ``sandbox.docker.image`` at one that has python3.
-_CONTAINER_PYTHON = "python3"
+# File-based RPC for a host-provisioned isolated environment. Core owns only
+# the bridge protocol; the executor owns filesystem access and process lifetime.
+# Both transports dispatch through the same captured authorization context.
 
 # How often the host poller re-scans the per-run dir for new request files.
 _POLL_INTERVAL_S = 0.02
@@ -345,7 +286,7 @@ def _make_file_dispatch(
 
 def _make_dispatch(*, pool, token, dry_run, allowed_tools, max_tool_calls, state):
     runtime, context, run_id = current_runtime(), current_execution_context(), current_run_id()
-    origin = current_execution_origin()
+    origin, ingress = current_execution_origin(), current_ingress_identity()
     if runtime is None or context is None or run_id is None:
         raise PermissionError("PTC requires an authenticated runtime execution")
     allowed = frozenset(allowed_tools) if allowed_tools is not None else None
@@ -360,7 +301,7 @@ def _make_dispatch(*, pool, token, dry_run, allowed_tools, max_tool_calls, state
             reference = req.get("tool_ref")
             if not isinstance(reference, str) or not reference:
                 raise ValueError("PTC requires the exact opaque tool_ref returned by discovery")
-            with execution_scope(runtime, context, run_id), execution_origin_scope(origin), dry_run_scope(dry_run):
+            with execution_scope(runtime, context, run_id), execution_origin_scope(origin), ingress_identity_scope(ingress), dry_run_scope(dry_run):
                 descriptors = [tool for tool in await runtime.capabilities.discover(context) if tool.tool_ref == reference]
                 if len(descriptors) != 1:
                     raise LookupError("Unknown or revoked tool reference")
@@ -375,11 +316,11 @@ def _make_dispatch(*, pool, token, dry_run, allowed_tools, max_tool_calls, state
     return dispatch
 
 
-async def _poll_rundir(backend: Any, rundir: str, dispatch: Any) -> None:
+async def _poll_rundir(executor: Any, rundir: str, dispatch: Any) -> None:
     """Host poller: turn ``req_<seq>.json`` files into ``resp_<seq>.json`` replies.
 
     Runs as its own task for the lifetime of the child script. Reads/writes the
-    per-run dir through the backend's container-fs helpers, so it never needs
+    per-run dir through the executor's filesystem methods, so it never needs
     host visibility into the container. Each request name is serviced exactly
     once (``seen``); a malformed request still gets a response so the child never
     blocks forever.
@@ -387,37 +328,40 @@ async def _poll_rundir(backend: Any, rundir: str, dispatch: Any) -> None:
     seen: set[str] = set()
     while True:
         try:
-            names = await backend.container_listdir(rundir)
+            names = await executor.files_listdir(rundir)
         except Exception:  # noqa: BLE001 — a transient exec hiccup must not kill the poller
             names = []
         for name in sorted(names):
             if name in seen or not (name.startswith("req_") and name.endswith(".json")):
                 continue
             seen.add(name)
-            raw = await backend.container_read(posixpath.join(rundir, name))
+            raw = await executor.files_read(posixpath.join(rundir, name))
             if raw is None:
                 seen.discard(name)  # not fully published yet — retry on the next scan
                 continue
             seq = name[len("req_"):-len(".json")]
             try:
+                if len(raw) > _MAX_REQUEST_LINE:
+                    raise ValueError("request too large")
                 req = json.loads(raw)
             except Exception as exc:  # noqa: BLE001
                 resp: dict[str, Any] = {"ok": False, "error": f"bad request: {exc}"}
             else:
                 resp = await dispatch(req)
             payload = json.dumps(resp, default=str).encode("utf-8")
-            await backend.container_write(posixpath.join(rundir, f"resp_{seq}.json"), payload)
+            await executor.files_write(posixpath.join(rundir, f"resp_{seq}.json"), payload)
         await asyncio.sleep(_POLL_INTERVAL_S)
 
 
-async def _run_docker(
+async def _run_files(
     code: str,
     *,
     pool: Any,
     settings: Any,
     dry_run: bool,
     t0: float,
-    backend: Any,
+    executor: Any,
+    context: Any,
 ) -> dict[str, Any]:
     from openagent_core.mcp.servers.ptc.prelude import (
         _BRIDGE_FILENAME,
@@ -426,30 +370,18 @@ async def _run_docker(
         render_script,
     )
 
-    # Bring the shared container up. A failure here (no daemon / bad image) is
-    # fatal by design: we must NOT fall back to running the model's script on the
-    # host, which is the whole point of require_sandbox.
-    try:
-        await backend.prepare()
-    except Exception as exc:  # noqa: BLE001
-        return _refuse(
-            f"PTC docker sandbox could not be started "
-            f"({type(exc).__name__}: {exc}); refusing to run on the host.",
-            t0=t0,
-        )
-
     token = secrets.token_hex(16)
     timeout_s = float(getattr(settings, "timeout_s", 120))
-    rundir = posixpath.join(backend.container_workdir, f"oa-ptc-{token[:12]}")
+    rundir = posixpath.join(executor.workdir, f"oa-ptc-{token[:12]}")
     state: dict[str, int] = {"calls": 0}
     poller: asyncio.Task | None = None
     try:
-        await backend.container_mkdir(rundir)
-        await backend.container_write(
+        await executor.files_mkdir(rundir)
+        await executor.files_write(
             posixpath.join(rundir, _BRIDGE_FILENAME),
             _DOCKER_BRIDGE_MODULE.encode("utf-8"),
         )
-        await backend.container_write(
+        await executor.files_write(
             posixpath.join(rundir, _SCRIPT_FILENAME),
             render_script(code).encode("utf-8"),
         )
@@ -462,21 +394,14 @@ async def _run_docker(
             max_tool_calls=int(getattr(settings, "max_tool_calls", 50)),
             state=state,
         )
-        poller = asyncio.create_task(_poll_rundir(backend, rundir, dispatch))
+        poller = asyncio.create_task(_poll_rundir(executor, rundir, dispatch))
 
         script_in_container = posixpath.join(rundir, _SCRIPT_FILENAME)
-        command = f"{_CONTAINER_PYTHON} {shlex.quote(script_in_container)}"
-        shell = BackgroundShell(
-            shell_id=f"ptc_{secrets.token_hex(3)}",
-            command=command,
-            cwd=None,  # docker exec runs in the container WORKDIR; the path is absolute
-            env={
-                "OPENAGENT_PTC_RUNDIR": rundir,
-                "OPENAGENT_PTC_TOKEN": token,
-                "OPENAGENT_PTC_CALL_TIMEOUT": str(int(timeout_s)),
-            },
-        )
-        result = await shell.run_with_timeout(timeout_seconds=timeout_s)
+        command = f"{shlex.quote(executor.python_executable)} {shlex.quote(script_in_container)}"
+        result = await executor.run(command=command, cwd=None, env={
+            "OPENAGENT_PTC_RUNDIR": rundir, "OPENAGENT_PTC_TOKEN": token,
+            "OPENAGENT_PTC_CALL_TIMEOUT": str(int(timeout_s)),
+        }, timeout_seconds=timeout_s, context=context)
         calls = state["calls"]
         ok = (result.exit_code == 0) and not result.timed_out
         out: dict[str, Any] = {
@@ -491,7 +416,7 @@ async def _run_docker(
             out["stderr"] = cap_tool_output(result.stderr)
         elog(
             "ptc.run",
-            backend="docker",
+            transport="files",
             status=out["status"],
             tool_calls=calls,
             exit_code=result.exit_code,
@@ -504,6 +429,6 @@ async def _run_docker(
             poller.cancel()
             await asyncio.gather(poller, return_exceptions=True)
         try:
-            await backend.container_rmtree(rundir)
+            await executor.files_rmtree(rundir)
         except Exception:  # noqa: BLE001 — per-run cleanup is best-effort
             pass

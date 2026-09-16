@@ -1,5 +1,0 @@
-/target
-Cargo.lock
-# Built binaries — populated by CI artifacts before PyInstaller, or by
-# scripts/build-computer-control.sh in dev. Never committed.
-/bin/

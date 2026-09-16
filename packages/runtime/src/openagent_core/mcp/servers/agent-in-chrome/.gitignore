@@ -1,5 +1,0 @@
-# Node dependencies (installed at build time / first launch)
-host/node_modules/
-
-# Local integration harness
-host/_smoke.mjs
