@@ -32,6 +32,20 @@ class ProviderLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await provider.shutdown()
         self.assertEqual((first.closed,second.closed),(1,1))
 
+    async def test_router_closes_retired_native_and_team_clients(self):
+        from openagent_core.models.dispatcher import TeamRouterProvider
+        router=TeamRouterProvider('openai:fixture',[])
+        native=NativeProvider('openai:fixture',api_key='fixture')
+        first,second=Client(),Client()
+        native._agno_agents['first']=SimpleNamespace(model=SimpleNamespace(async_client=first))
+        router._session_runtime['native']=native
+        router._session_runtime['team']=SimpleNamespace(model=SimpleNamespace(async_client=second))
+        async with router._call_scope():
+            router._invalidate_session_cache()
+            self.assertEqual((first.closed,second.closed),(0,0))
+        self.assertEqual((first.closed,second.closed),(1,1))
+        await router.shutdown()
+
     async def test_shared_clients_close_once_and_borrowed_transport_survives(self):
         shared,borrowed=Client(),Client()
         runtime=SimpleNamespace(model=SimpleNamespace(async_client=shared),members=[

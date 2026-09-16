@@ -40,6 +40,7 @@ from openagent_core.core import tool_trace, vault_recall
 from openagent_core.core.logging import elog
 from openagent_core.core.tool_scope import current_tool_allowlist, normalize_family
 from openagent_core.models.base import BaseModel, ModelResponse
+from openagent_core.models.resource_lifecycle import ProviderResources, _provider_call
 from openagent_core.models.catalog import (
     DEFAULT_CEREBRAS_BASE_URL,
     DEFAULT_MISTRAL_BASE_URL,
@@ -337,26 +338,6 @@ def _evict_oldest(cache: OrderedDict[str, Any], max_size: int, on_evict=None) ->
             close_runtime_databases(runtime)
         else:
             on_evict(runtime)
-
-
-def _provider_call(method):
-    """Hold cached resources until every overlapping model call has finished."""
-    if inspect.isasyncgenfunction(method):
-        @functools.wraps(method)
-        async def stream(self, *args, **kwargs):
-            async with self._call_scope():
-                iterator = method(self, *args, **kwargs)
-                try:
-                    async for item in iterator:
-                        yield item
-                finally:
-                    await iterator.aclose()
-        return stream
-    @functools.wraps(method)
-    async def complete(self, *args, **kwargs):
-        async with self._call_scope():
-            return await method(self, *args, **kwargs)
-    return complete
 
 
 def _system_cache_key(system: str | None) -> str:
@@ -853,7 +834,7 @@ PROVIDER_DEFAULT_BASE_URLS: dict[str, str] = {
 PROVIDER_REQUIRES_BASE_URL: frozenset[str] = frozenset({"local"})
 
 
-class NativeProvider(BaseModel):
+class NativeProvider(ProviderResources, BaseModel):
     """API model provider backed by the runtime's session and tool orchestration."""
 
     history_mode = "platform"
@@ -900,11 +881,7 @@ class NativeProvider(BaseModel):
         # mkdir()'d the parent — cached so the ensure-agent hot path
         # doesn't redo the stat+mkdir per cache miss.
         self._ensured_db_path: Path | None = None
-        self._retired_runtimes: list[Any] = []
-        self._active_calls = 0
-        self._closing = False
-        self._idle = asyncio.Event()
-        self._idle.set()
+        self._initialize_resources()
 
 
     def set_db(self, db) -> None:
@@ -936,44 +913,12 @@ class NativeProvider(BaseModel):
         self._fallback_config = fallback_config
         self._clear_runtime_caches()
 
-    def _retire_runtime(self, runtime) -> None:
-        self._retired_runtimes.append(runtime)
-
     def _clear_runtime_caches(self) -> None:
         """Retire old resources without closing another turn's active clients."""
         self._retired_runtimes.extend(self._agno_agents.values())
         self._retired_runtimes.extend(self._agno_teams.values())
         self._agno_agents.clear()
         self._agno_teams.clear()
-
-    async def _release_retired(self) -> None:
-        from openagent_core.models.runtime_db_lifecycle import close_runtime_clients, close_runtime_databases
-        if self._active_calls:
-            return
-        retired, self._retired_runtimes = self._retired_runtimes, []
-        seen = set()
-        for runtime in retired:
-            if id(runtime) not in seen:
-                seen.add(id(runtime))
-                close_runtime_databases(runtime)
-                await close_runtime_clients(runtime)
-
-    @contextlib.asynccontextmanager
-    async def _call_scope(self):
-        if self._closing:
-            raise RuntimeError("Model provider is closed")
-        self._active_calls += 1
-        self._idle.clear()
-        try:
-            yield
-        finally:
-            self._active_calls -= 1
-            if not self._active_calls:
-                try:
-                    await self._release_retired()
-                finally:
-                    if not self._active_calls:
-                        self._idle.set()
 
     async def shutdown(self) -> None:
         self._closing = True

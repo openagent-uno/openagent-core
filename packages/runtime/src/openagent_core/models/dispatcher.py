@@ -700,7 +700,10 @@ async def _arun_runtime_stream(
 # ════════════════════════════════════════════════════════════════════
 
 
-class TeamRouterProvider(BaseModel):
+from openagent_core.models.resource_lifecycle import ProviderResources, _provider_call
+
+
+class TeamRouterProvider(ProviderResources, BaseModel):
     """BaseModel facade over a runtime ``Team(mode=coordinate)`` per session.
 
     Construction is lazy: the first ``generate`` / ``stream`` for a
@@ -732,6 +735,7 @@ class TeamRouterProvider(BaseModel):
         budget_guard: Any = None,
         local_fallback: LocalFallbackPolicy | None = None,
     ):
+        self._initialize_resources()
         self._entry_runtime_id = entry_runtime_id
         self._providers_config = providers_config if providers_config is not None else []
         self._db: Any = None
@@ -842,10 +846,7 @@ class TeamRouterProvider(BaseModel):
         """Clear all per-session caches so the next turn rebuilds from
         the current db / pool / providers_config.
         """
-        from openagent_core.models.runtime_db_lifecycle import close_runtime_databases
-
-        for runtime in self._session_runtime.values():
-            close_runtime_databases(runtime)
+        self._retired_runtimes.extend(self._session_runtime.values())
         self._session_runtime.clear()
         self._session_system_key.clear()
         self._session_media_key.clear()
@@ -981,9 +982,7 @@ class TeamRouterProvider(BaseModel):
             # A prompt/media-shape change replaces the runtime in-place. Close
             # its SqliteDb before overwriting the cache slot; relying on GC is
             # what left old SQLAlchemy pools holding WAL reader snapshots.
-            from openagent_core.models.runtime_db_lifecycle import close_runtime_databases
-
-            close_runtime_databases(cached)
+            self._retire_runtime(cached)
             self._session_runtime.pop(session_id, None)
 
         catalog = self._enabled_llm_models(required_modalities)
@@ -1162,12 +1161,14 @@ class TeamRouterProvider(BaseModel):
 
     async def close_session(self, session_id: str) -> None:
         self._drop_session_state(session_id)
+        await self._release_retired()
         # The runtime's Team / Agent don't expose a per-session close in
         # this adapter shape; the SqliteDb persists the session for next
         # boot. Nothing else to tear down.
 
     async def forget_session(self, session_id: str) -> None:
         self._drop_session_state(session_id)
+        await self._release_retired()
         # Erase the persisted session row so the next turn starts fresh.
         db_path = _runtime_db_path(self._db)
         if not db_path:
@@ -1190,10 +1191,9 @@ class TeamRouterProvider(BaseModel):
         """
         if not session_id:
             return
-        from openagent_core.models.runtime_db_lifecycle import close_runtime_databases
-
         runtime = self._session_runtime.pop(session_id, None)
-        close_runtime_databases(runtime)
+        if runtime is not None:
+            self._retire_runtime(runtime)
         self._session_system_key.pop(session_id, None)
         self._session_media_key.pop(session_id, None)
         self._session_runtime_entry.pop(session_id, None)
@@ -1223,8 +1223,10 @@ class TeamRouterProvider(BaseModel):
         await self._fan_out_runtimes("cleanup_idle")
 
     async def shutdown(self) -> None:
-        await self._fan_out_runtimes("shutdown")
+        self._closing = True
+        await self._idle.wait()
         self._invalidate_session_cache()
+        await self._release_retired()
 
     async def _fan_out_runtimes(self, method_name: str) -> None:
         import asyncio as _asyncio
@@ -1460,6 +1462,7 @@ class TeamRouterProvider(BaseModel):
             )
         return selection
 
+    @_provider_call
     async def generate(
         self,
         messages: list[dict[str, Any]],
@@ -1579,6 +1582,7 @@ class TeamRouterProvider(BaseModel):
                 runtime_id=actual_runtime_id,
             )
 
+    @_provider_call
     async def stream(
         self,
         messages: list[dict[str, Any]],
@@ -1780,6 +1784,7 @@ class ModelDispatcher(BaseModel):
         # provider instance per entry-model lets us share the Team
         # construction cache across sessions that share an entry.
         self._team_providers: dict[str, BaseModel] = {}
+        self._retired_providers: list[BaseModel] = []
 
         # Per-session memo of the last entry model we routed to — used
         # by ``effective_model_id`` so the chat UI's model badge always
@@ -1888,6 +1893,7 @@ class ModelDispatcher(BaseModel):
             invalidate = getattr(provider, "_invalidate_session_cache", None)
             if callable(invalidate):
                 invalidate()
+        self._retired_providers.extend(self._team_providers.values())
         self._team_providers.clear()
 
     def set_session_handle(self, session_id: str, handle: str | None) -> None:
@@ -1905,6 +1911,9 @@ class ModelDispatcher(BaseModel):
 
     async def shutdown(self) -> None:
         await self._fan_out_async("shutdown")
+        for provider in self._retired_providers:
+            await provider.shutdown()
+        self._retired_providers.clear()
 
     async def close_session(self, session_id: str) -> None:
         if not session_id:
