@@ -159,7 +159,7 @@ class SqliteRuntimeStore:
             if reservation and (reservation['tenant_id']!=context.tenant_id or reservation['session_id']!=request.session_id):
                 raise IdempotencyConflict('Cancelled reservation belongs to another context')
             now=int(time.time()*1000)
-            existing=db.execute('SELECT tenant_id FROM sessions_v2 WHERE id=?',(request.session_id,)).fetchone()
+            existing=db.execute('SELECT tenant_id,parent_session_id FROM sessions_v2 WHERE id=?',(request.session_id,)).fetchone()
             if existing and existing[0]!=context.tenant_id:
                 raise PermissionError('Session belongs to another tenant')
             if not existing:
@@ -185,6 +185,8 @@ class SqliteRuntimeStore:
                 parent=db.execute("SELECT r.session_id,s.root_session_id FROM session_runs r JOIN sessions_v2 s ON s.id=r.session_id WHERE r.id=? AND r.tenant_id=?",(context.parent_run_id,context.tenant_id)).fetchone()
                 if parent is None or parent[0]==request.session_id:
                     raise ValueError("A child requires an existing parent in the same tenant")
+                if existing and existing['parent_session_id'] != parent[0]:
+                    raise ValueError('An existing session cannot acquire a different parent')
                 if not existing:
                     db.execute("UPDATE sessions_v2 SET parent_session_id=?,root_session_id=? WHERE id=?",(parent[0],parent[1] or parent[0],request.session_id))
             ordinal=db.execute('SELECT coalesce(max(ordinal),-1)+1 FROM session_runs WHERE session_id=?',(request.session_id,)).fetchone()[0]
@@ -192,10 +194,10 @@ class SqliteRuntimeStore:
                       'deadline_seconds':request.deadline_seconds,'cancel_requested':bool(reservation),
                       'attachments':request.attachments,'model_ref':request.model_ref,'steer_run_id':request.steer_run_id}
             db.execute('''INSERT INTO session_runs(id,tenant_id,session_id,ordinal,idempotency_key,runner_kind,
-                agent_id,status,status_raw,input_json,metadata_json,raw_envelope_json,raw_envelope_schema,created_at_ms)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(request.run_id,context.tenant_id,request.session_id,ordinal,
+                agent_id,status,status_raw,input_json,metadata_json,raw_envelope_json,raw_envelope_schema,created_at_ms,parent_run_id)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(request.run_id,context.tenant_id,request.session_id,ordinal,
                 request.idempotency_key,'agent',context.agent_id,'queued','accepted',canonical_json(request.input),
-                canonical_json(metadata),'{}',1,now))
+                canonical_json(metadata),'{}',1,now,context.parent_run_id))
             if reservation:
                 db.execute("UPDATE session_runs SET status='cancelled',status_raw='cancelled_before_accept',finished_at_ms=? WHERE id=?",(now,request.run_id))
             self._message(db,request.run_id,'user',request.input,context.author.key,context.author.kind,now)
@@ -203,7 +205,7 @@ class SqliteRuntimeStore:
             row=db.execute('SELECT * FROM session_runs WHERE id=?',(request.run_id,)).fetchone()
             return self._record(row),not bool(reservation)
 
-    def _message(self,db,run_id,role,text,principal,kind,now):
+    def _message(self,db,run_id,role,text,principal,kind,now,*,tool_call_id=None,status='complete'):
         row=db.execute('SELECT tenant_id,session_id FROM session_runs WHERE id=?',(run_id,)).fetchone()
         seq=db.execute('SELECT coalesce(max(sequence),-1)+1 FROM session_messages WHERE session_id=?',(row['session_id'],)).fetchone()[0]
         ordinal=db.execute('SELECT coalesce(max(ordinal),-1)+1 FROM session_messages WHERE run_id=?',(run_id,)).fetchone()[0]
@@ -212,10 +214,10 @@ class SqliteRuntimeStore:
         author_kind=kind if kind in ('user','agent','system') else 'system'
         message_id = str(uuid.uuid4())
         db.execute('''INSERT INTO session_messages(id,tenant_id,session_id,run_id,sequence,ordinal,role,status,
-            author_kind,author_principal_id,text,raw_envelope_json,raw_envelope_schema,created_at_ms,updated_at_ms,completed_at_ms)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(message_id,row['tenant_id'],row['session_id'],run_id,
-            seq,ordinal,role,'complete',author_kind,principal,text if isinstance(text,str) else canonical_json(text),
-            canonical_json({'author':json.loads(principal)}),1,now,now,now))
+            author_kind,author_principal_id,text,raw_envelope_json,raw_envelope_schema,created_at_ms,updated_at_ms,completed_at_ms,tool_call_id)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(message_id,row['tenant_id'],row['session_id'],run_id,
+            seq,ordinal,role,status,author_kind,principal,text if isinstance(text,str) else canonical_json(text),
+            canonical_json({'author':json.loads(principal)}),1,now,now,now if status=='complete' else None,tool_call_id))
         db.execute('UPDATE sessions_v2 SET source_version=source_version+1,updated_at_ms=?,last_activity_at_ms=? WHERE id=?', (now,now,row['session_id']))
         enqueue_source(db, 'message', message_id, now)
         enqueue_source(db, 'session', row['session_id'], now)
@@ -224,6 +226,7 @@ class SqliteRuntimeStore:
         for tool in db.execute('SELECT id FROM tool_invocations WHERE session_run_id=?', (run_id,)).fetchall():
             db.execute('UPDATE tool_invocations SET source_version=source_version+1 WHERE id=?', (tool['id'],))
             enqueue_source(db, 'tool_invocation', tool['id'], now)
+        return message_id
 
     def _transition(self, run_id: str, status: str, *, output: Any = None) -> RunRecord:
         with self._transaction() as db:
@@ -313,6 +316,9 @@ class SqliteRuntimeStore:
                  run['session_id'],run_id,ordinal,call_id,binding['source_id'],binding['name'],
                  'running','invoking',canonical_json(arguments),canonical_json(payload),1,now,'partial'))
             enqueue_source(db, 'tool_invocation', invocation_id, now)
+            context=json.loads(run['metadata_json'])['execution_context']
+            principal=PrincipalRef(context['authority']['authority'],run['tenant_id'],context['agent_id'],'agent')
+            self._message(db,run_id,'tool','',principal.key,'agent',now,tool_call_id=call_id,status='streaming')
             self._event(db,run_id,'tool.invoking',payload)
 
     def _finish_tool(self, run_id: str, call_id: str, *, result: Any = None, error: Mapping[str, Any] | None = None) -> None:
@@ -325,9 +331,10 @@ class SqliteRuntimeStore:
             encoded = canonical_json(result) if error is None else None
             failed = error is not None or (isinstance(result,dict) and bool(result.get('isError')))
             status = 'error' if failed else 'success'
-            payload = {'call_id':call_id,'status':status}
+            original=json.loads(row['raw_envelope_json'])
+            payload = {'call_id':call_id,'status':status,'binding':original.get('binding',{}),'arguments':original.get('arguments',{})}
             payload['error' if error is not None else 'result'] = dict(error) if error is not None else result
-            envelope = json.loads(row['raw_envelope_json']) | payload
+            envelope = original | payload
             db.execute('''UPDATE tool_invocations SET status=?,status_raw=?,result_json=?,
                 error_json=?,raw_envelope_json=?,result_sha256=?,result_size_bytes=?,
                 result_complete=?,completeness=?,finished_at_ms=?,source_version=source_version+1 WHERE id=?''',
@@ -336,6 +343,12 @@ class SqliteRuntimeStore:
                  len(encoded.encode()) if encoded else None,int(error is None),'partial' if error else 'complete',
                  int(time.time()*1000),row['id']))
             enqueue_source(db, 'tool_invocation', row['id'], int(time.time()*1000))
+            now=int(time.time()*1000)
+            anchor=db.execute('SELECT id FROM session_messages WHERE run_id=? AND tool_call_id=? AND role=?',(run_id,call_id,'tool')).fetchone()
+            if anchor is not None:
+                db.execute("UPDATE session_messages SET text=?,status='complete',updated_at_ms=?,completed_at_ms=?,source_version=source_version+1 WHERE id=?",
+                    (encoded if error is None else canonical_json(error),now,now,anchor['id']))
+                enqueue_source(db,'message',anchor['id'],now)
             self._event(db,run_id,'tool.completed',payload)
 
     def _events(self,run_id: str,after: int=0) -> tuple[RunEvent,...]:

@@ -128,22 +128,12 @@ def _ensure_execution_host(tool_exec: Any) -> dict[str, Any]:
 
 
 def _default_execution_host(args: Any) -> dict[str, Any]:
-    """Infer only the safe legacy default when a persisted row predates hosts."""
+    """Historical rows without a trusted destination keep that uncertainty.
 
-    server = args.get("server") if isinstance(args, dict) else None
-    if isinstance(server, str) and server.startswith("client:"):
-        try:
-            from openagent_core.core.execution_origin import current_execution_origin
-
-            origin = current_execution_origin()
-        except Exception:  # noqa: BLE001
-            origin = None
-        return (
-            origin.execution_host
-            if origin is not None
-            else {"kind": "client", "device_label": "Unavailable client"}
-        )
-    return {"kind": "server", "device_label": "Server OpenAgent"}
+    Caller arguments and opaque references never establish a device identity.
+    Current tool events carry their destination from the catalog registration.
+    """
+    return {"kind": "unknown", "device_label": "Unspecified destination"}
 
 
 __all__ = ["emit_tool_status", "tool_exec_to_wire_json", "stored_tool_to_wire"]

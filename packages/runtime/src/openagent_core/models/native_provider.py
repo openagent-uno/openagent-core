@@ -623,10 +623,8 @@ def _tool_name_args(entry: Any) -> tuple[Any, Any]:
 
 
 def _record_vault_recalls(response: Any) -> None:
-    """Book every vault note this non-streamed run read into the recall sink."""
+    """Record provider traces; trusted catalog results account for vault reads."""
     for entry in getattr(response, "tools", None) or []:
-        name, args = _tool_name_args(entry)
-        vault_recall.record_tool(name, args)
         tool_trace.record_execution(entry)
 
 
@@ -2194,13 +2192,9 @@ class NativeProvider(ProviderResources, BaseModel):
                             )
                     elif isinstance(event, tool_completed_types):
                         tool_exec = getattr(event, "tool", None)
-                        # Book a vault recall HERE, on completion, not on
-                        # ``tool_started``/``tool_error``: a read that failed
-                        # never put the note in front of the model, so it is
-                        # not a recall. This is the branch that fires in
-                        # production — the non-streaming path above ran 11
-                        # times against 697 streamed turns.
-                        vault_recall.record_tool(*_tool_name_args(tool_exec))
+                        # Only the authorized catalog's successful semantic
+                        # result can account for a vault read. Provider labels
+                        # alone cannot identify the trusted memory module.
                         tool_trace.record_execution(tool_exec)
                         if on_status is not None:
                             await self._emit_agno_tool_status(

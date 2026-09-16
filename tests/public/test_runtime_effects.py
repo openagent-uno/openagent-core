@@ -45,6 +45,8 @@ class Effects(unittest.IsolatedAsyncioTestCase):
         async def tool(args,context):
             row=self.store.connection.execute('SELECT status,args_json FROM tool_invocations').fetchone()
             self.assertEqual(row[0],'running');self.assertEqual(json.loads(row[1]),args)
+            anchor=self.store.connection.execute("SELECT status,tool_call_id FROM session_messages WHERE role='tool'").fetchone()
+            self.assertEqual(tuple(anchor),('streaming','provider-call'))
             return result
         source=FunctionSource((ToolDefinition('write','Write',{}),),{'write':tool})
         self.catalog.register('source',source,source,target_label='Exact destination')
@@ -59,6 +61,13 @@ class Effects(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tuple(row),('success',json.dumps(result,sort_keys=True,separators=(',',':')),1))
         events=await self.runtime.events('run',0,self.ctx)
         self.assertLess(next(e.cursor for e in events if e.kind=='tool.invoking'),next(e.cursor for e in events if e.kind=='tool.completed'))
+        completed=next(e for e in events if e.kind=='tool.completed')
+        self.assertEqual(completed.payload['binding']['execution_host']['device_label'],'Exact destination')
+        self.assertEqual(completed.payload['binding']['execution_host']['kind'],'capability')
+        messages=self.store.connection.execute('SELECT role,status,tool_call_id,text FROM session_messages ORDER BY sequence').fetchall()
+        self.assertEqual([m['role'] for m in messages],['user','tool','assistant'])
+        self.assertEqual(messages[1]['status'],'complete')
+        self.assertEqual(json.loads(messages[1]['text']),result)
 
     async def test_private_tool_result_never_enters_shared_replay(self):
         async def tool(args,ctx):
@@ -96,6 +105,7 @@ class Effects(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([r.run_id for r in await self.runtime.children('parent',self.ctx)],['child'])
         row=self.store.connection.execute("SELECT parent_session_id,root_session_id FROM sessions_v2 WHERE id='child-session'").fetchone()
         self.assertEqual(tuple(row),('session','session'))
+        self.assertEqual(self.store.connection.execute("SELECT parent_run_id FROM session_runs WHERE id='child'").fetchone()[0],'parent')
 
     async def test_automatic_operation_uses_refreshed_delegation_and_same_run_authority(self):
         token=ContextVar('test_ephemeral_token',default=None);active={'allowed':True}

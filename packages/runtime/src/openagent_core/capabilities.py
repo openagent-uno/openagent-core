@@ -186,9 +186,12 @@ class CapabilityCatalog:
             raise CapabilityUnavailable("Tool was removed or changed after discovery")
         descriptor = self._descriptor(tool_ref, registration, definition)
         if durable:
+            host = {"kind":"capability","device_label":registration.target_label,"source_id":registration.source_id}
+            if registration.lease is not None:
+                host.update(instance_id=registration.lease.instance_id,generation=registration.lease.generation)
             await runtime.services.store.begin_tool(run_id,call_id,
                 {"tool_ref":tool_ref,"source_id":registration.source_id,"name":definition.name,
-                 "target_label":registration.target_label,"effects":sorted(definition.effects)},arguments)
+                 "target_label":registration.target_label,"effects":sorted(definition.effects),"execution_host":host},arguments)
         try:
             result = await registration.executor.call_tool(definition.name, copy.deepcopy(dict(arguments)), context)
             # Publication is distinct from execution. Do not persist the
