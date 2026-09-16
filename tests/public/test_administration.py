@@ -63,6 +63,14 @@ class AdministrationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.admin.update_provider(self.context, p["id"], {"framework":"claude-code"})
 
+    async def test_duplicate_create_does_not_overwrite_saved_credentials_or_metadata(self):
+        p=await self.admin.create_provider(self.context,dict(name="local",framework="api-based",api_key="preserved-secret"))
+        m=await self.admin.create_model(self.context,dict(provider_id=p["id"],model="one",metadata={"input_modalities":["text","image"]}))
+        with self.assertRaises(ValueError):await self.admin.create_provider(self.context,dict(name="local",framework="api-based"))
+        with self.assertRaises(ValueError):await self.admin.create_model(self.context,dict(provider_id=p["id"],model="one"))
+        self.assertEqual("preserved-secret",(await self.db.get_provider(p["id"]))["api_key"])
+        self.assertEqual(["text","image"],(await self.db.get_model(m["id"]))["metadata"]["input_modalities"])
+
     async def test_fresh_authority_without_synthetic_session(self):
         self.assertFalse(hasattr(self.context, "session_id"))
         await self.admin.create_provider(self.context, dict(name="local", framework="api-based"))

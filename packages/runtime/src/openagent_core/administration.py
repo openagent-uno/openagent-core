@@ -42,7 +42,16 @@ class ProviderModelAdmin:
     async def create_provider(self, context, fields: dict):
         await self.authorize(context, "provider.write")
         if set(fields) - {"name","framework","kind","api_key","base_url","enabled","metadata"}: raise ValueError("Unknown provider fields")
+        if not isinstance(fields.get("name"),str) or not fields["name"].strip() or not isinstance(fields.get("framework"),str):
+            raise ValueError("Provider name and framework are required")
+        for key in ("api_key","base_url"):
+            if fields.get(key) is not None and not isinstance(fields[key],str): raise ValueError("Provider credentials and endpoint must be strings")
+        if "enabled" in fields and not isinstance(fields["enabled"],bool): raise ValueError("enabled must be boolean")
+        if "metadata" in fields and not isinstance(fields["metadata"],dict): raise ValueError("metadata must be an object")
+        framework="api-based" if fields["framework"] in {"agno","litellm"} else fields["framework"]
         async with self._mutations:
+            if any(r["name"]==fields["name"].strip() and r["framework"]==framework for r in await self.db.list_providers()):
+                raise ValueError("Provider already exists; update its stable id")
             pid = await self.db.upsert_provider(**fields)
             with self.scope(): await self.reload_catalog()
         return await self.provider(context, pid)
@@ -75,7 +84,15 @@ class ProviderModelAdmin:
     async def create_model(self, context, fields: dict):
         await self.authorize(context, "model.write")
         if set(fields) - {"provider_id","model","display_name","tier_hint","enabled","is_classifier","metadata","kind"}: raise ValueError("Unknown model fields")
+        if not isinstance(fields.get("model"),str) or not fields["model"].strip(): raise ValueError("Model name is required")
+        if isinstance(fields.get("provider_id"),bool) or not isinstance(fields.get("provider_id"),int): raise ValueError("Provider id is required")
+        for key in ("enabled","is_classifier"):
+            if key in fields and not isinstance(fields[key],bool): raise ValueError("Model flags must be boolean")
+        if "metadata" in fields and not isinstance(fields["metadata"],dict): raise ValueError("metadata must be an object")
         async with self._mutations:
+            if await self.db.get_provider(fields["provider_id"]) is None: raise LookupError("Provider not found")
+            if any(r["model"]==fields["model"].strip() for r in await self.db.list_models(provider_id=fields["provider_id"])):
+                raise ValueError("Model already exists; update its stable id")
             mid = await self.db.upsert_model(**fields)
             with self.scope(): await self.reload_catalog()
         return await self.model(context, mid)
@@ -134,14 +151,16 @@ class ProviderModelAdmin:
             candidates = [r for r in candidates if model_ref in {r["runtime_id"], r["model"]}]
         if not candidates: raise ValueError("Configure and enable a model for this provider first")
         selected = candidates[0]["runtime_id"]
-        from .core.execution_profile import stateless_completion_scope
-        from .models.runtime import run_provider_smoke_test
-        with self.scope(), stateless_completion_scope():
+        from .inference import InferenceRequest, StatelessInference
+        from .models.runtime import create_model_from_spec
+        with self.scope():
+            provider = create_model_from_spec(selected, providers_config=await self.db.materialise_providers_config())
             async with asyncio.timeout(30):
-                runtime_id, response = await run_provider_smoke_test(row["name"], await self.db.materialise_providers_config(),
-                    model_id=selected, framework=row["framework"])
+                response = await StatelessInference(provider).complete(InferenceRequest(({
+                    "role":"user", "content":"Say 'ok' and nothing else.",
+                },)))
         await self.authorize(context, "provider.test")
-        return {"ok":True,"model":runtime_id,"response":response.content}
+        return {"ok":True,"model":selected,"response":response.content}
 
 
 def public_provider(row: dict) -> dict:
