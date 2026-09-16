@@ -1968,7 +1968,13 @@
     "product_boundary": "persona, autonomy preference, network and dashboard rules move to product contributions",
     "management_boundary": "host owns storage; no raw writes even when a manager lacks an operation",
     "module_scope": "mandatory instructions included when module is enabled and authorized",
-    "lean_profile": "a real agent run never replaces mandatory rules based on provider URL"
+    "lean_profile": "a real agent run never replaces mandatory rules based on provider URL",
+    "discovery_arguments": {
+      "list_tools": "source_ref returned by list_servers",
+      "describe_tool": "tool_ref returned by list_tools",
+      "call_tool": "tool_ref returned by list_tools, plus args",
+      "test": "tests/prompts/test_prompt_contract.py::test_uniform_discovery_signatures"
+    }
   },
   "maintenance_rules": [
     {

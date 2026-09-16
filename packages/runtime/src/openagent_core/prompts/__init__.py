@@ -70,6 +70,15 @@ class HostPromptProvider(Protocol):
     def prompt_blocks(self, context: Any) -> tuple[PromptBlock, ...]: ...
 
 
+class HostContextProvider(Protocol):
+    """Trusted per-turn context prepared by the host before model execution.
+
+    Return JSON-serializable data; never include credentials. Unlike host
+    system blocks, this content is kept outside the stable provider prefix.
+    """
+    def prompt_context(self, context: Any) -> Mapping[str, Any]: ...
+
+
 def _rules() -> tuple[PromptBlock, ...]:
     return tuple(PromptBlock(**entry) for entry in json.loads(
         files(__package__).joinpath("rules.json").read_text(encoding="utf-8")
@@ -175,6 +184,6 @@ def modules_for_catalog(source_names: Iterable[str]) -> frozenset[str]:
     return frozenset(out)
 
 
-__all__ = ["ComposedPrompt", "HostPromptProvider", "PromptBlock", "PromptComposer",
+__all__ = ["ComposedPrompt", "HostContextProvider", "HostPromptProvider", "PromptBlock", "PromptComposer",
            "PromptReceipt", "default_framework_text", "framework_blocks",
            "modules_for_catalog", "split_prompt"]

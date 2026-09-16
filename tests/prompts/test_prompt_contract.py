@@ -19,6 +19,27 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class PromptContractTests(unittest.TestCase):
+    def test_uniform_discovery_signatures(self):
+        text = default_framework_text()
+        self.assertIn("tool_search_list_tools(source_ref)", text)
+        self.assertIn("tool_search_describe_tool(tool_ref)", text)
+        self.assertNotIn("tool_search_describe_tool(server, tool)", text)
+
+    def test_host_turn_context_is_dynamic(self):
+        from openagent_core.engine import Agent
+        class Provider:
+            device = "device-one"
+            def prompt_context(self, context): return {"connected_computers": [self.device]}
+        provider = Provider()
+        agent = Agent(host_context_provider=provider)
+        first = agent._combined_system_prompt("same-session")
+        provider.device = "device-two"
+        second = agent._combined_system_prompt("same-session")
+        self.assertEqual(split_prompt(first)[0], split_prompt(second)[0])
+        self.assertIn("device-one", split_prompt(first)[1])
+        self.assertNotIn("device-one", split_prompt(second)[1])
+        self.assertIn("device-two", split_prompt(second)[1])
+
     def test_dream_instructions_preserved(self):
         from openagent_core.memory.vault.prompts import DREAM_MODE_PROMPT
         baseline = (ROOT / "tests/fixtures/prompts/dream-v0.21.8.txt").read_text()

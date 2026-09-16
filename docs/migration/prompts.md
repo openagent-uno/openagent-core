@@ -64,3 +64,10 @@ Validation (isolated fixtures; no user data or credentials):
 
 Real-model discipline and product authenticated UI acceptance remain release
 gates. Unit prompt parity alone does not prove a model will obey every rule.
+
+Hosts can pass `Agent(host_context_provider=provider)` implementing public
+`HostContextProvider.prompt_context(context)`. Prepare bounded live discovery
+before execution and return JSON data without credentials. These contributions
+are per-turn dynamic context and cannot enter the cached stable prefix.
+Discovery signatures are `list_tools(source_ref)` and `describe_tool(tool_ref)`;
+source labels are never callable references.
