@@ -178,3 +178,38 @@ async def t_enable_suffix_restart_first(_ctx: TestContext):
         # Still a diagnostics claim - and rightly so: this turn DOES hold the
         # diagnostic_enable receipt. Losing that would silently unguard it.
         assert c.reply_guard.claims_diagnostics(text)
+
+
+@test("support_diagnostic_routing", "the web form's own questions never name the broken component")
+async def t_form_questions_do_not_route_the_task(_ctx: TestContext):
+    # eSound thread eee46c2b, 2-set-2026: a Premium subscriber could not play
+    # his playlists - shuffle dead, no next track - and the task was filed as
+    # "Fix failure in purchase state" under backend-core. The customer never
+    # wrote about buying anything: the form prepends its OWN questions to every
+    # report, and "Hai gia' acquistato Premium?" matched the purchase row first.
+    report = (
+        "Hai già acquistato Premium?: Sì\n"
+        "Dove hai acquistato Premium?: Google Play\n\n"
+        "Buongiorno mi sono abbonato lo scorso marzo.\n"
+        "Nell'ultimo mese non riesco in nessun modo a riprodurre le mie playlist "
+        "nonostante la connessione efficiente.\n"
+        "Nello specifico non funziona shuffle e non fa cambiare brano."
+    ) + _FORM_TRAILER
+    route = c._bug_symptom_route(report)
+    assert route is not None
+    title, _list_id, tag = route
+    assert "purchase" not in title, title
+    assert title.endswith("in playback"), title
+    assert tag == "esound/client-core", tag
+    # Stripping the questions must not strip a customer who really IS writing
+    # about a purchase.
+    billing = c._bug_symptom_route(
+        "Hai già acquistato Premium?: Sì\n\nHo pagato il premium ma non funziona" + _FORM_TRAILER
+    )
+    assert billing is not None and "purchase state" in billing[0], billing
+    # English form, same shape.
+    en = c._bug_symptom_route(
+        "Have you already purchased Premium?: Yes\nWhere did you purchase Premium?: App Store\n\n"
+        "Songs are not working, the next track never starts" + _FORM_TRAILER
+    )
+    assert en is not None and "purchase" not in en[0], en

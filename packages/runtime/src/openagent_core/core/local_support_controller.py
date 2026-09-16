@@ -2939,8 +2939,12 @@ _BUG_SURFACES: tuple[tuple[str, str, str, str], ...] = (
     # An incidental playlist mention must not steal a playback failure. A live
     # PC report said songs outside a playlist were unable to play and rapidly
     # skipped; the generic playlist row filed it under library ownership.
+    # "Non riesco a riprodurre le mie playlist", "non fa cambiare brano": the
+    # playlist is only WHAT will not play, and the generic playlist row below
+    # used to take it (eee46c2b, 2-set-2026).
     (r"unable to play|can'?t play|won'?t play|not playing|riproduzione|play(?:ing)? (?:a )?(?:song|track)|"
-     r"skip(?:s|ping)? (?:songs?|tracks?)|riprodurre (?:un )?(?:brano|canzone)",
+     r"skip(?:s|ping)? (?:songs?|tracks?)|riprodurre\b|\bshuffle\b|"
+     r"(?:cambia(?:re)?|passa(?:re)? a(?:l)?)\s+(?:il\s+|di\s+)?(?:brano|canzone)|next (?:song|track)",
      "playback", "client", "esound/client-core"),
     (r"playlist|library|folder|libreria|cartell", "the library", "client", "esound/client-core"),
     (r"\bplay(?:back|er|ing)?\b|\btracks?\b|\bsongs?\b|\bqueue\b|riproduzione|brano", "playback", "client", "esound/client-core"),
@@ -2974,6 +2978,19 @@ def _bug_severity(symptom: str, urgent_signal: bool) -> str:
     return base
 
 
+# The web form prepends its OWN questions to every report, one per line, as
+# "<question>?: <answer>" - "Hai gia' acquistato Premium?: Si'". They are the
+# form talking, not the customer, and the purchase row matched them first: on
+# 2-set-2026 a subscriber who could not play his playlists was filed as
+# "Fix failure in purchase state" under backend-core (thread eee46c2b).
+_FORM_QUESTION_LINE = re.compile(r"^[^\n?]{3,80}\?:[^\n]*$", re.MULTILINE)
+
+
+def _route_text(text: str) -> str:
+    """The customer's own words: no form questions, no metadata trailer."""
+    return _strip_report_metadata(_FORM_QUESTION_LINE.sub("", str(text or "")))
+
+
 def _bug_symptom_route(
     text: str, tenant: Tenant | None = None,
 ) -> tuple[str, str, str] | None:
@@ -2983,7 +3000,7 @@ def _bug_symptom_route(
     fails closed, so the controller asks for diagnostics rather than letting a
     title, a component, or a root cause be invented.
     """
-    low = text.lower()
+    low = _route_text(text).lower()
     provider_playlist_truncation = _provider_playlist_truncated(low)
     symptom = (
         "truncated import"
