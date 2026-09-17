@@ -214,9 +214,8 @@ async def asave_session(team: "Team", session: TeamSession) -> None:
     Args:
         session: The TeamSession to save.
     """
-    from openagent_core.core._runner.team._init import _has_async_db
     from openagent_core.core._runner.team._run import _scrub_member_responses
-    from openagent_core.core._runner.team._storage import _aupsert_session, _upsert_session
+    from openagent_core.core._runner.team._storage import _aupsert_session
 
     if team.db is not None and team.parent_team_id is None and team.workflow_id is None:
         if session.session_data is not None and isinstance(session.session_data.get("session_state"), dict):
@@ -235,10 +234,10 @@ async def asave_session(team: "Team", session: TeamSession) -> None:
                         # Scrub individual member responses based on their storage flags
                         _scrub_member_responses(team, run.member_responses)
 
-        if _has_async_db(team):
-            await _aupsert_session(team, session=session)
-        else:
-            _upsert_session(team, session=session)
+        # ``_aupsert_session`` also delegates synchronous stores to a worker.
+        # Keeping the SQLite wait off the event loop prevents a self-deadlock
+        # with async writers sharing the agent database.
+        await _aupsert_session(team, session=session)
         log_debug(f"Created or updated TeamSession record: {session.session_id}")
 
 

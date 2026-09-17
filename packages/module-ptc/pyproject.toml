@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openagent-module-ptc"
+version = "1.1.0b1"
+description = "Optional OpenAgent ptc module"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["openagent-core[engine]>=1.1.0b1,<2"]
+
+[project.entry-points."openagent.modules"]
+ptc = "openagent_module_ptc:descriptor"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openagent_module_ptc"]

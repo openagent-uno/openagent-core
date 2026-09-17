@@ -86,7 +86,7 @@ def get_session(
     Returns:
         AgentSession: The AgentSession loaded from the database/cache or None if not found.
     """
-    from openagent_core.core._runner.agent import _init, _storage
+    from openagent_core.core._runner.agent import _storage
 
     if not session_id and not agent.session_id:
         raise Exception("No session_id provided")
@@ -241,7 +241,7 @@ async def asave_session(agent: Agent, session: Union[AgentSession, TeamSession, 
     """
     Save the AgentSession to storage
     """
-    from openagent_core.core._runner.agent import _init, _storage
+    from openagent_core.core._runner.agent import _storage
 
     # If the agent is a member of a team, do not save the session to the database
     if (
@@ -254,10 +254,13 @@ async def asave_session(agent: Agent, session: Union[AgentSession, TeamSession, 
             session.session_data["session_state"].pop("current_session_id", None)
             session.session_data["session_state"].pop("current_user_id", None)
             session.session_data["session_state"].pop("current_run_id", None)
-        if _init.has_async_db(agent):
-            await _storage.aupsert_session(agent, session=session)
-        else:
-            _storage.upsert_session(agent, session=session)
+        # The async adapter handles both native async stores and synchronous
+        # SQLAlchemy stores.  Calling a synchronous SQLite writer directly here
+        # can deadlock the event loop against a pending async writer on the same
+        # WAL file: the sync call waits for the lock while the task that owns it
+        # cannot resume to commit.  ``aupsert_session`` moves that call to a
+        # worker and preserves cancellation until the write has settled.
+        await _storage.aupsert_session(agent, session=session)
         log_debug(f"Created or updated AgentSession record: {session.session_id}")
 
 

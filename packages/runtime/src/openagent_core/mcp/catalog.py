@@ -14,8 +14,10 @@ from openagent_core.core.execution_origin import TurnExecutionOrigin, current_ex
 
 
 class PoolCapabilitySource:
-    def __init__(self, pool: Any, source_id: str, toolkit: Any, *, effects=None) -> None:
+    def __init__(self, pool: Any, source_id: str, toolkit: Any, *, effects=None,
+                 toolkit_name: str | None = None) -> None:
         self.pool, self.source_id, self.toolkit = pool, source_id, toolkit
+        self.toolkit_name = toolkit_name or source_id
         self.effects = effects or {}
         # Deferred in-process tools have not passed through a model's schema
         # preparation. Materialize their real argument schemas before issuing
@@ -27,7 +29,7 @@ class PoolCapabilitySource:
                 prepare()
 
     def _check(self) -> None:
-        if self.pool.toolkit_by_name(self.source_id) is not self.toolkit:
+        if self.pool.toolkit_by_name(self.toolkit_name) is not self.toolkit:
             raise CapabilityUnavailable("The registered MCP instance was removed or replaced")
 
     async def inspect(self, context) -> tuple[ToolDefinition, ...]:
@@ -42,18 +44,18 @@ class PoolCapabilitySource:
         from .servers.tool_search.adapters import _functions_dict, _tool_is_denied, _require_server_allowed
         try:
             self._check()
-            _require_server_allowed(self.source_id)
+            _require_server_allowed(self.toolkit_name)
         except (PermissionError, CapabilityUnavailable):
             return ()
         return tuple(ToolDefinition(name, getattr(fn, "description", "") or "",
                                     getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()))
                      for name, fn in _functions_dict(self.toolkit).items()
-                     if not _tool_is_denied(self.source_id, name))
+                     if not _tool_is_denied(self.toolkit_name, name))
 
     async def call_tool(self, name: str, arguments: dict, context: ExecutionContext) -> Any:
         from .servers.tool_search.adapters import _invoke_registered_tool
         self._check()
-        return await _invoke_registered_tool(self.pool, self.source_id, name, arguments)
+        return await _invoke_registered_tool(self.pool, self.toolkit_name, name, arguments)
 
 
 class InteractiveCapabilitySource:
@@ -122,10 +124,13 @@ def revoke_interactive_capabilities(catalog: CapabilityCatalog,
 
 class PoolCatalogBinding:
     def __init__(self, pool: Any, catalog: CapabilityCatalog, *, trusted_modules: tuple[str, ...],
-                 target_label: str = "Agent workspace", user_sources: frozenset[str] = frozenset()) -> None:
+                 target_label: str = "Agent workspace", user_sources: frozenset[str] = frozenset(),
+                 graph_generation: int | None = None, source_wrapper: Any | None = None) -> None:
         self.pool, self.catalog = pool, catalog
         self.trusted_modules = frozenset(trusted_modules)
         self.target_label = target_label
+        self.graph_generation = graph_generation
+        self.source_wrapper = source_wrapper
         # This set comes from the host's trusted registry ownership service.
         # Persisted MCP metadata cannot label its own registration as mutable.
         self.user_sources = frozenset(user_sources)
@@ -138,7 +143,7 @@ class PoolCatalogBinding:
             raise PermissionError("This host has a fixed capability catalog")
         for name in self.user_sources.symmetric_difference(current):
             if name in self.sources:
-                self.catalog.revoke(name)
+                self.catalog.revoke_registration(name, self.graph_generation)
                 del self.sources[name]
         self.user_sources = current
 
@@ -147,7 +152,7 @@ class PoolCatalogBinding:
                    if name != "tool-search"}
         for name, source in tuple(self.sources.items()):
             if current.get(name) is not source.toolkit:
-                self.catalog.revoke(name)
+                self.catalog.revoke_registration(name, self.graph_generation)
                 del self.sources[name]
         specs = {spec.name: spec for spec in self.pool.specs}
         for name, toolkit in current.items():
@@ -169,14 +174,17 @@ class PoolCatalogBinding:
                         tags.add("vault.recall." + semantics.path_argument)
                     effects[tool] = frozenset(tags)
             source = PoolCapabilitySource(self.pool, name, toolkit, effects=effects)
+            registered = self.source_wrapper(name, source, name in self.user_sources) \
+                if self.source_wrapper is not None else source
             if name in self.user_sources:
-                self.catalog.register_user_source(name, source, source, target_label=self.target_label)
+                self.catalog.register_user_source(name, registered, registered, target_label=self.target_label,
+                                                  graph_generation=self.graph_generation)
             else:
-                self.catalog.register(name, source, source, target_label=self.target_label,
-                                      trusted_effects=effects)
+                self.catalog.register(name, registered, registered, target_label=self.target_label,
+                                      trusted_effects=effects, graph_generation=self.graph_generation)
             self.sources[name] = source
 
     def close(self) -> None:
         for name in self.sources:
-            self.catalog.revoke(name)
+            self.catalog.revoke_registration(name, self.graph_generation)
         self.sources.clear()

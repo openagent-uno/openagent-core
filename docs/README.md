@@ -1,9 +1,10 @@
 # OpenAgent core documentation
 
-The embedding API is being migrated to `1.0.0b1`. This checkout is an isolated
+The embedding API is being migrated to `1.1.0b1`. This checkout is an isolated
 implementation branch; it is not a qualified release or a production cutover.
 
 - [Architecture and ownership](architecture.md)
+- [Symmetric module contract and product profiles](modules-v1.1.md)
 - [Implementation and acceptance ledger](migration/implementation.md)
 - [Uniform capability catalog](tool-catalog.md)
 - [Memory visibility and durable indexing](memory-access.md)

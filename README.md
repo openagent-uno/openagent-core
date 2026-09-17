@@ -9,7 +9,7 @@ Products supply authentication, system instructions, resources, tools, and polic
 GlassPalace builds its own worker and sandbox from pinned core packages; the
 standalone app/CLI/server are maintained in the `openagent` product monorepo.
 
-This isolated `1.0.0b1` migration branch is **under implementation**. See the
+This isolated `1.1.0b1` migration branch is **under implementation**. See the
 [documentation](docs/README.md) and [acceptance ledger](docs/migration/implementation.md)
 for verified behavior and the remaining release gates.
 

@@ -12,10 +12,20 @@ import unittest
 from unittest.mock import patch
 
 from openagent_core.prompts import (
-    PromptBlock, PromptComposer, default_framework_text, framework_blocks, split_prompt,
+    PromptBlock, PromptComposer, default_framework_text, rule_blocks, split_prompt,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def vault_blocks():
+    from openagent_module_vault import descriptor
+    return (*rule_blocks("module.vault.storage", "module.vault.quality", "module.vault.checklist"),
+            *descriptor.additional_prompt_blocks)
+
+
+def tool_blocks():
+    return rule_blocks("core.tools", "core.managers", "core.tool-preference")
 
 
 class PromptContractTests(unittest.TestCase):
@@ -60,8 +70,12 @@ class PromptContractTests(unittest.TestCase):
         self.assertEqual(" ".join(baseline.split()), " ".join(
             " ".join(row["behavior"] for row in manifest["rules"]).split()))
         products = json.loads((ROOT / "docs/migration/product-prompt-blocks.json").read_text())
-        destinations = {b.id for b in framework_blocks(
-            ("vault", "history", "delegation", "automation", "attachments", "models"))}
+        destinations = {block.id for block in rule_blocks(
+            "core.identity", "core.tools", "core.managers", "core.tool-preference",
+            "module.vault.discipline", "module.vault.storage", "module.vault.history",
+            "module.vault.quality", "module.vault.checklist", "module.delegation",
+            "module.attachments", "module.automation", "module.models",
+        )}
         destinations.update(block["id"] for block in products)
         ids = set()
         for row in manifest["rules"]:
@@ -87,7 +101,7 @@ class PromptContractTests(unittest.TestCase):
 
     def test_host_cannot_replace_framework_or_vault(self):
         composer = PromptComposer()
-        result = composer.compose(enabled_modules=("vault",), host=(
+        result = composer.compose(modules=(*tool_blocks(), *vault_blocks()), host=(
             PromptBlock("host.system", "8", "Be a specialized support agent.", "test-host"),))
         self.assertIn("BEFORE any non-trivial action", result.text)
         self.assertIn("### Default = SAVE.", result.text)
@@ -102,15 +116,15 @@ class PromptContractTests(unittest.TestCase):
         self.assertNotIn("OA-UI", result.text)
         self.assertNotIn("SRP password", result.text)
         self.assertNotIn("vault_write_note", result.text)
-        self.assertIn("Copy the opaque `tool_ref`", result.text)
+        self.assertNotIn("Copy the opaque `tool_ref`", result.text)
         self.assertNotIn('server="server:', result.text)
         self.assertNotIn('server="client:', result.text)
 
     def test_receipts_and_cache_boundary(self):
         composer = PromptComposer()
-        a = composer.compose(enabled_modules=("vault",), dynamic={
+        a = composer.compose(modules=vault_blocks(), dynamic={
             "principal": "Alice", "catalog": ["ref-a"]}, session_id="same")
-        b = composer.compose(enabled_modules=("vault",), dynamic={
+        b = composer.compose(modules=vault_blocks(), dynamic={
             "principal": "Bob", "catalog": ["ref-b"]}, session_id="same")
         self.assertEqual(a.cache_key, b.cache_key)
         self.assertNotEqual(a.text, b.text)
@@ -119,7 +133,7 @@ class PromptContractTests(unittest.TestCase):
         self.assertIn("Alice", tail)
         self.assertTrue(all(not hasattr(receipt, "text") for receipt in a.receipts))
         self.assertNotEqual(a.receipts[-1].sha256, b.receipts[-1].sha256)
-        altered = composer.compose(enabled_modules=("vault",), host=(
+        altered = composer.compose(modules=vault_blocks(), host=(
             PromptBlock("host.system", "2", "A new persona", "host"),))
         self.assertNotEqual(a.cache_key, altered.cache_key)
         with self.assertRaises(ValueError):
@@ -142,15 +156,24 @@ class PromptContractTests(unittest.TestCase):
         from openagent_core.core.execution_profile import lean_local_event_scope
         agent = Agent.__new__(Agent)
         agent.system_prompt = "Host configured role"
-        agent.config = {}
+        # Construction-only compatibility callers must select their prompt
+        # modules explicitly. Live runtimes receive these from descriptors.
+        agent.config = {"_enabled_prompt_modules": ("vault", "history")}
         agent._mcp = SimpleNamespace(server_summary=lambda: {"vault": 1, "vault-gate": 2})
         agent._resolve_vault_path = lambda: "/isolated/vault"
         agent._resolve_db_path = lambda: "/isolated/state.sqlite3"
         agent._render_skills_index = lambda: ""
         agent._render_ptc_note = lambda: ""
-        normal = agent._combined_system_prompt("chat")
-        with lean_local_event_scope(True):
-            event = agent._combined_system_prompt("event")
+        from openagent_core.runtime import runtime_scope
+        runtime = SimpleNamespace(
+            enabled_module_ids=frozenset({"vault", "tool-discovery"}),
+            prompt_blocks=(*tool_blocks(), *vault_blocks()),
+            settings=SimpleNamespace(environment=()),
+        )
+        with runtime_scope(runtime):
+            normal = agent._combined_system_prompt("chat")
+            with lean_local_event_scope(True):
+                event = agent._combined_system_prompt("event")
         for prompt in (normal, event):
             self.assertIn("BEFORE any non-trivial action", prompt)
             self.assertIn("### Default = SAVE.", prompt)

@@ -11,8 +11,16 @@ import tempfile
 import zipfile
 from email.parser import BytesParser
 
-PACKAGES = ('.','packages/storage-sqlite','packages/modules','packages/capability-host',
-            'packages/gateway','sdk/python')
+PACKAGES = (
+    '.', 'packages/storage-sqlite', 'packages/modules',
+    'packages/module-sessions', 'packages/module-search', 'packages/module-vault',
+    'packages/module-mcp', 'packages/module-workflows', 'packages/module-scheduler',
+    'packages/module-events', 'packages/module-delegation', 'packages/module-skills',
+    'packages/module-models', 'packages/module-budget', 'packages/module-attachments',
+    'packages/module-logs', 'packages/module-ptc', 'packages/module-tool-discovery',
+    'packages/module-full', 'packages/capability-host', 'packages/gateway',
+    'sdk/python', 'examples/replio',
+)
 
 
 def command(*args,cwd):

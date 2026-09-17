@@ -26,7 +26,7 @@ class PrivatePolicy:
 
 class ProviderAttribution(unittest.IsolatedAsyncioTestCase):
     async def test_real_compiled_vault_pool_marks_reads_and_successful_writes(self):
-        from openagent_core.engine import module_pool
+        from openagent_modules.legacy import module_pool
         with tempfile.TemporaryDirectory() as root:
             path = Path(root)
             vault = path / "vault"; vault.mkdir()
@@ -61,7 +61,7 @@ class ProviderAttribution(unittest.IsolatedAsyncioTestCase):
                         await call("vault_read_multiple_notes", {"paths": ["Concepts/real.md"]})
                         captured.append(vault_recall.vault_activity(activity))
                     return "done"
-            runtime = Runtime(RuntimeSettings("agent", path, enabled_modules=("vault",)),
+            runtime = Runtime(RuntimeSettings("agent", path),
                               RuntimeServices(store, Executor(), policy, catalog))
             await runtime.start()
             try:
@@ -174,7 +174,12 @@ class ManualDream(unittest.IsolatedAsyncioTestCase):
                     if fail_child:
                         raise RuntimeError("Fixture child failure")
                     assert request.input == DREAM_MODE_PROMPT
-                    prompt = PromptComposer().compose(enabled_modules=("vault",)).text
+                    from openagent_module_vault import descriptor as vault_descriptor
+                    from openagent_core.prompts import rule_blocks
+                    prompt = PromptComposer().compose(modules=(
+                        *rule_blocks("module.vault.storage", "module.vault.quality", "module.vault.checklist"),
+                        *vault_descriptor.additional_prompt_blocks,
+                    )).text
                     assert "### Default = SAVE." in prompt
                     service = VaultService(path / "vault")
                     try:
@@ -184,7 +189,7 @@ class ManualDream(unittest.IsolatedAsyncioTestCase):
                         return "Dream maintenance completed"
                     finally:
                         await service.close()
-            runtime = Runtime(RuntimeSettings("agent", path, enabled_modules=("vault",),
+            runtime = Runtime(RuntimeSettings("agent", path,
                 environment=(("HOME", root), ("PATH", "/usr/bin:/bin"))),
                 RuntimeServices(store, Executor(), PrivatePolicy()))
             await runtime.start()

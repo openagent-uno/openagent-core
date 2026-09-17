@@ -404,11 +404,19 @@ def resolve_builtin_entry(name: str, env: dict[str, str] | None = None) -> dict[
 
     is_python = spec.get("python", False)
     if name == "vault":
-        try:
-            from openagent_modules import module_assets
-        except ImportError as exc:
-            raise RuntimeError("The vault module requires the optional openagent-modules package") from exc
-        mcp_dir = module_assets("vault")
+        configured_assets = (env or {}).get("OPENAGENT_MODULE_ASSETS_VAULT")
+        if configured_assets:
+            mcp_dir = Path(configured_assets).expanduser().resolve()
+        else:
+            # One beta compatibility window for old standalone bundles. New
+            # module wheels always pass their own resource directory explicitly.
+            try:
+                from openagent_modules import module_assets
+            except ImportError as exc:
+                raise RuntimeError(
+                    "The vault module must provide OPENAGENT_MODULE_ASSETS_VAULT"
+                ) from exc
+            mcp_dir = module_assets("vault")
     elif is_python and is_frozen():
         # Python modules are importable from the frozen PYZ archive. They do
         # not require a duplicate source directory in the extraction tree.

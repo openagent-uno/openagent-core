@@ -213,10 +213,18 @@ class Scheduler:
         agent: Agent,
         broadcast: BroadcastHook | None = None,
         *, execution_service=None,
+        enabled_domains: frozenset[str] | set[str] | tuple[str, ...] | None = None,
     ):
         self.db = db
         self.agent = agent
         self.execution_service = execution_service
+        self.enabled_domains = set(
+            {"scheduler", "workflows", "events"}
+            if enabled_domains is None else enabled_domains
+        )
+        unknown = self.enabled_domains - {"scheduler", "workflows", "events"}
+        if unknown:
+            raise ValueError("Unknown automation domains: " + ", ".join(sorted(unknown)))
         self._task: asyncio.Task | None = None
         # Dedicated loop that drains ``status='cancelling'`` rows. Kept
         # separate from ``_task`` so the heavy due-task scan stays on its
@@ -255,8 +263,26 @@ class Scheduler:
         self._last_stale_sweep: float = 0.0
         pool = getattr(agent, "_mcp", None)
         bind_interactive = getattr(pool, "bind_interactive_workflow_runner", None)
-        if callable(bind_interactive):
+        if callable(bind_interactive) and "workflows" in self.enabled_domains:
             bind_interactive(self.run_interactive_workflow)
+
+    def domain_enabled(self, domain: str) -> bool:
+        return domain in self.enabled_domains
+
+    async def set_enabled_domains(self, domains) -> None:
+        """Update independently activated automation domains at runtime."""
+        selected = set(domains)
+        unknown = selected - {"scheduler", "workflows", "events"}
+        if unknown:
+            raise ValueError("Unknown automation domains: " + ", ".join(sorted(unknown)))
+        had_workflows = "workflows" in self.enabled_domains
+        self.enabled_domains = selected
+        pool = getattr(self.agent, "_mcp", None)
+        bind = getattr(pool, "bind_interactive_workflow_runner", None)
+        if callable(bind) and had_workflows != ("workflows" in selected):
+            bind(self.run_interactive_workflow if "workflows" in selected else None)
+        if self._task is not None and not self._task.done():
+            await self._recalculate_next_runs()
 
     def _next_run(
         self,
@@ -328,7 +354,7 @@ class Scheduler:
     async def _recalculate_next_runs(self) -> None:
         """On startup, recalculate next_run for all enabled tasks AND
         every workflow with a cron schedule."""
-        tasks = await self.db.get_tasks(enabled_only=True)
+        tasks = await self.db.get_tasks(enabled_only=True) if self.domain_enabled("scheduler") else []
         now = time.time()
         for task in tasks:
             if self.execution_service is None or not await self.execution_service.definition_authorized('task',task):
@@ -366,6 +392,8 @@ class Scheduler:
         # schedules that elapsed while we were down fire once on next
         # tick rather than stampede once each missed window.
         try:
+            if not (self.domain_enabled("scheduler") and self.domain_enabled("workflows")):
+                return
             schedules = await self.db.list_schedules(enabled_only=True)
         except Exception as e:  # noqa: BLE001
             elog("scheduler.schedules_recalc_skipped", level="warning", error=str(e))
@@ -510,7 +538,7 @@ class Scheduler:
         rather than the 30-min stale-sweep age. Only touches rows with a non-NULL
         ``claim_expires``, so a legacy in-flight row (NULL lease at deploy) is
         untouched. Defensive: an older MemoryDB without the method no-ops."""
-        if self.db is None:
+        if self.db is None or not self.domain_enabled("events"):
             return
         if not hasattr(self.db, "reap_expired_event_leases"):
             return
@@ -528,7 +556,7 @@ class Scheduler:
         so a legitimately-running turn is never re-enqueued into a second
         concurrent dispatch. The DB method logs (``mode='stale-sweep'``) only
         when it acts and stays silent otherwise."""
-        if self.db is None:
+        if self.db is None or not self.domain_enabled("events"):
             return
         # Defensive: an older MemoryDB without the stale reap simply no-ops
         # (mirrors server.py's ``hasattr`` guard around the startup reap).
@@ -544,7 +572,7 @@ class Scheduler:
         ``trigger`` carried from the request row, leaving the task's cron
         schedule and enabled flag untouched. The firing is dispatched as its
         own tracked ``asyncio.Task`` so a long run can't stall the drain."""
-        if self.db is None:
+        if self.db is None or not self.domain_enabled("scheduler"):
             return
         try:
             requests = await self.db.claim_pending_task_requests(
@@ -632,7 +660,7 @@ class Scheduler:
         busy it simply claims nothing and returns, so a slow/hanging turn holds
         its slot without ever blocking the drain (the stale-orphan reaper
         recovers a truly stuck one)."""
-        if self.db is None:
+        if self.db is None or not self.domain_enabled("events"):
             return
         # Only claim what we can immediately dispatch. When the runtime is
         # saturated (in_flight == concurrency) free is 0 and we touch nothing
@@ -703,9 +731,12 @@ class Scheduler:
             return
         # Workflow runs.
         try:
-            wf_runs = await self.db.get_workflow_runs_by_status(
-                "cancelling", limit=_CANCEL_SCAN_LIMIT,
-            )
+            if not self.domain_enabled("workflows"):
+                wf_runs = []
+            else:
+                wf_runs = await self.db.get_workflow_runs_by_status(
+                    "cancelling", limit=_CANCEL_SCAN_LIMIT,
+                )
         except Exception as e:  # noqa: BLE001
             elog("scheduler.cancel_scan_failed", level="warning",
                  kind="workflow", error=str(e))
@@ -719,9 +750,12 @@ class Scheduler:
             )
         # Scheduled-task runs — same shape, different table.
         try:
-            task_runs = await self.db.get_task_runs_by_status(
-                "cancelling", limit=_CANCEL_SCAN_LIMIT,
-            )
+            if not self.domain_enabled("scheduler"):
+                task_runs = []
+            else:
+                task_runs = await self.db.get_task_runs_by_status(
+                    "cancelling", limit=_CANCEL_SCAN_LIMIT,
+                )
         except Exception as e:  # noqa: BLE001
             elog("scheduler.cancel_scan_failed", level="warning",
                  kind="scheduled_task", error=str(e))
@@ -798,6 +832,8 @@ class Scheduler:
     async def run_task(self, task: dict, *, trigger: str = "schedule", request_id: str | None = None,
                        context: dict | None = None) -> None:
         """Admit a firing before its first tool, provider or deterministic action."""
+        if not self.domain_enabled("scheduler"):
+            raise RuntimeError("The scheduler module is not active")
         if self.execution_service is None:
             raise PermissionError("A scheduler requires a host automation execution service")
         return await self.execution_service.run_task(self, task, trigger=trigger,
@@ -1361,7 +1397,7 @@ class Scheduler:
         leaves a durable ``running`` row for startup reaping/requeueing.
         """
         now = time.time()
-        due_tasks = await self.db.get_due_tasks(now)
+        due_tasks = await self.db.get_due_tasks(now) if self.domain_enabled("scheduler") else []
 
         for task in due_tasks:
             if self.execution_service is None or not await self.execution_service.definition_authorized("task", task):
@@ -1424,7 +1460,10 @@ class Scheduler:
         # trigger-schedule node as the entry point; a workflow with
         # multiple schedule blocks gets multiple independent firings.
         try:
-            due_schedules = await self.db.get_due_schedules(now)
+            if not (self.domain_enabled("scheduler") and self.domain_enabled("workflows")):
+                due_schedules = []
+            else:
+                due_schedules = await self.db.get_due_schedules(now)
         except Exception as e:  # noqa: BLE001
             elog("scheduler.schedules_fetch_failed", level="warning", error=str(e))
             due_schedules = []
@@ -1484,8 +1523,11 @@ class Scheduler:
 
         # AI-enqueued + manually-enqueued workflow runs (Phase 2).
         try:
-            requests = await self.db.claim_pending_workflow_requests(limit=5,
-                definition_ids=await self.execution_service.authorized_definition_ids("workflow") if self.execution_service else ())
+            if not self.domain_enabled("workflows"):
+                requests = []
+            else:
+                requests = await self.db.claim_pending_workflow_requests(limit=5,
+                    definition_ids=await self.execution_service.authorized_definition_ids("workflow") if self.execution_service else ())
         except Exception as e:  # noqa: BLE001
             # 37e99bd dropped explicit BEGIN/ROLLBACK from the claim path,
             # but both signatures still surface across mixout / performa
@@ -1549,6 +1591,8 @@ class Scheduler:
         :meth:`_run_workflow`, which explicitly clears the origin.
         """
 
+        if not self.domain_enabled("workflows"):
+            raise RuntimeError("The workflows module is not active")
         from openagent_core.core.execution_origin import current_execution_origin
 
         if current_execution_origin() is None:
@@ -1625,6 +1669,8 @@ class Scheduler:
     async def run_workflow(self, wf: dict, *, trigger: str, inputs: dict | None = None,
                            request_id: str | None = None, entry_node_id: str | None = None,
                            run_id: str | None = None):
+        if not self.domain_enabled("workflows"):
+            raise RuntimeError("The workflows module is not active")
         if self.execution_service is None:
             raise PermissionError("A workflow requires a host automation execution service")
         return await self.execution_service.run_workflow(self, wf, trigger=trigger, inputs=inputs,

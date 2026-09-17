@@ -16,13 +16,15 @@ import uuid
 import hashlib
 import asyncio
 import functools
+import base64
 from openagent_core.persistence import run_sync
+from openagent_core.configuration import sqlite_busy_timeout_ms, sqlite_busy_timeout_s
 
 from .search import enqueue_source, restore_runtime_search_intents
 from .ancestry import ensure_delegated_ancestry
 
 from openagent_core.contracts import (AcceptedRunRequest, PrincipalRef, ExecutionContext, IdempotencyConflict, RunEvent,
-    RunRecord, RunRequest, TERMINAL_STATUSES, canonical_json)
+    RunRecord, RunRequest, SessionRef, TERMINAL_STATUSES, canonical_json)
 
 
 def _serialized(method):
@@ -67,8 +69,12 @@ class SqliteRuntimeStore:
         self._lock_fd = fd
         existed = self.path.exists() and self.path.stat().st_size > 0
         try:
-            self._db = sqlite3.connect(str(self.path), isolation_level=None, timeout=5, check_same_thread=False)
+            self._db = sqlite3.connect(
+                str(self.path), isolation_level=None,
+                timeout=sqlite_busy_timeout_s(), check_same_thread=False,
+            )
             self._db.row_factory = sqlite3.Row
+            self._db.execute(f'PRAGMA busy_timeout={sqlite_busy_timeout_ms()}')
             self._db.execute('PRAGMA foreign_keys=ON')
             if existed:
                 present = {r[0] for r in self._db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -369,6 +375,167 @@ class SqliteRuntimeStore:
         rows=self.connection.execute("SELECT * FROM session_runs WHERE delegated_parent_run_id=? ORDER BY created_at_ms,id",(run_id,))
         return tuple(self._record(row) for row in rows)
 
+    @staticmethod
+    def _session_cursor(value) -> str:
+        return base64.urlsafe_b64encode(canonical_json(value).encode()).decode().rstrip('=')
+
+    @staticmethod
+    def _parse_session_cursor(value: str | None, *, length: int) -> tuple | None:
+        if value is None:
+            return None
+        try:
+            padded=value+'='*(-len(value)%4)
+            decoded=json.loads(base64.urlsafe_b64decode(padded).decode())
+        except Exception as exc:
+            raise ValueError('Invalid session cursor') from exc
+        if not isinstance(decoded,list) or len(decoded)!=length:
+            raise ValueError('Invalid session cursor')
+        return tuple(decoded)
+
+    @staticmethod
+    def _bounded_session_limit(limit: int) -> int:
+        if not isinstance(limit,int) or isinstance(limit,bool) or not 1 <= limit <= 100:
+            raise ValueError('Session page limit must be between 1 and 100')
+        return limit
+
+    @staticmethod
+    def _session_ref(row, authority: str) -> SessionRef:
+        return SessionRef(authority,row['tenant_id'],row['agent_id'],row['id'])
+
+    def _session_wire(self,row,authority: str) -> dict[str,Any]:
+        reference=self._session_ref(row,authority)
+        return {'session_ref':reference.token,'session_id':row['id'],'agent_id':row['agent_id'],
+            'title':row['title'],'status':row['status'],'kind':row['kind'],'origin':row['origin'],
+            'parent_session_id':row['parent_session_id'],'root_session_id':row['root_session_id'],
+            'created_at_ms':row['created_at_ms'],'updated_at_ms':row['updated_at_ms'],
+            'last_activity_at_ms':row['last_activity_at_ms'],'archived':row['deleted_at_ms'] is not None}
+
+    def _list_sessions(self,context: ExecutionContext,*,include_archived: bool,limit: int,cursor: str|None=None,
+                       agent_id:str|None=None):
+        if agent_id is not None and agent_id != context.agent_id:
+            raise PermissionError('This session store is local to one agent')
+        limit=self._bounded_session_limit(limit);after=self._parse_session_cursor(cursor,length=2)
+        clauses=['tenant_id=?','agent_id=?'];params:list[Any]=[context.tenant_id,context.agent_id]
+        if not include_archived:clauses.append('deleted_at_ms IS NULL')
+        if after is not None:
+            clauses.append('(last_activity_at_ms < ? OR (last_activity_at_ms = ? AND id < ?))')
+            params.extend([int(after[0]),int(after[0]),str(after[1])])
+        rows=self.connection.execute('SELECT * FROM sessions_v2 WHERE '+' AND '.join(clauses)+
+            ' ORDER BY last_activity_at_ms DESC,id DESC LIMIT ?',(*params,limit+1)).fetchall()
+        page=rows[:limit]
+        next_cursor=(self._session_cursor([page[-1]['last_activity_at_ms'],page[-1]['id']])
+                     if len(rows)>limit and page else None)
+        return {'sessions':[self._session_wire(row,context.authority.authority) for row in page],
+                'next_cursor':next_cursor}
+
+    def _search_sessions(self,context: ExecutionContext,*,query: str,limit: int,cursor: str|None=None,
+                         agent_id:str|None=None):
+        if agent_id is not None and agent_id != context.agent_id:
+            raise PermissionError('This session store is local to one agent')
+        query=str(query or '').strip()
+        if not query:raise ValueError('Session search query is required')
+        if len(query)>512:raise ValueError('Session search query is too long')
+        limit=self._bounded_session_limit(limit);after=self._parse_session_cursor(cursor,length=2)
+        clauses=['s.tenant_id=?','s.agent_id=?','s.deleted_at_ms IS NULL',
+            "(coalesce(s.title,'') LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM session_messages m WHERE m.session_id=s.id AND m.visibility='user_visible' AND coalesce(m.text,'') LIKE ? ESCAPE '\\'))"]
+        escaped=query.replace('\\','\\\\').replace('%','\\%').replace('_','\\_')
+        params:list[Any]=[context.tenant_id,context.agent_id,'%'+escaped+'%','%'+escaped+'%']
+        if after is not None:
+            clauses.append('(s.last_activity_at_ms < ? OR (s.last_activity_at_ms = ? AND s.id < ?))')
+            params.extend([int(after[0]),int(after[0]),str(after[1])])
+        rows=self.connection.execute('SELECT s.* FROM sessions_v2 s WHERE '+' AND '.join(clauses)+
+            ' ORDER BY s.last_activity_at_ms DESC,s.id DESC LIMIT ?',(*params,limit+1)).fetchall()
+        page=rows[:limit];items=[]
+        for row in page:
+            item=self._session_wire(row,context.authority.authority)
+            hit=self.connection.execute("SELECT text,sequence FROM session_messages WHERE session_id=? AND visibility='user_visible' AND coalesce(text,'') LIKE ? ESCAPE '\\' ORDER BY sequence DESC LIMIT 1",(row['id'],'%'+escaped+'%')).fetchone()
+            if hit:item.update(excerpt=(hit['text'] or '')[:500],message_sequence=hit['sequence'])
+            items.append(item)
+        next_cursor=(self._session_cursor([page[-1]['last_activity_at_ms'],page[-1]['id']])
+                     if len(rows)>limit and page else None)
+        return {'sessions':items,'next_cursor':next_cursor,'index':{'kind':'canonical','complete':True}}
+
+    def _require_local_session(self,reference:SessionRef,context:ExecutionContext):
+        if (reference.tenant_id!=context.tenant_id or reference.agent_id!=context.agent_id
+                or reference.authority!=context.authority.authority):
+            raise PermissionError('Session reference belongs to another runtime boundary')
+        row=self.connection.execute('SELECT * FROM sessions_v2 WHERE id=? AND tenant_id=? AND agent_id=?',
+            (reference.session_id,reference.tenant_id,reference.agent_id)).fetchone()
+        if row is None:raise LookupError(reference.session_id)
+        return row
+
+    def _read_session(self,reference:SessionRef,context:ExecutionContext,*,limit:int,cursor:str|None=None):
+        row=self._require_local_session(reference,context);limit=self._bounded_session_limit(limit)
+        after=self._parse_session_cursor(cursor,length=1);sequence=int(after[0]) if after else -1
+        messages=self.connection.execute('''SELECT id,run_id,sequence,role,status,author_kind,author_principal_id,
+            text,content_json,tool_call_id,created_at_ms FROM session_messages
+            WHERE session_id=? AND sequence>? AND visibility='user_visible' ORDER BY sequence LIMIT ?''',
+            (reference.session_id,sequence,limit+1)).fetchall()
+        page=messages[:limit]
+        next_cursor=(self._session_cursor([page[-1]['sequence']]) if len(messages)>limit and page else None)
+        return {'session':self._session_wire(row,reference.authority),'messages':[dict(message) for message in page],
+                'next_cursor':next_cursor}
+
+    def _create_session(self,reference:SessionRef,context:ExecutionContext,*,title:str|None,parent:SessionRef|None=None):
+        if reference.tenant_id!=context.tenant_id or reference.agent_id!=context.agent_id or reference.authority!=context.authority.authority:
+            raise PermissionError('Session reference belongs to another runtime boundary')
+        if self.connection.execute('SELECT 1 FROM sessions_v2 WHERE id=?',(reference.session_id,)).fetchone():
+            raise IdempotencyConflict('Session ID already exists')
+        parent_id=root_id=None
+        if parent is not None:
+            parent_row=self._require_local_session(parent,context);parent_id=parent.session_id
+            root_id=parent_row['root_session_id'] or parent.session_id
+        now=int(time.time()*1000)
+        with self._transaction() as db:
+            db.execute('''INSERT INTO sessions_v2(id,tenant_id,owner_principal_id,visibility,session_type,kind,
+                status,title,parent_session_id,root_session_id,created_at_ms,updated_at_ms,last_activity_at_ms,agent_id,metadata_json)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(reference.session_id,context.tenant_id,context.authority.key,
+                'shared' if len(context.audience)>1 else 'private','agent','chat','active',title,parent_id,root_id,
+                now,now,now,context.agent_id,canonical_json({'runtime_contract':1,'created_by':'sessions-module'})))
+            enqueue_source(db,'session',reference.session_id,now)
+        row=self.connection.execute('SELECT * FROM sessions_v2 WHERE id=?',(reference.session_id,)).fetchone()
+        return self._session_wire(row,reference.authority)
+
+    def _rename_session(self,reference:SessionRef,context:ExecutionContext,*,title:str):
+        self._require_local_session(reference,context);title=str(title or '').strip()
+        if not title or len(title)>240:raise ValueError('Session title must contain 1 to 240 characters')
+        now=int(time.time()*1000)
+        with self._transaction() as db:
+            db.execute('UPDATE sessions_v2 SET title=?,updated_at_ms=?,source_version=source_version+1 WHERE id=?',(title,now,reference.session_id))
+            enqueue_source(db,'session',reference.session_id,now)
+        return self._session_wire(self.connection.execute('SELECT * FROM sessions_v2 WHERE id=?',(reference.session_id,)).fetchone(),reference.authority)
+
+    def _archive_session(self,reference:SessionRef,context:ExecutionContext):
+        self._require_local_session(reference,context);now=int(time.time()*1000)
+        with self._transaction() as db:
+            db.execute("UPDATE sessions_v2 SET status='archived',deleted_at_ms=coalesce(deleted_at_ms,?),updated_at_ms=?,source_version=source_version+1 WHERE id=?",(now,now,reference.session_id))
+            enqueue_source(db,'session',reference.session_id,now)
+        return self._session_wire(self.connection.execute('SELECT * FROM sessions_v2 WHERE id=?',(reference.session_id,)).fetchone(),reference.authority)
+
+    def _restore_session(self,reference:SessionRef,context:ExecutionContext):
+        self._require_local_session(reference,context);now=int(time.time()*1000)
+        with self._transaction() as db:
+            db.execute("UPDATE sessions_v2 SET status='active',deleted_at_ms=NULL,updated_at_ms=?,source_version=source_version+1 WHERE id=?",(now,reference.session_id))
+            enqueue_source(db,'session',reference.session_id,now)
+        return self._session_wire(self.connection.execute('SELECT * FROM sessions_v2 WHERE id=?',(reference.session_id,)).fetchone(),reference.authority)
+
+    def _purge_session(self,reference:SessionRef,context:ExecutionContext):
+        row=self._require_local_session(reference,context)
+        if row['deleted_at_ms'] is None:raise ValueError('Archive a session before purging it')
+        active=self.connection.execute("SELECT 1 FROM session_runs WHERE session_id=? AND status NOT IN ('success','failed','cancelled','rejected','interrupted','skipped','timed_out') LIMIT 1",(reference.session_id,)).fetchone()
+        if active:raise RuntimeError('A session with active runs cannot be purged')
+        if self.connection.execute('SELECT 1 FROM sessions_v2 WHERE parent_session_id=? LIMIT 1',(reference.session_id,)).fetchone():
+            raise RuntimeError('A session with child sessions cannot be purged')
+        now=int(time.time()*1000)
+        with self._transaction() as db:
+            messages=db.execute('SELECT id,source_version FROM session_messages WHERE session_id=?',(reference.session_id,)).fetchall()
+            for message in messages:
+                db.execute("INSERT OR IGNORE INTO search_outbox(tenant_id,source_kind,source_id,operation,source_version,acl_version,committed_at_ms) VALUES(?,?,?,'delete',?,?,?)",
+                    (context.tenant_id,'message',message['id'],message['source_version']+1,row['acl_version'],now))
+            db.execute("INSERT OR IGNORE INTO search_outbox(tenant_id,source_kind,source_id,operation,source_version,acl_version,committed_at_ms) VALUES(?,?,?,'delete',?,?,?)",
+                (context.tenant_id,'session',reference.session_id,row['source_version']+1,row['acl_version'],now))
+            db.execute('DELETE FROM sessions_v2 WHERE id=?',(reference.session_id,))
+
     def _accepted_request(self, run_id: str) -> AcceptedRunRequest:
         row=self.connection.execute("SELECT * FROM session_runs WHERE id=? AND json_extract(metadata_json,'$.runtime_contract')=1",(run_id,)).fetchone()
         if row is None:
@@ -398,3 +565,11 @@ class SqliteRuntimeStore:
     recover = _serialized(_recover)
     children = _serialized(_children)
     accepted_request = _serialized(_accepted_request)
+    list_sessions = _serialized(_list_sessions)
+    search_sessions = _serialized(_search_sessions)
+    read_session = _serialized(_read_session)
+    create_session = _serialized(_create_session)
+    rename_session = _serialized(_rename_session)
+    archive_session = _serialized(_archive_session)
+    restore_session = _serialized(_restore_session)
+    purge_session = _serialized(_purge_session)

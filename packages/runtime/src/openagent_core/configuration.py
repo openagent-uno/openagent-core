@@ -10,6 +10,9 @@ from types import MappingProxyType
 import os
 
 
+_DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 60_000
+
+
 def runtime_environment() -> Mapping[str, str]:
     from .runtime import current_runtime
     runtime = current_runtime()
@@ -20,3 +23,20 @@ def runtime_environment() -> Mapping[str, str]:
 
 def getenv(name: str, default=None):
     return runtime_environment().get(name, default)
+
+
+def sqlite_busy_timeout_ms() -> int:
+    """Shared SQLite writer budget for every core and module connection."""
+    raw = runtime_environment().get("OPENAGENT_SQLITE_BUSY_TIMEOUT_MS")
+    if raw is None:
+        return _DEFAULT_SQLITE_BUSY_TIMEOUT_MS
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        return _DEFAULT_SQLITE_BUSY_TIMEOUT_MS
+    return value if value > 0 else _DEFAULT_SQLITE_BUSY_TIMEOUT_MS
+
+
+def sqlite_busy_timeout_s() -> float:
+    """The shared writer budget in seconds for ``sqlite3.connect``."""
+    return sqlite_busy_timeout_ms() / 1000.0

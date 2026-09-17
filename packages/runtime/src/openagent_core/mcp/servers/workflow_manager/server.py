@@ -57,6 +57,21 @@ from openagent_core.memory.schedule import (
 logger = logging.getLogger(__name__)
 
 
+def _scheduler_integration_enabled() -> bool:
+    return "scheduler" in {
+        item.strip() for item in
+        runtime_environment().get("OPENAGENT_ACTIVE_MODULES", "").split(",")
+        if item.strip()
+    }
+
+
+def _require_available_integrations(graph: dict) -> None:
+    if not _scheduler_integration_enabled() and any(iter_trigger_schedule_blocks(graph)):
+        raise ValueError(
+            "trigger-schedule blocks require the optional scheduler module"
+        )
+
+
 def _db_path() -> str:
     # Same rule as ``_common.db_path``: never the CWD (see that docstring —
     # under PyInstaller it means an empty database nobody notices).
@@ -223,6 +238,7 @@ async def _sync_workflow_schedules(
     runs against the MCP subprocess's raw ``aiosqlite.Connection``
     without pulling MemoryDB into this process.
     """
+    _require_available_integrations(graph)
     keep_node_ids: list[str] = []
     now = time.time()
     for node in iter_trigger_schedule_blocks(graph):
@@ -435,6 +451,7 @@ async def create_workflow(
     }
     try:
         validate_graph(graph)
+        _require_available_integrations(graph)
     except ValidationError as e:
         raise ValueError(f"graph validation failed: {e}") from e
 
@@ -532,6 +549,7 @@ async def update_workflow(
         }
         try:
             validate_graph(new_graph)
+            _require_available_integrations(new_graph)
         except ValidationError as e:
             raise ValueError(f"graph validation failed: {e}") from e
         updates["graph_json"] = json.dumps(new_graph)

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from openagent_core.instance_state import InstanceMapping
-from openagent_core.configuration import runtime_environment
+from openagent_core.configuration import (
+    runtime_environment, sqlite_busy_timeout_ms, sqlite_busy_timeout_s,
+)
 import asyncio
 import json
 import logging
@@ -57,24 +59,6 @@ WORKER_PID = os.getpid()
 # everyone else: 10s here, 5s there, none at all in the runtime store. So the
 # number lives here, once, and every writer reads it. Tunable per deployment
 # via ``OPENAGENT_SQLITE_BUSY_TIMEOUT_MS`` for the rare host that needs it.
-_DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 60_000
-
-
-def sqlite_busy_timeout_ms() -> int:
-    """Milliseconds every connection to the agent DB should wait for the
-    writer before giving up. Read live so a redeploy is not needed to retune."""
-    raw = runtime_environment().get("OPENAGENT_SQLITE_BUSY_TIMEOUT_MS")
-    if raw is None:
-        return _DEFAULT_SQLITE_BUSY_TIMEOUT_MS
-    try:
-        value = int(float(raw))
-    except (TypeError, ValueError):
-        return _DEFAULT_SQLITE_BUSY_TIMEOUT_MS
-    # A zero/negative timeout would mean "fail instantly", which is the bug
-    # this constant exists to remove. Treat it as "use the default".
-    return value if value > 0 else _DEFAULT_SQLITE_BUSY_TIMEOUT_MS
-
-
 # How long a delivery write may wait for the write lock before giving up.
 #
 # NOT the global ``busy_timeout``, which is three minutes on the agents: these
@@ -96,11 +80,6 @@ def delivery_lock_wait_ms() -> int:
         value = 8000
     return max(250, min(value, 60_000))
 
-
-def sqlite_busy_timeout_s() -> float:
-    """The same budget in seconds, for ``sqlite3.connect(timeout=...)`` — which
-    covers the window BEFORE the first PRAGMA can run on a new connection."""
-    return sqlite_busy_timeout_ms() / 1000.0
 
 # Lease defaults. The lease is SHORT so a frozen turn is reclaimed in ~LEASE_TTL
 # rather than the coarse 30-min stale-sweep age; the heartbeat (a tiny single-row

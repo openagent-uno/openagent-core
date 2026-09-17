@@ -58,6 +58,9 @@ class _Registration:
     managed: bool
     lease: CapabilityLease | None
     trusted_effects: Mapping[str, frozenset[str]] | frozenset[str] = frozenset()
+    graph_generation: int | None = None
+    visible_from_revision: int = 0
+    revoked: bool = False
     references: dict[str, tuple[str, ToolDefinition]] = field(default_factory=dict)
 
 
@@ -75,15 +78,36 @@ class CapabilityCatalog:
         self.authorizer = authorizer
         self.allow_dynamic = allow_dynamic
         self.observers = observers
-        self._sources: dict[str, _Registration] = {}
+        self._sources: dict[tuple[str, int | None], _Registration] = {}
         self._refs: dict[str, tuple[_Registration, ToolDefinition]] = {}
+        self._revision = 0
+        self._active_generation: int | None = None
+
+    @property
+    def revision(self) -> int:
+        return self._revision
+
+    def snapshot_revision(self) -> int:
+        """Capture the topology visible to a newly admitted run."""
+        return self._revision
+
+    def activate_generation(self, generation: int | None) -> None:
+        self._active_generation = generation
+
+    def _next_revision(self) -> int:
+        self._revision += 1
+        return self._revision
 
     def register(self, source_id: str, source: CapabilitySource, executor: ToolExecutor, *,
                  target_label: str, lease: CapabilityLease | None = None,
-                 trusted_effects: Mapping[str, frozenset[str]] | frozenset[str] = frozenset()) -> None:
-        self._register(source_id, source, executor, target_label=target_label, managed=True, lease=lease, trusted_effects=trusted_effects)
+                 trusted_effects: Mapping[str, frozenset[str]] | frozenset[str] = frozenset(),
+                 graph_generation: int | None = None) -> None:
+        self._register(source_id, source, executor, target_label=target_label, managed=True,
+                       lease=lease, trusted_effects=trusted_effects,
+                       graph_generation=graph_generation)
 
-    def register_user_source(self, source_id: str, source: CapabilitySource, executor: ToolExecutor, *, target_label: str) -> None:
+    def register_user_source(self, source_id: str, source: CapabilitySource, executor: ToolExecutor, *,
+                             target_label: str, graph_generation: int | None = None) -> None:
         """Restore a user-owned source from the host's trusted registry service.
 
         This is a composition API, never a REST deserializer. Imported MCP
@@ -91,29 +115,67 @@ class CapabilityCatalog:
         """
         if not self.allow_dynamic:
             raise PermissionError("This host has a fixed capability catalog")
-        self._register(source_id, source, executor, target_label=target_label, managed=False)
+        self._register(source_id, source, executor, target_label=target_label, managed=False,
+                       graph_generation=graph_generation)
 
     def _register(self, source_id: str, source: CapabilitySource, executor: ToolExecutor, *,
                   target_label: str, managed: bool, lease: CapabilityLease | None = None,
-                  trusted_effects: Mapping[str, frozenset[str]] | frozenset[str] = frozenset()) -> None:
-        if not source_id or source_id in self._sources:
+                  trusted_effects: Mapping[str, frozenset[str]] | frozenset[str] = frozenset(),
+                  graph_generation: int | None = None) -> None:
+        key = (source_id, graph_generation)
+        if not source_id or key in self._sources:
             raise ValueError("Capability source IDs must be unique")
         if lease and lease.source_id != source_id:
             raise ValueError("The lease must identify this exact source")
-        self._sources[source_id] = _Registration(source_id, source, executor, target_label, managed, lease, trusted_effects)
+        registration = _Registration(source_id, source, executor, target_label, managed,
+                                     lease, trusted_effects, graph_generation,
+                                     self._next_revision())
+        self._sources[key] = registration
 
     def revoke(self, source_id: str) -> None:
-        registration = self._sources.pop(source_id, None)
-        if registration:
+        registrations = [registration for (name, _generation), registration in self._sources.items()
+                         if name == source_id]
+        if registrations:
+            self._next_revision()
+        for registration in registrations:
+            registration.revoked = True
+            self._sources.pop((registration.source_id, registration.graph_generation), None)
+            for reference, _ in registration.references.values():
+                self._refs.pop(reference, None)
+
+    def revoke_registration(self, source_id: str, graph_generation: int | None) -> bool:
+        registration = self._sources.pop((source_id, graph_generation), None)
+        if registration is None:
+            return False
+        registration.revoked = True
+        for reference, _ in registration.references.values():
+            self._refs.pop(reference, None)
+        self._next_revision()
+        return True
+
+    def revoke_generation(self, generation: int) -> None:
+        registrations = [registration for (_name, current), registration in self._sources.items()
+                         if current == generation]
+        if registrations:
+            self._next_revision()
+        for registration in registrations:
+            registration.revoked = True
+            self._sources.pop((registration.source_id, registration.graph_generation), None)
             for reference, _ in registration.references.values():
                 self._refs.pop(reference, None)
 
     def revoke_lease(self, lease: CapabilityLease) -> bool:
         """A delayed disconnect must never revoke a newer connection."""
-        registration = self._sources.get(lease.source_id)
-        if registration is None or registration.lease != lease:
+        matches = [registration for (source_id, _generation), registration in self._sources.items()
+                   if source_id == lease.source_id and registration.lease == lease]
+        if len(matches) != 1:
             return False
-        self.revoke(lease.source_id)
+        registration = matches[0]
+        registration.revoked = True
+        self._sources.pop((registration.source_id, registration.graph_generation), None)
+        for reference, _ in registration.references.values():
+            self._refs.pop(reference, None)
+        self._next_revision()
         return True
 
     async def install(self, source_id: str, source: CapabilitySource, executor: ToolExecutor,
@@ -124,7 +186,8 @@ class CapabilityCatalog:
         self._register(source_id, source, executor, target_label=target_label, managed=False)
 
     async def remove(self, source_id: str, context: ExecutionContext) -> None:
-        registration = self._sources.get(source_id)
+        registration = next((registration for registration in self._registrations_for_context(context)
+                             if registration.source_id == source_id), None)
         if registration is None:
             raise CapabilityUnavailable(source_id)
         if registration.managed or not self.allow_dynamic:
@@ -132,9 +195,33 @@ class CapabilityCatalog:
         await require_authorized(self.authorizer, context, "catalog.remove", ResourceRef("capability", context.tenant_id, source_id))
         self.revoke(source_id)
 
+    def _execution_snapshot(self) -> tuple[int | None, int]:
+        try:
+            from .runtime import current_capability_revision, current_module_generation, current_runtime
+            runtime = current_runtime()
+            if runtime is not None and runtime.capabilities is self:
+                generation = current_module_generation()
+                revision = current_capability_revision()
+                return (self._active_generation if generation is None else generation,
+                        self._revision if revision is None else revision)
+        except ImportError:
+            pass
+        return self._active_generation, self._revision
+
     def _available(self, registration: _Registration, context: ExecutionContext) -> bool:
-        return (self._sources.get(registration.source_id) is registration and
-                (registration.lease is None or (not context.deferred and registration.lease in context.capabilities)))
+        generation, revision = self._execution_snapshot()
+        return (not registration.revoked and
+                self._sources.get((registration.source_id, registration.graph_generation)) is registration and
+                registration.visible_from_revision <= revision and
+                (registration.graph_generation is None or registration.graph_generation == generation) and
+                (registration.lease is None or (
+                    not getattr(context, "deferred", False) and
+                    registration.lease in getattr(context, "capabilities", ())
+                )))
+
+    def _registrations_for_context(self, context: ExecutionContext) -> tuple[_Registration, ...]:
+        return tuple(registration for registration in self._sources.values()
+                     if self._available(registration, context))
 
     async def inspect(self, context: Any, *, authorizer: Authorizer) -> tuple[ToolInventoryEntry, ...]:
         """Inspect host-owned schema metadata without constructing an agent turn.
@@ -144,7 +231,7 @@ class CapabilityCatalog:
         do. Discovery/invocation still require the regular ExecutionContext.
         """
         result = []
-        for registration in tuple(self._sources.values()):
+        for registration in self._registrations_for_context(context):
             inspect = getattr(registration.source, "inspect", None)
             if registration.lease is not None or not callable(inspect):
                 continue
@@ -152,7 +239,7 @@ class CapabilityCatalog:
             if not await authorizer.authorize(context, "catalog.inspect", resource, audience=()):
                 continue
             definitions = tuple(await inspect(context))
-            if (self._sources.get(registration.source_id) is not registration or
+            if (not self._available(registration, context) or
                     not await authorizer.authorize(context, "catalog.inspect", resource, audience=())):
                 continue
             names = set()
@@ -166,9 +253,7 @@ class CapabilityCatalog:
 
     async def discover(self, context: ExecutionContext) -> tuple[ToolDescriptor, ...]:
         result: list[ToolDescriptor] = []
-        for registration in tuple(self._sources.values()):
-            if not self._available(registration, context):
-                continue
+        for registration in self._registrations_for_context(context):
             resource = ResourceRef("capability", context.tenant_id, registration.source_id)
             if not await self.authorizer.authorize(context, "tool.discover", resource, audience=context.audience):
                 continue

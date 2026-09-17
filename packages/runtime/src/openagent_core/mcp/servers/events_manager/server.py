@@ -38,7 +38,17 @@ from openagent_core.core.execution_policy import encode_execution_policy, normal
 
 logger = logging.getLogger(__name__)
 
-_VALID_ACTION_KINDS = ("workflow", "scheduled_task", "prompt")
+def _valid_action_kinds() -> tuple[str, ...]:
+    """Expose integrations only when their modules are in this graph."""
+    active = {item.strip() for item in
+              runtime_environment().get("OPENAGENT_ACTIVE_MODULES", "").split(",")
+              if item.strip()}
+    values = ["prompt"]
+    if "workflows" in active:
+        values.insert(0, "workflow")
+    if "scheduler" in active:
+        values.insert(1 if values and values[0] == "workflow" else 0, "scheduled_task")
+    return tuple(values)
 
 
 def _db_path() -> str:
@@ -221,8 +231,9 @@ async def create_event(
     Returns the event plus ``secret`` (the clear per-event secret) — shown
     ONCE. The caller must save it; only a hint is retrievable afterwards.
     """
-    if action_kind not in _VALID_ACTION_KINDS:
-        raise ValueError(f"action_kind must be one of {_VALID_ACTION_KINDS}")
+    valid_action_kinds = _valid_action_kinds()
+    if action_kind not in valid_action_kinds:
+        raise ValueError(f"action_kind must be one of {valid_action_kinds} for the active module graph")
     if not is_valid_type(type):
         raise ValueError(f"unknown type {type!r}; use list_event_types")
     if action_kind in ("workflow", "scheduled_task") and not action_ref:
@@ -312,8 +323,9 @@ async def update_event(
     if enabled is not None:
         sets["enabled"] = 1 if enabled else 0
     if action_kind is not None:
-        if action_kind not in _VALID_ACTION_KINDS:
-            raise ValueError(f"action_kind must be one of {_VALID_ACTION_KINDS}")
+        valid_action_kinds = _valid_action_kinds()
+        if action_kind not in valid_action_kinds:
+            raise ValueError(f"action_kind must be one of {valid_action_kinds} for the active module graph")
         sets["action_kind"] = action_kind
     if action_ref is not None:
         sets["action_ref"] = action_ref or None

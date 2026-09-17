@@ -975,10 +975,13 @@ async def _with_recall(agent: Any, session_id: str | None, query: str,
     if not _recall_enabled() or not query or not query.strip():
         return text
     from openagent_core.runtime import current_runtime, current_execution_context
-    from openagent_core.memory_access import authorized_memory_hits
+    from openagent_core.memory_access import MemoryAccess, authorized_memory_hits
     runtime, context = current_runtime(), current_execution_context()
-    if (runtime is None or context is None or runtime.services.memory_access is None
+    memory_access = runtime.service(MemoryAccess) if runtime is not None else None
+    if (runtime is None or context is None or memory_access is None
             or context.session_id != session_id):
+        return text
+    if runtime.uses_descriptor_profile and "vault" not in runtime.enabled_module_ids:
         return text
     # Narrow the query to the marked span (usually the customer's own words)
     # before embedding. ``text`` — what the model reads — is left alone.
@@ -989,6 +992,9 @@ async def _with_recall(agent: Any, session_id: str | None, query: str,
             import time
             started = time.monotonic()
             candidates = await asyncio.to_thread(_recall_candidates, agent, query, session_id)
+            if runtime.uses_descriptor_profile:
+                candidates = [item for item in candidates
+                              if item.get("kind") in {"note", "skill"}]
             hits = await authorized_memory_hits(runtime, context, candidates)
             # Public quality summaries must describe exposed memory only, not
             # counts or scores belonging to another audience's private hits.
@@ -1754,7 +1760,7 @@ class Agent:
         # turn doesn't re-pay the nudge on every iteration.
         current_input = await _with_vault_reminder(
             self._db, session_id, message, config=getattr(self, "config", {}) or {},
-            enabled="vault" in self._prompt_module_names(),
+            enabled="vault" in self._active_module_ids(),
         )
         # Semantic auto-recall, on the same user-message path (cache-safe).
         # ``message`` (not ``current_input``) is embedded so the recall query is
@@ -2132,7 +2138,7 @@ class Agent:
         # Streaming twin of the reminder hook in ``_run_inner`` — see there.
         current_input = await _with_vault_reminder(
             self._db, session_id, message, config=getattr(self, "config", {}) or {},
-            enabled="vault" in self._prompt_module_names(),
+            enabled="vault" in self._active_module_ids(),
         )
         current_input = await _with_recall(self, session_id, message, current_input)
         accumulated: list[str] = []
@@ -2534,25 +2540,12 @@ class Agent:
             return str(Path(str(db_path)).expanduser().resolve())
         return str(default_db_path())
 
-    def _prompt_module_names(self) -> frozenset[str]:
-        """Resolve applicable module rules from this runtime's actual catalog."""
-        from openagent_core.prompts import modules_for_catalog
+    def _active_module_ids(self) -> frozenset[str]:
+        """Return only the host-selected runtime graph."""
         from openagent_core.runtime import current_runtime
 
         runtime = current_runtime()
-        if runtime is not None:
-            return frozenset(runtime.settings.enabled_modules)
-        config = getattr(self, "config", None) or {}
-        configured = config.get("_enabled_prompt_modules")
-        if configured is not None:
-            return frozenset(str(name) for name in configured)
-        try:
-            return modules_for_catalog(self._mcp.server_summary())
-        except (AttributeError, TypeError):
-            # Construction-only legacy callers without a catalog still receive
-            # the historic module discipline; a real empty catalog stays empty.
-            return frozenset({"vault", "history", "delegation", "automation",
-                              "attachments", "models", "skills"})
+        return runtime.enabled_module_ids if runtime is not None else frozenset()
 
     def _combined_system_prompt(self, session_id: str | None = None) -> str:
         """Compose mandatory framework/module rules and trusted host instructions.
@@ -2562,7 +2555,7 @@ class Agent:
         never select a reduced framework. Provider cache splitting shares the
         explicit stable/dynamic boundary from openagent_core.prompts.
         """
-        from openagent_core.prompts import PromptBlock, PromptComposer
+        from openagent_core.prompts import PromptBlock, PromptComposer, core_framework_blocks
         from openagent_core.core.execution_origin import current_execution_origin
         from openagent_core.core.on_behalf_context import current_on_behalf_identity
 
@@ -2570,9 +2563,10 @@ class Agent:
         host = []
         for raw in config.get("_host_prompt_blocks", ()):
             host.append(raw if isinstance(raw, PromptBlock) else PromptBlock(**raw))
-        from openagent_core.runtime import current_execution_context, current_run_id
+        from openagent_core.runtime import current_execution_context, current_run_id, current_runtime
 
         context = current_execution_context()
+        runtime = current_runtime()
         provider = getattr(self, "host_prompt_provider", None)
         if provider is not None:
             host.extend(provider.prompt_blocks(context))
@@ -2622,10 +2616,11 @@ class Agent:
                  "provenance": block.provenance, "instructions": block.text}
                 for block in contributions
             ]
-        enabled_modules = self._prompt_module_names()
+        active_module_ids = (runtime.enabled_module_ids if runtime is not None
+                             else frozenset())
         substitutions = {
-            "OPENAGENT_VAULT_PATH": self._resolve_vault_path() if "vault" in enabled_modules else "",
-            "OPENAGENT_DB_PATH": self._resolve_db_path() if enabled_modules & {"vault", "history"} else "",
+            "OPENAGENT_VAULT_PATH": self._resolve_vault_path() if "vault" in active_module_ids else "",
+            "OPENAGENT_DB_PATH": self._resolve_db_path() if "vault" in active_module_ids else "",
             "MCP_CATALOG_SUMMARY": "See the current authorized catalog in the trusted turn context.",
             "SKILLS_INDEX": self._render_skills_index(),
             "PTC_NOTE": self._render_ptc_note(),
@@ -2635,7 +2630,9 @@ class Agent:
         if substitutions["PTC_NOTE"]:
             dynamic["programmatic_tool_calling"] = substitutions["PTC_NOTE"]
         composed = PromptComposer().compose(
-            enabled_modules=enabled_modules, substitutions=substitutions,
+            framework=core_framework_blocks(),
+            substitutions=substitutions,
+            modules=runtime.prompt_blocks if runtime is not None else (),
             host=host, dynamic=dynamic, session_id=session_id,
         )
         receipts = getattr(self, "_prompt_receipts", None)

@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 dist/
+!packages/module-vault/src/openagent_module_vault/resources/vault/dist/
+!packages/module-vault/src/openagent_module_vault/resources/vault/dist/*
 build/
 .eggs/
 .venv/

@@ -85,10 +85,19 @@ def _rules() -> tuple[PromptBlock, ...]:
     ))
 
 
-def framework_blocks(enabled_modules: Iterable[str] = ()) -> tuple[PromptBlock, ...]:
-    enabled = frozenset(enabled_modules)
-    return tuple(block for block in _rules() if block.id.startswith("core.")
-                 or block.id.split(".")[1] in enabled)
+def core_framework_blocks() -> tuple[PromptBlock, ...]:
+    """Prompt rules that apply even when the runtime has no optional module."""
+    return tuple(block for block in _rules() if block.id == "core.identity")
+
+
+def rule_blocks(*ids: str) -> tuple[PromptBlock, ...]:
+    """Resolve exact versioned rules for an installed module descriptor."""
+    requested = tuple(ids)
+    available = {block.id: block for block in _rules()}
+    missing = [rule_id for rule_id in requested if rule_id not in available]
+    if missing:
+        raise LookupError("Unknown framework prompt rules: " + ", ".join(missing))
+    return tuple(available[rule_id] for rule_id in requested)
 
 
 def default_framework_text() -> str:
@@ -123,7 +132,7 @@ class PromptComposer:
     def compose(
         self,
         *,
-        enabled_modules: Iterable[str] = (),
+        framework: Iterable[PromptBlock] | None = None,
         substitutions: Mapping[str, str] | None = None,
         host: Iterable[PromptBlock] = (),
         modules: Iterable[PromptBlock] = (),
@@ -131,7 +140,7 @@ class PromptComposer:
         session_id: str | None = None,
     ) -> ComposedPrompt:
         values = substitutions or {}
-        mandatory = framework_blocks(enabled_modules)
+        mandatory = core_framework_blocks() if framework is None else tuple(framework)
         module_blocks = tuple(modules)
         host_blocks = tuple(host)
         seen: set[str] = set()
@@ -168,22 +177,5 @@ class PromptComposer:
         return ComposedPrompt("\n\n".join(rendered), tail, tuple(receipts))
 
 
-def modules_for_catalog(source_names: Iterable[str]) -> frozenset[str]:
-    """Default module policy for legacy MCP-backed hosts, based on live sources."""
-    names = frozenset(source_names)
-    out: set[str] = set()
-    for module, sources in {
-        "vault": {"vault", "vault-gate"}, "history": {"memory-search", "logs"},
-        "delegation": {"delegation"},
-        "automation": {"scheduler", "workflow-manager", "events-manager"},
-        "models": {"model-manager"}, "attachments": {"attachments"},
-        "skills": {"skills"},
-    }.items():
-        if names & sources:
-            out.add(module)
-    return frozenset(out)
-
-
 __all__ = ["ComposedPrompt", "HostContextProvider", "HostPromptProvider", "PromptBlock", "PromptComposer",
-           "PromptReceipt", "default_framework_text", "framework_blocks",
-           "modules_for_catalog", "split_prompt"]
+           "PromptReceipt", "core_framework_blocks", "default_framework_text", "rule_blocks", "split_prompt"]

@@ -6,7 +6,7 @@ authorization, cancellation and durable execution identity.
 """
 from __future__ import annotations
 from typing import Any
-from .contracts import ExecutionContext, RunRequest, ResourceRef, require_authorized
+from .contracts import ExecutionContext, RunRequest, ResourceRef, ModelCatalog, require_authorized
 from .runtime import Runtime, current_execution_context, current_runtime
 
 
@@ -45,7 +45,8 @@ class AgentExecutor:
             await self.agent.initialize()
             bind = getattr(self.agent.capability_pool, "bind_capability_catalog", None)
             if callable(bind):
-                bind(runtime.capabilities, trusted_modules=runtime.settings.enabled_modules, user_sources=runtime.services.user_sources)
+                bind(runtime.capabilities, trusted_modules=runtime.enabled_module_ids,
+                     user_sources=runtime.service("user_sources", frozenset()))
         except BaseException:
             if self.owns_agent:
                 await self.agent.shutdown()
@@ -60,9 +61,10 @@ class AgentExecutor:
         clear_run_failure()
         model = None
         if request.model_ref is not None:
-            if runtime.services.models is None:
+            models = runtime.service(ModelCatalog)
+            if models is None:
                 raise ValueError("A model override requires a host-supplied ModelCatalog adapter")
-            model = await runtime.services.models.resolve(request.model_ref, context)
+            model = await models.resolve(request.model_ref, context)
         chunks = []
         async def can_publish() -> None:
             await require_authorized(runtime.services.authorizer, context, "run.publish",
@@ -133,37 +135,3 @@ class AgentModelCatalog:
         if model is None:
             raise LookupError("Pinned model is unavailable")
         return model
-
-
-def module_pool(modules: tuple[str, ...], *, db_path: str, vault_path: str | None = None,
-                environment: dict[str, str] | None = None):
-    """Select reusable domain modules explicitly, without installing MCP rows.
-
-    Product tools and identity are deliberately absent. Compiled module assets
-    must already be present in the distribution before the pool is started.
-    """
-    from .mcp.pool import MCPPool
-    selections = {
-        'vault': ('vault','vault-gate'),
-        'history': ('memory-search',),
-        'delegation': ('delegation',),
-        'automation': ('scheduler','workflow-manager','events-manager'),
-        'skills': ('skills','skill-data'),
-        'models': ('model-manager','budget-manager'),
-        'attachments': ('attachments',),
-        'logs': ('logs',),
-        'ptc': ('ptc',),
-    }
-    unknown=set(modules)-set(selections)
-    if unknown:
-        raise ValueError('Unknown reusable modules: '+', '.join(sorted(unknown)))
-    names=['tool-search']
-    for module in modules:
-        names.extend(selections[module])
-    env=dict(environment or {})
-    if 'vault' in modules:
-        if not vault_path:
-            raise ValueError('The vault module requires an explicit vault directory')
-        env['OPENAGENT_VAULT_PATH']=vault_path
-    return MCPPool.from_config([{'builtin':name,'env':dict(env)} for name in dict.fromkeys(names)],
-                               include_defaults=False,db_path=db_path)

@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openagent-sdk"
-version = "1.0.0b1"
+version = "1.1.0b1"
 description = "HTTP client for the OpenAgent durable run protocol"
 requires-python = ">=3.11"
-dependencies = ["openagent-core==1.0.0b1"]
+dependencies = ["openagent-core==1.1.0b1"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -106,7 +106,7 @@ async def authorized_memory_hits(runtime, context: ExecutionContext, hits):
 
 
 async def search_authorized_history(runtime,context,**query):
-    service=runtime.services.memory_access
+    service=runtime.service(MemoryAccess)
     if service is None:
         return {'ok':False,'hits':[],'hint':'Authorized history retrieval is unavailable in this host.'}
     response=await service.search_history(context,**query)

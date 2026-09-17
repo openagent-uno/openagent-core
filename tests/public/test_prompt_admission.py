@@ -2,7 +2,8 @@ from pathlib import Path
 import tempfile
 import unittest
 from openagent_core import Runtime,RuntimeServices,RuntimeSettings,PrincipalRef,ExecutionContext,RunRequest
-from openagent_core.engine import Agent,AgentExecutor,module_pool
+from openagent_core.engine import Agent,AgentExecutor
+from openagent_core.mcp.pool import MCPPool
 from openagent_core.models.base import BaseModel
 from openagent_storage_sqlite import SqliteRuntimeStore
 
@@ -24,7 +25,7 @@ class PromptAdmission(unittest.IsolatedAsyncioTestCase):
                     raise RuntimeError('fixture provider failure')
                     yield ''
                 async def generate(self,*args,**kwargs):raise RuntimeError('fixture provider failure')
-            agent=Agent(model=FailingModel(),mcp_pool=module_pool((),db_path=str(store.path)),
+            agent=Agent(model=FailingModel(),mcp_pool=MCPPool.from_config([],include_defaults=False),
                 system_prompt='Host instructions',config={'_enabled_prompt_modules':[]})
             executor=AgentExecutor(agent)
             runtime=Runtime(RuntimeSettings('agent',directory),RuntimeServices(store,executor,Policy()),modules=(executor,))

@@ -6,6 +6,8 @@ caller JSON. Credentials do not belong in contexts or persisted run snapshots.
 from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Mapping, Protocol
+import base64
+import binascii
 import hashlib
 import json
 
@@ -127,6 +129,54 @@ class DelegationService(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class SessionRef:
+    """Stable session identity across local and federated host backends."""
+    authority: str
+    tenant_id: str
+    agent_id: str
+    session_id: str
+
+    def __post_init__(self) -> None:
+        if not all(isinstance(value, str) and value.strip() for value in
+                   (self.authority, self.tenant_id, self.agent_id, self.session_id)):
+            raise ValueError("A session reference requires authority, tenant, agent and session")
+
+    @property
+    def token(self) -> str:
+        encoded = canonical_json(asdict(self)).encode()
+        return base64.urlsafe_b64encode(encoded).decode().rstrip("=")
+
+    @classmethod
+    def parse(cls, token: str) -> "SessionRef":
+        if not isinstance(token, str) or not token:
+            raise ValueError("Session reference is required")
+        try:
+            padded = token + "=" * (-len(token) % 4)
+            value = json.loads(base64.urlsafe_b64decode(padded).decode())
+            return cls(**value)
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError, binascii.Error, UnicodeError) as exc:
+            raise ValueError("Invalid session reference") from exc
+
+
+class SessionStore(Protocol):
+    """Mandatory session substrate implemented by the runtime store adapter."""
+    async def list_sessions(self, context: ExecutionContext, *, include_archived: bool,
+                            limit: int, cursor: str | None = None,
+                            agent_id: str | None = None) -> Mapping[str, Any]: ...
+    async def search_sessions(self, context: ExecutionContext, *, query: str,
+                              limit: int, cursor: str | None = None,
+                              agent_id: str | None = None) -> Mapping[str, Any]: ...
+    async def read_session(self, reference: SessionRef, context: ExecutionContext, *,
+                           limit: int, cursor: str | None = None) -> Mapping[str, Any]: ...
+    async def create_session(self, reference: SessionRef, context: ExecutionContext, *,
+                             title: str | None, parent: SessionRef | None = None) -> Mapping[str, Any]: ...
+    async def rename_session(self, reference: SessionRef, context: ExecutionContext, *, title: str) -> Mapping[str, Any]: ...
+    async def archive_session(self, reference: SessionRef, context: ExecutionContext) -> Mapping[str, Any]: ...
+    async def restore_session(self, reference: SessionRef, context: ExecutionContext) -> Mapping[str, Any]: ...
+    async def purge_session(self, reference: SessionRef, context: ExecutionContext) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
 class RunRequest:
     run_id: str
     session_id: str
@@ -195,7 +245,7 @@ class RunEvent:
     payload: Mapping[str, Any]
 
 
-class RuntimeStore(Protocol):
+class RuntimeStore(SessionStore, Protocol):
     async def start(self) -> None: ...
     async def close(self) -> None: ...
     async def accept(self, request: RunRequest, context: ExecutionContext) -> tuple[RunRecord, bool]: ...

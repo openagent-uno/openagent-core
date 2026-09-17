@@ -58,7 +58,7 @@ single place for runtime effects and durable invocation events.
 
 ## Optional vault packaging
 
-`openagent-modules` owns the compiled vault resources. Run `npm ci` in the
+`openagent-module-vault` owns the compiled vault resources. Run `npm ci` in the
 preserved vault TypeScript source and `node scripts/build-module-assets.mjs`
 before building that optional wheel. `resolve_builtin_entry("vault")` uses its
 installed assets. Runtime resolution never installs dependencies or compiles

@@ -5,10 +5,13 @@ from types import MappingProxyType
 from typing import Mapping, Protocol
 
 from aiohttp import web
-from openagent_core import Runtime, RuntimeServices, RuntimeSettings
+from openagent_core import (Runtime, RuntimeServices, RuntimeSettings, ModuleCatalog,
+    ModuleConfig, RuntimeProfile)
 from openagent_core.capabilities import CapabilityCatalog, FunctionSource, ToolDefinition
 from openagent_core.contracts import ExecutionContext, IdempotencyConflict, PrincipalRef, RunRequest
-from openagent_core.engine import Agent, AgentExecutor, MemoryDB, NativeProvider, module_pool
+from openagent_core.engine import Agent, AgentExecutor, MemoryDB, NativeProvider, MCPPool
+from openagent_module_sessions import descriptor as sessions_descriptor
+from openagent_module_tool_discovery import descriptor as tool_discovery_descriptor
 from openagent_storage_sqlite import SqliteRuntimeStore
 
 
@@ -95,13 +98,21 @@ class ReplioHost:
         memory=MemoryDB(str(db_path))
         model=NativeProvider('replio:'+provider_model,api_key=provider_key,db_path=str(db_path),
             providers_config=[{'name':'replio','enabled':True,'framework':'api-based','kind':'llm','base_url':provider_base_url}])
-        pool=module_pool((),db_path=str(db_path))
+        pool=MCPPool.from_config([{'builtin':'tool-search'}],include_defaults=False)
         agent=Agent(name=self.policy.agent_id,model=model,memory=memory,mcp_pool=pool,
             system_prompt=system_prompt,config={'skills':{'enabled':False},'ptc':{'enabled':False},
                 'memory':{'db_path':str(db_path),'vault_path':str(data_dir/'unused-vault')}})
         self.executor=AgentExecutor(agent)
+        profile=RuntimeProfile(1,{
+            'tool-discovery':ModuleConfig(frozenset({'service','agent_tools'})),
+            # Replio exposes session administration through its own product UI;
+            # the module service is present without adding agent-visible tools.
+            'sessions':ModuleConfig(frozenset({'service','host_api'})),
+        })
         self.runtime=Runtime(RuntimeSettings(self.policy.agent_id,data_dir,()),
-            RuntimeServices(SqliteRuntimeStore(db_path),self.executor,self.policy,self.catalog),modules=(self.executor,))
+            RuntimeServices(SqliteRuntimeStore(db_path),self.executor,self.policy,self.catalog),
+            modules=(self.executor,),profile=profile,
+            module_catalog=ModuleCatalog((tool_discovery_descriptor,sessions_descriptor)))
 
     async def list_documents(self,args,context):
         if args: raise ValueError('list_documents takes no arguments')

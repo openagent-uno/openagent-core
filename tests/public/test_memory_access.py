@@ -10,7 +10,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from openagent_core import PrincipalRef, ExecutionContext, Runtime, RuntimeSettings, RuntimeServices, RunRequest
+from openagent_core import (ModuleConfig, PrincipalRef, ExecutionContext, Runtime,
+    RuntimeProfile, RuntimeSettings, RuntimeServices, RunRequest)
 from openagent_core.memory_access import (
     HistoryAccess, CanonicalHistorySearch, memory_resource,
     authorized_memory_hits, search_authorized_history,
@@ -43,7 +44,11 @@ class MemoryPrivacy(unittest.IsolatedAsyncioTestCase):
         self.context = ExecutionContext(self.alice, self.alice, self.alice, 'current', 'agent', (self.alice, self.bob))
         self.policy = AudiencePolicy()
         self.store = SqliteRuntimeStore(self.path / 'state.sqlite3')
-        self.runtime = Runtime(RuntimeSettings('agent', self.path), RuntimeServices(self.store, object(), self.policy, memory_access=object()))
+        self.runtime = Runtime(
+            RuntimeSettings('agent', self.path),
+            RuntimeServices(self.store, object(), self.policy, memory_access=object()),
+            profile=RuntimeProfile(1, {'vault': ModuleConfig()}),
+        )
         await self.store.start()
 
     async def asyncTearDown(self):

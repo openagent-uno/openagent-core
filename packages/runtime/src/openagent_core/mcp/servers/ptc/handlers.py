@@ -172,7 +172,10 @@ async def run_python_impl(
     runtime, context = current_runtime(), current_execution_context()
     if runtime is None or context is None:
         return _refuse("PTC requires an authenticated runtime execution", t0=t0)
-    executor = runtime.services.code_executor
+    from openagent_core.code_execution import CodeExecutor
+    resolver = getattr(runtime, "service", None)
+    executor = (resolver(CodeExecutor) if callable(resolver)
+                else getattr(getattr(runtime, "services", None), "code_executor", None))
     if executor is None:
         return _refuse("The host has not configured a code executor", t0=t0)
     if getattr(settings, "require_sandbox", True) and executor.isolated is not True:

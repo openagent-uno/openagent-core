@@ -23,6 +23,10 @@ and a fixed capability catalog.
 
 ## Lifecycle and ownership
 
+Optional behavior follows the uniform descriptor and surface contract documented
+in [modules-v1.1.md](modules-v1.1.md). The runtime receives an explicit
+`RuntimeProfile`; installed wheels are inert until that profile selects them.
+
 ```python
 runtime = Runtime(settings, services, modules)
 await runtime.start()

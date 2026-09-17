@@ -6,6 +6,7 @@ import unittest
 import aiosqlite
 from openagent_core import PrincipalRef,ExecutionContext,RunRequest
 from openagent_storage_sqlite import SqliteRuntimeStore
+from openagent_core.configuration import sqlite_busy_timeout_ms
 from openagent_core.memory.store.sqlite.sqlite import SqliteDb
 from openagent_core.memory.sessions.agent import AgentSession
 from openagent_core.core._runner.agent._storage import aupsert_session
@@ -16,6 +17,10 @@ class SqliteConcurrency(unittest.IsolatedAsyncioTestCase):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.path=Path(self.temp.name)/'state.sqlite3'
         self.store=SqliteRuntimeStore(self.path);await self.store.start();self.addAsyncCleanup(self.store.close)
+        self.assertEqual(
+            self.store.connection.execute("PRAGMA busy_timeout").fetchone()[0],
+            sqlite_busy_timeout_ms(),
+        )
         self.other=await aiosqlite.connect(self.path);self.addAsyncCleanup(self.other.close)
         principal=PrincipalRef('host','tenant','alice')
         self.context=ExecutionContext(principal,principal,principal,'session','agent',(principal,))

@@ -387,7 +387,11 @@ async def _specs_from_db(db: Any, db_path: str | None, host_spec_resolver=None) 
     scheduler-DB env injection all reuse the existing code path instead
     of being duplicated.
     """
-    rows = await db.list_mcps(enabled_only=True)
+    list_mcps = db.list_mcps
+    parameters = inspect.signature(list_mcps).parameters
+    rows = await (list_mcps(enabled_only=True) if "enabled_only" in parameters else list_mcps())
+    if "enabled_only" not in parameters:
+        rows = [row for row in rows if row.get("enabled", True)]
     specs: list[_ServerSpec] = []
     for row in rows:
         kind = row.get("kind")
@@ -579,7 +583,8 @@ class MCPPool:
         # that adds up across every prompt construction.
         self._catalog_summary_cache: str | None = None
 
-    def bind_capability_catalog(self, catalog, *, trusted_modules=(), target_label="Agent workspace", user_sources=frozenset()):
+    def bind_capability_catalog(self, catalog, *, trusted_modules=(), target_label="Agent workspace",
+                                user_sources=frozenset(), graph_generation=None, source_wrapper=None):
         """Bind this pool to one public catalog; only host code establishes trust."""
         from .catalog import PoolCatalogBinding
         if self._capability_binding is not None:
@@ -588,7 +593,9 @@ class MCPPool:
             self._capability_binding.set_user_sources(user_sources)
             self._capability_binding.sync()
             return
-        self._capability_binding = PoolCatalogBinding(self, catalog, trusted_modules=tuple(trusted_modules), target_label=target_label, user_sources=frozenset(user_sources))
+        self._capability_binding = PoolCatalogBinding(self, catalog, trusted_modules=tuple(trusted_modules),
+            target_label=target_label, user_sources=frozenset(user_sources), graph_generation=graph_generation,
+            source_wrapper=source_wrapper)
         self._capability_binding.sync()
 
     def set_catalog_user_sources(self, names) -> None:
@@ -597,6 +604,14 @@ class MCPPool:
             raise RuntimeError("Bind a runtime catalog before updating ownership")
         self._capability_binding.set_user_sources(names)
         self._capability_binding.sync()
+
+    def unbind_capability_catalog(self) -> None:
+        """Revoke this pool's exact registrations before its graph is closed."""
+        binding = self._capability_binding
+        if binding is None:
+            return
+        binding.close()
+        self._capability_binding = None
 
     def bind_agent_runtime(self, agent: Any | None) -> None:
         """Attach the one live Agent to in-process management toolkits."""

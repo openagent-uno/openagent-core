@@ -10,9 +10,10 @@ from openagent_core.runtime import current_runtime, current_execution_context
 
 def _service():
     runtime, context = current_runtime(), current_execution_context()
-    if runtime is None or context is None or runtime.services.catalog_management is None:
+    service = runtime.service("catalog_management") if runtime is not None else None
+    if runtime is None or context is None or service is None:
         raise PermissionError('This host does not expose dynamic catalog management')
-    return runtime.services.catalog_management, context
+    return service, context
 
 
 async def list_mcps(enabled_only: bool = False) -> list[dict[str, Any]]:

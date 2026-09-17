@@ -45,10 +45,10 @@ uv build --wheel --out-dir /absolute/wheelhouse examples/replio
 ```
 
 Install the wheel with matching `openagent-core` and `openagent-storage-sqlite`
-`1.0.0b1` wheels, then run the installed-package verifier from any directory:
+`1.1.0b1` wheels, then run the installed-package verifier from any directory:
 
 ```sh
-uv pip install --python /absolute/venv/bin/python --prerelease=allow --find-links /absolute/wheelhouse replio-agent-example==1.0.0b1
+uv pip install --python /absolute/venv/bin/python --prerelease=allow --find-links /absolute/wheelhouse replio-agent-example==1.1.0b1
 /absolute/venv/bin/python /absolute/openagent-core/examples/replio/scripts/verify-installed.py
 ```
 

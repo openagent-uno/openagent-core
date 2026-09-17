@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openagent-modules-full"
+version = "1.1.0b1"
+description = "Dependency-only full OpenAgent module profile"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+  "openagent-module-sessions==1.1.0b1",
+  "openagent-module-search==1.1.0b1",
+  "openagent-module-vault==1.1.0b1",
+  "openagent-module-mcp==1.1.0b1",
+  "openagent-module-workflows==1.1.0b1",
+  "openagent-module-scheduler==1.1.0b1",
+  "openagent-module-events==1.1.0b1",
+  "openagent-module-delegation==1.1.0b1",
+  "openagent-module-skills==1.1.0b1",
+  "openagent-module-models==1.1.0b1",
+  "openagent-module-budget==1.1.0b1",
+  "openagent-module-attachments==1.1.0b1",
+  "openagent-module-logs==1.1.0b1",
+  "openagent-module-ptc==1.1.0b1",
+  "openagent-module-tool-discovery==1.1.0b1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openagent_modules_full"]

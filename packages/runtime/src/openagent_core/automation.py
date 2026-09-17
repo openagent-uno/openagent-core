@@ -12,6 +12,7 @@ import importlib
 import inspect
 from pathlib import Path
 import sqlite3
+import json
 from typing import Any, get_type_hints
 
 _MODULES = {
@@ -127,6 +128,64 @@ class AutomationRepository:
         function=getattr(module,name)
         async with (self.transaction() if atomic else self.session()):
             return await function(**arguments)
+
+
+async def durable_module_references(repository: AutomationRepository,
+                                    removed_modules: frozenset[str]):
+    """Return active automation resources that depend on removed modules.
+
+    This is a read-only preflight. Definitions remain owned by their modules;
+    the runtime merely refuses an ambiguous hot deactivation until the host
+    explicitly pauses or rewrites the named resources.
+    """
+    references: dict[str, list[str]] = {module_id: [] for module_id in removed_modules}
+    async with repository.session() as connection:
+        if removed_modules & {"workflows", "scheduler"}:
+            cursor = await connection.execute(
+                "SELECT id,action_kind,action_ref FROM events WHERE enabled=1 "
+                "AND action_kind IN ('workflow','scheduled_task')"
+            )
+            for row in await cursor.fetchall():
+                target = "workflows" if row["action_kind"] == "workflow" else "scheduler"
+                if target in removed_modules:
+                    references[target].append(
+                        f"event:{row['id']}->{row['action_kind']}:{row['action_ref']}"
+                    )
+        if "scheduler" in removed_modules or "workflows" in removed_modules:
+            cursor = await connection.execute(
+                "SELECT id,workflow_id,node_id FROM workflow_schedules WHERE enabled=1"
+            )
+            for row in await cursor.fetchall():
+                value = f"workflow_schedule:{row['id']}@{row['workflow_id']}:{row['node_id']}"
+                if "scheduler" in removed_modules:
+                    references["scheduler"].append(value)
+                if "workflows" in removed_modules:
+                    references["workflows"].append(value)
+        if "mcp" in removed_modules:
+            try:
+                cursor = await connection.execute("SELECT name FROM mcps WHERE enabled=1")
+                external_sources = {str(row["name"]) for row in await cursor.fetchall()}
+            except sqlite3.OperationalError:
+                external_sources = set()
+            if external_sources:
+                cursor = await connection.execute(
+                    "SELECT id,graph_json FROM workflow_tasks WHERE enabled=1"
+                )
+                for row in await cursor.fetchall():
+                    try:
+                        graph = json.loads(row["graph_json"] or "{}")
+                    except (TypeError, ValueError):
+                        continue
+                    for node in graph.get("nodes", ()) if isinstance(graph, dict) else ():
+                        if not isinstance(node, dict):
+                            continue
+                        config = node.get("config") or {}
+                        source = str(config.get("mcp_name") or "")
+                        if node.get("type") == "mcp-tool" and source in external_sources:
+                            references["mcp"].append(
+                                f"workflow:{row['id']}/node:{node.get('id')}->{source}"
+                            )
+    return {key: tuple(dict.fromkeys(values)) for key, values in references.items() if values}
 
 
 def build_automation_toolkit(kind: str):

@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+[project]
+name = "openagent-module-tool-discovery"
+version = "1.1.0b1"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["openagent-core[engine]>=1.1.0b1,<2"]
+[project.entry-points."openagent.modules"]
+tool-discovery = "openagent_module_tool_discovery:descriptor"
+[tool.hatch.build.targets.wheel]
+packages = ["src/openagent_module_tool_discovery"]

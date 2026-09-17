@@ -1,14 +1,15 @@
-"""Installed resources for explicitly selected optional engine modules."""
-from pathlib import Path
+"""Deprecated full-profile compatibility package.
 
-__version__ = "1.0.0b1"
+Feature implementations live in their individual ``openagent-module-*``
+distributions. Import from those packages for new integrations.
+"""
+
+__version__ = "1.1.0b1"
 
 
-def module_assets(name: str) -> Path:
-    """Return one known installed module's resource directory without mutation."""
-    if name != "vault":
-        raise LookupError(f"Unknown module resources: {name}")
-    path = Path(__file__).resolve().parent / "resources" / name
-    if not (path / "manifest.json").is_file():
-        raise FileNotFoundError(f"Build module resources before packaging {name}")
-    return path
+def module_assets(name: str):
+    """Compatibility redirect to the owning module distribution."""
+    if name == "vault":
+        from openagent_module_vault import module_assets as owned_assets
+        return owned_assets(name)
+    raise LookupError(f"Unknown module resources: {name}")
