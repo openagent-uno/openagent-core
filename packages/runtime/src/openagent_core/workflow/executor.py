@@ -321,6 +321,30 @@ class WorkflowExecutor:
                     mcp_errors=mcp_errors_from_pool(pool),
                 )
                 await self._walk(graph, ctx, on_status, entry_node_id=entry_node_id)
+            except asyncio.CancelledError:
+                # Cancellation is a terminal workflow outcome.  The active
+                # node task is cancelled before its handler can replace the
+                # incremental ``running`` trace entry, so close every such
+                # entry here before propagating cancellation to the runtime.
+                # This keeps the durable trace consistent with the run row
+                # observed by API clients after Stop returns.
+                finished_at = time.time()
+                for entry in ctx.trace:
+                    if entry.get("status") == "running":
+                        entry["status"] = "cancelled"
+                        entry["finished_at"] = finished_at
+                        entry["error"] = "Stopped by user"
+                        node_id = entry.get("node_id")
+                        if node_id:
+                            ctx.nodes[node_id] = {
+                                "output": None,
+                                "status": "cancelled",
+                                "error": "Stopped by user",
+                            }
+                await self._finalize_run(
+                    ctx, status="cancelled", error="Stopped by user",
+                )
+                raise
             except WorkflowExecutionError as exc:
                 await self._finalize_run(
                     ctx, status="failed", error=str(exc),
