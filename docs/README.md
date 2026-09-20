@@ -1,7 +1,8 @@
 # OpenAgent core documentation
 
-The embedding API is being migrated to `1.1.0b1`. This checkout is an isolated
-implementation branch; it is not a qualified release or a production cutover.
+The embedding API is released as the `1.1.0b1` modular candidate. Product
+qualification and production cutover remain owned by each host because the core
+does not ship product credentials or create infrastructure.
 
 - [Architecture and ownership](architecture.md)
 - [Symmetric module contract and product profiles](modules-v1.1.md)

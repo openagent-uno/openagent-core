@@ -9,9 +9,10 @@ Products supply authentication, system instructions, resources, tools, and polic
 GlassPalace builds its own worker and sandbox from pinned core packages; the
 standalone app/CLI/server are maintained in the `openagent` product monorepo.
 
-This isolated `1.1.0b1` migration branch is **under implementation**. See the
-[documentation](docs/README.md) and [acceptance ledger](docs/migration/implementation.md)
-for verified behavior and the remaining release gates.
+The `1.1.0b1` package set is the first modular release candidate. See the
+[documentation](docs/README.md), [module contract](docs/modules-v1.1.md), and
+[acceptance ledger](docs/migration/implementation.md) for verified behavior and
+the boundaries that still require product-specific qualification.
 
 ```sh
 pip install openagent-core openagent-storage-sqlite
@@ -19,5 +20,6 @@ pip install openagent-core openagent-storage-sqlite
 pip install 'openagent-core[engine,providers,modules,retrieval]'
 ```
 
-Packages shown above are distribution names; this prerelease is not yet
-published. Local qualification installs built wheels from the migration wheelhouse.
+Packages shown above are independent distribution names. Hosts pin exact wheel
+versions and build their own worker images; they never need a standalone
+OpenAgent server release or a source checkout at runtime.
