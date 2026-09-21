@@ -4,6 +4,9 @@ The embedding API is released as the `1.1.0b1` modular candidate. Product
 qualification and production cutover remain owned by each host because the core
 does not ship product credentials or create infrastructure.
 
+The public product guide is at [openagent.uno](https://openagent.uno/); this
+repository remains the canonical source for Core contracts and evidence.
+
 - [Architecture and ownership](architecture.md)
 - [Symmetric module contract and product profiles](modules-v1.1.md)
 - [Implementation and acceptance ledger](migration/implementation.md)
