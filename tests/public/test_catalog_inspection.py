@@ -50,3 +50,11 @@ class CatalogInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.policy.revoked = False
         source.action = lambda: self.catalog.revoke("durable")
         self.assertEqual((), await self.catalog.inspect(self.context, authorizer=self.policy))
+
+    async def test_host_can_check_current_trusted_source_without_granting_access(self):
+        source = Source()
+        self.catalog.register("native-module", source, source, target_label="Module")
+        self.assertTrue(self.catalog.has_source("native-module", self.context))
+        self.assertFalse(self.catalog.has_source("unregistered", self.context))
+        self.catalog.revoke("native-module")
+        self.assertFalse(self.catalog.has_source("native-module", self.context))

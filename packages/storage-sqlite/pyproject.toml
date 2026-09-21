@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 [project]
 name = "openagent-storage-sqlite"
-version = "1.1.0b1"
+version = "1.1.0b2"
 requires-python = ">=3.11"
-dependencies = ["openagent-core==1.1.0b1"]
+dependencies = ["openagent-core==1.1.0b2"]
 [tool.setuptools.packages.find]
 where = ["src"]

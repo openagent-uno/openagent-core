@@ -1,6 +1,10 @@
 # MCP and connected-client catalog
 
 `Runtime.capabilities` is the model-facing authority for discovery and invocation.
+Hosts can call `CapabilityCatalog.has_source(source_id, context)` to verify that
+a source is a trusted registration in the current run snapshot before applying
+their own audience policy. The check observes the admitted catalog revision,
+module generation, temporary lease and revocation; it does not grant access.
 The model receives four discovery functions only:
 
 - `tool_search_list_servers()` returns authorized source references and target labels.

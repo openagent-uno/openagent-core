@@ -223,6 +223,17 @@ class CapabilityCatalog:
         return tuple(registration for registration in self._sources.values()
                      if self._available(registration, context))
 
+    def has_source(self, source_id: str, context: ExecutionContext) -> bool:
+        """Return whether *source_id* belongs to the current run snapshot.
+
+        Hosts use this read-only check before applying their own audience and
+        delegation policy.  Registration is the trusted composition boundary:
+        callers cannot make an arbitrary source valid by naming it, and the
+        result observes generation, admission revision, lease and revocation.
+        """
+        return any(registration.source_id == source_id
+                   for registration in self._registrations_for_context(context))
+
     async def inspect(self, context: Any, *, authorizer: Authorizer) -> tuple[ToolInventoryEntry, ...]:
         """Inspect host-owned schema metadata without constructing an agent turn.
 
