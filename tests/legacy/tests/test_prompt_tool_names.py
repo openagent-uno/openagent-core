@@ -476,9 +476,9 @@ async def t_inlined_tool_lists_are_complete(_ctx: TestContext) -> None:
                                 {name: discovery_only for name in real})
         catalog.register(server, source, source, target_label=server)
         with execution_scope(runtime, context, "discovery-only"):
-            discovered = await _list_scoped_tools_impl(pool, server)
-        assert {tool["name"] for tool in discovered} == real
-        refs = {tool["tool_ref"] for tool in discovered}
+            discovered = await _list_scoped_tools_impl(pool, server, limit=50)
+        assert {tool["name"] for tool in discovered["tools"]} == real
+        refs = {tool["tool_ref"] for tool in discovered["tools"]}
         assert len(refs) == len(real) and not refs.intersection(real)
         assert all(not ref.startswith(("client:", "server:")) for ref in refs)
 

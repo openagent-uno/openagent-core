@@ -490,9 +490,100 @@ def _descriptor_wire(tool):
             "target_label": tool.target_label}
 
 
-async def _list_scoped_tools_impl(pool: Any, source_ref: str) -> list[dict[str, Any]]:
+_DEFAULT_DISCOVERY_PAGE_SIZE = 20
+_MAX_DISCOVERY_PAGE_SIZE = 50
+_COMPACT_DESCRIPTION_CHARS = 240
+
+
+def _compact_descriptor_wire(tool) -> dict[str, Any]:
+    """Return enough metadata to select a tool without returning its schema.
+
+    Large MCP servers commonly expose dozens of tools. Returning every full
+    JSON schema from discovery can overflow a provider's tool-result budget and
+    truncate the opaque reference the model actually needs. The exact schema
+    remains available from ``describe_tool`` after a compact result is chosen.
+    """
+    description = " ".join(str(tool.description or "").split())
+    if len(description) > _COMPACT_DESCRIPTION_CHARS:
+        description = description[: _COMPACT_DESCRIPTION_CHARS - 1].rstrip() + "…"
+    return {
+        "tool_ref": tool.tool_ref,
+        "name": tool.name,
+        "description": description,
+        "source_ref": tool.source_id,
+        "target_label": tool.target_label,
+    }
+
+
+def _discovery_search_score(tool, query: str) -> int | None:
+    """Rank a descriptor for a human-style capability query.
+
+    Matching is deliberately forgiving: any query term can select a tool, but
+    names containing all terms rank ahead of generic description matches. This
+    lets ``create adset`` find the exact write tool while still making broader
+    searches such as ``adset creative`` useful.
+    """
+    normalized_query = " ".join(query.casefold().replace("_", " ").replace("-", " ").split())
+    if not normalized_query:
+        return 0
+    terms = tuple(dict.fromkeys(normalized_query.split()))
+    name = " ".join(str(tool.name).casefold().replace("_", " ").replace("-", " ").split())
+    description = " ".join(str(tool.description or "").casefold().split())
+    combined = f"{name} {description}"
+    if not any(term in combined for term in terms):
+        return None
+    score = 0
+    if name == normalized_query:
+        score += 1_000
+    elif name.startswith(normalized_query):
+        score += 800
+    elif normalized_query in name:
+        score += 700
+    if all(term in combined for term in terms):
+        score += 300
+    for term in terms:
+        if term in name:
+            score += 100
+        elif term in description:
+            score += 20
+    return score
+
+
+async def _list_scoped_tools_impl(
+    pool: Any,
+    source_ref: str,
+    query: str | None = None,
+    limit: int = _DEFAULT_DISCOVERY_PAGE_SIZE,
+    offset: int = 0,
+) -> dict[str, Any]:
     catalog, context = _authorized_catalog(pool)
-    return [_descriptor_wire(tool) for tool in await catalog.discover(context) if tool.source_id == source_ref]
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        raise TypeError("limit must be an integer")
+    if isinstance(offset, bool) or not isinstance(offset, int):
+        raise TypeError("offset must be an integer")
+    if limit < 1 or limit > _MAX_DISCOVERY_PAGE_SIZE:
+        raise ValueError(f"limit must be between 1 and {_MAX_DISCOVERY_PAGE_SIZE}")
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
+
+    ranked = []
+    for tool in await catalog.discover(context):
+        if tool.source_id != source_ref:
+            continue
+        score = _discovery_search_score(tool, query or "")
+        if score is not None:
+            ranked.append((score, tool))
+    ranked.sort(key=lambda item: (-item[0], item[1].name.casefold(), item[1].name))
+    page = ranked[offset : offset + limit]
+    return {
+        "source_ref": source_ref,
+        "query": query or "",
+        "total": len(ranked),
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(page) < len(ranked),
+        "tools": [_compact_descriptor_wire(tool) for _score, tool in page],
+    }
 
 
 async def _describe_scoped_tool_impl(pool: Any, tool_ref: str) -> dict[str, Any]:
@@ -820,9 +911,25 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
         """
         return await _list_scoped_servers_impl(pool)
 
-    async def tool_search_list_tools(source_ref: str) -> list[dict[str, Any]]:
-        """List tools, opaque references and schemas for one discovered source."""
-        return await _list_scoped_tools_impl(pool, source_ref)
+    async def tool_search_list_tools(
+        source_ref: str,
+        query: str | None = None,
+        limit: int = _DEFAULT_DISCOVERY_PAGE_SIZE,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Search a source's tools and return compact opaque references.
+
+        Args:
+            source_ref: Exact source reference returned by list_servers.
+            query: Optional capability words, for example ``create adset``.
+                Use a narrow query for sources with many tools.
+            limit: Page size from 1 to 50. Defaults to 20.
+            offset: Zero-based page offset. Increase it while ``has_more`` is true.
+
+        The compact list intentionally omits JSON schemas. Call describe_tool
+        with a returned reference before invoking the selected tool.
+        """
+        return await _list_scoped_tools_impl(pool, source_ref, query, limit, offset)
 
     async def tool_search_describe_tool(tool_ref: str) -> dict[str, Any]:
         """Return the current description and JSON schema for an exact tool reference."""

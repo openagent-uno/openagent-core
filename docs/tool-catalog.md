@@ -8,9 +8,18 @@ module generation, temporary lease and revocation; it does not grant access.
 The model receives four discovery functions only:
 
 - `tool_search_list_servers()` returns authorized source references and target labels.
-- `tool_search_list_tools(source_ref)` returns definitions and opaque tool references.
+- `tool_search_list_tools(source_ref, query?, limit?, offset?)` returns a compact,
+  ranked page of opaque references. It deliberately omits full JSON schemas;
+  large sources should be narrowed with capability words such as `create adset`.
 - `tool_search_describe_tool(tool_ref)` resolves one current definition.
 - `tool_search_call_tool(tool_ref, args)` invokes that exact instance and generation.
+
+The list response includes `total`, `has_more` and the current page. Page size
+defaults to 20 and is bounded at 50, so a server with dozens of verbose schemas
+cannot truncate later references inside a provider result. After selecting a
+compact entry, describe and call its exact reference in the same run. A revoked
+or replaced registration invalidates the reference immediately and requires a
+fresh discovery; pagination never creates or persists an authorization grant.
 
 No model argument selects client/server routing. A source name is a durable
 logical binding; a tool reference is a short-lived handle and is not persisted
@@ -68,7 +77,8 @@ before building that optional wheel. `resolve_builtin_entry("vault")` uses its
 installed assets. Runtime resolution never installs dependencies or compiles
 code. The host supplies Node.js, vault directory and explicit configuration.
 
-`tests/public/test_mcp_catalog.py` exercises exact same-name destinations,
+`tests/public/test_mcp_catalog.py` exercises compact query and pagination over a
+54-tool source, exact schema retrieval after selection, same-name destinations,
 revocation/replacement, device/channel separation, model schemas, PTC Unix
 socket dispatch, workflow dispatch, actual MCP stdio full envelopes, semantic
 effect provenance and fixed/user catalog ownership. `tests/modules` exercises

@@ -9,7 +9,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
-from openagent_core.capabilities import CapabilityCatalog, CapabilityUnavailable
+from openagent_core.capabilities import (
+    CapabilityCatalog,
+    CapabilityUnavailable,
+    FunctionSource,
+    ToolDefinition,
+)
 from openagent_core.contracts import ExecutionContext, PrincipalRef, require_authorized
 from openagent_core.runtime import execution_scope
 from openagent_core.core.execution_origin import TurnExecutionOrigin, execution_origin_scope
@@ -18,8 +23,9 @@ from openagent_core.mcp._runtime import Toolkit
 from openagent_core.mcp.pool import MCPPool, _ServerSpec
 from openagent_core.mcp.catalog import register_interactive_capabilities, revoke_interactive_capabilities
 from openagent_core.mcp.servers.tool_search.adapters import (
-    _call_scoped_tool_impl, _call_tool_impl, _list_scoped_servers_impl,
-    _list_scoped_tools_impl, build_runtime_toolkit, coerce_mcp_result_to_jsonable,
+    _call_scoped_tool_impl, _call_tool_impl, _describe_scoped_tool_impl,
+    _list_scoped_servers_impl, _list_scoped_tools_impl, build_runtime_toolkit,
+    coerce_mcp_result_to_jsonable,
 )
 
 
@@ -111,14 +117,25 @@ class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
         call = functions["tool_search_call_tool"]
         self.assertIn("tool_ref", call.parameters["properties"])
         self.assertNotIn("server", call.parameters["properties"])
+        list_tools = functions["tool_search_list_tools"]
+        self.assertEqual(
+            {"source_ref", "query", "limit", "offset"},
+            set(list_tools.parameters["properties"]),
+        )
         with execution_scope(self.runtime, self.context, "run"):
             servers = await _list_scoped_servers_impl(self.pool)
             self.assertEqual({item["name"] for item in servers}, {"left", "right"})
-            left = (await _list_scoped_tools_impl(self.pool, "left"))[0]
-            right = (await _list_scoped_tools_impl(self.pool, "right"))[0]
+            left_page = await _list_scoped_tools_impl(self.pool, "left")
+            right_page = await _list_scoped_tools_impl(self.pool, "right")
+            left = left_page["tools"][0]
+            right = right_page["tools"][0]
             self.assertNotEqual(left["tool_ref"], right["tool_ref"])
             self.assertEqual(left["name"], right["name"])
-            self.assertIn("value", left["input_schema"]["properties"])
+            self.assertNotIn("input_schema", left)
+            described = await functions["tool_search_describe_tool"].entrypoint(
+                tool_ref=left["tool_ref"]
+            )
+            self.assertIn("value", described["input_schema"]["properties"])
             result = await call.entrypoint(tool_ref=left["tool_ref"], args={"value": "exact"})
             self.assertEqual(result["structuredContent"], {"value": "exact"})
             self.assertEqual(result["_meta"], {"target": "left"})
@@ -127,6 +144,65 @@ class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
                 await call.entrypoint(tool_ref=left["tool_ref"], args={"server": "right"})
             self.assertEqual(self.calls, [("left", "exact")])
 
+    async def test_large_source_discovery_is_compact_searchable_and_paged(self):
+        names = [
+            "meta_ads_create_adset",
+            "meta_ads_create_ad_creative",
+            "meta_ads_create_ad",
+        ] + [f"meta_ads_fixture_tool_{index:02d}" for index in range(51)]
+        definitions = tuple(
+            ToolDefinition(
+                name=name,
+                description=(
+                    "Create an ad set with targeting and budget. "
+                    if name == "meta_ads_create_adset"
+                    else f"Meta Ads operation {name}. "
+                ) + ("Detailed provider guidance. " * 40),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        f"argument_{index}": {
+                            "type": "string",
+                            "description": "A deliberately verbose schema field. " * 20,
+                        }
+                        for index in range(25)
+                    },
+                },
+            )
+            for name in names
+        )
+
+        async def invoke(arguments, context):
+            return {"arguments": arguments, "session": context.session_id}
+
+        source = FunctionSource(definitions, {name: invoke for name in names})
+        self.catalog.register("meta-ads", source, source, target_label="Meta Ads")
+
+        with execution_scope(self.runtime, self.context, "run"):
+            first_page = await _list_scoped_tools_impl(self.pool, "meta-ads")
+            self.assertEqual(first_page["total"], 54)
+            self.assertEqual(len(first_page["tools"]), 20)
+            self.assertTrue(first_page["has_more"])
+            self.assertLess(len(json.dumps(first_page)), 16_000)
+            self.assertTrue(all("input_schema" not in tool for tool in first_page["tools"]))
+
+            match = await _list_scoped_tools_impl(
+                self.pool, "meta-ads", query="create adset", limit=5
+            )
+            self.assertEqual(match["tools"][0]["name"], "meta_ads_create_adset")
+            selected = match["tools"][0]
+            described = await _describe_scoped_tool_impl(
+                self.pool, selected["tool_ref"]
+            )
+            self.assertEqual(described["name"], "meta_ads_create_adset")
+            self.assertEqual(len(described["input_schema"]["properties"]), 25)
+
+            last_page = await _list_scoped_tools_impl(
+                self.pool, "meta-ads", limit=20, offset=40
+            )
+            self.assertEqual(len(last_page["tools"]), 14)
+            self.assertFalse(last_page["has_more"])
+
     async def test_no_unauthenticated_fallback_or_old_prefix_route(self):
         with self.assertRaises(PermissionError):
             await _call_tool_impl(self.pool, "left", "read", {})
@@ -134,17 +210,17 @@ class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(LookupError):
                 await _call_scoped_tool_impl(self.pool, "server:left", {})
             self.policy.denied.add("tool.call")
-            reference = (await _list_scoped_tools_impl(self.pool, "left"))[0]["tool_ref"]
+            reference = (await _list_scoped_tools_impl(self.pool, "left"))["tools"][0]["tool_ref"]
             with self.assertRaises(PermissionError):
                 await _call_scoped_tool_impl(self.pool, reference, {})
         self.assertEqual(self.calls, [])
 
     async def test_replacement_revokes_previous_reference_without_fallback(self):
         with execution_scope(self.runtime, self.context, "run"):
-            before = (await _list_scoped_tools_impl(self.pool, "left"))[0]["tool_ref"]
+            before = (await _list_scoped_tools_impl(self.pool, "left"))["tools"][0]["tool_ref"]
             self.pool._toolkit_by_name["left"] = self.toolkit("replacement")
             self.pool._capability_binding.sync()
-            after = (await _list_scoped_tools_impl(self.pool, "left"))[0]["tool_ref"]
+            after = (await _list_scoped_tools_impl(self.pool, "left"))["tools"][0]["tool_ref"]
             self.assertNotEqual(before, after)
             with self.assertRaises(CapabilityUnavailable):
                 await _call_scoped_tool_impl(self.pool, before, {})
@@ -176,7 +252,7 @@ class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
         from openagent_core.mcp.servers.ptc.handlers import start_rpc_server
         sock = str(self.path / "ptc.sock")
         with execution_scope(self.runtime, self.context, "run"):
-            reference = (await _list_scoped_tools_impl(self.pool, "left"))[0]["tool_ref"]
+            reference = (await _list_scoped_tools_impl(self.pool, "left"))["tools"][0]["tool_ref"]
             server, state = await start_rpc_server(pool=self.pool, sock_path=sock, token="fixture", max_tool_calls=2)
         async def send(payload):
             reader, writer = await asyncio.open_unix_connection(sock)
