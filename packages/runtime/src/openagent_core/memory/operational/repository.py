@@ -736,8 +736,15 @@ def project_legacy_session(
     # The provider's compatibility envelope remains its conversation buffer;
     # projection must never delete queued runs absent from that older buffer
     # or overwrite accepted author/delegation/cancellation metadata.
-    owned = conn.execute("SELECT metadata_json FROM sessions_v2 WHERE id=?", (session_id,)).fetchone()
-    if owned and json.loads(owned[0] or "{}").get("runtime_contract") == 1:
+    owned = conn.execute(
+        "SELECT metadata_json, deleted_at_ms, status FROM sessions_v2 WHERE id=?",
+        (session_id,),
+    ).fetchone()
+    if (
+        owned
+        and (owned[1] is None or str(owned[2] or "") != "deleted")
+        and json.loads(owned[0] or "{}").get("runtime_contract") == 1
+    ):
         raw_runs = legacy.get("runs") or []
         if isinstance(raw_runs, str):
             raw_runs = json.loads(raw_runs)
@@ -753,6 +760,14 @@ def project_legacy_session(
         _mark_legacy_changes(conn, session_id, now_ms=effective_now,
                              source_hash=hashlib.sha256(json.dumps(legacy, default=str, sort_keys=True).encode()).hexdigest())
         return ProjectionWrite(session_id, True, False, 1, "complete", None)
+
+    # A compatibility source may be deliberately forgotten and later created
+    # again under the same stable channel id (for example ``tg:<user>`` after
+    # /clear).  The tombstone is the boundary between those two generations.
+    # Re-project the new source in full instead of treating the old
+    # runtime-owned row as immutable: the ordinary reconciliation below
+    # removes the previous generation's runs/messages/tools, clears the
+    # tombstone and emits ordered search deletes plus the fresh upsert.
 
     tenant_id = _tenant_id(conn)
     projection = build_session_projection(

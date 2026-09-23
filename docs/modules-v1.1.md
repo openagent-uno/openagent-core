@@ -28,6 +28,14 @@ tools, prompt rules, reminder and quality behavior only while active. Search
 federates `SearchProvider` contributions; each domain still owns its canonical
 search operation. The old conversation-search name remains a beta alias.
 
+Deletion and recreation are separate generations even when a channel must reuse
+a stable external id such as `tg:<user>`. A deleted compatibility source leaves
+a tombstone and removes the previous transcript from active history. If the
+verified host recreates that source, projection replaces the deleted generation
+before the next run is admitted; old normalized runs, messages and tool rows do
+not become visible again. An archived Sessions resource is unaffected and still
+requires an explicit authorized restore.
+
 MCP means external MCP protocol sources. Its fixed, product-managed and dynamic
 catalog modes decide who may mutate those resources. Internal OpenAgent tools are
 native module capabilities in the uniform `CapabilityCatalog`; the model always

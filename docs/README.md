@@ -1,6 +1,6 @@
 # OpenAgent core documentation
 
-The embedding API is released as the `1.1.0b3` modular candidate. Product
+The embedding API is released as the `1.1.0b4` modular candidate. Product
 qualification and production cutover remain owned by each host because the core
 does not ship product credentials or create infrastructure.
 
