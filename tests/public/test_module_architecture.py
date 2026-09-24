@@ -181,6 +181,31 @@ class ModularRuntime(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(waited["timed_out"])
             self.assertEqual(waited["completed"][0]["status"], "cancelled")
 
+    async def test_wait_observes_a_run_owned_by_another_runtime(self):
+        await self.runtime.start()
+        self.executor.holds["remote"] = asyncio.Event()
+        await self.runtime.submit(RunRequest("remote", "session", "remote-key", "work"), self.context)
+        self.assertEqual(await self.executor.started.get(), "remote")
+        observer = Runtime(
+            RuntimeSettings("agent", self.directory),
+            RuntimeServices(self.store, self.executor, self.policy, owns_store=False),
+        )
+        try:
+            await observer.start()
+            waiting = asyncio.create_task(observer.wait("remote", self.context))
+            await asyncio.sleep(0.15)
+            self.assertFalse(waiting.done(), "A nonlocal running task is not a completion")
+            self.policy.denied.add("run.read")
+            with self.assertRaises(PermissionError):
+                await asyncio.wait_for(waiting, 1)
+            self.policy.denied.clear()
+            waiting = asyncio.create_task(observer.wait("remote", self.context))
+            self.executor.holds["remote"].set()
+            record = await asyncio.wait_for(waiting, 2)
+            self.assertEqual(record.status, "success")
+        finally:
+            await observer.close()
+
     async def test_hot_reconfiguration_swaps_new_runs_and_drains_old_runs(self):
         await self.runtime.start()
         self.executor.holds["old"] = asyncio.Event()

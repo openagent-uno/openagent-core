@@ -22,3 +22,5 @@ repository remains the canonical source for Core contracts and evidence.
 Start with the architecture, then check the acceptance ledger before using a
 component in a deployment. A successful deterministic test does not qualify an
 installer, a physical device, a real provider, or a live data migration.
+The run observer now waits for terminal state across worker processes as well
+as within one runtime; the Sessions module limits model-facing waits to 30 seconds.

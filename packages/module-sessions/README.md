@@ -12,3 +12,8 @@ principal, or send messages to arbitrary sessions. Hosts can omit the module's
 `agent_tools` surface or deny individual actions. Result-bearing calls also
 check `run.publish` for the turn's verified audience; access to a private
 run is not sufficient to quote its output into a shared session.
+
+`Runtime.wait` observes the authoritative store even when the run belongs to
+another worker process. A nonlocal active run is not mistaken for a completion;
+each observation rechecks current authorization. Cancelling an observer does
+not cancel the accepted run.

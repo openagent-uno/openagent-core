@@ -778,12 +778,19 @@ class Runtime:
         return record
 
     async def wait(self, run_id: str, context: ExecutionContext) -> RunRecord:
-        await self.get_run(run_id,context)
-        task=self._tasks.get(run_id)
-        if task is not None:
-            # An observer disconnect does not cancel an accepted execution.
-            await asyncio.shield(task)
-        return await self.get_run(run_id,context)
+        # The accepted run may belong to another runtime process sharing this
+        # store. A missing local task does not mean it has finished. Observe
+        # authoritative state until it is terminal, rechecking current host
+        # policy on each read. Cancelling this observer never cancels the run.
+        while True:
+            record = await self.get_run(run_id, context)
+            if record.terminal:
+                return record
+            task = self._tasks.get(run_id)
+            if task is not None and not task.done():
+                await asyncio.shield(task)
+            else:
+                await asyncio.sleep(0.1)
 
     async def spawn(self, request: RunRequest, context: ExecutionContext, *, deferred: bool = False) -> RunRecord:
         parent_id=current_run_id()
