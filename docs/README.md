@@ -11,6 +11,7 @@ repository remains the canonical source for Core contracts and evidence.
 - [Symmetric module contract and product profiles](modules-v1.1.md)
 - [Implementation and acceptance ledger](migration/implementation.md)
 - [Uniform capability catalog](tool-catalog.md)
+- [Sessions and exact run controls](../packages/module-sessions/README.md)
 - [Memory visibility and durable indexing](memory-access.md)
 - [Authorized vault administration](vault-administration.md)
 - [Vault/tool parity evidence](migration/vault-tool-parity.md)

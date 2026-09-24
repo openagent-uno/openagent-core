@@ -135,6 +135,52 @@ class ModularRuntime(unittest.IsolatedAsyncioTestCase):
             ["module.sessions.history"],
         )
 
+    async def test_run_tools_use_authoritative_state_and_current_policy(self):
+        await self.runtime.start()
+        self.executor.holds["target"] = asyncio.Event()
+        await self.runtime.submit(RunRequest("target", "session", "key", "work"), self.context)
+        self.assertEqual(await self.executor.started.get(), "target")
+        observer_context = replace(self.context, session_id="observer-session")
+        self.executor.holds["observer"] = asyncio.Event()
+        await self.runtime.submit(RunRequest("observer", "observer-session", "observer-key", "observe"), observer_context)
+        self.assertEqual(await self.executor.started.get(), "observer")
+        with execution_scope(
+            self.runtime, observer_context, "observer", module_generation=1,
+            capability_revision=self.runtime.capabilities.snapshot_revision(),
+        ):
+            tools = {tool.name: tool for tool in await self.runtime.capabilities.discover(observer_context)}
+            async def call(name, **arguments):
+                return await self.runtime.capabilities.call_tool(
+                    tools[name].tool_ref, arguments, observer_context)
+
+            self.assertEqual((await call("runs_get", run_id="target"))["status"], "running")
+            self.assertEqual((await call("runs_children", run_id="target"))["children"], [])
+            events = await call("runs_events", run_id="target", after=0)
+            self.assertEqual(events["run_id"], "target")
+            self.policy.denied.add("run.replay")
+            with self.assertRaises(PermissionError):
+                await call("runs_get", run_id="target")
+            with self.assertRaises(PermissionError):
+                await call("runs_events", run_id="target")
+            self.policy.denied.clear()
+            self.policy.denied.add("run.publish")
+            with self.assertRaises(PermissionError):
+                await call("runs_get", run_id="target")
+            self.policy.denied.clear()
+            with self.assertRaises(ValueError):
+                await call("runs_cancel", run_id="observer")
+            with self.assertRaises(ValueError):
+                await call("runs_wait", run_ids=["observer"], timeout_seconds=1)
+            pending = await call("runs_wait", run_ids=["target"], timeout_seconds=1)
+            self.assertTrue(pending["timed_out"])
+            self.assertEqual((await call("runs_get", run_id="target"))["status"], "running")
+            cancelled = await call("runs_cancel", run_id="target")
+            self.assertTrue(cancelled["terminal"])
+            self.assertEqual(cancelled["status"], "cancelled")
+            waited = await call("runs_wait", run_ids=["target"], timeout_seconds=1)
+            self.assertFalse(waited["timed_out"])
+            self.assertEqual(waited["completed"][0]["status"], "cancelled")
+
     async def test_hot_reconfiguration_swaps_new_runs_and_drains_old_runs(self):
         await self.runtime.start()
         self.executor.holds["old"] = asyncio.Event()
