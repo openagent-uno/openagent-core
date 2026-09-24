@@ -2,7 +2,8 @@
 
 The embedding API is prepared as the `1.1.0b5` modular candidate. Its SQLite
 adapter is `1.1.0b5`; gateway and Python SDK are `1.1.0b2` so their exact
-core dependency resolves to this build. Product
+core dependency resolves to this build. The Replio example is `1.1.0b2` and
+uses the new Sessions module. Product
 qualification and production cutover remain owned by each host because the core
 does not ship product credentials or create infrastructure.
 

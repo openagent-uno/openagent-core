@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "replio-agent-example"
-version = "1.1.0b1"
+version = "1.1.0b2"
 description = "Reference Replio consumer of the public OpenAgent runtime"
 requires-python = ">=3.11"
 dependencies = ["openagent-core[engine,providers]>=1.1.0b1,<2", "openagent-storage-sqlite>=1.1.0b1,<2",
-  "openagent-module-sessions==1.1.0b1", "openagent-module-tool-discovery==1.1.0b1", "aiohttp>=3.12,<4"]
+  "openagent-module-sessions==1.1.0b2", "openagent-module-tool-discovery==1.1.0b1", "aiohttp>=3.12,<4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

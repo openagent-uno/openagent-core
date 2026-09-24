@@ -92,11 +92,11 @@ class ReferenceConsumerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual({s['source_ref'] for s in sources},{'replio-project'})
                 call=('tool_search_list_tools',{'source_ref':'replio-project'})
             elif len(results)==2:
-                tools=self.tool_data(results[1]['content'])
+                tools=self.tool_data(results[1]['content'])['tools']
                 ref=next(t['tool_ref'] for t in tools if t['name']=='list_documents')
                 call=('tool_search_call_tool',{'tool_ref':ref,'args':{}})
             elif len(results)==3:
-                tools=self.tool_data(results[1]['content'])
+                tools=self.tool_data(results[1]['content'])['tools']
                 ref=next(t['tool_ref'] for t in tools if t['name']=='read_document')
                 documents=self.tool_data(results[2]['content'])
                 call=('tool_search_call_tool',{'tool_ref':ref,'args':{'document_id':documents['documents'][0]['id']}})
