@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openagent-core"
-version = "1.1.0b4"
+version = "1.1.0b5"
 description = "Embeddable OpenAgent runtime and public host contracts"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,7 +16,7 @@ engine = ["mcp>=1.27,<2", "pyyaml>=6", "aiosqlite>=0.20", "sqlalchemy[asyncio]>=
 providers = ["openai>=1", "anthropic>=0.34", "google-genai>=1", "groq>=0.4"]
 audio = ["litellm>=1.60,<2"]
 retrieval = ["numpy>=1.24", "pypdf>=5"]
-modules = ["openagent-modules==1.1.0b1"]
+modules = ["openagent-modules==1.1.0b2"]
 
 [tool.setuptools]
 include-package-data = false
