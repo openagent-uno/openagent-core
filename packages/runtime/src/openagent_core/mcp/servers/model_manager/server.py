@@ -282,14 +282,17 @@ async def add_model(
     enabled: bool = True,
     is_classifier: bool = False,
     input_modalities: list[str] | None = None,
+    kind: str = "llm",
 ) -> dict[str, Any]:
-    """Register a new LLM model row under a provider.
+    """Register a model row under a provider.
 
     - ``provider_id`` is the surrogate id of the provider row the model
       belongs to (see ``add_provider`` / ``list_providers``). The
       framework is inherited — no separate ``framework`` argument.
     - ``model`` is the bare vendor id (``gpt-4o-mini``,
       ``claude-sonnet-4-6``, ``glm-5``, …).
+    - ``kind`` is ``llm``, ``image``, ``tts`` or ``stt``. Image rows are
+      available to the image-generation tool and are never chat routers.
     - ``tier_hint`` (optional, free-form) is this model's *scope*: a
       natural-language sentence describing what it is good at
       (``"vision"``, ``"200k context"``, ``"best for code"``, ``"fast +
@@ -310,6 +313,8 @@ async def add_model(
     Pricing is resolved live from OpenRouter on every billing event,
     so there is no cost field to set here. Returns the enriched row.
     """
+    if kind not in {"llm", "image", "tts", "stt"} or (kind != "llm" and is_classifier):
+        raise ValueError("Invalid model kind or default-router selection")
     db = await _get_db()
     mid = await db.upsert_model(
         provider_id=int(provider_id),
@@ -318,6 +323,7 @@ async def add_model(
         tier_hint=tier_hint,
         enabled=enabled,
         is_classifier=bool(is_classifier),
+        kind=kind,
         metadata=(
             {"input_modalities": input_modalities}
             if input_modalities is not None else None
@@ -353,6 +359,7 @@ async def update_model(
     await db.upsert_model(
         provider_id=existing["provider_id"],
         model=existing["model"],
+        kind=existing.get("kind") or "llm",
         display_name=display_name if display_name is not None else existing.get("display_name"),
         tier_hint=tier_hint if tier_hint is not None else existing.get("tier_hint"),
         enabled=enabled if enabled is not None else bool(existing.get("enabled", True)),

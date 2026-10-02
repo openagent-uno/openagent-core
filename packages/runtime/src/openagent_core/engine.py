@@ -78,6 +78,11 @@ class AgentExecutor:
                 author={"kind":context.author.kind,"handle":context.author.key}):
             await can_publish()
             kind = event.get("kind")
+            if kind == "done" and event.get("errored"):
+                # Agent.run_stream reports provider failures as a terminal
+                # frame so channel clients can display them. A durable run
+                # must fail instead of recording that frame as an answer.
+                raise RuntimeError(event.get("error_public") or "Agent execution failed")
             if kind == "delta":
                 chunks.append(event.get("text") or "")
             elif kind == "done":

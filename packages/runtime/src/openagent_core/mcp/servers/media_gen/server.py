@@ -8,16 +8,14 @@ Providers:
   • image:  any OpenAI-compatible ``/v1/images/generations`` endpoint
   • video:  ``fal``     (pixverse / runway etc.)  — uses ``FAL_KEY``
 
-The image backend is resolved BY CAPABILITY, not by hardcoding a vendor:
-the server looks through the enabled model catalog for a model whose
-``metadata.capabilities`` declares ``image_generation`` and uses that
-model's provider. A subscription-backed proxy therefore serves images the
-moment its models declare the capability, with no key to configure and
-nothing metered.
+The image backend is resolved from an enabled image model in the catalog.
+For older catalogs, an LLM model declaring ``image_generation`` in metadata
+is also accepted. The host configures provider credentials and decides which
+models are enabled.
 
 Resolution order:
   1. ``OPENAGENT_IMAGE_BASE_URL`` (+ ``_API_KEY`` / ``_MODEL``) — explicit override.
-  2. a catalog model declaring ``image_generation`` → its provider's base_url.
+  2. an enabled image model (or legacy capable model) → its provider's base_url.
   3. ``OPENAI_API_KEY`` → api.openai.com, the metered fallback.
 
 Generation stays a TOOL rather than a routing decision on purpose. Making
@@ -28,13 +26,9 @@ draw. As a tool, every model in the roster can produce images.
 When nothing is configured, the tool surfaces a clear "not configured"
 error instead of silently failing — the model can fall back or tell the user.
 
-Files are written under ``~/.cache/openagent/media/<timestamp>-<hash>.{ext}``
-so disk usage stays predictable; the tool returns the local path AND the
-remote URL (when present) so callers can pick.
-
-Off by default. Enable by mounting in ``openagent.yaml``:
-  mcps:
-    - builtin: media-gen
+Files are written under ``~/.cache/openagent/media/<timestamp>-<hash>.{ext}``.
+The tool returns the local path and the outbound image marker; hosts decide
+whether to deliver that marker to a channel or retain the file for later use.
 """
 
 from __future__ import annotations
@@ -79,7 +73,7 @@ def _images_url(base_url: str) -> str:
     return f"{base}/v1/images/generations"
 
 
-async def _capability_backend() -> Optional[tuple[str, str, str]]:
+async def _capability_backend(requested_model: str = "") -> Optional[tuple[str, str, str]]:
     """Find an enabled model that declares image generation.
 
     Returns ``(images_url, api_key, model_id)`` or None. The capability lives
@@ -91,11 +85,13 @@ async def _capability_backend() -> Optional[tuple[str, str, str]]:
         conn = await _conn.get()
         rows = await (await conn.execute(
             """
-            SELECT p.base_url AS base_url, p.api_key AS api_key, m.model AS model,
+            SELECT p.base_url AS base_url, p.api_key AS api_key, p.name AS provider,
+                   m.model AS model, m.kind AS kind,
                    m.metadata_json AS metadata_json
             FROM models m JOIN providers p ON p.id = m.provider_id
-            WHERE m.enabled = 1 AND p.enabled = 1 AND m.kind = 'llm'
-            ORDER BY m.id
+            WHERE m.enabled = 1 AND p.enabled = 1
+              AND (m.kind = 'image' OR m.kind = 'llm')
+            ORDER BY CASE WHEN m.kind = 'image' THEN 0 ELSE 1 END, m.id
             """
         )).fetchall()
     except Exception as e:  # noqa: BLE001 - never fail generation over lookup
@@ -105,14 +101,22 @@ async def _capability_backend() -> Optional[tuple[str, str, str]]:
     import json as _json
 
     for row in rows or []:
+        if requested_model and requested_model not in {
+            str(row["model"] or ""), f'{row["provider"]}:{row["model"]}',
+        }:
+            continue
         try:
             meta = _json.loads(row["metadata_json"] or "{}")
         except Exception:  # noqa: BLE001
             continue
         caps = meta.get("capabilities") or []
-        if not isinstance(caps, (list, tuple)) or _IMAGE_CAPABILITY not in caps:
+        if row["kind"] != "image" and (not isinstance(caps, (list, tuple)) or _IMAGE_CAPABILITY not in caps):
             continue
-        url = _images_url(str(row["base_url"] or ""))
+        from openagent_core.image_generation import images_endpoint
+        try:
+            url = images_endpoint(str(row["base_url"] or ""), str(row["provider"] or ""))
+        except ValueError:
+            continue
         if url:
             return url, str(row["api_key"] or ""), str(row["model"] or "")
     return None
@@ -128,7 +132,7 @@ async def _image_backend(model: str) -> tuple[Optional[tuple[str, str, str]], Op
             (runtime_environment().get("OPENAGENT_IMAGE_MODEL") or model or "").strip(),
         ), None
 
-    backend = await _capability_backend()
+    backend = await _capability_backend(model)
     if backend:
         return backend, None
 
@@ -168,20 +172,20 @@ async def _save_url_to_file(url: str, dest: Path, timeout_s: float = 60.0) -> bo
 @mcp.tool()
 async def generate_image(
     prompt: str,
-    model: str = "gpt-image-1",
+    model: str = "",
     size: str = "1024x1024",
-    quality: str = "standard",
+    quality: str = "auto",
 ) -> dict[str, Any]:
     """Generate an image from a text prompt.
 
     Args:
         prompt: What to draw — natural-language description.
-        model: Only used by the metered OpenAI fallback; a capability-resolved
-            backend picks its own host model and ignores this.
+        model: Optional model id. The configured image model is used by default.
         size: ``1024x1024`` / ``1536x1024`` / ``1024x1536``. Honoured on a
             best-effort basis — the returned ``size`` is what was actually
             produced, which is not always what was asked for.
-        quality: ``standard`` or ``hd``. Metered OpenAI only.
+        quality: ``auto``, ``low``, ``medium`` or ``high``; the newest GPT image
+            variants additionally accept ``xhigh`` and ``max``.
 
     Returns ``{ok, local_path, remote_url, model, size}``. ``ok`` is False
     with a ``reason`` field when no backend is configured or the request
@@ -190,55 +194,27 @@ async def generate_image(
     if backend is None:
         return {"ok": False, "reason": reason}
     url, api_key, backend_model = backend
-
-    payload: dict[str, Any] = {"prompt": prompt[:4000], "n": 1, "size": size}
-    if backend_model:
-        payload["model"] = backend_model
-    if "api.openai.com" in url:
-        # Only the metered endpoint has a quality knob; sending it elsewhere
-        # is at best ignored and at worst a 400.
-        payload["quality"] = quality
-    headers = {"content-type": "application/json"}
-    if api_key:
-        headers["authorization"] = f"Bearer {api_key}"
-
+    from openagent_core.image_generation import generate_image_bytes
     try:
-        async with httpx.AsyncClient(timeout=600.0) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-        if resp.status_code >= 300:
-            return {"ok": False, "reason": f"image generation failed ({resp.status_code}): {resp.text[:300]}"}
-        body = resp.json()
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "reason": f"image generation failed: {e}"}
-
-    data = (body or {}).get("data") or []
-    if not data:
-        return {"ok": False, "reason": "the backend returned no images"}
-    item = data[0] or {}
-    remote_url = item.get("url")
-    b64 = item.get("b64_json")
-    local = _cache_path("img", prompt, "png")
-
-    if b64:
-        import base64
-
-        try:
-            local.write_bytes(base64.b64decode(b64))
-        except Exception as e:  # noqa: BLE001
-            return {"ok": False, "reason": f"b64 decode failed: {e}"}
-    elif remote_url:
-        if not await _save_url_to_file(remote_url, local):
-            return {"ok": False, "reason": "failed to download generated image"}
-    else:
-        return {"ok": False, "reason": "the backend returned neither url nor b64"}
+        image = await generate_image_bytes(
+            endpoint=url, api_key=api_key, model=backend_model or model or "gpt-image-1",
+            prompt=prompt, size=size, quality=quality,
+        )
+    except Exception as exc:  # noqa: BLE001 - an MCP failure is a tool result
+        return {"ok": False, "reason": f"image generation failed: {exc}"}
+    extension = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}[image.mime_type]
+    local = _cache_path("img", prompt, extension)
+    local.write_bytes(image.content)
 
     return {
         "ok": True,
         "local_path": str(local),
-        "remote_url": remote_url,
-        "model": backend_model or model,
+        "remote_url": image.remote_url,
+        "model": image.model,
+        "send_marker": f"[IMAGE:{local}]",
+        "send_instruction": "Include send_marker verbatim in the final reply to deliver the image in the current channel. Omit it to keep the image for later use.",
         # What came back, not what was asked for.
-        "size": item.get("size") or size,
+        "size": image.size,
         "bytes": local.stat().st_size,
     }
 

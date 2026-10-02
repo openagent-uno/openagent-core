@@ -109,6 +109,12 @@ The 16-minute execution deadline belongs to the runtime; the acceptance request
 has a short timeout. A failed HTTP read triggers reconciliation of the same run.
 `cancel_requested` remains an intention until the runtime confirms the outcome.
 
+`AgentExecutor` treats a terminal `run_stream` frame with `errored: true` as a
+failed durable run. The frame's `error_public` may explain the failure to the
+caller, but its `text` is never persisted as a successful assistant reply.
+Hosts should use this public adapter for ordinary engine execution rather than
+copying its stream loop into product code.
+
 ## Prompts and memory
 
 Every agent execution composes the mandatory framework, applicable module rules,

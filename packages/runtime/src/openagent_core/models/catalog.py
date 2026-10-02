@@ -77,8 +77,9 @@ FULL_SESSION_HISTORY_RUNS = 10_000_000
 #                     the provider's API key) is the only shipped framework;
 #                     the ``framework`` column remains the seam for adding
 #                     more later.
-#   - **kind**      : ``llm`` / ``tts`` / ``stt``. The runtime dispatches by
-#                     kind first; framework only matters for ``kind='llm'``.
+#   - **kind**      : ``llm`` / ``image`` / ``tts`` / ``stt``. The runtime
+#                     dispatches by kind first; framework matters for LLMs.
+#                     Image rows are selected by the image-generation tool.
 #                     TTS/STT rows always have framework='api-based' and
 #                     route through ``litellm.aspeech`` / ``atranscription``.
 #   - **model**     : the bare model id (``gpt-4o-mini``, ``claude-sonnet-4-6``).

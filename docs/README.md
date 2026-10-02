@@ -1,7 +1,7 @@
 # OpenAgent core documentation
 
-The embedding API is prepared as the `1.1.0b5` modular candidate. Its SQLite
-adapter is `1.1.0b5`; gateway and Python SDK are `1.1.0b2` so their exact
+The embedding API is prepared as the `1.1.0b6` modular candidate. Its SQLite
+adapter is `1.1.0b6`; gateway and Python SDK are `1.1.0b3` so their exact
 core dependency resolves to this build. The Replio example is `1.1.0b2` and
 uses the new Sessions module. Product
 qualification and production cutover remain owned by each host because the core
@@ -14,6 +14,7 @@ repository remains the canonical source for Core contracts and evidence.
 - [Symmetric module contract and product profiles](modules-v1.1.md)
 - [Implementation and acceptance ledger](migration/implementation.md)
 - [Uniform capability catalog](tool-catalog.md)
+- [Image model and attachment contract](image-generation.md)
 - [Sessions and exact run controls](../packages/module-sessions/README.md)
 - [Memory visibility and durable indexing](memory-access.md)
 - [Authorized vault administration](vault-administration.md)

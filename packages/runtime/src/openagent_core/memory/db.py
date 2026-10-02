@@ -455,6 +455,7 @@ CREATE INDEX IF NOT EXISTS idx_providers_name ON providers(name);
 --     entry model; the rest join its team as members).
 --   ``tts`` — speech synthesis. ``metadata.voice_id`` carries the voice.
 --   ``stt`` — speech-to-text.
+--   ``image`` — image generation; never enters the LLM router.
 -- LLM rows route via the provider's framework (``api-based`` builds
 -- the runtime ``Agent`` from the provider's vendor class); ``tts`` / ``stt`` rows
 -- always dispatch through LiteLLM (``litellm.aspeech`` /
@@ -470,7 +471,7 @@ CREATE TABLE IF NOT EXISTS models (
     enabled INTEGER NOT NULL DEFAULT 1,
     is_classifier INTEGER NOT NULL DEFAULT 0,
     metadata_json TEXT NOT NULL DEFAULT '{}',
-    kind TEXT NOT NULL DEFAULT 'llm' CHECK (kind IN ('llm','tts','stt')),
+    kind TEXT NOT NULL DEFAULT 'llm' CHECK (kind IN ('llm','tts','stt','image')),
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
     UNIQUE(provider_id, model)
@@ -1375,6 +1376,7 @@ class MemoryDB:
             "CREATE INDEX IF NOT EXISTS idx_models_kind ON models(kind)"
         )
         await self._migrate_models_description_column()
+        await self._migrate_models_image_kind_check()
         # Media routing reads capabilities from models.metadata_json. Legacy
         # rows predate that declaration, so give each LLM a conservative,
         # persisted default (text-only unless its provider/model family is a
@@ -1988,6 +1990,59 @@ class MemoryDB:
                 (now, audio_provider_id),
             )
         await self._conn.commit()
+
+    async def _migrate_models_image_kind_check(self) -> None:
+        """Expand the model kind constraint without changing any model row.
+
+        SQLite cannot alter a CHECK constraint in place. Rebuild only older
+        tables; preserve surrogate IDs and re-enable foreign-key enforcement.
+        """
+        assert self._conn is not None
+        row = await (await self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='models'"
+        )).fetchone()
+        if row is None or "'image'" in (row[0] or ""):
+            return
+        await self._conn.commit()
+        await self._conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            await self._conn.execute("BEGIN IMMEDIATE")
+            await self._conn.execute("""
+                CREATE TABLE models_image_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+                    model TEXT NOT NULL,
+                    display_name TEXT,
+                    tier_hint TEXT,
+                    description TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    is_classifier INTEGER NOT NULL DEFAULT 0,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    kind TEXT NOT NULL DEFAULT 'llm'
+                        CHECK (kind IN ('llm','tts','stt','image')),
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    UNIQUE(provider_id, model)
+                )
+            """)
+            columns = "id,provider_id,model,display_name,tier_hint,description,enabled,is_classifier,metadata_json,kind,created_at,updated_at"
+            await self._conn.execute(
+                f"INSERT INTO models_image_new ({columns}) SELECT {columns} FROM models"
+            )
+            await self._conn.execute("DROP TABLE models")
+            await self._conn.execute("ALTER TABLE models_image_new RENAME TO models")
+            for name, column in (("provider", "provider_id"), ("enabled", "enabled"),
+                                 ("updated", "updated_at"), ("kind", "kind"),
+                                 ("is_classifier", "is_classifier")):
+                await self._conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_models_{name} ON models({column})"
+                )
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+        finally:
+            await self._conn.execute("PRAGMA foreign_keys = ON")
 
     async def _migrate_legacy_elevenlabs_to_litellm(self) -> None:
         """Idempotent UPDATE of pre-LiteLLM TTS rows. Historically targeted
@@ -5782,8 +5837,8 @@ class MemoryDB:
             raise ValueError("provider_id is required")
         if not model or not str(model).strip():
             raise ValueError("model is required")
-        if kind not in ("llm", "tts", "stt"):
-            raise ValueError(f"invalid kind {kind!r}; expected llm/tts/stt")
+        if kind not in ("llm", "tts", "stt", "image"):
+            raise ValueError(f"invalid kind {kind!r}; expected llm/tts/stt/image")
         conn = await self._ensure_connected()
         # FK integrity: make sure the parent provider exists before we
         # try the insert so callers get a clear error instead of the

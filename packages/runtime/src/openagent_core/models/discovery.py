@@ -78,7 +78,7 @@ _AUDIO_BUNDLED: dict[str, list[dict[str, Any]]] = {
 
 
 def _kind_for_model(provider: str, model_id: str) -> str:
-    """Heuristic: classify a model as ``llm`` / ``tts`` / ``stt`` from id.
+    """Classify a discovered model by its generation capability.
 
     Audio-only vendors get a flat label; otherwise we pattern-match on
     the model id so OpenAI's /v1/models response gets correctly split
@@ -97,6 +97,9 @@ def _kind_for_model(provider: str, model_id: str) -> str:
         return "tts"
     if "whisper" in m or "transcribe" in m or m.startswith("nova-"):
         return "stt"
+    if ("gpt-image" in m or "dall-e" in m or "imagen" in m
+            or "ideogram" in m or "stable-diffusion" in m or m.startswith("flux-")):
+        return "image"
     return "llm"
 
 # OpenRouter prefixes each model with ``<vendor>/<id>``. Map vendor →
@@ -344,5 +347,4 @@ def _tagged(provider: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]
     for e in entries:
         e["kind"] = _kind_for_model(provider, str(e.get("id") or ""))
     return entries
-
 

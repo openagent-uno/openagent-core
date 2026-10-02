@@ -1945,7 +1945,8 @@ class Agent:
             model_class=type(active_model).__name__,
             response_len=len((last_response.content if last_response else "") or ""),
         )
-        return (last_response.content if last_response else "") or "(Done — no final message was returned.)"
+        from openagent_core.stream.presentation import assistant_text
+        return assistant_text((last_response.content if last_response else "") or "") or "(Done — no final message was returned.)"
 
     async def run_stream(
         self,
@@ -2006,6 +2007,12 @@ class Agent:
                 session_id=session_id, model_override=model_override,
                 author=author,
             ):
+                if event.get("kind") in {"delta", "done"}:
+                    from openagent_core.stream.presentation import assistant_text
+                    visible = assistant_text(event.get("text") or "")
+                    if event["kind"] == "delta" and not visible:
+                        continue
+                    event = {**event, "text": visible}
                 if event.get("kind") == "done":
                     # Quality monitor (opt-in, sampled): grade this completed
                     # STREAMING turn off the reply path. Scheduled here on the
