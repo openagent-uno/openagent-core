@@ -11,6 +11,21 @@ import httpx
 MAX_IMAGE_BYTES = 20 << 20
 
 
+def supports_image_generation(kind: str, metadata: object) -> bool:
+    """Whether a catalog row may serve the shared image generation tool."""
+    if kind == "image":
+        return True
+    capabilities = metadata.get("capabilities") if isinstance(metadata, dict) else None
+    return (kind == "llm" and isinstance(capabilities, (list, tuple))
+            and "image_generation" in capabilities)
+
+
+def provider_image_model_id(model_id: str, metadata: object) -> str:
+    """Resolve a provider's bare image ID from a qualified catalog identity."""
+    alias = metadata.get("image_model_id") if isinstance(metadata, dict) else None
+    return alias.strip() if isinstance(alias, str) and alias.strip() else model_id
+
+
 @dataclass(frozen=True)
 class GeneratedImage:
     content: bytes

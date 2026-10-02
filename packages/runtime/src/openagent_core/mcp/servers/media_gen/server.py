@@ -109,8 +109,10 @@ async def _capability_backend(requested_model: str = "") -> Optional[tuple[str, 
             meta = _json.loads(row["metadata_json"] or "{}")
         except Exception:  # noqa: BLE001
             continue
-        caps = meta.get("capabilities") or []
-        if row["kind"] != "image" and (not isinstance(caps, (list, tuple)) or _IMAGE_CAPABILITY not in caps):
+        if not isinstance(meta, dict):
+            continue
+        from openagent_core.image_generation import supports_image_generation, provider_image_model_id
+        if not supports_image_generation(str(row["kind"] or "llm"), meta):
             continue
         from openagent_core.image_generation import images_endpoint
         try:
@@ -118,7 +120,10 @@ async def _capability_backend(requested_model: str = "") -> Optional[tuple[str, 
         except ValueError:
             continue
         if url:
-            return url, str(row["api_key"] or ""), str(row["model"] or "")
+            # A host may register a qualified catalog id to disambiguate
+            # variants while the provider's images API requires its bare id.
+            image_model_id = provider_image_model_id(str(row["model"] or ""), meta)
+            return url, str(row["api_key"] or ""), image_model_id
     return None
 
 

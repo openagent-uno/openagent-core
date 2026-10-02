@@ -1,7 +1,7 @@
 # OpenAgent core documentation
 
-The embedding API is prepared as the `1.1.0b6` modular candidate. Its SQLite
-adapter is `1.1.0b6`; gateway and Python SDK are `1.1.0b3` so their exact
+The embedding API is prepared as the `1.1.0b7` modular candidate. Its SQLite
+adapter is `1.1.0b7`; gateway and Python SDK are `1.1.0b4` so their exact
 core dependency resolves to this build. The Replio example is `1.1.0b2` and
 uses the new Sessions module. Product
 qualification and production cutover remain owned by each host because the core

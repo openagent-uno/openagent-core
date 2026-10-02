@@ -43,6 +43,32 @@ class ImageCatalogTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ImageTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_capable_chat_model_uses_provider_image_id(self):
+        from openagent_core.mcp.servers.media_gen.server import _capability_backend
+        from openagent_core.mcp.servers.media_gen import server as media_server
+
+        with tempfile.TemporaryDirectory() as folder:
+            db = MemoryDB(str(Path(folder) / "agent.sqlite"))
+            await db.connect()
+            provider = await db.upsert_provider(
+                name="codex", framework="api-based", api_key="test",
+                base_url="http://codex-proxy.test/v1",
+            )
+            await db.upsert_model(
+                provider_id=provider, model="codex:gpt-5.6-sol:high",
+                metadata={"capabilities": ["chat", "image_generation"],
+                          "image_model_id": "gpt-5.6-sol:high"},
+            )
+            with patch.object(media_server._conn, "get", new=AsyncMock(return_value=db._conn)):
+                backend = await _capability_backend()
+                qualified = await _capability_backend("codex:codex:gpt-5.6-sol:high")
+            self.assertEqual(
+                ("http://codex-proxy.test/v1/images/generations", "test", "gpt-5.6-sol:high"),
+                backend,
+            )
+            self.assertEqual(backend, qualified)
+            await db.close()
+
     async def test_configured_image_returns_bytes_and_type(self):
         png = b"\x89PNG\r\n\x1a\n" + b"content"
 
