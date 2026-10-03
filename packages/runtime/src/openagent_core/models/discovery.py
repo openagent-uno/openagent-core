@@ -156,7 +156,18 @@ def _parse_openai_style(payload: Any) -> list[dict[str, Any]]:
         mid = str(entry.get("id") or entry.get("model") or entry.get("name") or "").strip()
         if not mid:
             continue
-        out.append({"id": mid, "display_name": str(entry.get("name") or entry.get("display_name") or mid)})
+        discovered = {"id": mid, "display_name": str(entry.get("name") or entry.get("display_name") or mid)}
+        # Subscription proxies publish their exact media contract here. Keep
+        # these declarations through discovery so product registration can
+        # persist them instead of falling back to a provider-name guess.
+        for key in ("input_modalities", "capabilities"):
+            value = entry.get(key)
+            if isinstance(value, list) and all(isinstance(item, str) for item in value):
+                discovered[key] = value
+        image_model_id = entry.get("image_model_id")
+        if isinstance(image_model_id, str) and image_model_id:
+            discovered["image_model_id"] = image_model_id
+        out.append(discovered)
     return out
 
 
@@ -184,8 +195,7 @@ async def _fetch_openai_style(
 ) -> list[dict[str, Any]]:
     import aiohttp
 
-    base, path = _OPENAI_STYLE[provider]
-    url = (base_url.rstrip("/") if base_url else base.rstrip("/")) + path
+    url = _openai_models_url(provider, base_url)
     if provider == "anthropic":
         headers = {
             "x-api-key": api_key,
@@ -204,6 +214,18 @@ async def _fetch_openai_style(
                 raise RuntimeError(f"{provider} /v1/models returned {resp.status}")
             payload = await resp.json(content_type=None)
     return _parse_openai_style(payload)
+
+
+def _openai_models_url(provider: str, base_url: str | None) -> str:
+    """Resolve discovery for a built-in or custom OpenAI-compatible server."""
+    if base_url:
+        base = base_url.rstrip("/")
+        if base.endswith("/v1"):
+            return base + "/models"
+        path = _OPENAI_STYLE[provider][1] if provider in _OPENAI_STYLE else "/v1/models"
+        return base + path
+    base, path = _OPENAI_STYLE[provider]
+    return base.rstrip("/") + path
 
 
 async def _fetch_google(api_key: str) -> list[dict[str, Any]]:
@@ -290,7 +312,7 @@ async def list_provider_models(
     api_key: str | None = None,
     base_url: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return ``[{id, display_name, input_cost_per_million, output_cost_per_million}]``.
+    """Return model IDs, prices and provider-advertised media capabilities.
 
     Always returns a list — never raises. Source priority: configured
     key → OpenRouter cross-vendor catalog → empty list.
@@ -302,7 +324,7 @@ async def list_provider_models(
     # Local servers (Ollama / vLLM / LM Studio) usually need no key, but the
     # ``if api_key:`` gate below would skip discovery entirely without one.
     # Synthesise a placeholder so we still query the configured /v1/models.
-    if provider == "local" and not api_key:
+    if (provider == "local" or base_url) and not api_key:
         api_key = "local"
 
     # Audio-only vendors short-circuit to the bundled catalog — they
@@ -318,7 +340,7 @@ async def list_provider_models(
         try:
             if provider == "google":
                 result = await _fetch_google(api_key)
-            elif provider in _OPENAI_STYLE:
+            elif provider in _OPENAI_STYLE or base_url:
                 result = await _fetch_openai_style(provider, api_key, base_url)
             else:
                 result = []
@@ -347,4 +369,3 @@ def _tagged(provider: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]
     for e in entries:
         e["kind"] = _kind_for_model(provider, str(e.get("id") or ""))
     return entries
-
