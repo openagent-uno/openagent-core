@@ -1,11 +1,17 @@
 # OpenAgent core documentation
 
-The embedding API is prepared as the `1.1.0b8` modular candidate. Its SQLite
-adapter is `1.1.0b8`; gateway and Python SDK are `1.1.0b5` so their exact
+The embedding API is prepared as the `1.1.0b9` modular candidate. Its SQLite
+adapter is `1.1.0b9`; gateway and Python SDK are `1.1.0b6` so their exact
 core dependency resolves to this build. The Replio example is `1.1.0b2` and
 uses the new Sessions module. Product
 qualification and production cutover remain owned by each host because the core
 does not ship product credentials or create infrastructure.
+
+Core infers image input for recognised Claude model IDs even when an
+OpenAI-compatible subscription proxy is registered under a custom provider
+name. Explicit `models.metadata.input_modalities` declarations remain
+authoritative. Existing rows already persisted as text-only must be reviewed
+and updated by their host after verifying that the proxy accepts images.
 
 The public product guide is at [openagent.uno](https://openagent.uno/); this
 repository remains the canonical source for Core contracts and evidence.

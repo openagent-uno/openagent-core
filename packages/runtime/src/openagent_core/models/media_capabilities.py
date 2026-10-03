@@ -132,10 +132,10 @@ def normalize_input_modalities(value: Any, *, require_text: bool = True) -> list
 def default_input_modalities(provider: str, model: str) -> list[str]:
     """Conservative capabilities for legacy/new rows without metadata.
 
-    Unknown and local models default to text only.  We opt models into binary
-    modalities only for stable, recognisable multimodal families; operators can
-    override this explicitly in ``metadata_json`` when a proxy or fine-tune has
-    different capabilities.
+    Unknown models default to text only.  Recognisable model families retain
+    their input capabilities behind a custom OpenAI-compatible proxy (whose
+    provider name is often ``local``). Operators can override this explicitly
+    in ``metadata_json`` when a proxy or fine-tune differs.
     """
     p = str(provider or "").strip().lower()
     m = str(model or "").strip().lower()
@@ -149,7 +149,7 @@ def default_input_modalities(provider: str, model: str) -> list[str]:
     modalities = {"text"}
     if p == "google" and "gemini" in m:
         modalities.update({"image", "audio", "video", "file"})
-    elif p == "anthropic" and "claude" in m and any(
+    elif m.startswith("claude-") and any(
         marker in m for marker in ("claude-3", "claude-sonnet-4", "claude-opus-4", "claude-haiku-4")
     ):
         modalities.update({"image", "file"})
