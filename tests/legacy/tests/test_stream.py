@@ -1071,6 +1071,41 @@ async def _wait_for(condition, *, timeout: float = 1.0, step: float = 0.01):
     return condition()
 
 
+@test("stream", "transcribed voice keeps its file in the turn but sends text to the model")
+async def t_transcribed_voice_model_input(ctx: TestContext) -> None:
+    from openagent_core.stream.events import TextFinal, now_ms
+
+    agent = _RecordingAgent()
+    sess = _make_session(agent, coalesce_window_ms=0)
+    voice = {"type": "voice", "filename": "note.ogg", "mime_type": "audio/ogg",
+             "artifact_id": "voice-artifact"}
+    image = {"type": "image", "filename": "photo.jpg", "mime_type": "image/jpeg",
+             "artifact_id": "image-artifact"}
+
+    async def _null(_db):
+        return None
+
+    await sess.start(stt_factory=_null, tts_factory=_null)
+    try:
+        await sess.push_in(TextFinal(
+            session_id="s", seq=1, ts_ms=now_ms(), text="The spoken request",
+            source="stt", attachments=(voice, image),
+        ))
+        assert await _wait_for(lambda: len(agent.calls) == 1)
+        assert agent.calls[0]["message"] == "The spoken request"
+        assert agent.calls[0]["attachments"] == [image]
+        # A regular audio upload without STT must still reach a compatible
+        # native-audio model through the existing capability router.
+        await sess.push_in(TextFinal(
+            session_id="s", seq=2, ts_ms=now_ms(), text="Analyze the audio",
+            source="user_typed", attachments=(voice,),
+        ))
+        assert await _wait_for(lambda: len(agent.calls) == 2)
+        assert agent.calls[1]["attachments"] == [voice]
+    finally:
+        await sess.close()
+
+
 def _make_session(agent, **kwargs):
     from openagent_core.stream.session import StreamSession
     return StreamSession(agent, client_id="c", session_id="s", **kwargs)

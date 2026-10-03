@@ -1342,6 +1342,7 @@ class StreamSession:
                 client_id=turn_client_id,
                 session_id=self.session_id,
                 attachments=attachments or None,
+                transcribed_audio=msg.source == "stt",
                 speak=speak,
                 author=turn_author,
                 execution_origin=execution_origin,
@@ -1578,6 +1579,7 @@ class StreamTurnRunner:
         client_id: str,
         session_id: str,
         attachments: list[dict] | None = None,
+        transcribed_audio: bool = False,
         speak: bool = False,
         author: dict | None = None,
         execution_origin: Any = None,
@@ -1800,13 +1802,28 @@ class StreamTurnRunner:
         _execution_origin_tok = install_execution_origin(execution_origin)
         _ingress_tok = install_ingress_identity(ingress_identity)
 
+        # STT has already converted a voice attachment into ``text``. Keep the
+        # original attachment for durable history and download, but do not
+        # forward its bytes as native audio to a chat model. Most text models
+        # (including subscription proxies) cannot consume audio input.
+        model_attachments = attachments
+        if transcribed_audio and attachments:
+            model_attachments = [
+                item for item in attachments
+                if not (
+                    str(item.get("kind") or item.get("type") or "").lower()
+                    in {"voice", "audio"}
+                    or str(item.get("mime_type") or "").lower().startswith("audio/")
+                )
+            ]
+
         try:
             try:
                 async for event in self._agent.run_stream(
                     message=text,
                     user_id=client_id,
                     session_id=session_id,
-                    attachments=attachments,
+                    attachments=model_attachments,
                     on_status=on_status,
                     author=author,
                     **({"run_id": turn_context.request_id} if getattr(turn_context,"request_id",None) else {}),
