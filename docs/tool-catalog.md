@@ -68,6 +68,10 @@ MCP results retain `content`, `structuredContent`, `isError`, `_meta`, embedded
 resources, child-session references and other extension fields. Function-call
 hooks remain in the pool's private leaf executor. The public catalog is the
 single place for runtime effects and durable invocation events.
+When an MCP result includes image blocks, the runtime `tool-search` adapter
+passes their decoded pixels to the model as image content. The full MCP envelope
+remains available to durable invocations and programmatic callers; the model's
+text result contains only bounded text and a visible image marker, not base64.
 
 ## Optional vault packaging
 
