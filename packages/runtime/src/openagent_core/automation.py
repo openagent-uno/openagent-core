@@ -209,4 +209,53 @@ def build_automation_toolkit(kind: str):
             invoke.__annotations__=get_type_hints(fn)
             return invoke
         wrappers.append(wrap(function,signature))
+
+    # Historical definitions intentionally do not inherit an owner at startup.
+    # Expose the host's explicit revision-review service beside each native
+    # automation source so an authenticated App, Telegram or other live turn
+    # can inspect and approve the exact persisted revision without resorting
+    # to a disable/enable rewrite.  These are synthetic host operations rather
+    # than SQLite manager functions: the host owns principal policy and grant
+    # capture, while Core only supplies the portable tool surface.
+    noun = {
+        "scheduled_task": "scheduled_task",
+        "workflow": "workflow",
+        "event": "event",
+    }[kind]
+
+    async def review_automation_authorization(definition_id: str) -> dict[str, Any]:
+        """Inspect one persisted automation revision before approving it.
+
+        This is read-only. Use the returned full definition and digest to show
+        the user exactly what would run. Historical definitions remain paused
+        until the current authenticated user explicitly approves that digest.
+        """
+        runtime, context = current_runtime(), current_execution_context()
+        service = getattr(getattr(runtime, "services", None), "automation_management", None)
+        if service is None or context is None:
+            raise PermissionError("This host does not expose automation management")
+        return await service.review_authorization(kind, definition_id, context)
+
+    review_automation_authorization.__name__ = f"review_{noun}_authorization"
+
+    async def approve_automation_authorization(
+        definition_id: str, digest: str,
+    ) -> dict[str, Any]:
+        """Approve exactly one previously reviewed automation revision.
+
+        Call the matching review tool first and pass its exact digest. Only
+        call this after the current authenticated user explicitly asks to
+        activate this definition; existence or enabled state is not consent.
+        A changed definition is rejected instead of approving newer behavior.
+        """
+        runtime, context = current_runtime(), current_execution_context()
+        service = getattr(getattr(runtime, "services", None), "automation_management", None)
+        if service is None or context is None:
+            raise PermissionError("This host does not expose automation management")
+        return await service.approve_authorization(
+            kind, definition_id, digest, context,
+        )
+
+    approve_automation_authorization.__name__ = f"approve_{noun}_authorization"
+    wrappers.extend((review_automation_authorization, approve_automation_authorization))
     return Toolkit(name=_MODULES[kind].replace('_','-'),tools=wrappers)
