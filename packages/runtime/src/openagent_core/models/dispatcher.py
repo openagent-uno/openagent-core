@@ -32,6 +32,7 @@ describing something that no longer happens.
 
 from __future__ import annotations
 
+import asyncio
 from openagent_core.configuration import runtime_environment
 import logging
 import os
@@ -424,16 +425,20 @@ async def _arun_runtime_stream(
     sometimes as text response".
     """
     from openagent_core.core._run_state.agent import (
+        RunCancelledEvent as _AgentRunCancelledEvent,
         RunCompletedEvent as _AgentRunCompletedEvent,
         RunContentEvent as _AgentRunContentEvent,
+        RunErrorEvent as _AgentRunErrorEvent,
         ToolCallCompletedEvent as _AgentToolCallCompletedEvent,
         ToolCallErrorEvent as _AgentToolCallErrorEvent,
         ToolCallStartedEvent as _AgentToolCallStartedEvent,
     )
     from openagent_core.core._run_state.team import (
         IntermediateRunContentEvent as _TeamIntermediateRunContentEvent,
+        RunCancelledEvent as _TeamRunCancelledEvent,
         RunCompletedEvent as _TeamRunCompletedEvent,
         RunContentEvent as _TeamRunContentEvent,
+        RunErrorEvent as _TeamRunErrorEvent,
         ToolCallCompletedEvent as _TeamToolCallCompletedEvent,
         ToolCallErrorEvent as _TeamToolCallErrorEvent,
         ToolCallStartedEvent as _TeamToolCallStartedEvent,
@@ -444,6 +449,14 @@ async def _arun_runtime_stream(
     run_completed_event_types = (
         _AgentRunCompletedEvent,
         _TeamRunCompletedEvent,
+    )
+    run_error_event_types = (
+        _AgentRunErrorEvent,
+        _TeamRunErrorEvent,
+    )
+    run_cancelled_event_types = (
+        _AgentRunCancelledEvent,
+        _TeamRunCancelledEvent,
     )
 
     content_event_types = (
@@ -514,6 +527,17 @@ async def _arun_runtime_stream(
         # the completed run always carries the text it produced. See the net at the
         # bottom of this function for why that matters.
         completed_content: str | None = None
+        # Runtime Agent/Team streams report provider failures as terminal
+        # events and then end normally.  If those frames are ignored, the
+        # caller sees an empty stream and Agent.run_stream's safety net runs
+        # the whole prompt again through generate().  Besides duplicating
+        # spend and side effects, a rate-limited scheduled task can then sit
+        # in `running` until that second call eventually times out.  Preserve
+        # the terminal outcome and raise it after the runtime generator has
+        # drained so the ordinary run_stream error/cancellation path owns the
+        # final state.
+        terminal_error: str | None = None
+        terminal_cancel_reason: str | None = None
         stream_iter = runtime.arun(prompt, **stream_kwargs)
         async for event in stream_iter:
             # Capture the agno run_id (first event wins) so a barge-in can
@@ -540,6 +564,20 @@ async def _arun_runtime_stream(
                     _ev_content = getattr(event, "content", None)
                     if isinstance(_ev_content, str) and _ev_content.strip():
                         completed_content = _ev_content
+            if isinstance(event, run_error_event_types):
+                ev_sid = getattr(event, "session_id", None)
+                if ev_sid is None or ev_sid == session_id:
+                    content = getattr(event, "content", None)
+                    error_type = getattr(event, "error_type", None)
+                    terminal_error = str(
+                        content or error_type or "Runtime stream ended with an error"
+                    )
+            elif isinstance(event, run_cancelled_event_types):
+                ev_sid = getattr(event, "session_id", None)
+                if ev_sid is None or ev_sid == session_id:
+                    terminal_cancel_reason = str(
+                        getattr(event, "reason", None) or "Runtime stream was cancelled"
+                    )
             # Suppress a delegated member's OWN content + nested tool events
             # from the PARENT live stream when the member runs in its own child
             # session. That work belongs to the child session (navigable via the
@@ -624,6 +662,11 @@ async def _arun_runtime_stream(
                 completion_media.extend(_output_media_markers(
                     event, emitted=emitted_media,
                 ))
+
+        if terminal_cancel_reason is not None:
+            raise asyncio.CancelledError(terminal_cancel_reason)
+        if terminal_error is not None:
+            raise RuntimeError(terminal_error)
 
         # Silent-leader safety net: a turn that delegated but whose leader
         # emitted NO synthesis of its own would otherwise yield zero content

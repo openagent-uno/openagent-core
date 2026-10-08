@@ -17,6 +17,7 @@ Le due direzioni che contano:
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -95,3 +96,47 @@ async def test_empty_completion_yields_nothing(ctx: TestContext) -> None:
         f"un run completato senza testo non deve produrre niente: {got!r} — "
         "quel caso resta del fallback di run_stream"
     )
+
+
+@test("stream_completed_net",
+      "terminal Agent/Team errors raise instead of re-running the prompt")
+async def test_terminal_error_does_not_become_empty_stream(ctx: TestContext) -> None:
+    from openagent_core.core._run_state.agent import RunErrorEvent
+    from openagent_core.core._run_state.team import RunErrorEvent as TeamRunErrorEvent
+
+    for event in (
+        RunErrorEvent(session_id="s1", content="provider rate limit"),
+        TeamRunErrorEvent(session_id="s1", content="team provider rate limit"),
+    ):
+        try:
+            await _drain([event])
+        except RuntimeError as exc:
+            assert "rate limit" in str(exc), exc
+        else:
+            raise AssertionError(
+                "a terminal runtime error became an empty successful stream; "
+                "Agent.run_stream would duplicate the provider call"
+            )
+
+
+@test("stream_completed_net",
+      "terminal Agent/Team cancellation propagates without generate fallback")
+async def test_terminal_cancellation_propagates(ctx: TestContext) -> None:
+    from openagent_core.core._run_state.agent import RunCancelledEvent
+    from openagent_core.core._run_state.team import (
+        RunCancelledEvent as TeamRunCancelledEvent,
+    )
+
+    for event in (
+        RunCancelledEvent(session_id="s1", reason="stopped"),
+        TeamRunCancelledEvent(session_id="s1", reason="team stopped"),
+    ):
+        try:
+            await _drain([event])
+        except asyncio.CancelledError as exc:
+            assert "stopped" in str(exc), exc
+        else:
+            raise AssertionError(
+                "a terminal cancellation became an empty successful stream; "
+                "Agent.run_stream would duplicate the provider call"
+            )
