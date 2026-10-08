@@ -9,7 +9,7 @@ Products supply authentication, system instructions, resources, tools, and polic
 GlassPalace builds its own worker and sandbox from pinned core packages; the
 standalone app/CLI/server are maintained in the `openagent` product monorepo.
 
-The `1.1.0b13` kernel, SQLite adapter, gateway and SDK are the current modular
+The `1.1.0b14` kernel, SQLite adapter, gateway and SDK are the current modular
 release candidates; optional module wheels remain compatible at `1.1.0b2`. See the
 [documentation](docs/README.md), [module contract](docs/modules-v1.1.md), and
 [acceptance ledger](docs/migration/implementation.md) for verified behavior and
@@ -22,10 +22,10 @@ Core wheel set and manifest from
 
 ```sh
 pip install --find-links /path/to/verified-wheelhouse \
-  openagent-core==1.1.0b13 openagent-storage-sqlite==1.1.0b13
+  openagent-core==1.1.0b14 openagent-storage-sqlite==1.1.0b14
 # Hosts that need the full algorithm select the relevant extras:
 pip install --find-links /path/to/verified-wheelhouse \
-  'openagent-core[engine,providers,modules,retrieval]==1.1.0b13'
+  'openagent-core[engine,providers,modules,retrieval]==1.1.0b14'
 ```
 
 Packages shown above are independent distribution names. Hosts pin exact wheel
