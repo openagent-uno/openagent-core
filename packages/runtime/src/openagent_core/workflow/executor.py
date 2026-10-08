@@ -31,8 +31,8 @@ Responsibilities:
 
 The executor does **not** run in the workflow-manager MCP subprocess —
 it lives in the main OpenAgent process so it can call ``agent.run()``
-and touch the live ``MCPPool``. The MCP subprocess hands work over
-via the ``workflow_run_requests`` queue table.
+and use the current Runtime capability catalog. The MCP subprocess hands
+work over via the ``workflow_run_requests`` queue table.
 """
 
 from __future__ import annotations
@@ -134,8 +134,12 @@ class _ConcurrencyGate:
 
 
 class WorkflowExecutor:
-    """Runs workflows against the live Agent and MCPPool. One instance
-    per main process is enough — per-run state lives in ``_RunCtx``.
+    """Runs workflows against the live Agent and capability catalog.
+
+    One instance per main process is enough — per-run state lives in
+    ``_RunCtx``. A Runtime execution always uses its authorized unified
+    catalog. A direct Agent pool can still supply a legacy validation snapshot,
+    but invocation remains subject to Runtime admission and authorization.
     """
 
     def __init__(self, agent: Any, db: MemoryDB, broadcast: Any = None):
@@ -301,9 +305,9 @@ class WorkflowExecutor:
                 agent=self.agent,
             )
             try:
-                # Run-start re-validation with the live pool. The
+                # Run-start re-validation with the live capability graph. The
                 # workflow-manager MCP subprocess validates without
-                # inventory (it can't see the parent's pool); the
+                # inventory (it can't see the parent's catalog); the
                 # gateway path already validates with inventory at
                 # create/update time. This belt-and-suspenders catch
                 # turns opaque mid-DAG ``TypeError`` / ``RuntimeError``
@@ -313,13 +317,22 @@ class WorkflowExecutor:
                 # failure surfaces as a finalized ``failed`` run row,
                 # not an uncaught exception that strands the row in
                 # ``running``.
-                pool = getattr(self.agent, "_mcp", None)
-                validate_graph(
-                    graph,
-                    mcp_inventory=mcp_inventory_from_pool(pool),
-                    mcp_callability=mcp_callability_from_pool(pool),
-                    mcp_errors=mcp_errors_from_pool(pool),
-                )
+                catalog_snapshot = await _runtime_capability_snapshot()
+                if catalog_snapshot is not None:
+                    inventory, callability = catalog_snapshot
+                    validate_graph(
+                        graph,
+                        mcp_inventory=inventory,
+                        mcp_callability=callability,
+                    )
+                else:
+                    pool = getattr(self.agent, "_mcp", None)
+                    validate_graph(
+                        graph,
+                        mcp_inventory=mcp_inventory_from_pool(pool),
+                        mcp_callability=mcp_callability_from_pool(pool),
+                        mcp_errors=mcp_errors_from_pool(pool),
+                    )
                 await self._walk(graph, ctx, on_status, entry_node_id=entry_node_id)
             except asyncio.CancelledError:
                 # Cancellation is a terminal workflow outcome.  The active
@@ -769,6 +782,44 @@ class WorkflowExecutor:
 # ── block handlers ──────────────────────────────────────────────────
 
 
+def _runtime_capability_binding() -> tuple[Any, Any] | None:
+    """Return the active Runtime catalog and verified execution context.
+
+    Workflows admitted by :class:`Runtime` must use the same capability
+    surface as interactive turns and the gateway. A Runtime without its
+    execution context is not an authorized invocation environment; callers
+    without both bindings cannot use Runtime capabilities.
+    """
+    from openagent_core.runtime import current_execution_context, current_runtime
+
+    runtime = current_runtime()
+    context = current_execution_context()
+    catalog = getattr(runtime, "capabilities", None) if runtime is not None else None
+    if catalog is None or context is None:
+        return None
+    return catalog, context
+
+
+async def _runtime_capability_snapshot(
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, bool]]] | None:
+    """Build the workflow validator's view from the unified catalog."""
+    binding = _runtime_capability_binding()
+    if binding is None:
+        return None
+    catalog, context = binding
+    descriptors = await catalog.discover(context)
+    inventory: dict[str, dict[str, Any]] = {}
+    for descriptor in descriptors:
+        inventory.setdefault(descriptor.source_id, {})[descriptor.name] = dict(
+            descriptor.input_schema
+        )
+    callability = {
+        source_id: {name: True for name in tools}
+        for source_id, tools in inventory.items()
+    }
+    return inventory, callability
+
+
 async def _h_trigger_manual(
     exe: WorkflowExecutor, node: dict, cfg: dict, ctx: _RunCtx,
 ) -> dict[str, Any]:
@@ -829,13 +880,32 @@ async def _h_mcp_tool(
         raise ValueError(
             "mcp-tool: both 'mcp_name' and 'tool_name' are required"
         )
-    pool = getattr(exe.agent, "_mcp", None)
-    if pool is None:
-        raise RuntimeError("mcp-tool: agent has no MCP pool attached")
     if not isinstance(args, dict):
         raise ValueError("mcp-tool: args must be an object")
-    from openagent_core.engine import call_tool
-    result = await call_tool(pool, mcp_name, tool_name, args)
+    runtime_binding = _runtime_capability_binding()
+    if runtime_binding is not None:
+        catalog, context = runtime_binding
+        descriptors = await catalog.discover(context)
+        matches = [
+            descriptor
+            for descriptor in descriptors
+            if descriptor.source_id == mcp_name and descriptor.name == tool_name
+        ]
+        if len(matches) != 1:
+            from openagent_core.capabilities import CapabilityUnavailable
+
+            raise CapabilityUnavailable(
+                f"Workflow tool {mcp_name!r}/{tool_name!r} is unavailable "
+                "in the current authorized capability catalog"
+            )
+        result = await catalog.call_tool(matches[0].tool_ref, args, context)
+    else:
+        pool = getattr(exe.agent, "_mcp", None)
+        if pool is None:
+            raise RuntimeError("mcp-tool: agent has no MCP pool attached")
+        from openagent_core.engine import call_tool
+
+        result = await call_tool(pool, mcp_name, tool_name, args)
     return {"result": _coerce_to_jsonable(result)}
 
 
