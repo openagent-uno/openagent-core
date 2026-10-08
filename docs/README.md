@@ -1,11 +1,16 @@
 # OpenAgent core documentation
 
-The embedding API is prepared as the `1.1.0b11` modular candidate. Its SQLite
+The embedding API is prepared as the `1.1.0b12` modular candidate. Its SQLite
 adapter, gateway and Python SDK share that version and pin the same Core wheel.
 The Replio example is `1.1.0b2` and
 uses the new Sessions module. Product
 qualification and production cutover remain owned by each host because the core
 does not ship product credentials or create infrastructure.
+
+Automation toolkits expose explicit read-only revision review and exact-digest
+approval operations. Historical scheduled tasks, workflows and events remain
+paused until an authenticated product host captures that approval; Core never
+assigns them an owner during startup or migration.
 
 Core infers image input for recognised Claude model IDs even when an
 OpenAI-compatible subscription proxy is registered under a custom provider
