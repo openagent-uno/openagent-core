@@ -912,16 +912,24 @@ async def _sync_operational_search_unlocked(
     index = await asyncio.to_thread(_open_index, target)
     try:
         state = index.execute("SELECT * FROM search_index_state WHERE singleton_id=1").fetchone()
-        if (
-            _index_is_incompatible(
-                state,
-                instance_id=instance_id,
-                schema_version=schema_version,
-                fingerprint=fingerprint,
-                outbox_head=outbox_head,
-            )
-            or _index_has_rowid_mismatch(index)
-        ):
+        incompatible = _index_is_incompatible(
+            state,
+            instance_id=instance_id,
+            schema_version=schema_version,
+            fingerprint=fingerprint,
+            outbox_head=outbox_head,
+        )
+        # A mature FTS generation can contain millions of chunks.  The
+        # bidirectional anti-join deliberately checks every rowid, so it must
+        # never run on the asyncio thread that also serves the gateway and
+        # scheduler.  The connection allows a deliberate, non-concurrent
+        # thread hand-off (see ``_open_index``).
+        rowid_mismatch = (
+            False
+            if incompatible
+            else await asyncio.to_thread(_index_has_rowid_mismatch, index)
+        )
+        if incompatible or rowid_mismatch:
             await asyncio.to_thread(
                 _reset_index_generation,
                 index,
@@ -985,7 +993,10 @@ async def _sync_operational_search_unlocked(
             documents = int(index.execute("SELECT COUNT(*) FROM search_documents WHERE deleted_at_ms IS NULL").fetchone()[0])
             chunks = int(index.execute("SELECT COUNT(*) FROM search_chunks").fetchone()[0])
             fts_rows = int(index.execute("SELECT COUNT(*) FROM search_fts").fetchone()[0])
-            rowids_match = not _index_has_rowid_mismatch(index)
+            rowids_match = not await asyncio.to_thread(
+                _index_has_rowid_mismatch,
+                index,
+            )
             coverage = (
                 "ready"
                 if remaining == 0 and chunks == fts_rows and rowids_match
@@ -1119,7 +1130,13 @@ async def operational_search_status(db: Any) -> dict[str, Any]:
             fingerprint=fingerprint,
             outbox_head=outbox_head,
         )
-        rowid_mismatch = _index_has_rowid_mismatch(conn)
+        # Integrity verification is proportional to the complete derived
+        # corpus, not the small status row.  Keep it off the gateway event
+        # loop so a large index cannot freeze chat, REST, or scheduler ticks.
+        rowid_mismatch = await asyncio.to_thread(
+            _index_has_rowid_mismatch,
+            conn,
+        )
         if incompatible:
             payload.update(
                 ready=False,

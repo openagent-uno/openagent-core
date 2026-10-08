@@ -1,8 +1,11 @@
 """Canonical runtime writes feed the existing rebuildable search corpus."""
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import asyncio
 import unittest
 import sqlite3
+import threading
+from unittest.mock import patch
 
 from openagent_core import PrincipalRef, ExecutionContext, RunRequest
 from openagent_core.memory_access import CanonicalHistorySearch, HistoryAccess
@@ -10,6 +13,50 @@ from openagent_storage_sqlite import SqliteRuntimeStore
 
 
 class RuntimeSearchOutbox(unittest.IsolatedAsyncioTestCase):
+    async def test_full_index_integrity_checks_leave_event_loop_responsive(self):
+        from openagent_core.memory.db import MemoryDB
+        from openagent_core.memory.operational import search as search_module
+
+        with TemporaryDirectory() as directory:
+            store = SqliteRuntimeStore(Path(directory) / 'state.sqlite3')
+            await store.start()
+            db = MemoryDB(str(store.path))
+            await db.connect()
+            try:
+                await search_module.sync_operational_search(db, limit=100)
+                event_loop_thread = threading.get_ident()
+                observed_threads: list[int] = []
+                original = search_module._index_has_rowid_mismatch
+
+                def observed_check(connection):
+                    observed_threads.append(threading.get_ident())
+                    return original(connection)
+
+                async def heartbeat():
+                    await asyncio.sleep(0)
+                    return threading.get_ident()
+
+                with patch.object(
+                    search_module,
+                    '_index_has_rowid_mismatch',
+                    side_effect=observed_check,
+                ):
+                    status, heartbeat_thread = await asyncio.gather(
+                        search_module.operational_search_status(db),
+                        heartbeat(),
+                    )
+                    self.assertIn(status['state'], {'ready', 'warming'})
+                    self.assertEqual(heartbeat_thread, event_loop_thread)
+                    await search_module.sync_operational_search(db, limit=100)
+
+                self.assertGreaterEqual(len(observed_threads), 3)
+                self.assertTrue(
+                    all(thread_id != event_loop_thread for thread_id in observed_threads)
+                )
+            finally:
+                await db.close()
+                await store.close()
+
     async def test_atomic_write_retry_restart_backfill_and_index_loss(self):
         from openagent_core.memory.db import MemoryDB
         from openagent_core.memory.operational.search import operational_search_path
