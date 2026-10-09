@@ -1813,6 +1813,11 @@ class ModelDispatcher(BaseModel):
         self._db: Any = None
         self._mcp_pool: Any = None
         self._fallback_config: Any = None
+        # Keep the operator-authored refs separate from their live runtime
+        # objects. Catalog hot reloads can rotate a credential/base URL; each
+        # rebuild must recreate fallbacks from the fresh provider rows rather
+        # than retaining a model object with stale secrets.
+        self._configured_fallback_refs: dict[str, list[Any]] | None = None
         self._local_fallback = LocalFallbackPolicy()
 
         # Per-entry-model TeamRouterProvider. The provider's session
@@ -1847,10 +1852,7 @@ class ModelDispatcher(BaseModel):
             # esaurita. L'ultimo ripiego riuscito risaliva al 28-ago.
             # Qui i provider ci sono: si ri-innesta, ed e' idempotente
             # (`_prioritize_unique` deduplica per id).
-            if self._fallback_config is not None:
-                self._fallback_config = self._local_fallback.augment_fallback_config(
-                    self._fallback_config, providers_config=self._providers_config,
-                )
+            self._refresh_fallback_config()
         # Keep the guard's providers view current so the C2 $0-priced-scope
         # warning tracks a hot-reloaded catalog.
         if self._budget_guard is not None:
@@ -1911,19 +1913,82 @@ class ModelDispatcher(BaseModel):
         return self._fallback_config
 
     def set_fallback_config(self, fallback_config: Any) -> None:
-        self._fallback_config = self._local_fallback.augment_fallback_config(
-            fallback_config, providers_config=self._providers_config,
-        )
+        if fallback_config is not self._fallback_config:
+            self._configured_fallback_refs = (
+                None if fallback_config is None else {
+                    attr: list(getattr(fallback_config, attr, None) or [])
+                    for attr in (
+                        "on_error", "on_rate_limit", "on_context_overflow",
+                    )
+                }
+            )
+        self._fallback_config = fallback_config
+        self._refresh_fallback_config()
         for provider in self._team_providers.values():
             wire_model_runtime(provider, fallback_config=self._fallback_config)
+
+    def _refresh_fallback_config(self) -> None:
+        """Resolve catalog fallback refs through the normal provider runtime.
+
+        ``FallbackConfig.resolve_models`` only knows a small built-in vendor
+        map and therefore discarded valid catalog entries such as Moonshot,
+        ZAI, OpenRouter, and operator-hosted OpenAI-compatible providers. The
+        dispatcher owns the complete catalog (including DB credentials, base
+        URLs, and per-model sampling), so it is the only correct resolver.
+        Non-catalog refs are retained for the generic built-in resolver.
+        """
+        config = self._fallback_config
+        sources = self._configured_fallback_refs
+        if config is None or sources is None:
+            return
+        if not self._providers_config:
+            # Boot sequence: provider rows arrive during Agent.initialize().
+            for attr, values in sources.items():
+                setattr(config, attr, list(values))
+            return
+
+        known = {
+            entry.runtime_id
+            for entry in iter_configured_models(self._providers_config)
+        }
+        from openagent_core.core.metrics import ModelType
+        from openagent_core.models.native_provider import NativeProvider
+
+        db_path = _runtime_db_path(self._db)
+        for attr, values in sources.items():
+            resolved: list[Any] = []
+            for value in values:
+                if not isinstance(value, str) or value not in known:
+                    # Preserve direct Model objects and legacy built-in refs;
+                    # the runtime's ordinary resolver still owns those.
+                    resolved.append(value)
+                    continue
+                try:
+                    model = NativeProvider(
+                        model=value,
+                        providers_config=self._providers_config,
+                        db_path=db_path,
+                    ).build_runtime_model()
+                    model.model_type = ModelType.MODEL
+                    resolved.append(model)
+                except Exception as exc:  # noqa: BLE001 — one bad rung is skipped
+                    elog(
+                        "router.catalog_fallback_model_error",
+                        level="warning",
+                        model=value,
+                        error=str(exc) or type(exc).__name__,
+                    )
+            setattr(config, attr, resolved)
+
+        self._fallback_config = self._local_fallback.augment_fallback_config(
+            config, providers_config=self._providers_config,
+        )
 
     def set_local_fallback_policy(self, raw: Any) -> None:
         """Configure cloud/local standby routing before Agent.initialize()."""
         self._local_fallback = LocalFallbackPolicy(raw)
         if self._fallback_config is not None:
-            self._fallback_config = self._local_fallback.augment_fallback_config(
-                self._fallback_config, providers_config=self._providers_config,
-            )
+            self._refresh_fallback_config()
         for provider in self._team_providers.values():
             provider._local_fallback = self._local_fallback
             invalidate = getattr(provider, "_invalidate_session_cache", None)
