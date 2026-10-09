@@ -201,6 +201,8 @@ CREATE TABLE IF NOT EXISTS task_run_requests (
     created_at  REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_taskreq_unclaimed ON task_run_requests(claimed_at);
+CREATE INDEX IF NOT EXISTS idx_taskreq_ready
+    ON task_run_requests(claimed_at, created_at);
 
 -- One row per (run, vault note recalled). The join that lets the vault be a
 -- policy instead of a diary: which notes the agent READ before a run, and how
@@ -2817,6 +2819,38 @@ class MemoryDB:
         row = await cursor.fetchone()
         return self._row_to_task_run(row) if row else None
 
+    async def task_run_has_tool_activity(self, run_id: str) -> bool:
+        """Whether a scheduled run crossed the external-side-effect boundary.
+
+        Automatic retry is allowed only when this method proves there were no
+        tool calls. Any missing schema, query failure, or missing run fails
+        closed (``True``), because a false negative could duplicate an email,
+        post, or mutation after an ambiguous first attempt.
+        """
+        if not run_id:
+            return True
+        try:
+            run = await self.get_task_run(run_id)
+            if run is None:
+                return True
+            conn = await self._ensure_connected()
+            cursor = await conn.execute(
+                "SELECT 1 FROM tool_invocations "
+                "WHERE task_run_id = ? "
+                "   OR (root_kind = 'scheduled_run' AND root_id = ?) "
+                "   OR (? IS NOT NULL AND session_id = ?) "
+                "LIMIT 1",
+                (run_id, run_id, run.get("session_id"), run.get("session_id")),
+            )
+            return await cursor.fetchone() is not None
+        except Exception as error:  # noqa: BLE001 — retry safety fails closed
+            logger.warning(
+                "task_run.tool_activity_check_failed run_id=%s error=%s",
+                run_id,
+                str(error) or type(error).__name__,
+            )
+            return True
+
     async def list_task_runs(
         self,
         task_id: str,
@@ -3038,16 +3072,30 @@ class MemoryDB:
     # overlap.
 
     async def enqueue_task_run_request(
-        self, *, task_id: str, trigger: str = "manual",
+        self,
+        *,
+        task_id: str,
+        trigger: str = "manual",
+        not_before: float | None = None,
+        deduplicate: bool = False,
     ) -> str:
-        conn = await self._ensure_connected()
         req_id = str(uuid.uuid4())
-        await conn.execute(
-            "INSERT INTO task_run_requests "
-            "(id, task_id, trigger, created_at) VALUES (?, ?, ?, ?)",
-            (req_id, task_id, trigger, time.time()),
-        )
-        await conn.commit()
+        created_at = max(time.time(), float(not_before or 0.0))
+        async with self._isolated_write() as conn:
+            if deduplicate:
+                existing = await conn.execute(
+                    "SELECT id FROM task_run_requests "
+                    "WHERE task_id = ? AND trigger = ? LIMIT 1",
+                    (task_id, trigger),
+                )
+                row = await existing.fetchone()
+                if row is not None:
+                    return str(row[0])
+            await conn.execute(
+                "INSERT INTO task_run_requests "
+                "(id, task_id, trigger, created_at) VALUES (?, ?, ?, ?)",
+                (req_id, task_id, trigger, created_at),
+            )
         return req_id
 
     async def _claim_authorized_requests(self, table: str, definition_column: str, *, limit: int,
@@ -3058,13 +3106,15 @@ class MemoryDB:
             raise ValueError("Invalid request queue")
         clause = f" AND {definition_column} IN (SELECT value FROM json_each(?))" if definition_ids is not None else ""
         values = [json.dumps(definition_ids)] if definition_ids is not None else []
+        now = time.time()
         async with aiosqlite.connect(self.db_path, timeout=sqlite_busy_timeout_s()) as conn:
             conn.row_factory = aiosqlite.Row
             await conn.execute("BEGIN IMMEDIATE")
             cursor = await conn.execute(
                 f"UPDATE {table} SET claimed_at=? WHERE id IN (SELECT id FROM {table} "
-                f"WHERE claimed_at IS NULL{clause} ORDER BY created_at,id LIMIT ?) AND claimed_at IS NULL RETURNING *",
-                [time.time(), *values, int(limit)])
+                f"WHERE claimed_at IS NULL AND created_at <= ?{clause} "
+                f"ORDER BY created_at,id LIMIT ?) AND claimed_at IS NULL RETURNING *",
+                [now, now, *values, int(limit)])
             rows = [dict(row) for row in await cursor.fetchall()]
             await conn.commit()
         return sorted(rows, key=lambda row: (row["created_at"], row["id"]))

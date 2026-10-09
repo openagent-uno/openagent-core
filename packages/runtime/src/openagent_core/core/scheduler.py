@@ -79,6 +79,60 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+# A recurring task advances its cron slot before dispatch so two scheduler
+# ticks cannot fire the same occurrence. That is the right atomicity rule, but
+# it used to make a transient provider outage terminal: once the model returned
+# 429/503/timeout, the occurrence was gone until tomorrow (or next week).
+# Retry through the durable task request queue, with a future ``created_at``
+# acting as not-before. The chain is deliberately short and operator-tunable;
+# an empty value disables automatic retry.
+_TASK_RETRY_DELAYS_ENV = "OPENAGENT_SCHEDULED_TASK_RETRY_DELAYS_SECONDS"
+_TASK_RETRY_DELAYS_DEFAULT = (900.0, 3600.0, 14400.0)  # 15m, 1h, 4h
+_TASK_RETRY_TRIGGER_PREFIX = "automatic-retry"
+
+
+def _task_retry_delays() -> tuple[float, ...]:
+    """Configured transient-failure retry delays, bounded to eight attempts."""
+    raw = runtime_environment().get(_TASK_RETRY_DELAYS_ENV)
+    if raw is None:
+        return _TASK_RETRY_DELAYS_DEFAULT
+    if not str(raw).strip():
+        return ()
+    try:
+        values = tuple(float(item.strip()) for item in str(raw).split(","))
+    except (TypeError, ValueError):
+        return _TASK_RETRY_DELAYS_DEFAULT
+    if not values or any(value < 0 for value in values):
+        return _TASK_RETRY_DELAYS_DEFAULT
+    return values[:8]
+
+
+def _parse_task_retry_trigger(trigger: object) -> tuple[int, str | None]:
+    """Return ``(attempt, root_run_id)`` for an automatic retry trigger."""
+    text = str(trigger or "")
+    prefix = f"{_TASK_RETRY_TRIGGER_PREFIX}:"
+    if not text.startswith(prefix):
+        return 0, None
+    parts = text.split(":", 2)
+    if len(parts) != 3:
+        return 0, None
+    try:
+        attempt = int(parts[1])
+    except ValueError:
+        return 0, None
+    return (attempt, parts[2]) if attempt > 0 and parts[2] else (0, None)
+
+
+def _task_failure_is_transient(error: object) -> bool:
+    """Use the event pipeline's proven provider-outage classifier for tasks."""
+    try:
+        from openagent_core.core.event_dispatcher import _classify_delivery_failure
+
+        return _classify_delivery_failure(error) == "transient"
+    except Exception:  # noqa: BLE001 — classification must not break finalization
+        return False
+
+
 # Bounded event-delivery dispatch. ``_drain_event_deliveries`` claims the
 # ``received`` rows the events-manager MCP enqueued and dispatches each as a
 # DETACHED turn. An event turn can be very heavy (a ~250k-token support-thread
@@ -597,12 +651,43 @@ class Scheduler:
             elog("scheduler.run_now", name=task.get("name"),
                  request_id=req.get("id"))
             self._spawn_workflow(
-                self.run_task(
-                    task,
-                    trigger=req.get("trigger") or "manual",
-                    request_id=req.get("id"),
-                )
+                self._run_requested_task(req, task)
             )
+
+    async def _run_requested_task(self, request: dict, task: dict) -> None:
+        """Run one claimed request and continue a bounded retry chain safely.
+
+        Product automation admission raises a generic wrapper exception after
+        the scheduler has already persisted the useful provider error. This
+        detached runner logs the wrapper, then reads the linked run and decides
+        from the durable detail whether another attempt is safe.
+        """
+        trigger = request.get("trigger") or "manual"
+        try:
+            await self.run_task(
+                task, trigger=trigger, request_id=request.get("id"),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — detached failure is durable below
+            elog(
+                "scheduler.task_request_failed",
+                level="warning",
+                task=task.get("name"),
+                request_id=request.get("id"),
+                error=str(exc).strip() or type(exc).__name__,
+            )
+
+        linked = await self.db.get_task_run_request(request.get("id"))
+        run_id = linked.get("run_id") if linked else None
+        row = await self.db.get_task_run(run_id) if run_id else None
+        retry_attempt, _ = _parse_task_retry_trigger(trigger)
+        if (
+            retry_attempt > 0
+            and row is not None
+            and row.get("status") == "failed"
+        ):
+            await self._maybe_schedule_task_retry(task, row)
 
     def _event_dispatch_concurrency(self) -> int:
         """Max event-delivery turns allowed in flight at once (always >= 1).
@@ -1371,12 +1456,29 @@ class Scheduler:
                 run_id, task, status="cancelled", error="Stopped by user",
             )
             raise
-        except Exception as exc:
-            detail = str(exc).strip() or type(exc).__name__
-            await self._record_task_finish(
-                run_id, task, status="failed", error=detail,
+        except Exception as exc:  # noqa: BLE001 — failure is finalized durably
+            # ``_execute_task`` normally finalized the row with the original
+            # provider error before product admission raised its generic
+            # wrapper. Preserve that useful detail; only synthesize one when
+            # no terminal row exists (for example, a hook failed before it
+            # entered the scheduler execution path).
+            row = await self.db.get_task_run(run_id) if self.db is not None else None
+            if row is None or row.get("status") == "running":
+                detail = str(exc).strip() or type(exc).__name__
+                await self._record_task_finish(
+                    run_id, task, status="failed", error=detail,
+                )
+                row = await self.db.get_task_run(run_id) if self.db is not None else None
+            elog(
+                "scheduler.preclaimed_task_failed",
+                level="warning",
+                task=task.get("name"),
+                run_id=run_id,
+                error=(row or {}).get("error") or str(exc) or type(exc).__name__,
             )
-            raise
+            if row is not None and row.get("status") == "failed":
+                await self._maybe_schedule_task_retry(task, row)
+            return
         row = await self.db.get_task_run(run_id) if self.db is not None else None
         if row is not None and row.get("status") == "running":
             await self._record_task_finish(
@@ -1385,6 +1487,78 @@ class Scheduler:
                 status="success",
                 output="Completed by scheduled-task execution hook",
             )
+        elif row is not None and row.get("status") == "failed":
+            await self._maybe_schedule_task_retry(task, row)
+
+    async def _maybe_schedule_task_retry(self, task: dict, run: dict) -> str | None:
+        """Queue a delayed retry for a transient, side-effect-free failure.
+
+        The no-tool proof is the safety boundary: after even one tool call we
+        cannot know whether an email/post/mutation reached the remote system,
+        so the scheduler leaves the failure for a human instead of risking a
+        duplicate. One-shot tasks are also excluded because their captured
+        occurrence grant is intentionally completed after the first attempt.
+        """
+        if self.db is None or run.get("status") != "failed":
+            return None
+        delays = _task_retry_delays()
+        if not delays or is_one_shot_expression(task.get("cron_expression") or ""):
+            return None
+        error = str(run.get("error") or "").strip()
+        if not error or not _task_failure_is_transient(error):
+            return None
+        if await self.db.task_run_has_tool_activity(str(run.get("id") or "")):
+            elog(
+                "scheduler.task_retry_unsafe",
+                level="warning",
+                task=task.get("name"),
+                run_id=run.get("id"),
+                reason="tool activity already recorded",
+            )
+            return None
+
+        current = await self.db.get_task(task.get("id"))
+        if current is None or not current.get("enabled"):
+            return None
+        attempt, root_run_id = _parse_task_retry_trigger(run.get("trigger"))
+        root_run_id = root_run_id or str(run.get("id") or "")
+        if not root_run_id or attempt >= len(delays):
+            if attempt >= len(delays):
+                elog(
+                    "scheduler.task_retry_exhausted",
+                    level="warning",
+                    task=task.get("name"),
+                    run_id=run.get("id"),
+                    attempts=attempt,
+                )
+            return None
+
+        next_attempt = attempt + 1
+        delay = delays[attempt]
+        trigger = f"{_TASK_RETRY_TRIGGER_PREFIX}:{next_attempt}:{root_run_id}"
+        not_before = time.time() + delay
+        request_id = await self.db.enqueue_task_run_request(
+            task_id=task["id"],
+            trigger=trigger,
+            not_before=not_before,
+            deduplicate=True,
+        )
+        marker = (
+            f"automatic retry {next_attempt}/{len(delays)} queued "
+            f"for unix={not_before:.3f}"
+        )
+        await self.db.update_task_run(
+            str(run["id"]), error=f"{error} | {marker}"[:_MAX_TASK_RUN_OUTPUT],
+        )
+        elog(
+            "scheduler.task_retry_queued",
+            task=task.get("name"),
+            run_id=run.get("id"),
+            request_id=request_id,
+            attempt=next_attempt,
+            delay_seconds=delay,
+        )
+        return request_id
 
     async def _check_and_run(self) -> None:
         """Check for due tasks and execute them.
