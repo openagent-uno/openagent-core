@@ -27,7 +27,8 @@ from openagent_core import (
     ToolDefinition,
 )
 from openagent_core.runtime import execution_scope
-from openagent_module_search import descriptor as search_descriptor
+from openagent_module_search import (SEARCH_PROMPT, SearchModule,
+    descriptor as search_descriptor)
 from openagent_module_sessions import descriptor as sessions_descriptor
 from openagent_module_events import descriptor as events_descriptor
 from openagent_module_mcp import descriptor as mcp_descriptor
@@ -73,6 +74,49 @@ class ProfileExecutor:
         if hold is not None:
             await hold.wait()
         return request.input
+
+
+class FederatedSearch(unittest.IsolatedAsyncioTestCase):
+    async def test_one_unavailable_domain_does_not_discard_other_results(self):
+        class Provider:
+            def __init__(self, domain, *, response=None, error=None):
+                self.domain = domain
+                self.response = response or {"hits": ()}
+                self.error = error
+
+            async def search(self, context, *, query, limit):
+                if self.error is not None:
+                    raise self.error
+                return self.response
+
+        providers = (
+            Provider("scheduler", error=RuntimeError(
+                "Not authorized for automation.read"
+            )),
+            Provider("sessions", response={"hits": ({
+                "session_ref": "session:tenant:one", "title": "Needle"
+            },)}),
+            Provider("mcp", error=RuntimeError("MCP catalog is unavailable")),
+        )
+        runtime = SimpleNamespace(
+            services_for=lambda key: providers if key == "search.providers" else ()
+        )
+        module = SearchModule(SimpleNamespace(runtime=runtime))
+
+        result = await module._call({"query": "needle"}, object())
+
+        self.assertEqual(result["scope"], "openagent-internal")
+        self.assertEqual(result["domains"], ["sessions"])
+        self.assertEqual(result["searched_domains"], ["sessions"])
+        self.assertEqual(result["results"], [{
+            "domain": "sessions",
+            "result": {"session_ref": "session:tenant:one", "title": "Needle"},
+        }])
+        self.assertEqual(result["unavailable_domains"], [
+            {"domain": "mcp", "reason": "unavailable", "error_type": "RuntimeError"},
+            {"domain": "scheduler", "reason": "unauthorized", "error_type": "RuntimeError"},
+        ])
+        self.assertIn("does not search the public Internet", SEARCH_PROMPT.text)
 
 
 class ModularRuntime(unittest.IsolatedAsyncioTestCase):
