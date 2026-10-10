@@ -30,24 +30,21 @@ bounded, per-session hand-off map that ``quality_monitor.spawn_scoring`` drains
 synchronously right after the turn — the judge task then carries the trace it
 captured, immune to a later turn overwriting it.
 
-OFF BY DEFAULT / §17
---------------------
-Keyed on the SAME switch as the quality monitor (``OPENAGENT_QUALITY_MONITOR_
-ENABLED``): when the monitor is off, ``maybe_open`` returns no token, ``record``
-is a bare no-op (no sink), and ``publish`` stores nothing — so a deployment that
-never enabled the monitor is byte-identical. Everything here is best-effort:
-a bookkeeping miss must cost a trace, never a turn.
+ALWAYS-ON CORRECTNESS RECEIPT / §17
+-----------------------------------
+The compact trace is also the pre-send proof that an assistant-reported tool or
+authorization error actually happened.  That is execution correctness, not
+optional quality telemetry, so capture is always enabled.  The quality monitor
+still decides independently whether to consume the receipt for scoring.  The
+trace is bounded and process-local; everything here remains best-effort, so a
+bookkeeping miss must cost a receipt, never a turn.
 """
 from __future__ import annotations
 
-from openagent_core.configuration import runtime_environment
 import contextvars
 import json
-import os
 from collections import OrderedDict
 from typing import Any, Optional
-
-_ENABLED_ENV = "OPENAGENT_QUALITY_MONITOR_ENABLED"
 
 # Bounds — a runaway loop, or a tool that returns tens of KB, must cost a
 # bounded trace, not unbounded memory and not a ballooning judge prompt.
@@ -67,21 +64,11 @@ _SINK: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
 _PUBLISHED: "OrderedDict[str, list[tuple[str, str]]]" = OrderedDict()
 
 
-def _truthy(v: str) -> bool:
-    return v.strip().lower() in ("1", "true", "yes", "on")
-
-
 def _enabled() -> bool:
-    if _truthy(runtime_environment().get(_ENABLED_ENV, "0")):
-        return True
-    # The lean local-event reply guard verifies final status/action claims
-    # against the tool evidence before sending. Capture is therefore part of
-    # execution correctness for this profile, not merely quality telemetry.
-    try:
-        from openagent_core.core.execution_profile import lean_local_event_active
-        return lean_local_event_active()
-    except Exception:  # noqa: BLE001
-        return False
+    # Keep this helper for callers/tests that ask whether a receipt is
+    # available.  Quality-monitor enablement is intentionally NOT consulted:
+    # reply grounding needs the same evidence on ordinary chat turns too.
+    return True
 
 
 def _excerpt(value: Any) -> str:
@@ -180,14 +167,20 @@ def record_execution(entry: Any) -> None:
 
 
 def publish(session_id: Optional[str], sink: Optional[dict]) -> None:
-    """Store a completed run's trace for the session, bounded. No-op for an
-    empty trace (a no-tool run needs no trace) or when disabled."""
-    if not session_id or not sink:
+    """Store a completed run's trace for the session, bounded.
+
+    An empty completed run explicitly clears the prior receipt.  Leaving the
+    old entry behind lets a no-tool reply borrow evidence from the preceding
+    turn in the same session, which is precisely the false-attestation class
+    this hand-off exists to prevent.
+    """
+    if not session_id or sink is None:
         return
     tools = sink.get("tools") or []
-    if not tools:
-        return
     try:
+        if not tools:
+            _PUBLISHED.pop(session_id, None)
+            return
         _PUBLISHED[session_id] = list(tools)
         _PUBLISHED.move_to_end(session_id)
         while len(_PUBLISHED) > _MAX_SESSIONS:

@@ -145,6 +145,27 @@ async def t_no_fallback_when_stream_yields(_ctx: TestContext) -> None:
     assert done and done[0]["text"] == "Hello world", done
 
 
+@test("agent_run_stream", "stream terminal text strips an invented authorization receipt")
+async def t_stream_guard_authorization_receipt(_ctx: TestContext) -> None:
+    from openagent_core.core import tool_trace
+
+    session_id = "sess-auth-receipt"
+    tool_trace.take(session_id)
+    draft = (
+        "Ho appena provato a leggere il Vault. "
+        "La chiamata restituisce Not authorized for memory.read."
+    )
+    model = _FakeModel(deltas=[draft])
+    agent = _make_agent(model)
+
+    events = await _drive(agent, "Ricordi il Patek?", session_id=session_id)
+    done = [event for event in events if event.get("kind") == "done"]
+
+    assert done, events
+    assert "Not authorized for memory.read" not in done[-1]["text"]
+    assert "non lo presento come reale" in done[-1]["text"]
+
+
 @test("agent_run_stream", "stream empty + generate() raises → clean done with empty text")
 async def t_fallback_generate_raises(_ctx: TestContext) -> None:
     model = _FakeModel(

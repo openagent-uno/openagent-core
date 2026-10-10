@@ -48,6 +48,25 @@ from openagent_core.core.logging import elog
 _ENABLED_ENV = "OPENAGENT_REPLY_GUARD_ENABLED"
 _BACKING_TOOLS_ENV = "OPENAGENT_REPLY_GUARD_BACKING_TOOLS"
 
+# A runtime authorization error is a receipt, not prose the model may infer.
+# This exact family came from a production Telegram turn where the assistant
+# said it had just called the Vault, while the append-only tool journal proved
+# that no tool invocation occurred.  Match only the stable runtime wording so
+# ordinary explanations about permissions are unaffected.
+_AUTHORIZATION_ERROR = re.compile(
+    r"Not\s+authorized\s+for\s+"
+    r"(?P<action>[A-Za-z0-9_:-]+(?:\.[A-Za-z0-9_:-]+)*)",
+    re.IGNORECASE,
+)
+_USER_REPORTED_ERROR = re.compile(
+    r"(?:you\s+(?:said|reported|saw|received|got)|"
+    r"the\s+error\s+you\s+(?:reported|saw|received)|"
+    r"mi\s+hai\s+(?:detto|scritto|segnalato)|"
+    r"hai\s+(?:detto|scritto|segnalato|visto|ricevuto)|"
+    r"l['’]errore\s+che\s+(?:hai|mi\s+hai))",
+    re.IGNORECASE,
+)
+
 # Tool-name substrings (case-insensitive) that count as a REAL backing action
 # for a "a human will follow up" promise — creating a handoff, task, ticket, or
 # team notification. Generic on purpose; an operator extends the set per
@@ -529,6 +548,77 @@ def _trace_result_succeeded(excerpt: str) -> bool:
     return bool(value) and not bool(_TRACE_ERROR.search(value))
 
 
+def unbacked_authorization_errors(
+    text: Optional[str], rows: list[tuple[str, str]], *, user_message: str = "",
+) -> list[str]:
+    """Return exact runtime authorization errors absent from this turn's tools.
+
+    Quoting an error the user explicitly supplied is allowed only when the
+    surrounding reply attributes it to the user.  An assistant statement such
+    as "I just tried it; Not authorized for memory.read" must carry the same
+    exact error in a current-turn tool result.
+    """
+    if not text:
+        return []
+    evidence = "\n".join(str(excerpt or "") for _name, excerpt in rows or ())
+    evidence_low = evidence.lower()
+    user_low = (user_message or "").lower()
+    unbacked: list[str] = []
+    for match in _AUTHORIZATION_ERROR.finditer(text):
+        claim = match.group(0)
+        if claim.lower() in evidence_low:
+            continue
+        context = text[max(0, match.start() - 180):match.end() + 40]
+        if claim.lower() in user_low and _USER_REPORTED_ERROR.search(context):
+            continue
+        if claim not in unbacked:
+            unbacked.append(claim)
+    return unbacked
+
+
+def _unverified_authorization_fallback(text: str) -> str:
+    italian = bool(re.search(
+        r"\b(?:ho|abbiamo|errore|autorizzazione|chiamata|memoria|vault|"
+        r"provato|ricevuto|restituisce)\b|[àèéìòù]",
+        text or "", re.IGNORECASE,
+    ))
+    if italian:
+        return (
+            "Non ho una ricevuta di tool che confermi quell'errore di "
+            "autorizzazione, quindi non lo presento come reale. Devo eseguire "
+            "la chiamata al Vault e riportare soltanto il suo esito effettivo."
+        )
+    return (
+        "I do not have a tool receipt confirming that authorization error, so "
+        "I will not present it as real. I need to call the Vault and report "
+        "only the result it actually returns."
+    )
+
+
+def _strip_unbacked_authorization_claims(text: str, claims: list[str]) -> str:
+    """Remove sentences carrying fabricated auth receipts, then explain why."""
+    if not claims:
+        return text
+    # Structured controller replies need to keep their envelope valid.
+    stripped = (text or "").strip()
+    try:
+        value = json.loads(stripped)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        value = None
+    fallback = _unverified_authorization_fallback(text)
+    if isinstance(value, dict) and "reply" in value:
+        value["reply"] = fallback
+        return json.dumps(value, ensure_ascii=False)
+
+    pieces = re.split(r"(?<=[.!?])\s+|\n+", stripped)
+    kept = [
+        piece.strip() for piece in pieces
+        if piece.strip() and not _AUTHORIZATION_ERROR.search(piece)
+    ]
+    kept.append(fallback)
+    return " ".join(kept).strip()
+
+
 def _has_successful_backing_action(rows: list[tuple[str, str]]) -> bool:
     subs = _backing_tool_substrings()
     return any(
@@ -919,13 +1009,20 @@ async def guard_reply(
     from openagent_core.core.execution_profile import lean_local_event_active
 
     strict_local = lean_local_event_active()
-    if not (enabled() or strict_local) or not reply:
+    if not reply:
         return reply
     try:
-        trace_rows: list[tuple[str, str]] = []
-        if strict_local:
-            from openagent_core.core import tool_trace
-            trace_rows = list(tool_trace.peek(session_id) or [])
+        # Authorization claims are guarded on every profile.  A compact trace
+        # is an execution receipt, not an opt-in quality feature.
+        from openagent_core.core import tool_trace
+        trace_rows: list[tuple[str, str]] = list(
+            tool_trace.peek(session_id) or []
+        )
+        fabricated_authorization = unbacked_authorization_errors(
+            reply, trace_rows, user_message=user_message,
+        )
+        if not (enabled() or strict_local or fabricated_authorization):
+            return reply
         from openagent_core.core.dry_run import is_dry_run
         dry_run = is_dry_run()
 
@@ -967,9 +1064,22 @@ async def guard_reply(
             has_human_promise, has_future_promise, has_action_claim,
             has_commercial_promise, has_unsupported_fix_status,
             has_unsupported_account_state, fabricated_ids, fabricated_money,
-            unbacked_tracking,
+            unbacked_tracking, fabricated_authorization,
         )):
             return reply
+        if fabricated_authorization:
+            cleaned = _strip_unbacked_authorization_claims(
+                reply, fabricated_authorization,
+            )
+            elog(
+                "reply_guard.stripped",
+                level="warning",
+                session_id=session_id,
+                reason="unbacked_authorization_error",
+                errors=len(fabricated_authorization),
+                tools=len(trace_rows),
+            )
+            return cleaned
         if has_unsupported_account_state:
             cleaned = _replace_structured_reply(
                 reply, _missing_account_evidence_for(reply),

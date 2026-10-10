@@ -299,6 +299,29 @@ async def t_run_one_shot(ctx: TestContext) -> None:
     assert isinstance(out[-1], TurnComplete), f"TurnComplete must be last; got {out[-1]!r}"
 
 
+@test("stream", "guarded terminal text supersedes stale streamed deltas")
+async def t_terminal_text_supersedes_deltas(ctx: TestContext) -> None:
+    from openagent_core.stream.events import OutTextFinal
+    from openagent_core.stream.session import StreamSession
+
+    class _RevisingAgent(_FakeAgent):
+        async def run_stream(self, **_kwargs):
+            yield {"kind": "delta", "text": "unverified draft"}
+            yield {"kind": "done", "text": "verified final"}
+
+    sess = StreamSession(
+        _RevisingAgent([]), client_id="c", session_id="guarded-terminal",
+    )
+    summary = await sess.run_one_shot("hi", speak=False)
+    assert summary["text"] == "verified final", summary
+
+    frames = []
+    while not sess.outbound.empty():
+        frames.append(sess.outbound.get_nowait())
+    finals = [frame for frame in frames if isinstance(frame, OutTextFinal)]
+    assert finals and finals[-1].text == "verified final", frames
+
+
 @test("stream", "OA-UI marker is hidden across deltas and emitted as an ordered part")
 async def t_ui_marker_stream_parts(ctx: TestContext) -> None:
     import tempfile

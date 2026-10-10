@@ -538,15 +538,85 @@ async def t_local_receipt_fix_status(ctx: TestContext) -> None:
     assert "non è verificato" in payload["reply"]
 
 
-@test("reply_guard", "tool trace capture is automatically enabled for lean events")
-async def t_local_trace_enabled(ctx: TestContext) -> None:
+@test("reply_guard", "tool trace capture is always enabled as a correctness receipt")
+async def t_trace_always_enabled(ctx: TestContext) -> None:
     from openagent_core.core import tool_trace
     from openagent_core.core.execution_profile import lean_local_event_scope
 
     os.environ.pop("OPENAGENT_QUALITY_MONITOR_ENABLED", None)
-    assert not tool_trace._enabled()
+    assert tool_trace._enabled()
     with lean_local_event_scope(True):
         assert tool_trace._enabled()
+
+
+@test("reply_guard", "an empty turn clears the prior tool receipt")
+async def t_trace_empty_turn_clears_prior(ctx: TestContext) -> None:
+    from openagent_core.core import tool_trace
+
+    first, first_token = tool_trace.maybe_open()
+    try:
+        tool_trace.record("vault_read_note", "ok")
+    finally:
+        tool_trace.close(first_token)
+    tool_trace.publish("same-session", first)
+    assert tool_trace.peek("same-session")
+
+    empty, empty_token = tool_trace.maybe_open()
+    tool_trace.close(empty_token)
+    tool_trace.publish("same-session", empty)
+    assert tool_trace.peek("same-session") is None
+
+
+@test("reply_guard", "unbacked runtime authorization errors are stripped on every profile")
+async def t_unbacked_authorization_error(ctx: TestContext) -> None:
+    from openagent_core.core import reply_guard
+
+    _guard_on(False)
+    model = _FakeModel()
+    draft = (
+        "Ho appena provato a leggere il Vault. "
+        "La chiamata restituisce Not authorized for memory.read."
+    )
+    with _Trace(enabled=True, rows=[]):
+        out = await reply_guard.guard_reply(
+            _FakeAgent(model), "sid", "Ricordi il Patek?", draft,
+        )
+    assert "Not authorized for memory.read" not in out
+    assert "non lo presento come reale" in out
+    assert model.calls == [], "authorization receipt guard must be deterministic"
+
+
+@test("reply_guard", "a real tool authorization error remains reportable")
+async def t_backed_authorization_error(ctx: TestContext) -> None:
+    from openagent_core.core import reply_guard
+
+    _guard_on(False)
+    draft = "Ho provato ora: Not authorized for memory.read."
+    rows = [
+        ("vault_read_note", "result=Not authorized for memory.read"),
+    ]
+    with _Trace(enabled=True, rows=rows):
+        out = await reply_guard.guard_reply(
+            _FakeAgent(_FakeModel()), "sid", "Leggi il Vault", draft,
+        )
+    assert out == draft
+
+
+@test("reply_guard", "an attributed user-reported authorization error is not rewritten")
+async def t_quoted_user_authorization_error(ctx: TestContext) -> None:
+    from openagent_core.core import reply_guard
+
+    _guard_on(False)
+    user = "Friday mi ha mostrato Not authorized for memory.manage"
+    draft = (
+        "L'errore che hai segnalato, Not authorized for memory.manage, "
+        "va verificato con una chiamata reale."
+    )
+    with _Trace(enabled=True, rows=[]):
+        out = await reply_guard.guard_reply(
+            _FakeAgent(_FakeModel()), "sid", user, draft,
+        )
+    assert out == draft
 
 
 @test("reply_guard", "tool trace records nested tool-search args with secrets redacted")

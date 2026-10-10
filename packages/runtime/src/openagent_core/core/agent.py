@@ -2014,6 +2014,20 @@ class Agent:
                         continue
                     event = {**event, "text": visible}
                 if event.get("kind") == "done":
+                    # Streaming turns need the same pre-send integrity guard as
+                    # run().  The terminal text is authoritative for persistence
+                    # and batched bridges; StreamSession replaces its local
+                    # accumulation when this differs from emitted deltas.
+                    if not event.get("errored"):
+                        try:
+                            from openagent_core.core import reply_guard
+                            guarded = await reply_guard.guard_reply(
+                                self, session_id, message, event.get("text", ""),
+                                model_override=model_override,
+                            )
+                            event = {**event, "text": guarded}
+                        except Exception:  # noqa: BLE001 — guard never breaks a turn
+                            pass
                     # Quality monitor (opt-in, sampled): grade this completed
                     # STREAMING turn off the reply path. Scheduled here on the
                     # 'done' event (not after the loop) because the consumer

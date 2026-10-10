@@ -1819,6 +1819,7 @@ class StreamTurnRunner:
 
         try:
             try:
+                terminal_text_replaced_stream = False
                 async for event in self._agent.run_stream(
                     message=text,
                     user_id=client_id,
@@ -1876,21 +1877,35 @@ class StreamTurnRunner:
                                 code=str(event.get("error_code") or "generic"),
                             )
                             break
-                        if event.get("text") and not accumulated:
-                            tail = event["text"]
-                            accumulated.append(tail)
-                            visible_tail = content_stream_filter.feed(tail)
-                            if visible_tail:
-                                await publish(OutTextDelta(
-                                    session_id=session_id,
-                                    seq=sess.next_seq(),
-                                    ts_ms=now_ms(),
-                                    text=visible_tail,
-                                ))
-                                if speaker is not None:
-                                    await text_q.put(visible_tail)
+                        terminal_text = event.get("text")
+                        if terminal_text is not None:
+                            streamed_text = "".join(accumulated)
+                            if streamed_text:
+                                if terminal_text != streamed_text:
+                                    # The pre-send guard revised the draft.
+                                    # Keep the terminal frame canonical for
+                                    # transcript persistence and batched
+                                    # channels instead of silently preferring
+                                    # stale deltas.
+                                    accumulated[:] = [terminal_text]
+                                    terminal_text_replaced_stream = True
+                            elif terminal_text:
+                                accumulated.append(terminal_text)
+                                visible_tail = content_stream_filter.feed(terminal_text)
+                                if visible_tail:
+                                    await publish(OutTextDelta(
+                                        session_id=session_id,
+                                        seq=sess.next_seq(),
+                                        ts_ms=now_ms(),
+                                        text=visible_tail,
+                                    ))
+                                    if speaker is not None:
+                                        await text_q.put(visible_tail)
                         break
-                visible_tail = content_stream_filter.finish()
+                visible_tail = (
+                    "" if terminal_text_replaced_stream
+                    else content_stream_filter.finish()
+                )
                 if visible_tail:
                     await publish(OutTextDelta(
                         session_id=session_id,
