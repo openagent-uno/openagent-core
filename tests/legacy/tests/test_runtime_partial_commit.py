@@ -310,6 +310,14 @@ async def t_recover_missing_journal_history(ctx: TestContext) -> None:
         ]:
             await db.append_session_event(session_id, event_type, {"text": text})
 
+        # A long-lived shared connection can legitimately have another SQL
+        # statement in progress.  Recovery already committed through a fresh
+        # connection, so its v2 projection must not fall back to this one.
+        async def shared_projection_would_fail(_session_id: str) -> None:
+            raise RuntimeError("cannot open savepoint - SQL statements in progress")
+
+        db._project_operational_session = shared_projection_would_fail  # type: ignore[method-assign]
+
         recovered_count = await db.recover_session_from_journal(
             session_id, current_text="[language hint]\ncontinue now",
         )

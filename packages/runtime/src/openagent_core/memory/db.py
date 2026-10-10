@@ -2492,6 +2492,38 @@ class MemoryDB:
                 exc,
             )
 
+    async def _project_committed_operational_session(self, session_id: str) -> None:
+        """Project an already-committed legacy repair on a fresh connection.
+
+        Recovery writers intentionally commit through their own SQLite
+        connection.  Reusing ``self._conn`` afterwards can fail before the
+        savepoint opens when an unrelated reader still has a statement in
+        progress (``cannot open savepoint - SQL statements in progress``).
+        A detached transaction is the matching boundary for the normalized
+        projection and cannot inherit that connection-local state.
+        """
+        if not session_id:
+            return
+        conn = await aiosqlite.connect(
+            self.db_path,
+            timeout=sqlite_busy_timeout_s(),
+        )
+        try:
+            await conn.execute(f"PRAGMA busy_timeout = {sqlite_busy_timeout_ms()}")
+            await conn.execute("PRAGMA foreign_keys = ON")
+            await conn.execute("BEGIN IMMEDIATE")
+            from openagent_core.memory.operational.repository import (
+                project_legacy_session_async,
+            )
+
+            await project_legacy_session_async(conn, session_id)
+            await conn.commit()
+        except BaseException:
+            await conn.rollback()
+            raise
+        finally:
+            await conn.close()
+
     async def set_operational_storage_phase(self, phase: str):
         """Explicitly promote or roll back normalized runtime reads.
 
@@ -6793,10 +6825,7 @@ class MemoryDB:
         # Projection is best-effort by design; the accepted legacy repair is
         # already durable even if the additive v2 mirror must catch up later.
         try:
-            await self._ensure_connected()
-            await self._project_operational_session(session_id)
-            assert self._conn is not None
-            await self._conn.commit()
+            await self._project_committed_operational_session(session_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "stale session run projection deferred for %s: %s",
@@ -7148,10 +7177,7 @@ class MemoryDB:
             await conn.close()
 
         try:
-            await self._ensure_connected()
-            await self._project_operational_session(session_id)
-            assert self._conn is not None
-            await self._conn.commit()
+            await self._project_committed_operational_session(session_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "journal continuity projection deferred for %s: %s",
