@@ -23,6 +23,18 @@ _STATELESS_COMPLETION = contextvars.ContextVar(
 _TRUTHY = {"1", "true", "yes", "on"}
 _FALSEY = {"0", "false", "no", "off"}
 
+# A loopback subscription proxy still runs the vendor's cloud model. Keep
+# background model selection consistent with the original runtime contract.
+_CLOUD_MODEL_FAMILIES = (
+    "claude", "gpt-", "gpt4", "gpt5", "o1-", "o3-", "o4-",
+    "gemini", "grok", "deepseek", "mistral-large", "command-r",
+)
+
+
+def _is_cloud_model_id(runtime_id: str) -> bool:
+    model = runtime_id.split(":", 1)[-1].strip().lower()
+    return any(family in model for family in _CLOUD_MODEL_FAMILIES)
+
 
 def lean_local_event_active() -> bool:
     return bool(_LEAN_LOCAL_EVENT.get())

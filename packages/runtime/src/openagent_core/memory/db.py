@@ -2453,7 +2453,8 @@ class MemoryDB:
         # confine dell'intervallo non fanno il checkpoint due volte.
         _LAST_WAL_CHECKPOINT[key] = now
         try:
-            await conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            async with conn.execute("PRAGMA wal_checkpoint(PASSIVE)") as cursor:
+                await cursor.fetchall()
         except Exception:
             # WAL occupato o lockato: si riprova al prossimo intervallo.
             pass
@@ -2560,7 +2561,7 @@ class MemoryDB:
             await conn.close()
 
     @asynccontextmanager
-    async def _isolated_write(self):
+    async def _isolated_write(self, *, lock_wait_ms: int | None = None):
         """A short-lived write connection for the writes that must not be lost.
 
         The rule, arrived at by measurement rather than taste: use this where
@@ -2588,12 +2589,13 @@ class MemoryDB:
 
         The wait is short on purpose: see ``delivery_lock_wait_ms``.
         """
+        wait_ms = delivery_lock_wait_ms() if lock_wait_ms is None else lock_wait_ms
         conn = await aiosqlite.connect(
-            self.db_path, timeout=delivery_lock_wait_ms() / 1000.0,
+            self.db_path, timeout=wait_ms / 1000.0,
         )
         conn.row_factory = aiosqlite.Row
         try:
-            await conn.execute(f"PRAGMA busy_timeout = {delivery_lock_wait_ms()}")
+            await conn.execute(f"PRAGMA busy_timeout = {wait_ms}")
             await conn.execute("PRAGMA foreign_keys = ON")
             await conn.execute("BEGIN IMMEDIATE")
             yield conn
@@ -2719,6 +2721,19 @@ class MemoryDB:
 
     async def get_due_tasks(self, now: float) -> list[dict]:
         """Get all enabled tasks whose next_run is <= now."""
+        if self._owns_connection:
+            await self._ensure_connected()
+            # The atomic claimant advances schedules on another connection;
+            # a long-lived reader must not repeatedly return its stale cursor.
+            async with aiosqlite.connect(
+                self.db_path, timeout=sqlite_busy_timeout_s(),
+            ) as conn:
+                conn.row_factory = aiosqlite.Row
+                async with conn.execute(
+                    "SELECT * FROM scheduled_tasks WHERE enabled = 1 "
+                    "AND next_run <= ? ORDER BY next_run ASC", (now,),
+                ) as cursor:
+                    return [dict(row) for row in await cursor.fetchall()]
         conn = await self._ensure_connected()
         cursor = await conn.execute(
             "SELECT * FROM scheduled_tasks WHERE enabled = 1 AND next_run <= ? ORDER BY next_run ASC",
@@ -6370,6 +6385,20 @@ class MemoryDB:
         session-reset bug). Leaving ``user_id`` NULL lets the runtime
         claim and own the row; tenancy is carried by ``session_id``
         (e.g. ``tg:<uid>``), never by this column."""
+        if self._owns_connection:
+            await self._ensure_connected()
+            # A shared reader can hold a WAL snapshot older than the latest
+            # provider commit. Promoting it to a writer fails immediately
+            # (SQLITE_BUSY_SNAPSHOT), regardless of busy_timeout. Acquire the
+            # writer before reading metadata, and project on that transaction.
+            async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+                writer = type(self).from_connection(conn, db_path=self.db_path)
+                await writer.upsert_session(
+                    session_id, client_id=client_id, title=title, model=model,
+                    framework=framework, device_id=device_id,
+                    parent_session_id=parent_session_id, origin=origin, kind=kind,
+                )
+            return
         conn = await self._ensure_connected()
         now = int(time.time())
         existing = await (
