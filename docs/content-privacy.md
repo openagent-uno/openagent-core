@@ -146,7 +146,7 @@ and tool caches remain separate writer boundaries.
 
 The legacy engine serializer and compaction writer consume those exact
 identities/origins in the checkpoints below; already persisted legacy data still
-requires baseline reconciliation. No standalone runtime
+requires baseline reconciliation. No released standalone runtime
 installs this publisher or callback yet. These live public-ledger tests remain
 source qualification and never establish Shopify readiness or released artifact
 compatibility.
