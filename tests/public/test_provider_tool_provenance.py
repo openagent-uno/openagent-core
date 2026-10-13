@@ -150,3 +150,15 @@ class ToolProvenance(unittest.IsolatedAsyncioTestCase):
                 self.assertGreater((await ledger.progress('redaction')).remaining_revisions,0)
             finally:
                 await runtime.close()
+
+
+    async def test_new_run_scope_does_not_inherit_parent_model_call_identity(self):
+        from openagent_core.runtime import provider_tool_call_scope, execution_scope
+        p=PrincipalRef('host','tenant','user')
+        context=ExecutionContext(p,p,p,'session','agent',(p,))
+        runtime=SimpleNamespace()
+        with provider_tool_call_scope('parent-model-call'):
+            with execution_scope(runtime,context,'child'):
+                self.assertIsNone(current_provider_tool_call_id())
+            self.assertEqual(current_provider_tool_call_id(),'parent-model-call')
+        self.assertIsNone(current_provider_tool_call_id())

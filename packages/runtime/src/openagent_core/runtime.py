@@ -71,10 +71,12 @@ def execution_scope(runtime: Runtime, context: ExecutionContext, run_id: str, *,
                     capability_revision: int | None = None):
     tokens = (_current_runtime.set(runtime), _current_context.set(context), _current_run.set(run_id),
               _current_module_generation.set(module_generation),
-              _current_capability_revision.set(capability_revision))
+              _current_capability_revision.set(capability_revision),
+              _current_provider_tool_call.set(None))
     try:
         yield
     finally:
+        _current_provider_tool_call.reset(tokens[5])
         _current_capability_revision.reset(tokens[4])
         _current_module_generation.reset(tokens[3])
         _current_run.reset(tokens[2]); _current_context.reset(tokens[1]); _current_runtime.reset(tokens[0])
