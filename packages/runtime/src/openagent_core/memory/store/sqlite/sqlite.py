@@ -167,6 +167,9 @@ def _project_operational_session_in_transaction(
         # accepted legacy write too, rather than defer only the projection.
         privacy_writer.record_engine_session(conn, session_id, source_row,
                                               current_execution_context(), current_run_id())
+    else:
+        from openagent_core.memory.operational.privacy_snapshots import guard_unscoped_history_transaction
+        guard_unscoped_history_transaction(conn, session_id, source_row)
     savepoint = f"operational_projection_{_uuid4().hex}"
     conn.execute(f"SAVEPOINT {savepoint}")
     try:
@@ -879,6 +882,11 @@ class SqliteDb(BaseDb):
             writer.begin_engine_session(sqlalchemy_driver_connection(database_session),
                                         serialized.get('session_id'), serialized,
                                         current_execution_context(), current_run_id())
+        else:
+            from openagent_core.memory.operational.repository import sqlalchemy_driver_connection
+            from openagent_core.memory.operational.privacy_snapshots import guard_unscoped_history_transaction
+            guard_unscoped_history_transaction(sqlalchemy_driver_connection(database_session),
+                                               serialized.get('session_id'), serialized)
         if not self._runtime_session(serialized.get('session_id')):
             return
         row = database_session.execute(select(table.c.user_id).where(table.c.session_id == serialized['session_id'])).first()

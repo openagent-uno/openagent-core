@@ -14,6 +14,22 @@ def guard_snapshot_transaction(connection):
             raise PrivacyFence('Protected state snapshots require a managed provenance and erasure adapter')
 
 
+def guard_unscoped_history_transaction(connection, session_id, serialized=None):
+    """Unscoped legacy writers cannot silently bypass an opted-in cohort."""
+    tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    protected = 'engine_privacy_nodes' in tables and connection.execute(
+        'SELECT 1 FROM engine_privacy_nodes WHERE session=? LIMIT 1', (session_id,)).fetchone()
+    if not protected and serialized and 'runtime_privacy_origins' in tables:
+        for run in serialized.get('runs') or ():
+            if isinstance(run, dict) and connection.execute(
+                    "SELECT 1 FROM runtime_privacy_origins WHERE run_id=? AND origins!='[]' LIMIT 1",
+                    (run.get('run_id'),)).fetchone():
+                protected = True
+                break
+    if protected:
+        raise PrivacyFence('Protected history writes require an admitted canonical privacy writer')
+
+
 @asynccontextmanager
 async def checked_snapshot_source(path):
     """Pin the checked source snapshot before any destination/copy is created."""

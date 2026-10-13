@@ -19,6 +19,18 @@ from openagent_storage_sqlite.engine_privacy import SqliteEngineContentPrivacy
 
 
 class EnginePrivacy(unittest.IsolatedAsyncioTestCase):
+    async def test_unscoped_restore_is_fenced_but_unrelated_human_session_is_retained(self):
+        with execution_scope(self.runtime, self.context, 'run'):
+            self.db.upsert_session(self.session)
+        with self.assertRaises(PrivacyFence):
+            self.db.upsert_session(self.session)
+        human = AgentSession(session_id='human-only', agent_id='agent', user_id=self.context.authority.key,
+                             runs=[], session_data={'session_state':{'preference':'UNRELATED HUMAN'}},
+                             created_at=1, updated_at=1)
+        self.db.upsert_session(human)
+        self.assertIn('UNRELATED HUMAN', str(self.db.get_session('human-only', deserialize=False)))
+        self.assertIn('PRIVATE SHOP RESULT', str(self.db.get_session('session', deserialize=False)))
+
     async def asyncSetUp(self):
         self.temp=tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

@@ -12,6 +12,7 @@ from pathlib import Path
 import asyncio
 import json
 import inspect
+import itertools
 import os
 import sqlite3
 import time
@@ -88,6 +89,61 @@ class SqliteContentPrivacyStore:
             yield db
         finally:
             db.close()
+
+    async def qualify_empty_history(self) -> bool:
+        """Admit a new canonical cohort without claiming legacy reconciliation.
+
+        Reads the known Core history and pre-DDL snapshot surfaces. Existing
+        untracked history or an unreadable snapshot fails closed and is retained.
+        A durable admitted cohort survives restart; hosts must still qualify
+        their real writers and fences before declaring coverage.
+        """
+        return await run_sync(self._qualify_empty_history)
+
+    @staticmethod
+    def _history_is_empty(db):
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        for name in ('sessions', 'sessions_v2', 'session_runs', 'session_messages',
+                     'session_events', 'runs', 'task_runs', 'memories'):
+            if name in tables and db.execute('SELECT 1 FROM "' + name + '" LIMIT 1').fetchone():
+                return False
+        return True
+
+    def _qualify_empty_history(self):
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            try:
+                db.execute('''CREATE TABLE IF NOT EXISTS privacy_history_baseline(
+                    id INTEGER PRIMARY KEY CHECK(id=1),admitted INTEGER NOT NULL CHECK(admitted IN (0,1)))''')
+                previous = db.execute('SELECT admitted FROM privacy_history_baseline WHERE id=1').fetchone()
+                if previous:
+                    db.rollback()
+                    return bool(previous[0])
+                admitted = self._history_is_empty(db)
+                backups = self.path.parent / 'backups'
+                if backups.is_symlink():
+                    admitted = False
+                elif backups.exists():
+                    paths = tuple(itertools.islice(backups.iterdir(), 257))
+                    if len(paths) > 256:
+                        admitted = False
+                    for path in paths:
+                        if not admitted:
+                            break
+                        if path.is_symlink():
+                            admitted = False
+                        elif path.name.endswith(('.db', '.db.tmp')):
+                            try:
+                                with sqlite3.connect(path.resolve().as_uri()+'?mode=ro', uri=True) as snapshot:
+                                    admitted = self._history_is_empty(snapshot)
+                            except sqlite3.Error:
+                                admitted = False
+                db.execute('INSERT INTO privacy_history_baseline VALUES(1,?)', (int(admitted),))
+                db.commit()
+                return admitted
+            except BaseException:
+                db.rollback()
+                raise
 
     @staticmethod
     def _origin(value):

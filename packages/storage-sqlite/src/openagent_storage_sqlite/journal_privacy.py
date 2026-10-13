@@ -44,7 +44,10 @@ class SqliteSessionJournalContentPrivacy:
         payload=json.loads(_json(data))
         if self.provenance is not None:
             plan=await self.provenance(event_type,payload,context,run_id)
-        elif origins and event_type not in self._GENERATED:
+        elif origins and event_type not in self._GENERATED and not (
+                event_type == 'tool/status' and isinstance(payload, dict)
+                and set(payload) == {'text'} and isinstance(payload['text'], str)
+                and len(payload['text']) <= 4000):
             raise PrivacyFence('Raw or human journal payload requires a trusted schema partition')
         else:
             plan=ToolResultProvenance((ContentFragment((),origins),))

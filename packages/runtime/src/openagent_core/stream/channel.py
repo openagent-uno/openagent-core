@@ -27,6 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
+from openagent_core.content_privacy import PrivacyFence, PrivacyConflict
 from openagent_core.stream.events import (
     OutAudioChunk,
     OutAudioEnd,
@@ -146,52 +147,59 @@ class RealtimeChannel:
         try:
             while True:
                 evt = await self._session.outbound.get()
-                ingress_identity = self._session.take_outbound_ingress(evt)
                 try:
-                    payload = self._encoder(
-                        evt,
-                        include_local_attachment_paths=bool(
-                            getattr(
-                                self._session,
-                                "allow_local_attachment_paths",
-                                False,
-                            )
-                        ),
-                    )
-                except TypeError as e:
-                    logger.debug("realtime: drop unwireable event: %s", e)
-                    continue
-                if self._on_outbound is not None:
+                    await _authorize_frame(self._session, evt)
+                    ingress_identity = self._session.take_outbound_ingress(evt)
                     try:
-                        self._on_outbound(payload)
-                    except Exception as e:  # noqa: BLE001
-                        logger.debug("realtime: outbound observer raised: %s", e)
-                deadline = time.monotonic() + self.UNRECOVERABLE_AFTER_S
-                while True:
-                    try:
-                        send = self._send_for_ingress(ingress_identity)
-                        ok = await send(payload) if send is not None else False
-                    except Exception as e:  # noqa: BLE001
-                        logger.debug("realtime: send raised: %s", e)
-                        ok = False
-                    if ok:
-                        break
-                    if time.monotonic() >= deadline:
-                        logger.warning(
-                            "realtime: dropping frame, no live ws for %.0fs"
-                            " (session=%s)",
-                            self.UNRECOVERABLE_AFTER_S,
-                            self._session.session_id,
-                        )
-                        if self._on_unrecoverable is not None:
-                            try:
-                                await self._on_unrecoverable()
-                            except Exception as e:  # noqa: BLE001
-                                logger.debug(
-                                    "realtime: on_unrecoverable raised: %s", e
+                        payload = self._encoder(
+                            evt,
+                            include_local_attachment_paths=bool(
+                                getattr(
+                                    self._session,
+                                    "allow_local_attachment_paths",
+                                    False,
                                 )
-                        return
-                    await asyncio.sleep(self.RETRY_INTERVAL_S)
+                            ),
+                        )
+                    except TypeError as e:
+                        logger.debug("realtime: drop unwireable event: %s", e)
+                        continue
+                    if self._on_outbound is not None and not _frame_origins(self._session, evt):
+                        try:
+                            self._on_outbound(payload)
+                        except Exception as e:  # noqa: BLE001
+                            logger.debug("realtime: outbound observer raised: %s", e)
+                    deadline = time.monotonic() + self.UNRECOVERABLE_AFTER_S
+                    while True:
+                        await _authorize_frame(self._session, evt)
+                        try:
+                            send = self._send_for_ingress(ingress_identity)
+                            ok = await send(payload) if send is not None else False
+                        except Exception as e:  # noqa: BLE001
+                            logger.debug("realtime: send raised: %s", e)
+                            ok = False
+                        if ok:
+                            break
+                        if time.monotonic() >= deadline:
+                            logger.warning(
+                                "realtime: dropping frame, no live ws for %.0fs"
+                                " (session=%s)",
+                                self.UNRECOVERABLE_AFTER_S,
+                                self._session.session_id,
+                            )
+                            if self._on_unrecoverable is not None:
+                                try:
+                                    await self._on_unrecoverable()
+                                except Exception as e:  # noqa: BLE001
+                                    logger.debug(
+                                        "realtime: on_unrecoverable raised: %s", e
+                                    )
+                            return
+                        await asyncio.sleep(self.RETRY_INTERVAL_S)
+                except (PrivacyFence, PrivacyConflict):
+                    logger.debug("realtime: discarded a privacy-fenced frame")
+                finally:
+                    _release_frame(self._session, evt)
         except asyncio.CancelledError:
             return
 
@@ -203,6 +211,23 @@ class RealtimeChannel:
             except (asyncio.CancelledError, Exception):
                 pass
         await self._session.close()
+
+
+async def _authorize_frame(session, event):
+    check = getattr(session, 'authorize_outbound', None)
+    if callable(check):
+        await check(event)
+
+
+def _frame_origins(session, event):
+    lookup = getattr(session, 'outbound_origins', None)
+    return lookup(event) if callable(lookup) else ()
+
+
+def _release_frame(session, event):
+    release = getattr(session, 'release_outbound', None)
+    if callable(release):
+        release(event)
 
 
 class BatchedChannel:
@@ -233,7 +258,7 @@ class BatchedChannel:
         _ob = self._session.outbound
         while not _ob.empty():
             try:
-                _ob.get_nowait()
+                _release_frame(self._session, _ob.get_nowait())
             except asyncio.QueueEmpty:
                 break
         sid = self._session.session_id
@@ -252,39 +277,49 @@ class BatchedChannel:
         text_parts: list[str] = []
         audio_started = False
 
-        while True:
-            evt = await self._session.outbound.get()
-            if isinstance(evt, OutTextDelta):
-                text_parts.append(evt.text)
-            elif isinstance(evt, OutTextFinal):
-                reply.text = evt.text
-                reply.attachments = list(evt.attachments)
-                reply.parts = list(evt.parts)
-                reply.model = evt.model
-            elif isinstance(evt, OutAudioStart):
-                audio_started = True
-                reply.audio_format = evt.format
-                reply.audio_mime = evt.mime
-                reply.voice_id = evt.voice_id
-            elif isinstance(evt, OutAudioChunk):
-                if audio_started:
-                    reply.audio_chunks.append(evt.data)
-            elif isinstance(evt, (OutAudioEnd, OutToolStatus)):
-                # Audio span end: marker only; chunks already buffered above.
-                # Tool status: bridges render via on_status side-channel; the
-                # event is also still queued for channels that want it.
-                pass
-            elif isinstance(evt, OutError):
-                reply.errored = True
-                reply.error_text = evt.text
-            elif isinstance(evt, TurnComplete):
-                break
+        protected = []
+        try:
+            while True:
+                evt = await self._session.outbound.get()
+                protected.append(evt)
+                await _authorize_frame(self._session, evt)
+                if isinstance(evt, OutTextDelta):
+                    text_parts.append(evt.text)
+                elif isinstance(evt, OutTextFinal):
+                    reply.text = evt.text
+                    reply.attachments = list(evt.attachments)
+                    reply.parts = list(evt.parts)
+                    reply.model = evt.model
+                elif isinstance(evt, OutAudioStart):
+                    audio_started = True
+                    reply.audio_format = evt.format
+                    reply.audio_mime = evt.mime
+                    reply.voice_id = evt.voice_id
+                elif isinstance(evt, OutAudioChunk):
+                    if audio_started:
+                        reply.audio_chunks.append(evt.data)
+                elif isinstance(evt, (OutAudioEnd, OutToolStatus)):
+                    # Audio span end: marker only; chunks already buffered above.
+                    # Tool status: bridges render via on_status side-channel; the
+                    # event is also still queued for channels that want it.
+                    pass
+                elif isinstance(evt, OutError):
+                    reply.errored = True
+                    reply.error_text = evt.text
+                elif isinstance(evt, TurnComplete):
+                    break
 
-        # Prefer the canonical OutTextFinal text when present; fall back
-        # to the accumulated deltas (some agents skip the final marker).
-        if not reply.text and text_parts:
-            reply.text = "".join(text_parts)
-        return reply
+            # Prefer the canonical OutTextFinal text when present; fall back
+            # to the accumulated deltas (some agents skip the final marker).
+            if not reply.text and text_parts:
+                reply.text = "".join(text_parts)
+            for event in protected:
+                await _authorize_frame(self._session, event)
+            return reply
+        finally:
+            for event in protected:
+                _release_frame(self._session, event)
+
 
     async def close(self) -> None:
         await self._session.close()

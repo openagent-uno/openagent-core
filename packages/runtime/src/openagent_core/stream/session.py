@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import tempfile
+import weakref
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
@@ -231,6 +232,10 @@ class StreamSession:
         # channel must not infer ownership from whichever websocket touched the
         # holder most recently.
         self._outbound_ingresses: dict[int, Any] = {}
+        # Only the installed host publisher can bind a frame to an origin.
+        # Weak frame references retain in-flight fences without extending the
+        # lifetime of already discarded content.
+        self._privacy_frames: dict[int, tuple] = {}
 
         self._stt: BaseSTT | None = None
         self._tts: BaseTTS | None = None
@@ -621,8 +626,8 @@ class StreamSession:
     # Append-only, written DURING the turn. ``sessions.runs`` remains the
     # surface the model reads (and the runtime still owns it, written at turn
     # end); this is the record of what happened, for the client, for support,
-    # and for anyone asking "what did it do at 14:32". A witness never gets to
-    # break the thing it witnesses, so every failure here is swallowed.
+    # and for anyone asking "what did it do at 14:32". Ordinary journal errors
+    # are best-effort; an installed privacy fence remains authoritative.
     _JOURNALLED_TYPES = ("user/message", "assistant/message", "tool/status",
                          "turn/end", "error", "compaction")
 
@@ -637,6 +642,9 @@ class StreamSession:
         try:
             await append(self.session_id, event_type, data)
         except Exception as e:  # noqa: BLE001
+            from openagent_core.content_privacy import PrivacyFence, PrivacyConflict
+            if isinstance(e, (PrivacyFence, PrivacyConflict)):
+                raise
             logger.debug("session journal append failed (%s): %s", event_type, e)
 
     async def _maybe_review_turn(self, reason: str) -> None:
@@ -738,6 +746,58 @@ class StreamSession:
 
         return self._outbound_ingresses.pop(id(evt), None)
 
+    def outbound_origins(self, evt: Event) -> tuple:
+        """Read host-bound origins for a frame owned by this stream."""
+        entry = self._privacy_frames.get(id(evt))
+        return entry[4] if entry is not None and entry[0]() is evt else ()
+
+    async def authorize_outbound(self, evt: Event) -> None:
+        """Recheck a dequeued frame immediately before each transport attempt."""
+        entry = self._privacy_frames.get(id(evt))
+        if entry is not None and entry[0]() is evt:
+            await entry[1].origins_for_execution(entry[2], entry[3])
+
+    def release_outbound(self, evt: Event) -> None:
+        """Forget a frame only after delivery or an authoritative discard."""
+        entry = self._privacy_frames.get(id(evt))
+        if entry is not None and entry[0]() is evt:
+            self._privacy_frames.pop(id(evt), None)
+
+    def purge_outbound(self, request) -> int:
+        """Purge exact pending origins; mixed or in-flight copies block receipt.
+
+        The host enqueues its durable revocation fence before calling this API.
+        This operation is synchronous on the owning event loop; it preserves
+        human and unmatched frames and never guesses a partition of mixed text.
+        """
+        from openagent_core.content_privacy import PrivacyRequest, PrivacyConflict, PrivacyFence
+        if not isinstance(request, PrivacyRequest) or request.operation != 'redact':
+            raise ValueError('A typed redaction request is required')
+        queued = {id(event) for event in self.outbound._queue}
+        remove = set()
+        for identity, entry in tuple(self._privacy_frames.items()):
+            event, origins = entry[0](), entry[4]
+            if event is None:
+                self._privacy_frames.pop(identity, None)
+                continue
+            matching = tuple(origin for origin in origins if request.matches(origin))
+            if not matching:
+                continue
+            if len(matching) != len(origins) or any(
+                    request.subjects and (not origin.subjects or not set(origin.subjects) <= set(request.subjects))
+                    for origin in matching):
+                raise PrivacyConflict('Pending mixed output has no exact customer partition')
+            if identity not in queued:
+                raise PrivacyFence('A matching outbound frame is still in flight')
+            remove.add(identity)
+        retained = deque(event for event in self.outbound._queue if id(event) not in remove)
+        self.outbound._queue.clear()
+        self.outbound._queue.extend(retained)
+        for identity in remove:
+            self._privacy_frames.pop(identity, None)
+            self._outbound_ingresses.pop(identity, None)
+        return len(remove)
+
     # ── publishing helper for the turn runner ───────────────────────
 
     async def _publish(
@@ -754,6 +814,29 @@ class StreamSession:
             evt, (OutTextFinal, TurnComplete)
         ):
             return
+        from openagent_core.runtime import current_runtime, current_execution_context, current_run_id
+        from openagent_core.content_privacy import ToolResultPrivacyPublisher
+        runtime, context, run_id = current_runtime(), current_execution_context(), current_run_id()
+        publisher = runtime.service(ToolResultPrivacyPublisher) if runtime is not None else None
+        origins = ()
+        if publisher is not None and context is not None and run_id is not None:
+            # The public publisher checks the admitted identity and current
+            # source fence before a transport or observer receives this frame.
+            if context.session_id != self.session_id:
+                from openagent_core.content_privacy import PrivacyConflict
+                raise PrivacyConflict('Protected stream context belongs to a different session')
+            origins = await publisher.origins_for_execution(context, run_id)
+            if origins:
+                from openagent_core.content_privacy import PrivacyFence
+                if not isinstance(evt, (OutTextDelta, OutTextFinal, OutToolStatus, OutError,
+                                        TurnComplete, SessionCompacted, OutReasoning, ContextReport)):
+                    raise PrivacyFence('Protected media output requires an attested managed sink')
+                if isinstance(evt, OutTextFinal) and (evt.attachments or any(
+                        part.get('kind') != 'text' for part in evt.parts)):
+                    raise PrivacyFence('Protected rich output requires an attested managed sink')
+                self._privacy_frames = {identity: entry for identity, entry in self._privacy_frames.items()
+                                        if entry[0]() is not None}
+                self._privacy_frames[id(evt)] = (weakref.ref(evt), publisher, context, run_id, origins)
         # ``outbound`` is intentionally unbounded, so queueing the
         # frame never needs to suspend. Enqueue FIRST, synchronously:
         # if the current task is cancellation-poisoned by a provider
@@ -766,7 +849,7 @@ class StreamSession:
         if ingress_identity is not None:
             self._outbound_ingresses[id(evt)] = ingress_identity
         observer = getattr(self, "on_event", None)
-        if observer is not None:
+        if observer is not None and not origins:
             try:
                 observer(evt)
             except Exception:
