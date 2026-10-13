@@ -49,7 +49,7 @@ class JournalPrivacy(unittest.IsolatedAsyncioTestCase):
         observed = []
         stream.on_event = observed.append
         with execution_scope(self.runtime, self.context, 'run'):
-            await stream._publish(OutToolStatus(text='PRIVATE GENERATED STATUS'))
+            await stream._publish(OutToolStatus(session_id='session', text='PRIVATE GENERATED STATUS'))
         self.assertEqual((await stream.outbound.get()).text, 'PRIVATE GENERATED STATUS')
         self.assertIn('PRIVATE GENERATED STATUS', str(await self.memory.list_session_events('session')))
         request = PrivacyRequest('stream-redact', 'tenant', 'shopify/app', 'shop', 1, 'redact', ('customer:23',))
@@ -57,7 +57,7 @@ class JournalPrivacy(unittest.IsolatedAsyncioTestCase):
         await self._apply_targets(request, writer)
         self.assertNotIn('PRIVATE GENERATED STATUS', str(await self.memory.list_session_events('session')))
         with execution_scope(self.runtime, self.context, 'run'):
-            for event in (OutToolStatus(text='LATE STATUS'), OutTextDelta(text='LATE DELTA')):
+            for event in (OutToolStatus(session_id='session', text='LATE STATUS'), OutTextDelta(session_id='session', text='LATE DELTA')):
                 with self.assertRaises(PrivacyFence):
                     await stream._publish(event)
         self.assertTrue(stream.outbound.empty())
@@ -76,15 +76,15 @@ class JournalPrivacy(unittest.IsolatedAsyncioTestCase):
         await self.store.begin_tool('other-run', 'source', {'source_id':'shopify','name':'read'}, {})
         other_origin = replace(self.origin, subjects=('customer:24',))
         await self.publisher.publish_tool_result(other_context, 'other-run', 'source', {'private':'OTHER'}, (other_origin,))
-        inflight = OutTextDelta(text='INFLIGHT CUSTOMER A')
-        pending = OutTextDelta(text='PENDING CUSTOMER A')
-        human = OutTextDelta(text='UNRELATED HUMAN')
+        inflight = OutTextDelta(session_id='session', text='INFLIGHT CUSTOMER A')
+        pending = OutTextDelta(session_id='session', text='PENDING CUSTOMER A')
+        human = OutTextDelta(session_id='session', text='UNRELATED HUMAN')
         with execution_scope(self.runtime, self.context, 'run'):
             await first._publish(inflight)
             await first._publish(pending)
         await first._publish(human)
         with execution_scope(self.runtime, other_context, 'other-run'):
-            await second._publish(OutTextDelta(text='CUSTOMER B'))
+            await second._publish(OutTextDelta(session_id='other-session', text='CUSTOMER B'))
         self.assertIs(await first.outbound.get(), inflight)
         request = PrivacyRequest('queued', 'tenant', 'shopify/app', 'shop', 1, 'redact', ('customer:23',))
         await self.ledger.enqueue(request)
@@ -111,7 +111,7 @@ class JournalPrivacy(unittest.IsolatedAsyncioTestCase):
                                                 (replace(self.origin, subjects=('customer:24',)),))
         stream = StreamSession(SimpleNamespace(memory_db=self.memory, config={}),
                                client_id='client', session_id='session', speak_enabled=False)
-        frame = OutTextDelta(text='MIXED A AND B')
+        frame = OutTextDelta(session_id='session', text='MIXED A AND B')
         with execution_scope(self.runtime, self.context, 'run'):
             await stream._publish(frame)
         request = PrivacyRequest('mixed', 'tenant', 'shopify/app', 'shop', 1, 'redact', ('customer:23',))
@@ -140,7 +140,7 @@ class JournalPrivacy(unittest.IsolatedAsyncioTestCase):
         channel = RealtimeChannel(stream, send, encoder=lambda event, **kwargs: {'text':event.text},
                                   decoder=lambda frame: None, on_outbound=cache.append)
         with execution_scope(self.runtime, self.context, 'run'):
-            await stream._publish(OutTextDelta(text='VISIBLE OWNER REPLY'))
+            await stream._publish(OutTextDelta(session_id='session', text='VISIBLE OWNER REPLY'))
         await channel.start()
         try:
             await asyncio.wait_for(done.wait(), 2)
