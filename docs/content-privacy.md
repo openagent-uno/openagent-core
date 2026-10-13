@@ -419,3 +419,12 @@ it does not substitute best-effort `close_session` or destructive `forget_sessio
 The host must install its source fence before draining and only acknowledge a
 privacy action after canonical sinks and this operation succeed. Third-party
 provider resume state needs its own adapter and cannot be attested by this API.
+
+After fully covered redaction completes, future turns inherit only retained
+origins. A child mission from the old protected run and late writes by that run
+remain fenced. Canonical engine upserts compare archived runs with the durable,
+selectively redacted compatibility envelope before accepting them: a stale
+in-memory run cannot restore deleted fields or move the data into another field.
+Only content-free serialization defaults are normalized. Changed historical
+human revisions cause a conflict instead of deletion. Compaction provenance
+retains surviving source revisions and omits erased source fields.

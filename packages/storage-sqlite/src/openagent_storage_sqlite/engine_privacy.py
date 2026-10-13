@@ -32,6 +32,22 @@ def _set(root,path,value):
     _replace(root,path,value)
 
 
+def _archived_envelope(value):
+    # The canonical RunOutput/Message roundtrip omits None-valued dict fields
+    # and materializes an empty events list. Normalize only those content-free
+    # serialization differences; retain every nonempty or unknown field.
+    def clean(item):
+        if isinstance(item,dict):
+            return {key:clean(child) for key,child in item.items() if child is not None}
+        if isinstance(item,list):
+            return [clean(child) for child in item]
+        return item
+    result=clean(value)
+    if isinstance(result,dict) and result.get('events')==[]:
+        result.pop('events')
+    return _encoded(result)
+
+
 class SqliteEngineContentPrivacy:
     sink_id='engine-history'
 
@@ -77,6 +93,18 @@ class SqliteEngineContentPrivacy:
                 continue
             if context is not None and context.tenant_id!=trusted[0]:
                 raise PrivacyConflict('Engine write crossed a tenant boundary')
+            retained=self.publisher._retained_origins(transaction,origins)
+            if len(retained)!=len(origins):
+                # Projection has not run yet: this is the durable envelope
+                # from before the attempted legacy upsert. Historical rows
+                # whose erasure completed may only be copied unchanged. A
+                # stale cached envelope cannot republish a deleted value,
+                # move it to another field, or invent an unattributed copy.
+                durable=transaction.execute('SELECT raw_envelope_json FROM session_runs WHERE id=?',
+                                            (identity,)).fetchone()
+                if durable is None or not durable[0] or _archived_envelope(json.loads(durable[0]))!=_archived_envelope(run):
+                    raise PrivacyConflict('Archived engine context changed after selective erasure')
+                continue
             self.publisher._guard(transaction,identity)
             model_calls={}
             model_partitions={}
@@ -172,13 +200,14 @@ class SqliteEngineContentPrivacy:
             if owned:
                 if tuple(owned)!=(tenant_row[0],session_id):
                     raise PrivacyConflict('Compaction crossed an admitted session boundary')
-                origins.update(self.publisher._origins(transaction,identity))
+                origins.update(self.publisher._retained_origins(transaction,self.publisher._origins(transaction,identity)))
             else:
                 recap=transaction.execute('SELECT tenant,session,origins FROM engine_privacy_recaps WHERE run_id=?',(identity,)).fetchone()
                 if recap:
                     if tuple(recap[:2])!=(tenant_row[0],session_id):
                         raise PrivacyConflict('Compaction crossed a recap boundary')
-                    origins.update(self.ledger._origin(value) for value in json.loads(recap[2]))
+                    origins.update(self.publisher._retained_origins(transaction,
+                        tuple(self.ledger._origin(value) for value in json.loads(recap[2]))))
         return tenant_row[0],tuple(origins)
 
     def _guard_origins(self,transaction,origins):
@@ -207,7 +236,10 @@ class SqliteEngineContentPrivacy:
         parents=[]
         for identity in folded_run_ids:
             for row in transaction.execute('SELECT artifact FROM engine_privacy_nodes WHERE tenant=? AND session=? AND run_id=?',(tenant,session_id,identity)):
-                latest=transaction.execute('SELECT revision FROM privacy_revisions WHERE tenant=? AND artifact=? ORDER BY rowid DESC LIMIT 1',(tenant,row[0])).fetchone()
+                latest=transaction.execute('''SELECT revision FROM privacy_revisions r
+                    WHERE tenant=? AND artifact=? AND NOT EXISTS(
+                        SELECT 1 FROM engine_privacy_erased e WHERE e.artifact=r.artifact AND e.revision=r.revision)
+                    ORDER BY rowid DESC LIMIT 1''',(tenant,row[0])).fetchone()
                 if latest:
                     parents.append((row[0],latest[0]))
         paths=[('content',)]

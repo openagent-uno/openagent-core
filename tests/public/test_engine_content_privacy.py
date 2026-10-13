@@ -111,6 +111,40 @@ class EnginePrivacy(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('PRIVATE SHOP RESULT',str(tuple(raw)))
         self.assertIn('CUSTOMER TWO RESULT',str(tuple(raw)))
 
+    async def test_completed_redaction_allows_new_turn_but_rejects_stale_cached_history(self):
+        from openagent_core.content_privacy import PrivacyConflict
+        from openagent_storage_sqlite.runtime_privacy import SqliteRuntimeContentPrivacySink
+        with execution_scope(self.runtime,self.context,'run'):
+            self.db.upsert_session(self.session)
+        await self.store.transition('run','success',output='PRIVATE DERIVED FINAL')
+        request=PrivacyRequest('continue-event','tenant','shopify/app','group',10,'redact',('customer:23',))
+        await self.ledger.enqueue(request)
+        async def export(*args): self.fail('unexpected export')
+        public=SqliteRuntimeContentPrivacySink(self.store,self.ledger,export=export)
+        progress=await self.ledger.process(request.request_id,(public,self.sink),
+                                          covered_surfaces=self.ledger.required_surfaces)
+        self.assertEqual(progress.status,'complete')
+        await self.store.accept(RunRequest('new-run','session','new-key','NEW HUMAN QUESTION'),self.context)
+        await self.store.transition('new-run','running')
+        self.assertEqual(await self.publisher.origins_for_execution(self.context,'new-run'),())
+        fresh=self.db.get_session('session')
+        fresh.runs.append(RunOutput(run_id='new-run',agent_id='agent',session_id='session',
+                                   content='NEW UNRELATED ANSWER',messages=[Message(role='user',content='NEW HUMAN QUESTION')]))
+        with execution_scope(self.runtime,self.context,'new-run'):
+            self.db.upsert_session(fresh)
+        stored=str(self.db.get_session('session',deserialize=False))
+        self.assertIn('NEW UNRELATED ANSWER',stored)
+        self.assertIn('UNRELATED MAIL RESULT',stored)
+        self.assertNotIn('PRIVATE SHOP RESULT',stored)
+        # The old in-memory session is not allowed to overwrite the clean
+        # historical run, even when the new run itself is not tainted.
+        self.session.runs.append(fresh.runs[-1])
+        with execution_scope(self.runtime,self.context,'new-run'):
+            with self.assertRaises(PrivacyConflict):
+                self.db.upsert_session(self.session)
+        self.assertNotIn('PRIVATE SHOP RESULT',str(self.db.get_session('session',deserialize=False)))
+
+
     async def test_mixed_customer_one_call_preserves_sibling_across_real_public_and_engine_copies(self):
         from dataclasses import replace
         from openagent_core.content_privacy import ContentFragment,ToolResultProvenance,ContentRevision,JsonStringBoundary

@@ -283,9 +283,12 @@ class SqliteToolResultPrivacyPublisher:
     def inherit(self, db, run_id, session_id, parent_run_id):
         origins=set()
         if parent_run_id:
+            # A delegated mission may itself contain the old context. It must
+            # not use historical completion to bypass its parent's fence.
+            self._guard(db,parent_run_id)
             origins.update(self._origins(db,parent_run_id))
         for row in db.execute('SELECT id FROM session_runs WHERE session_id=? AND id!=?',(session_id,run_id)):
-            origins.update(self._origins(db,row[0]))
+            origins.update(self._retained_origins(db,self._origins(db,row[0])))
         if origins:
             self._merge(db,run_id,origins)
             # Reject admission before a model can consume revoked historical
@@ -298,6 +301,19 @@ class SqliteToolResultPrivacyPublisher:
                     raise PrivacyFence('Protected child attachments require an attested managed-copy bridge')
                 if metadata.get('execution_context',{}).get('author',{}).get('kind')=='agent':
                     self._record(db,'input',run_id,tuple(origins))
+
+    def _retained_origins(self,db,origins):
+        """Completed, fully covered erasure no longer taints future history.
+
+        Existing run writes remain fenced through `_guard`. Canonical engine
+        serialization additionally rejects resurrection of an archived run.
+        Pending/blocked requests retain their fence at new-run admission.
+        """
+        requests=[(self.ledger._request(json.loads(row[0])),row[1])
+                  for row in db.execute('SELECT request,status FROM privacy_requests')]
+        return tuple(origin for origin in origins if not any(
+            request.operation=='redact' and status=='complete' and request.matches(origin)
+            for request,status in requests))
 
     def _record(self,db,kind,identity,origins):
         if not origins:
