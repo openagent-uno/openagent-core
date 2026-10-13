@@ -345,6 +345,8 @@ class SqliteRuntimeStore:
             principal=PrincipalRef(context['authority']['authority'],run['tenant_id'],context['agent_id'],'agent')
             self._message(db,run_id,'tool','',principal.key,'agent',now,tool_call_id=call_id,status='streaming')
             self._event(db,run_id,'tool.invoking',payload)
+            if self._content_privacy_publication is not None:
+                self._content_privacy_publication.record_invocation_intent(db,run_id,call_id)
 
     def _finish_tool(self, run_id: str, call_id: str, *, result: Any = None, error: Mapping[str, Any] | None = None,
                      _privacy_provenance=None) -> None:
@@ -381,6 +383,12 @@ class SqliteRuntimeStore:
                 if publisher is not self._content_privacy_publication:
                     raise PrivacyConflict('A stale provenance publisher cannot write this store')
                 publisher.record_completed_tool(db,run_id,call_id,origins)
+            elif self._content_privacy_publication is not None:
+                publisher=self._content_privacy_publication
+                if error is not None:
+                    publisher.record_failed_tool(db,run_id,call_id)
+                else:
+                    publisher.record_completed_tool(db,run_id,call_id,())
 
     def _events(self,run_id: str,after: int=0) -> tuple[RunEvent,...]:
         rows=self.connection.execute('SELECT sequence,event_type,metadata_json FROM domain_events WHERE run_id=? AND sequence>? ORDER BY sequence',(run_id,after))

@@ -220,8 +220,11 @@ targetable after restart. This primitive alone is not Vault/Git qualification.
 immutable JSON key/index tuples into the normalized provider result. The trusted
 schema adapter must provide a complete, disjoint partition: missing fields,
 invalid selectors, overlaps or a foreign tenant reject publication. A fragment
-with no origins explicitly classifies nonpersonal data; an origin with no subjects
-means unknown customer scope. Customer-specific processing of such an unknown
+with no origins means the subtree has no provider source (for example host-only
+envelope metadata). Provider inventory uses a source-bound
+`ContentOrigin(..., nonpersonal=True)` retaining app/shop/generation: customer
+requests preserve it, while whole-shop requests erase it. An origin with no
+subjects and `nonpersonal=False` means unknown customer scope. Customer-specific processing of such an unknown
 scope blocks with `subject_scope_unknown` before invoking any sink. Storewide
 requests still match unknown origins, and revoked unknown scope remains fenced.
 
@@ -299,7 +302,8 @@ customers and metadata. They retain the existing MCP envelope and tool contracts
 The mixed-customer canonical test uses the real GlassPalace MCP envelope shape
 with text plus structured copies, then the engine's own JSON-text serialization.
 Both copies retain the second customer after the first request; its later request
-also succeeds. Unclassified, ambiguous or malformed encoded provider JSON cannot
+also succeeds, and a later whole-shop request removes source-bound inventory in
+every canonical copy. Unclassified, ambiguous or malformed encoded provider JSON cannot
 be published through a fragment partition.
 
 ## Agent child missions and inherited histories
@@ -321,3 +325,19 @@ the parent's original human input/authority. Generated final fields in later
 runs also inherit protected history even without a new source call. Arbitrary
 cached model-context messages, external child executors and unknown historical
 session copies still require explicit inventory and qualified adapters.
+
+## Invocation arguments and unsuccessful tools
+
+Protected arguments are recorded in the invocation/envelope/replay intent before
+external API IO, in the same canonical begin-tool transaction. A timeout, crash
+or rejected result therefore cannot leave an unowned private query. Successful
+source results use a root fragment when no finer partition was supplied; this
+separates raw provider results from model-generated arguments. Arguments retain
+the origins present when the intent was written, while result records retain
+their exact provider customer scope. Error payloads and their message/replay
+copies also participate in canonical publication and engine serialization.
+
+Tests place one customer's private data in the later query for another customer,
+then erase the query in public and engine copies while retaining the second raw
+result. Another real failed invocation proves its query and error copies are
+targetable even without a successful provider result.

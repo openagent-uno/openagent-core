@@ -11,7 +11,7 @@ import base64
 import json
 import time
 
-from openagent_core.content_privacy import ContentRevision, PrivacyConflict, PrivacyFence, ToolResultProvenance
+from openagent_core.content_privacy import ContentFragment, ContentRevision, PrivacyConflict, PrivacyFence, ToolResultProvenance
 from .content_privacy import SqliteContentPrivacyStore
 from .privacy_json import get as json_get, replace as json_replace, encode_path
 from .search import enqueue_source
@@ -273,7 +273,7 @@ class SqliteToolResultPrivacyPublisher:
     def _merge(self, db, run_id, origins):
         merged=set(self._origins(db,run_id)).union(origins)
         encoded=json.dumps(sorted((dict(tenant_id=o.tenant_id,source_id=o.source_id,group_id=o.group_id,
-                                       generation=o.generation,subjects=o.subjects) for o in merged),
+                                       generation=o.generation,subjects=o.subjects,nonpersonal=o.nonpersonal) for o in merged),
                                   key=lambda v:json.dumps(v,sort_keys=True)),sort_keys=True,separators=(',',':'))
         db.execute('INSERT INTO runtime_privacy_origins VALUES(?,?) ON CONFLICT(run_id) DO UPDATE SET origins=excluded.origins',(run_id,encoded))
         return tuple(merged)
@@ -352,6 +352,8 @@ class SqliteToolResultPrivacyPublisher:
         origins=partition.origins if partition else (origins or self._origins(db,run_id))
         self._merge(db,run_id,origins)
         tool=db.execute('SELECT id FROM tool_invocations WHERE session_run_id=? AND tool_call_id=?',(run_id,call_id)).fetchone()
+        if partition is None and origins:
+            partition=ToolResultProvenance((ContentFragment((),tuple(origins)),))
         if partition:
             from dataclasses import asdict
             db.execute('INSERT INTO runtime_privacy_tool_partitions VALUES(?,?)',(tool['id'],json.dumps(asdict(partition),sort_keys=True)))
@@ -363,6 +365,41 @@ class SqliteToolResultPrivacyPublisher:
         for row in db.execute("SELECT event_id,metadata_json FROM domain_events WHERE run_id=? AND event_type='tool.completed'",(run_id,)):
             if json.loads(row['metadata_json']).get('call_id')==call_id:
                 self._record(db,'event',row['event_id'],origins)
+
+    def argument_origins(self,db,tool_id):
+        row=db.execute('''SELECT r.origins FROM runtime_privacy_fragments f JOIN privacy_revisions r
+            ON r.artifact=f.artifact AND r.tenant=f.tenant
+            WHERE f.kind='tool' AND f.identity=? AND f.field='args_json' AND f.path='[]'
+            ORDER BY r.rowid DESC LIMIT 1''',(tool_id,)).fetchone()
+        return tuple(self.ledger._origin(origin) for origin in json.loads(row[0])) if row else ()
+
+    def record_invocation_intent(self,db,run_id,call_id):
+        self._guard(db,run_id)
+        origins=self._origins(db,run_id)
+        if not origins: return
+        tool=db.execute('SELECT id FROM tool_invocations WHERE session_run_id=? AND tool_call_id=?',(run_id,call_id)).fetchone()
+        for field,path in (('args_json',()),('raw_envelope_json',('arguments',))):
+            self._fragment(db,'tool',tool['id'],field,path,origins)
+        for row in db.execute("SELECT event_id,metadata_json FROM domain_events WHERE run_id=? AND event_type='tool.invoking'",(run_id,)):
+            if json.loads(row['metadata_json']).get('call_id')==call_id:
+                self._fragment(db,'event',row['event_id'],'metadata_json',('arguments',),origins)
+
+    def record_failed_tool(self,db,run_id,call_id):
+        self._guard(db,run_id)
+        origins=self._origins(db,run_id)
+        if not origins: return
+        tool=db.execute('SELECT id FROM tool_invocations WHERE session_run_id=? AND tool_call_id=?',(run_id,call_id)).fetchone()
+        arguments=self.argument_origins(db,tool['id']) or origins
+        for field,path in (('args_json',()),('raw_envelope_json',('arguments',))):
+            self._fragment(db,'tool',tool['id'],field,path,arguments)
+        for field,path in (('error_json',()),('raw_envelope_json',('error',))):
+            self._fragment(db,'tool',tool['id'],field,path,origins)
+        for row in db.execute("SELECT id FROM session_messages WHERE run_id=? AND role='tool' AND tool_call_id=?",(run_id,call_id)):
+            self._fragment(db,'message',row['id'],'text',(),origins)
+        for row in db.execute("SELECT event_id,metadata_json FROM domain_events WHERE run_id=? AND event_type='tool.completed'",(run_id,)):
+            if json.loads(row['metadata_json']).get('call_id')==call_id:
+                self._fragment(db,'event',row['event_id'],'metadata_json',('arguments',),arguments)
+                self._fragment(db,'event',row['event_id'],'metadata_json',('error',),origins)
 
     def _fragment(self,db,kind,identity,field,path,origins):
         if not origins:
@@ -387,11 +424,12 @@ class SqliteToolResultPrivacyPublisher:
                 if json.loads(row['metadata_json']).get('call_id')==call_id:
                     self._fragment(db,'event',row['event_id'],'metadata_json',('result',)+fragment.path,fragment.origins)
         # Invocation arguments are one source-bound query, not a mixed response.
+        argument_origins=self.argument_origins(db,tool_id) or self._origins(db,run_id)
         for field,path in (('args_json',()),('raw_envelope_json',('arguments',))):
-            self._fragment(db,'tool',tool_id,field,path,partition.origins)
+            self._fragment(db,'tool',tool_id,field,path,argument_origins)
         for row in db.execute("SELECT event_id,metadata_json FROM domain_events WHERE run_id=? AND event_type IN ('tool.invoking','tool.completed')",(run_id,)):
             if json.loads(row['metadata_json']).get('call_id')==call_id:
-                self._fragment(db,'event',row['event_id'],'metadata_json',('arguments',),partition.origins)
+                self._fragment(db,'event',row['event_id'],'metadata_json',('arguments',),argument_origins)
 
     async def publish_tool_result(self,context,run_id,call_id,result,origins):
         from openagent_core.persistence import run_sync

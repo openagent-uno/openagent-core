@@ -32,6 +32,7 @@ class ContentOrigin:
     group_id: str
     generation: int
     subjects: tuple[str, ...] = ()
+    nonpersonal: bool = False
 
     def __post_init__(self):
         for value in (self.tenant_id, self.source_id, self.group_id, *self.subjects):
@@ -40,6 +41,8 @@ class ContentOrigin:
             raise ValueError("Origin generation must be host-issued")
         if not isinstance(self.subjects, tuple) or len(self.subjects) > 4096 or len(set(self.subjects)) != len(self.subjects):
             raise ValueError("Origin subjects must be bounded, immutable and unique")
+        if type(self.nonpersonal) is not bool or self.nonpersonal and self.subjects:
+            raise ValueError('Nonpersonal source scope cannot claim customer subjects')
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +79,8 @@ class PrivacyRequest:
     def matches(self, origin: ContentOrigin) -> bool:
         return (self.tenant_id == origin.tenant_id and self.source_id == origin.source_id
                 and self.group_id == origin.group_id and origin.generation <= self.through_generation
-                and (not self.subjects or not origin.subjects or bool(set(self.subjects).intersection(origin.subjects))))
+                and (not self.subjects or (not origin.nonpersonal and
+                     (not origin.subjects or bool(set(self.subjects).intersection(origin.subjects))))))
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +122,7 @@ def decode_fragment_json(value):
 
 @dataclass(frozen=True, slots=True)
 class ContentFragment:
-    """Host-classified exact JSON subtree; empty origins explicitly mean nonpersonal.
+    """Host-classified exact JSON subtree; empty origins mean no provider source.
 
     The path is into the normalized provider result, not into arbitrary storage.
     A trusted schema adapter must classify every leaf and cannot overlap paths.

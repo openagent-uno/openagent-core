@@ -80,8 +80,13 @@ class SqliteEngineContentPrivacy:
             self.publisher._guard(transaction,identity)
             model_calls={}
             model_partitions={}
+            model_arguments={}
             for row in transaction.execute('SELECT id,raw_envelope_json FROM tool_invocations WHERE session_run_id=?',(identity,)):
                 binding=json.loads(row[1]).get('binding',{})
+                if binding.get('provider_call_id'):
+                    model_arguments[binding['provider_call_id']]=self.publisher.argument_origins(transaction,row[0])
+                    if json.loads(row[1]).get('error') is not None and model_arguments[binding['provider_call_id']]:
+                        model_calls.setdefault(binding['provider_call_id'],set()).update(origins)
                 # Only source results carrying trusted origins qualify, not any
                 # model call that happens to use the same customer in its text.
                 source=transaction.execute('SELECT origins FROM privacy_revisions WHERE tenant=? AND artifact=?',
@@ -92,6 +97,8 @@ class SqliteEngineContentPrivacy:
                 partition=transaction.execute('SELECT partition_json FROM runtime_privacy_tool_partitions WHERE invocation=?',(row[0],)).fetchone()
                 if partition and binding.get('provider_call_id'):
                     fragments=json.loads(partition[0])['fragments']
+                    if not any(fragment['origins'] for fragment in fragments):
+                        continue
                     model_partitions[binding['provider_call_id']]=fragments
                     model_calls.setdefault(binding['provider_call_id'],set()).update(
                         self.ledger._origin(origin) for fragment in fragments for origin in fragment['origins'])
@@ -144,7 +151,8 @@ class SqliteEngineContentPrivacy:
                                           tuple(self.ledger._origin(origin) for origin in fragment['origins']))
                                          for fragment in fragments if fragment['origins'])
                         else:
-                            paths.append((('tools',index,field),tuple(model_calls[tool['tool_call_id']])))
+                            paths.append((('tools',index,field),(model_arguments.get(tool['tool_call_id']) or origins)
+                                          if field=='tool_args' else tuple(model_calls[tool['tool_call_id']])))
             for path,node_origins in paths:
                 locator=[session_id,identity,list(path)]
                 artifact=base64.urlsafe_b64encode(_encoded(locator)).decode().rstrip('=')
@@ -194,7 +202,7 @@ class SqliteEngineContentPrivacy:
         if recap is None or recap_id in folded_run_ids:
             raise PrivacyConflict('Compaction has no new exact recap identity')
         encoded_origins=json.dumps([dict(tenant_id=o.tenant_id,source_id=o.source_id,group_id=o.group_id,
-                                         generation=o.generation,subjects=o.subjects) for o in origins])
+                                         generation=o.generation,subjects=o.subjects,nonpersonal=o.nonpersonal) for o in origins])
         transaction.execute('INSERT INTO engine_privacy_recaps VALUES(?,?,?,?)',(recap_id,tenant,session_id,encoded_origins))
         parents=[]
         for identity in folded_run_ids:

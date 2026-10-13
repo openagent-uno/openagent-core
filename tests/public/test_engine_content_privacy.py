@@ -80,19 +80,19 @@ class EnginePrivacy(unittest.IsolatedAsyncioTestCase):
 
     async def test_different_customer_raw_tool_results_keep_exact_origins(self):
         from dataclasses import replace
-        await self.store.begin_tool('run','second-catalog',{'source_id':'shopify','name':'read','provider_call_id':'model-second-shop'}, {})
+        await self.store.begin_tool('run','second-catalog',{'source_id':'shopify','name':'read','provider_call_id':'model-second-shop'}, {'query':'PRIVATE SHOP RESULT'})
         second=replace(self.origin,subjects=('customer:24',))
         await self.publisher.publish_tool_result(self.context,'run','second-catalog',{'private':'CUSTOMER TWO RESULT'},(second,))
         run=self.session.runs[0]
         run.messages.insert(2,Message(role='tool',tool_call_id='model-second-shop',content='CUSTOMER TWO RESULT'))
-        run.tools.append(ToolExecution(tool_call_id='model-second-shop',tool_name='read',tool_args={'id':24},result='CUSTOMER TWO RESULT'))
+        run.tools.append(ToolExecution(tool_call_id='model-second-shop',tool_name='read',tool_args={'id':24,'query':'PRIVATE SHOP RESULT'},result='CUSTOMER TWO RESULT'))
         with execution_scope(self.runtime,self.context,'run'):
             self.db.upsert_session(self.session)
         request=PrivacyRequest('customer-event','tenant','shopify/app','group',10,'redact',('customer:23',))
         await self.ledger.enqueue(request)
         from openagent_core.content_privacy import ContentRevision
         targets=self.store.connection.execute("SELECT r.* FROM privacy_targets t JOIN privacy_revisions r ON t.tenant=r.tenant AND t.artifact=r.artifact AND t.revision=r.revision WHERE t.request_id=? AND r.sink='engine-history'",('customer-event',)).fetchall()
-        self.assertEqual(len(targets),5)
+        self.assertEqual(len(targets),6)  # Later model query arguments inherit earlier protected context too.
         for node in targets:
             revision=ContentRevision(node['tenant'],node['artifact'],node['revision'],node['sink'],node['digest'])
             self.assertEqual(await self.sink.apply(request,revision),'complete')
@@ -100,12 +100,23 @@ class EnginePrivacy(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('PRIVATE SHOP RESULT',str(source))
         self.assertIn('CUSTOMER TWO RESULT',str(source))
         self.assertIn('UNRELATED MAIL RESULT',str(source))
+        from openagent_storage_sqlite.runtime_privacy import SqliteRuntimeContentPrivacySink
+        async def export(*args):self.fail('unexpected export')
+        public=SqliteRuntimeContentPrivacySink(self.store,self.ledger,export=export)
+        public_targets=self.store.connection.execute("SELECT r.* FROM privacy_targets t JOIN privacy_revisions r ON t.tenant=r.tenant AND t.artifact=r.artifact AND t.revision=r.revision WHERE t.request_id=? AND r.sink='runtime-ledger'",('customer-event',)).fetchall()
+        for node in public_targets:
+            revision=ContentRevision(node['tenant'],node['artifact'],node['revision'],node['sink'],node['digest'])
+            self.assertEqual(await public.apply(request,revision),'complete')
+        raw=self.store.connection.execute('SELECT args_json,result_json,raw_envelope_json FROM tool_invocations WHERE tool_call_id=?',('second-catalog',)).fetchone()
+        self.assertNotIn('PRIVATE SHOP RESULT',str(tuple(raw)))
+        self.assertIn('CUSTOMER TWO RESULT',str(tuple(raw)))
 
     async def test_mixed_customer_one_call_preserves_sibling_across_real_public_and_engine_copies(self):
         from dataclasses import replace
         from openagent_core.content_privacy import ContentFragment,ToolResultProvenance,ContentRevision,JsonStringBoundary
         from openagent_storage_sqlite.runtime_privacy import SqliteRuntimeContentPrivacySink
         second=replace(self.origin,subjects=('customer:24',))
+        inventory=replace(self.origin,subjects=(),nonpersonal=True)
         payload={'data':{'customers':[{'id':23,'name':'FIRST CUSTOMER PRIVATE'},
                                      {'id':24,'name':'SECOND CUSTOMER RETAIN'}],'inventory':'NONPERSONAL INVENTORY'},
                  '_glasspalace':{'count':2}}
@@ -115,7 +126,7 @@ class EnginePrivacy(unittest.IsolatedAsyncioTestCase):
         for prefix in (('structuredContent',),('content',0,'text',boundary)):
             fragments.extend((ContentFragment(prefix+('data','customers',0),(self.origin,)),
                               ContentFragment(prefix+('data','customers',1),(second,)),
-                              ContentFragment(prefix+('data','inventory'),()),ContentFragment(prefix+('_glasspalace',),())))
+                              ContentFragment(prefix+('data','inventory'),(inventory,)),ContentFragment(prefix+('_glasspalace',),())))
         fragments.append(ContentFragment(('content',0,'type'),()))
         provenance=ToolResultProvenance(tuple(fragments))
         provenance.validate_result(result,'tenant')
@@ -158,6 +169,18 @@ class EnginePrivacy(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await (public if node['sink']=='runtime-ledger' else self.sink).apply(second_request,revision),'complete')
         self.assertNotIn('SECOND CUSTOMER RETAIN',str(self.db.get_session('session',deserialize=False)))
         self.assertIn('NONPERSONAL INVENTORY',str(self.db.get_session('session',deserialize=False)))
+        shop_request=replace(request,request_id='whole-shop',subjects=())
+        await self.ledger.enqueue(shop_request)
+        targets=self.store.connection.execute('''SELECT r.* FROM privacy_targets t JOIN privacy_revisions r
+            ON t.tenant=r.tenant AND t.artifact=r.artifact AND t.revision=r.revision WHERE t.request_id=?''',('whole-shop',)).fetchall()
+        for node in targets:
+            revision=ContentRevision(node['tenant'],node['artifact'],node['revision'],node['sink'],node['digest'])
+            self.assertEqual(await (public if node['sink']=='runtime-ledger' else self.sink).apply(shop_request,revision),'complete')
+        self.assertNotIn('NONPERSONAL INVENTORY',str(self.db.get_session('session',deserialize=False)))
+        for table,column in (('tool_invocations','result_json'),('tool_invocations','raw_envelope_json'),
+                             ('session_messages','text'),('domain_events','metadata_json'),('session_runs','raw_envelope_json')):
+            copies=' '.join(str(row[0]) for row in self.store.connection.execute(f'SELECT {column} FROM {table}'))
+            self.assertNotIn('NONPERSONAL INVENTORY',copies)
 
     async def test_actual_spawn_tracks_child_mission_and_engine_output_without_new_source_tool(self):
         from openagent_core.core._run_state.agent import RunInput
@@ -202,6 +225,32 @@ class EnginePrivacy(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PrivacyFence):
             await self.store.accept(RunRequest('child','child-session','child-key','mission',attachments=({'path':'unattested'},)),context)
         self.assertIsNone(await self.store.get('child'))
+
+    async def test_inflight_query_and_failed_tool_copies_are_recorded_before_results(self):
+        from openagent_core.content_privacy import ContentRevision
+        from openagent_storage_sqlite.runtime_privacy import SqliteRuntimeContentPrivacySink
+        await self.store.begin_tool('run','failed',{'source_id':'shopify','name':'read','provider_call_id':'failed-model'}, {'query':'DERIVED PRIVATE QUERY'})
+        # No successful result is needed for the invocation intent to be owned.
+        self.assertGreater(self.store.connection.execute("SELECT count(*) FROM runtime_privacy_fragments WHERE field='args_json'").fetchone()[0],0)
+        await self.store.finish_tool('run','failed',error={'detail':'DERIVED PRIVATE ERROR'})
+        run=self.session.runs[0]
+        run.messages.insert(2,Message(role='tool',tool_call_id='failed-model',content='DERIVED PRIVATE ERROR'))
+        run.tools.append(ToolExecution(tool_call_id='failed-model',tool_name='read',tool_args={'query':'DERIVED PRIVATE QUERY'},result='DERIVED PRIVATE ERROR'))
+        with execution_scope(self.runtime,self.context,'run'):
+            self.db.upsert_session(self.session)
+        request=PrivacyRequest('failed-event','tenant','shopify/app','group',10,'redact',('customer:23',))
+        await self.ledger.enqueue(request)
+        async def export(*args):self.fail('unexpected export')
+        public=SqliteRuntimeContentPrivacySink(self.store,self.ledger,export=export)
+        targets=self.store.connection.execute('''SELECT r.* FROM privacy_targets t JOIN privacy_revisions r
+            ON t.tenant=r.tenant AND t.artifact=r.artifact AND t.revision=r.revision WHERE t.request_id=?''',('failed-event',)).fetchall()
+        for node in targets:
+            revision=ContentRevision(node['tenant'],node['artifact'],node['revision'],node['sink'],node['digest'])
+            self.assertEqual(await (public if node['sink']=='runtime-ledger' else self.sink).apply(request,revision),'complete')
+        self.assertNotIn('DERIVED PRIVATE',str(self.db.get_session('session',deserialize=False)))
+        for table,column in (('tool_invocations','args_json'),('tool_invocations','raw_envelope_json'),
+                             ('session_messages','text'),('domain_events','metadata_json')):
+            self.assertNotIn('DERIVED PRIVATE',' '.join(str(row[0]) for row in self.store.connection.execute(f'SELECT {column} FROM {table}')))
 
     async def test_real_compaction_records_recap_and_redacts_folded_compatibility_copy(self):
         from unittest.mock import patch
