@@ -159,6 +159,50 @@ class EnginePrivacy(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('SECOND CUSTOMER RETAIN',str(self.db.get_session('session',deserialize=False)))
         self.assertIn('NONPERSONAL INVENTORY',str(self.db.get_session('session',deserialize=False)))
 
+    async def test_actual_spawn_tracks_child_mission_and_engine_output_without_new_source_tool(self):
+        from openagent_core.core._run_state.agent import RunInput
+        from openagent_core.content_privacy import ContentRevision
+        from openagent_storage_sqlite.runtime_privacy import SqliteRuntimeContentPrivacySink
+        async def execute(request,context,runtime):
+            run=RunOutput(run_id=request.run_id,agent_id='agent',session_id=request.session_id,
+                          input=RunInput(request.input),content='PRIVATE CHILD ANSWER',
+                          messages=[Message(role='user',content='UNRELATED OLDER HUMAN'),
+                                    Message(role='user',content=request.input),Message(role='assistant',content='PRIVATE CHILD ANSWER')])
+            session=AgentSession(session_id=request.session_id,agent_id='agent',user_id=context.authority.key,runs=[run],created_at=1,updated_at=1)
+            self.db.upsert_session(session)
+            return 'PRIVATE CHILD ANSWER'
+        self.runtime.services.executor=SimpleNamespace(execute=execute)
+        with execution_scope(self.runtime,self.context,'run'):
+            child=await self.runtime.spawn(RunRequest('child','child-session','child-key','PRIVATE CHILD MISSION'),self.context)
+        self.assertEqual(child.status,'success')
+        self.assertIn('PRIVATE CHILD MISSION',str(self.db.get_session('child-session',deserialize=False)))
+        request=PrivacyRequest('child-event','tenant','shopify/app','group',10,'redact',('customer:23',))
+        await self.ledger.enqueue(request)
+        async def export(*args):self.fail('unexpected export')
+        public=SqliteRuntimeContentPrivacySink(self.store,self.ledger,export=export)
+        targets=self.store.connection.execute('''SELECT r.* FROM privacy_targets t JOIN privacy_revisions r
+            ON t.tenant=r.tenant AND t.artifact=r.artifact AND t.revision=r.revision WHERE t.request_id=?''',('child-event',)).fetchall()
+        for node in targets:
+            revision=ContentRevision(node['tenant'],node['artifact'],node['revision'],node['sink'],node['digest'])
+            self.assertEqual(await (public if node['sink']=='runtime-ledger' else self.sink).apply(request,revision),'complete')
+        source=str(self.db.get_session('child-session',deserialize=False))
+        self.assertNotIn('PRIVATE CHILD MISSION',source)
+        self.assertNotIn('PRIVATE CHILD ANSWER',source)
+        self.assertIn('UNRELATED OLDER HUMAN',source)
+        self.assertIsNone(self.store.connection.execute('SELECT input_json FROM session_runs WHERE id=?',('child',)).fetchone()[0])
+        self.assertEqual(json.loads(self.store.connection.execute('SELECT input_json FROM session_runs WHERE id=?',('run',)).fetchone()[0]),'HUMAN INPUT')
+        with self.assertRaises(PrivacyFence):
+            await self.store.accepted_request('child')
+        metadata=json.loads(self.store.connection.execute('SELECT metadata_json FROM session_runs WHERE id=?',('child',)).fetchone()[0])
+        self.assertEqual(metadata['execution_context']['authority']['subject_id'],'alice')
+
+    async def test_protected_child_attachments_are_not_admitted_without_managed_copy_bridge(self):
+        from openagent_core import PrincipalRef
+        context=self.context.child(session_id='child-session',run_id='run',agent=PrincipalRef('host','tenant','agent','agent'))
+        with self.assertRaises(PrivacyFence):
+            await self.store.accept(RunRequest('child','child-session','child-key','mission',attachments=({'path':'unattested'},)),context)
+        self.assertIsNone(await self.store.get('child'))
+
     async def test_real_compaction_records_recap_and_redacts_folded_compatibility_copy(self):
         from unittest.mock import patch
         from openagent_core.core.compaction import compact

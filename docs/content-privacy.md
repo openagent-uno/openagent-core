@@ -301,3 +301,23 @@ with text plus structured copies, then the engine's own JSON-text serialization.
 Both copies retain the second customer after the first request; its later request
 also succeeds. Unclassified, ambiguous or malformed encoded provider JSON cannot
 be published through a fragment partition.
+
+## Agent child missions and inherited histories
+
+The real public `Runtime.spawn` path retains host-authenticated agent authorship
+and the parent run identity. Protected parent origins are inherited before model
+IO. Agent-authored child missions are tracked in accepted input and the public
+message anchor; original human input remains separate. The engine writer also
+tracks exact child input, generated output and its matching mission message,
+without requiring the child to call a provider again. Engine child input must
+equal the admitted mission. Redacted missions cannot be reconstructed through
+`accepted_request`; the API raises `PrivacyFence` instead of replaying private
+input. Children carrying attachments are refused until a managed-copy bridge
+attests those replicas.
+
+The canonical spawn test persists a real child engine session, erases its mission
+and answer in both public/legacy copies, and retains an older human message and
+the parent's original human input/authority. Generated final fields in later
+runs also inherit protected history even without a new source call. Arbitrary
+cached model-context messages, external child executors and unknown historical
+session copies still require explicit inventory and qualified adapters.

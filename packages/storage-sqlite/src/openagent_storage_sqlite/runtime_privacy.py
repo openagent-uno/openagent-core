@@ -23,6 +23,7 @@ _FIELDS = {
     'tool': ('tool_invocations', ('args_json','result_json','result_text','error_json','error_text','raw_envelope_json')),
     'event': ('domain_events', ('metadata_json',)),
     'output': ('session_runs', ('output_json',)),
+    'input': ('session_runs', ('input_json',)),
 }
 
 
@@ -288,6 +289,13 @@ class SqliteToolResultPrivacyPublisher:
             # Reject admission before a model can consume revoked historical
             # context. A source/tool-only fence is too late for provider IO.
             self._guard(db,run_id)
+            if parent_run_id:
+                row=db.execute('SELECT metadata_json FROM session_runs WHERE id=?',(run_id,)).fetchone()
+                metadata=json.loads(row[0])
+                if metadata.get('attachments'):
+                    raise PrivacyFence('Protected child attachments require an attested managed-copy bridge')
+                if metadata.get('execution_context',{}).get('author',{}).get('kind')=='agent':
+                    self._record(db,'input',run_id,tuple(origins))
 
     def _record(self,db,kind,identity,origins):
         if not origins:

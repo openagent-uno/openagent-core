@@ -18,7 +18,7 @@ import asyncio
 import functools
 import base64
 from openagent_core.persistence import run_sync
-from openagent_core.content_privacy import PrivacyConflict
+from openagent_core.content_privacy import PrivacyConflict,PrivacyFence
 from openagent_core.configuration import sqlite_busy_timeout_ms, sqlite_busy_timeout_s
 
 from .search import enqueue_source, restore_runtime_search_intents
@@ -245,6 +245,10 @@ class SqliteRuntimeStore:
             enqueue_source(db, 'tool_invocation', tool['id'], now)
         if self._content_privacy_publication is not None and role in {'assistant','compaction'} and status=='complete':
             self._content_privacy_publication.generated(db,'message',message_id,run_id)
+        elif self._content_privacy_publication is not None and role=='user' and kind=='agent':
+            child=db.execute('SELECT delegated_parent_run_id FROM session_runs WHERE id=?',(run_id,)).fetchone()
+            if child and child[0]:
+                self._content_privacy_publication.generated(db,'message',message_id,run_id)
         return message_id
 
     def _transition(self, run_id: str, status: str, *, output: Any = None) -> RunRecord:
@@ -559,6 +563,8 @@ class SqliteRuntimeStore:
         row=self.connection.execute("SELECT * FROM session_runs WHERE id=? AND json_extract(metadata_json,'$.runtime_contract')=1",(run_id,)).fetchone()
         if row is None:
             raise LookupError('No durable request has been accepted for this run')
+        if row['input_json'] is None:
+            raise PrivacyFence('The accepted derived mission has been redacted and cannot be replayed')
         metadata=json.loads(row['metadata_json']);context=metadata['execution_context']
         request=RunRequest(row['id'],row['session_id'],row['idempotency_key'],json.loads(row['input_json']),
             metadata.get('deadline_seconds'),tuple(metadata.get('attachments',())),

@@ -98,6 +98,22 @@ class SqliteEngineContentPrivacy:
             paths=[]
             messages=run.get('messages') or []
             first_source=None
+            admitted=transaction.execute('SELECT input_json,delegated_parent_run_id,metadata_json FROM session_runs WHERE id=?',(identity,)).fetchone()
+            admitted_input=json.loads(admitted[0])
+            agent_child=bool(admitted[1] and json.loads(admitted[2]).get('execution_context',{}).get('author',{}).get('kind')=='agent')
+            # The final output belongs to this admitted run even when its only
+            # protected source is inherited history/parent context.
+            paths.extend(((field,),origins) for field in _GENERATED_FIELDS if run.get(field) is not None)
+            if agent_child and run.get('input') is not None:
+                if not isinstance(run['input'],dict) or run['input'].get('input_content')!=admitted_input:
+                    raise PrivacyConflict('Child engine input does not retain the admitted agent mission')
+                paths.append((('input',),origins))
+            admitted_user=None
+            for index,message in enumerate(messages):
+                if isinstance(message,dict) and message.get('role')=='user' and message.get('content')==admitted_input:
+                    admitted_user=index
+            if agent_child and admitted_user is not None:
+                paths.append((('messages',admitted_user,'content'),origins))
             for index,message in enumerate(messages):
                 if isinstance(message,dict) and message.get('role')=='tool' and message.get('tool_call_id') in model_calls:
                     first_source=index if first_source is None else first_source
@@ -114,7 +130,10 @@ class SqliteEngineContentPrivacy:
                 for index,message in enumerate(messages):
                     if index>first_source and isinstance(message,dict) and message.get('role')=='assistant':
                         paths.extend((('messages',index,field),origins) for field in _MESSAGE_FIELDS if message.get(field) is not None)
-                paths.extend(((field,),origins) for field in _GENERATED_FIELDS if run.get(field) is not None)
+            elif admitted_user is not None:
+                for index,message in enumerate(messages):
+                    if index>admitted_user and isinstance(message,dict) and message.get('role')=='assistant':
+                        paths.extend((('messages',index,field),origins) for field in _MESSAGE_FIELDS if message.get(field) is not None)
             for index,tool in enumerate(run.get('tools') or []):
                 if isinstance(tool,dict) and tool.get('tool_call_id') in model_calls:
                     fragments=model_partitions.get(tool['tool_call_id'])
