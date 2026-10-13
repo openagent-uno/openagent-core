@@ -92,3 +92,39 @@ class RuntimePrivacy(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('UNRELATED HUMAN INPUT',str(self.exports))
         self.assertNotIn('UNRELATED GMAIL DATA',str(self.exports))
         self.assertEqual((await self.store.get('run')).output,'DERIVED PRIVATE SUMMARY')
+
+    async def test_changed_canonical_revision_does_not_erase_new_content(self):
+        await self.populate()
+        revisions=await self.sink.capture('run',('shop',),(self.origin,))
+        message=next(r for r in revisions if r.artifact_id.startswith('message/'))
+        identity=message.artifact_id.partition('/')[2]
+        self.store.connection.execute("UPDATE session_messages SET text='HUMAN REPLACEMENT' WHERE id=?",(identity,))
+        self.assertEqual(await self.sink.apply(self.request,message),'conflict')
+        self.assertEqual(self.store.connection.execute('SELECT text FROM session_messages WHERE id=?',(identity,)).fetchone()[0],'HUMAN REPLACEMENT')
+
+    async def test_host_event_policy_drift_does_not_disable_immutability(self):
+        await self.populate()
+        revisions=await self.sink.capture('run',('shop',),(self.origin,))
+        event=next(r for r in revisions if r.artifact_id.startswith('event/'))
+        self.store.connection.execute('DROP TRIGGER trg_domain_events_no_update')
+        custom="CREATE TRIGGER trg_domain_events_no_update BEFORE UPDATE ON domain_events BEGIN SELECT RAISE(ABORT,'CUSTOM HOST POLICY'); END"
+        self.store.connection.execute(custom)
+        self.assertEqual(await self.sink.apply(self.request,event),'conflict')
+        with self.assertRaisesRegex(Exception,'CUSTOM HOST POLICY'):
+            self.store.connection.execute("UPDATE domain_events SET metadata_json='{}'")
+
+    async def test_reader_holding_original_pages_blocks_completion_until_checkpoint(self):
+        import sqlite3
+        await self.populate()
+        revisions=await self.sink.capture('run',('shop',),(self.origin,))
+        target=next(r for r in revisions if r.artifact_id.startswith('message/'))
+        reader=sqlite3.connect(self.store.path)
+        try:
+            reader.execute('BEGIN')
+            reader.execute('SELECT text FROM session_messages').fetchall()
+            self.store.connection.execute('PRAGMA busy_timeout=1')
+            self.assertEqual(await self.sink.apply(self.request,target),'conflict')
+            reader.commit()
+            self.assertEqual(await self.sink.apply(self.request,target),'complete')
+        finally:
+            reader.close()
