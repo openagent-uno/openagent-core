@@ -2,6 +2,19 @@
 from __future__ import annotations
 
 
+class SqliteOperationalSearchPrivacy:
+    """Canonical Core index consumer; no product SQL or rebuild shortcut."""
+    def __init__(self,runtime_store,memory_db):
+        from pathlib import Path
+        if Path(memory_db.db_path).resolve()!=runtime_store.path.resolve():
+            raise ValueError('Privacy index must consume the canonical content database')
+        self.memory_db=memory_db
+
+    async def refresh(self,through_seq):
+        from openagent_core.memory.operational.search import refresh_privacy_search
+        return await refresh_privacy_search(self.memory_db,through_seq=through_seq)
+
+
 def enqueue_source(db, source_kind: str, source_id: str, now_ms: int) -> None:
     """Called inside the canonical writer's transaction; never commits independently."""
     if source_kind == 'session':

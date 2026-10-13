@@ -1,3 +1,4 @@
+<!-- Concrete host labels in this historical record are anonymized; original bytes and hashes are retained in the protected operator audit. -->
 # Tool and vault parity qualification
 
 The migration retains the 74-case baseline: 5 prompt/tool-name contracts,
@@ -68,7 +69,7 @@ checks now call the public core service shared by both products. Git expectation
 include a separate initial baseline: the first note now retains its own author.
 Dream maintenance commits its own effects and provenance under the mutation lock,
 so a subsequent sweep correctly reports no remaining changes. Five additional
-public service tests and three authenticated GlassPalace HTTP cases cover the
+public service tests and three authenticated embedding-host HTTP cases cover the
 management API and authorization. See [vault administration](../vault-administration.md).
 
 Use a virtual environment containing the engine, SQLite store, modules, shell

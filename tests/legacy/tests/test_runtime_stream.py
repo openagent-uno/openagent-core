@@ -1,6 +1,6 @@
 """NativeProvider.stream — hermetic zero-delta fallback coverage.
 
-Friday's stuck Telegram turns were hitting a runtime streamed turn that
+a deployed instance's stuck Telegram turns were hitting a runtime streamed turn that
 finished with zero ``RunContentEvent`` deltas. The provider now falls back to
 its own ``generate()`` before control returns to Agent.run_stream, which keeps
 the reply on the provider side of the cancellation-poison boundary.

@@ -2,7 +2,7 @@
 and re-dispatched instead of being dropped as ``failed`` — and a replay never
 double-messages the customer.
 
-The bug (esound-openagent, 2026-07): ``webhook_site`` records a delivery
+The bug (alpha-openagent, 2026-07): ``webhook_site`` records a delivery
 ``claimed=True`` then dispatches the agent turn as a detached background task
 and returns 202 — at-most-once. If the process died before the turn finished,
 ``reap_orphan_event_deliveries`` marked the in-flight row ``failed`` and never

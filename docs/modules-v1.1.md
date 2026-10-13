@@ -1,3 +1,4 @@
+<!-- Concrete host labels in this historical record are anonymized; original bytes and hashes are retained in the protected operator audit. -->
 # Symmetric module architecture
 
 OpenAgent 1.1 separates the always-present kernel from optional domain modules.
@@ -59,7 +60,7 @@ Installed code never changes at runtime; adding or upgrading a wheel needs a new
 artifact/process. Run events persist the profile generation, module versions and
 surfaces, prompt revisions and capability generation used at admission.
 
-The full standalone profile enables every domain. GlassPalace selects the same
+The full standalone profile enables every domain. embedding-host selects the same
 modules per agent, supplies a federated Sessions backend and managed MCP catalog,
 and owns pods and device capability sources. Replio demonstrates Sessions plus a
 fixed native catalog with Vault, MCP, Scheduler, Workflows and Events absent.

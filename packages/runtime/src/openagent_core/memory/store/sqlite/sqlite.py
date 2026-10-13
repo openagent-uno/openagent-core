@@ -1,3 +1,4 @@
+from openagent_core.content_privacy import PrivacyFence, PrivacyConflict
 from openagent_core.configuration import runtime_environment
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -156,6 +157,19 @@ def _project_operational_session_in_transaction(
     )
 
     conn = sqlalchemy_driver_connection(sess)
+    from openagent_core.runtime import current_runtime, current_execution_context, current_run_id
+    from openagent_core.content_privacy import EngineContentPrivacyWriter
+    runtime = current_runtime()
+    privacy_writer = runtime.service(EngineContentPrivacyWriter) if runtime is not None else None
+    if privacy_writer is not None:
+        # Privacy is part of the canonical source transaction, before the
+        # best-effort projection savepoint. A privacy fence must roll back the
+        # accepted legacy write too, rather than defer only the projection.
+        privacy_writer.record_engine_session(conn, session_id, source_row,
+                                              current_execution_context(), current_run_id())
+    else:
+        from openagent_core.memory.operational.privacy_snapshots import guard_unscoped_history_transaction
+        guard_unscoped_history_transaction(conn, session_id, source_row)
     savepoint = f"operational_projection_{_uuid4().hex}"
     conn.execute(f"SAVEPOINT {savepoint}")
     try:
@@ -859,6 +873,20 @@ class SqliteDb(BaseDb):
         return database is not None and self.db_file is not None and Path(database).resolve() == Path(self.db_file).resolve()
 
     def _preserve_runtime_user(self, table, database_session, serialized: dict) -> None:
+        from openagent_core.runtime import current_runtime, current_execution_context, current_run_id
+        from openagent_core.content_privacy import EngineContentPrivacyWriter
+        runtime = current_runtime()
+        writer = runtime.service(EngineContentPrivacyWriter) if runtime is not None else None
+        if writer is not None:
+            from openagent_core.memory.operational.repository import sqlalchemy_driver_connection
+            writer.begin_engine_session(sqlalchemy_driver_connection(database_session),
+                                        serialized.get('session_id'), serialized,
+                                        current_execution_context(), current_run_id())
+        else:
+            from openagent_core.memory.operational.repository import sqlalchemy_driver_connection
+            from openagent_core.memory.operational.privacy_snapshots import guard_unscoped_history_transaction
+            guard_unscoped_history_transaction(sqlalchemy_driver_connection(database_session),
+                                               serialized.get('session_id'), serialized)
         if not self._runtime_session(serialized.get('session_id')):
             return
         row = database_session.execute(select(table.c.user_id).where(table.c.session_id == serialized['session_id'])).first()
@@ -1294,6 +1322,8 @@ class SqliteDb(BaseDb):
                         return session_raw
                     return WorkflowSession.from_dict(session_raw)
 
+        except (PrivacyFence, PrivacyConflict):
+            raise
         except Exception as e:
             log_warning(f"Exception upserting into table: {str(e)}")
             raise e

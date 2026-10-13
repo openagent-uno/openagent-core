@@ -406,11 +406,11 @@ async def t_allow_pattern_exempts(ctx: TestContext) -> None:
     prev_on = os.environ.get(safety._APPROVALS_ENV)
     prev_allow = os.environ.get(safety._ALLOW_PATTERNS_ENV)
     os.environ[safety._APPROVALS_ENV] = "1"
-    os.environ[safety._ALLOW_PATTERNS_ENV] = r"git push --force[a-z-]* origin lyra-agent/"
+    os.environ[safety._ALLOW_PATTERNS_ENV] = r"git push --force[a-z-]* origin beta-agent/"
     try:
         # The agent's own branch — its normal workflow keeps running.
-        safety.check_command_allowed("git push --force origin lyra-agent/482-fix")
-        safety.check_command_allowed("git push --force-with-lease origin lyra-agent/482")
+        safety.check_command_allowed("git push --force origin beta-agent/482-fix")
+        safety.check_command_allowed("git push --force-with-lease origin beta-agent/482")
 
         # The exception is SCOPED. This is the whole value: the May-2026
         # incident put production signing on master via a force-push, and a
@@ -430,7 +430,7 @@ async def t_allow_pattern_exempts(ctx: TestContext) -> None:
                 )
 
         # Unrelated defaults are untouched by the exemption.
-        for blocked in ("rm -rf /", "kubectl delete deployment lyra-api"):
+        for blocked in ("rm -rf /", "kubectl delete deployment beta-api"):
             try:
                 safety.check_command_allowed(blocked)
             except safety.BlockedCommandError:
@@ -497,12 +497,12 @@ async def t_bad_allow_pattern_audited(ctx: TestContext) -> None:
     prev_on = os.environ.get(safety._APPROVALS_ENV)
     prev_allow = os.environ.get(safety._ALLOW_PATTERNS_ENV)
     os.environ[safety._APPROVALS_ENV] = "1"
-    os.environ[safety._ALLOW_PATTERNS_ENV] = "git push --force origin lyra-agent/((("
+    os.environ[safety._ALLOW_PATTERNS_ENV] = "git push --force origin beta-agent/((("
     try:
         # Broken fragment is dropped, not raised — the agent must not die on
         # its first shell call because of a yaml typo.
         try:
-            safety.check_command_allowed("git push --force origin lyra-agent/482")
+            safety.check_command_allowed("git push --force origin beta-agent/482")
         except safety.BlockedCommandError:
             pass  # fails CLOSED, as documented
         else:

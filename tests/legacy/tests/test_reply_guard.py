@@ -524,7 +524,7 @@ async def t_local_receipt_fix_status(ctx: TestContext) -> None:
         'implementata e completata.","evidence_files":["old.md"]}'
         "\n```"
     )
-    rows = [("tool_search_call_tool", "path: esound/receipts/old-task.md status: complete")]
+    rows = [("tool_search_call_tool", "path: alpha/receipts/old-task.md status: complete")]
     model = _RaisingModel()
     with lean_local_event_scope(True), _Trace(enabled=True, rows=rows):
         out = await reply_guard.guard_reply(
@@ -657,7 +657,7 @@ async def t_ungrounded_identifiers(_ctx: TestContext) -> None:
     from openagent_core.core import reply_guard
     from openagent_core.core.execution_profile import lean_local_event_scope
 
-    rows = [("tool_search_call_tool", 'result={"id": "86-local-created-esound"}')]
+    rows = [("tool_search_call_tool", 'result={"id": "86-local-created-alpha"}')]
 
     # The two fabrications a local model actually produced in a dry run.
     assert reply_guard.unbacked_task_ids(
@@ -666,10 +666,10 @@ async def t_ungrounded_identifiers(_ctx: TestContext) -> None:
     assert reply_guard.unbacked_money(
         "The refund of €9.99 will be issued.", rows,
     ) == ["€9.99"]
-    # Tenant-agnostic on purpose: the same agent will serve Lyra, so the rule
+    # Tenant-agnostic on purpose: the same agent will serve beta, so the rule
     # keys on the context word, not on one workspace's id shape.
     assert reply_guard.unbacked_identifiers(
-        "Lyra ticket LYR-4471 is tracking this.", rows,
+        "beta ticket LYR-4471 is tracking this.", rows,
     ) == ["LYR-4471"]
     assert reply_guard.unbacked_identifiers(
         "Il tuo ordine 12345-ABC non risulta.", rows,
@@ -695,7 +695,7 @@ async def t_ungrounded_identifiers(_ctx: TestContext) -> None:
 
     # An identifier the tools really returned is not a fabrication.
     assert reply_guard.unbacked_task_ids(
-        "Linked to task 86-local-created-esound.", rows,
+        "Linked to task 86-local-created-alpha.", rows,
     ) == []
     assert reply_guard.unbacked_money(
         "Your last payment of 4.99 is on the receipt.",
@@ -775,7 +775,7 @@ async def t_unbacked_tracking(_ctx: TestContext) -> None:
 
 @test("reply_guard", "a claim about diagnostic logs needs a receipt behind it")
 async def t_diagnostics_claim_detected(_ctx: TestContext) -> None:
-    """The three sentences a real Lyra thread received on 26-ago-2026.
+    """The three sentences a real beta thread received on 26-ago-2026.
 
     No capture had ever been switched on and no log existed; the customer
     performed the reproduction ritual twice for nothing.
@@ -805,14 +805,14 @@ async def t_diagnostics_claim_detected(_ctx: TestContext) -> None:
 
     # An enable receipt is what makes the sentence sayable.
     backed = [(
-        "lyra_admin_enable_diagnostics",
+        "beta_admin_enable_diagnostics",
         'result={"ok": true, "categories": ["playback"]}',
     )]
     assert reply_guard._trace_supports_completed_action(
         "I enabled diagnostic capture on your account.", backed,
     ) is True
     failed = [(
-        "lyra_admin_enable_diagnostics", 'result={"ok": false, "error": "not found"}',
+        "beta_admin_enable_diagnostics", 'result={"ok": false, "error": "not found"}',
     )]
     assert reply_guard._trace_supports_completed_action(
         "I enabled diagnostic capture on your account.", failed,

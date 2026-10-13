@@ -2986,7 +2986,7 @@ class MemoryDB:
         work. For an hourly task the next tick covers it; for a weekly one
         (``0 9 * * 1``) the week's output simply does not exist, and the only
         trace is a ``failed`` row nobody reads. Seen on 2026-08-31: a WAL-pin
-        restart killed ``esound-manager-review`` mid-run and the Monday review
+        restart killed ``example-product-a-manager-review`` mid-run and the Monday review
         was lost until someone went looking for it.
 
         So an interrupted run goes back in the queue, through the same
@@ -3007,7 +3007,7 @@ class MemoryDB:
         """
         # Only rows settled by the immediately preceding reap belong to this
         # boot.  Querying by the durable error marker alone replays every old
-        # interrupted run forever: after one deployment restart eSound
+        # interrupted run forever: after one deployment restart example-product-a
         # launched fifteen unrelated historical tasks at once, pinned a WAL
         # read mark, and grew the WAL for fourteen hours.  The in-memory ids
         # disappear with the process, which is exactly the lifecycle boundary
@@ -3456,7 +3456,7 @@ class MemoryDB:
         # the statement runs. If another connection holds the write lock at
         # that moment the upgrade fails with SQLITE_BUSY **immediately**: the
         # busy handler is never called, so ``busy_timeout`` — three minutes of
-        # it — buys nothing. Measured on the Lyra agent: an HTTP 500 back to
+        # it — buys nothing. Measured on the example-product-b agent: an HTTP 500 back to
         # Replio for every inbound conversation while three task runs sat
         # holding the database, and before Replio had a durable queue those
         # events were simply gone.
@@ -3520,7 +3520,7 @@ class MemoryDB:
         # write is a promotion from whatever snapshot that connection is
         # holding, and once that snapshot is stale SQLite refuses INSTANTLY —
         # the busy handler never runs. Retrying the same promotion three times
-        # in 350 ms then fails three identical times. Measured on the Lyra
+        # in 350 ms then fails three identical times. Measured on the example-product-b
         # agent after the ingest fix: nine deliveries recorded and none
         # finalised, every one of them stuck at ``received``.
         #
@@ -3600,7 +3600,7 @@ class MemoryDB:
         # A claim is a SELECT followed by an UPDATE, which is exactly the read
         # -then-promote pattern SQLite refuses INSTANTLY when the connection's
         # snapshot is no longer current — no busy handler, no timeout. Measured
-        # on the Lyra agent with ingest and finalisation already repaired:
+        # on the example-product-b agent with ingest and finalisation already repaired:
         # ``scheduler.event_claim_failed`` 49 times in ten minutes, and every
         # re-enqueued orphan sat unclaimed for ten minutes and more. The
         # conversation had been captured and was never answered.
@@ -3920,7 +3920,7 @@ class MemoryDB:
         The old behaviour marked every ``received`` / ``running`` orphan
         ``failed`` and forgot it — *at-most-once*. A delivery that was claimed
         and dispatched but whose process died before the turn finished was
-        never re-fired, so on the live esound-openagent pod **1181 of 1267
+        never re-fired, so on the live example-product-a-openagent pod **1181 of 1267
         ``failed`` rows carried this exact ``reaped: orphan …`` marker**: not
         failures, dropped tickets.
 
@@ -4936,7 +4936,7 @@ class MemoryDB:
         never take down a run — so a write that lost the WAL writer race just
         vanished, and the only trace was one ``Failed to record usage: database
         is locked`` warning nobody counts. On 3-set-2026 that emptied
-        ``usage_log`` on esound and lyra for hours while deliveries kept
+        ``usage_log`` on example-product-a and example-product-b for hours while deliveries kept
         landing at 30/h: the token alerts read an accounting hole as calm.
         The row is built ONCE outside the retry so a second attempt writes the
         same row rather than a duplicate under a new id."""
@@ -6630,13 +6630,23 @@ class MemoryDB:
         """
         if not session_id or not event_type:
             return 0
+        conn = await self._ensure_connected()
+        from openagent_core.runtime import current_runtime,current_execution_context,current_run_id
+        from openagent_core.content_privacy import SessionJournalPrivacyWriter,ToolResultPrivacyPublisher,PrivacyFence
+        runtime=current_runtime();context=current_execution_context();run_id=current_run_id()
+        if runtime is not None and context is not None and run_id is not None:
+            writer=runtime.service(SessionJournalPrivacyWriter)
+            if writer is not None:
+                return await writer.append_session_event(self.db_path,session_id,event_type,data or {},context,run_id)
+            publisher=runtime.service(ToolResultPrivacyPublisher)
+            if publisher is not None and await publisher.origins_for_execution(context,run_id):
+                raise PrivacyFence('Protected journal publication requires a canonical privacy writer')
         payload = "{}"
         if data:
             try:
                 payload = json.dumps(data, default=str)
             except (TypeError, ValueError):
                 payload = json.dumps({"unserializable": True})
-        conn = await self._ensure_connected()
         for _attempt in range(3):
             try:
                 cursor = await conn.execute(

@@ -1,3 +1,4 @@
+<!-- Concrete host labels in this historical record are anonymized; original bytes and hashes are retained in the protected operator audit. -->
 # Vault administration for embedding hosts
 
 `openagent_core.vault_administration.VaultAdministration` exposes the same vault
@@ -31,7 +32,7 @@ through both repairs and generated artifacts. Empty scaffold directories are
 excluded from Git pathspecs so they cannot prevent template commits.
 
 Verification on temporary data includes five public service tests, three
-authenticated GlassPalace HTTP tests and the existing 130 vault/tool parity
+authenticated embedding-host HTTP tests and the existing 130 vault/tool parity
 cases. The historical checks now target the public service for graph, path and
 frontmatter behavior. Commit-count expectations explicitly include the initial
 baseline and separately verify the first note's provenance. These tests do not

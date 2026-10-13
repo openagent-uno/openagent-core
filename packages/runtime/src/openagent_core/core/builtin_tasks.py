@@ -42,7 +42,7 @@ SKILL_DISTILLER_TASK_NAME = "skill-distiller"
 # agent's OWN vault rules, and writes a grounded correction for each weak one —
 # see ``AgentServer._sync_quality_scorer``. Its config section is
 # ``self_improvement``. DEDUP: an agent that already ships a tuned, NON-builtin
-# quality-scorer (eSound/Lyra do) keeps it — the builtin defers rather than
+# quality-scorer (example-product-a/example-product-b do) keeps it — the builtin defers rather than
 # double-running.
 QUALITY_SCORER_TASK_NAME = "quality-scorer"
 # The quality-digest: the daily synthesis half of the intrinsic loop. It rolls
@@ -60,7 +60,7 @@ QUALITY_DIGEST_TASK_NAME = "quality-digest"
 # explicit gate (``self_improvement.enabled`` AND
 # ``cost_observability_enabled``), same
 # ``self_improvement`` section, same DEDUP discipline as the scorer/digest: an
-# agent that already ships a tuned, NON-builtin cost watcher (eSound/Lyra do)
+# agent that already ships a tuned, NON-builtin cost watcher (example-product-a/example-product-b do)
 # keeps it. See ``AgentServer._sync_cost_observability``.
 COST_OBSERVABILITY_TASK_NAME = "cost-observability"
 # The escalation-audit: the HANDOFF arm of the intrinsic self-improvement loop.
@@ -75,7 +75,7 @@ COST_OBSERVABILITY_TASK_NAME = "cost-observability"
 # explicit gate (``self_improvement.enabled`` AND
 # ``escalation_audit_enabled``), same
 # ``self_improvement`` section + DEDUP: an agent that already ships a tuned,
-# NON-builtin escalation auditor (eSound/Lyra's ``support-escalation-audit``)
+# NON-builtin escalation auditor (example-product-a/example-product-b's ``support-escalation-audit``)
 # keeps it. See ``AgentServer._sync_escalation_audit``.
 ESCALATION_AUDIT_TASK_NAME = "escalation-audit"
 

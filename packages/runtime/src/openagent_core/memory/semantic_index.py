@@ -47,7 +47,7 @@ BRUTE-FORCE COSINE IS HONEST AT THIS SCALE
 ------------------------------------------
 Search stacks the stored unit vectors into one matrix and dots it with the
 (unit) query vector — the top-k is a single ``numpy`` matmul over a few
-thousand rows, sub-millisecond. The real eSound vault is ~2,100 notes; the
+thousand rows, sub-millisecond. The real example-product-a vault is ~2,100 notes; the
 deleted code's own docstring flagged brute force as a stopgap only past ~50k.
 An ANN index (faiss/hnsw) would be a second dependency and a second thing to
 keep in sync for a corpus that does not need it. When a deployment's corpus
@@ -90,7 +90,7 @@ _SCHEMA_VERSION = "1"
 # and reports the rest as ``pending`` — the same "bounded cold build" the
 # transcript index uses, and it matters MORE here: each item is a network round
 # trip to the embedding endpoint, not a local parse. A first sync on the 2,100-
-# note eSound vault must not fire 2,100 sequential HTTP calls on one call.
+# note example-product-a vault must not fire 2,100 sequential HTTP calls on one call.
 _MAX_ITEMS_PER_SYNC = 128
 
 # One embedding request carries at most this many texts. Every OpenAI-compatible
@@ -576,7 +576,7 @@ class SemanticIndex:
         constant. It depends on the model's tokenizer and on the LANGUAGE:
         Italian costs meaningfully more tokens per character than English, so
         a note that fits the cap can still overflow the window. Measured on
-        the eSound vault against ``snowflake-arctic-embed2``: a 5,871-char
+        the example-product-a vault against ``snowflake-arctic-embed2``: a 5,871-char
         Italian note (under the 6,000 cap) returns
         ``the input length exceeds the context length``.
 
@@ -748,7 +748,7 @@ class SemanticIndex:
         # ── the embedding round trip happens OUTSIDE the lock ─────────────
         # ``search`` takes the same lock, so embedding under it made every
         # recall that landed mid-sync wait for the whole batch to come back
-        # from the embedder. Measured on lyra-agent: query embedding 342ms and
+        # from the embedder. Measured on example-product-b-agent: query embedding 342ms and
         # the vector scan 420ms, yet recall ran to a 7.4s median, 25.6s p90 and
         # 56.6s max — the remainder was purely this wait, and 5 turns in 76
         # blew the 30s ceiling and answered the customer with NO vault rules.
@@ -900,7 +900,7 @@ class SemanticIndex:
         # embedder — one query 362ms, one note 774ms, one session digest
         # 1037ms, but a batch of 32 notes 15.2s and a batch of 32 sessions
         # 22.7s. Held under the lock, one such batch stalled every concurrent
-        # recall for that long, which is what put lyra-agent's recall p90 at
+        # recall for that long, which is what put example-product-b-agent's recall p90 at
         # 66.9s and its max at 128.7s. Sessions churn far faster than notes
         # (50 re-embeds an hour against 6), so this is the path that actually
         # hurt. See the matching fix in ``sync_vault``.

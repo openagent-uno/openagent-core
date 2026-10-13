@@ -1,6 +1,6 @@
 """La skill scritta senza corpo, e riportata come scritta.
 
-Il 5-ago-2026 una passata autonoma su SpicySparks ha creato sei skill.
+Il 5-ago-2026 una passata autonoma su example-host ha creato sei skill.
 Cinque sono finite sul disco come frontmatter e nient'altro. Il tool ha
 risposto ``ok: True`` — perche' "ok" voleva dire "il frontmatter si
 rilegge", che e' esattamente il controllo che una skill vuota supera — e

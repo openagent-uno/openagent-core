@@ -1,6 +1,7 @@
 """Session persistence and serialization helpers for Team."""
 
 from __future__ import annotations
+from openagent_core.content_privacy import PrivacyFence, PrivacyConflict
 
 from openagent_core.persistence import run_sync
 
@@ -172,6 +173,8 @@ def _read_session(
             raise ValueError("Db not initialized")
         session = team.db.get_session(session_id=session_id, session_type=session_type, user_id=user_id)
         return session  # type: ignore
+    except (PrivacyFence, PrivacyConflict):
+        raise
     except Exception as e:
         log_warning(f"Error getting session from db: {str(e)}")
         return None
@@ -192,6 +195,8 @@ async def _aread_session(
         else:
             session = await run_sync(team.db.get_session, session_id=session_id, session_type=session_type, user_id=user_id)  # type: ignore[assignment]
         return session  # type: ignore
+    except (PrivacyFence, PrivacyConflict):
+        raise
     except Exception as e:
         log_warning(f"Error getting session from db: {str(e)}")
         return None
@@ -204,6 +209,8 @@ def _upsert_session(team: "Team", session: TeamSession) -> Optional[TeamSession]
         if not team.db:
             raise ValueError("Db not initialized")
         return team.db.upsert_session(session=session)  # type: ignore
+    except (PrivacyFence, PrivacyConflict):
+        raise
     except Exception as e:
         log_warning(f"Error upserting session into db: {str(e)}")
     return None
@@ -220,6 +227,8 @@ async def _aupsert_session(team: "Team", session: TeamSession) -> Optional[TeamS
             return await team.db.upsert_session(session=session)  # type: ignore
         else:
             return await run_sync(team.db.upsert_session, session=session)  # type: ignore
+    except (PrivacyFence, PrivacyConflict):
+        raise
     except Exception as e:
         log_warning(f"Error upserting session into db: {str(e)}")
     return None
@@ -572,6 +581,8 @@ def to_dict(team: "Team") -> Dict[str, Any]:
                 elif callable(tool):
                     func = Function.from_callable(tool)
                     serialized_tools.append(func.to_dict())
+            except (PrivacyFence, PrivacyConflict):
+                raise
             except Exception as e:
                 log_warning(f"Could not serialize tool {tool}: {str(e)}")
         if serialized_tools:
@@ -1092,6 +1103,8 @@ def save(
 
         return config["version"]
 
+    except (PrivacyFence, PrivacyConflict):
+        raise
     except Exception as e:
         log_error(f"Error saving Team to database: {str(e)}")
         raise

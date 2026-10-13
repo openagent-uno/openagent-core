@@ -231,7 +231,7 @@ async def t_scope_parity(ctx: TestContext) -> None:
     """The 413-note bug, pinned.
 
     Every path below is one the two implementations used to disagree about, or
-    a boundary of the rules they now share. ``_inherited-from-lyra/**`` and
+    a boundary of the rules they now share. ``_inherited-from-beta/**`` and
     ``_index.md`` are the two shapes that made up all 413.
     """
     if not _node_available():
@@ -240,9 +240,9 @@ async def t_scope_parity(ctx: TestContext) -> None:
     paths = [
         "entities/acme.md",
         "_index.md",
-        "esound/receipts/_index.md",
-        "_inherited-from-lyra/features/equalizer.md",
-        "_inherited-from-lyra/receipts/2026-05-16-n15.md",
+        "alpha/receipts/_index.md",
+        "_inherited-from-beta/features/equalizer.md",
+        "_inherited-from-beta/receipts/2026-05-16-n15.md",
         "workspace/journal/sessions/2026-07-15.md",
         "workspace/scratch.md",
         "workspace/_templates/note.md",
@@ -253,7 +253,7 @@ async def t_scope_parity(ctx: TestContext) -> None:
         ".git/COMMIT_EDITMSG.md",
         "templates/thing.md",
         "docs/a/b/c.md",
-        "projects/lyra-client/tasks/86c9u6uk2.md",
+        "projects/beta-client/tasks/86c9u6uk2.md",
     ]
     cases = [(p, p, "---\ntitle: T\nsummary: s\n---\nBody.\n") for p in paths]
     node = _run_node([[i, p, c] for i, p, c in cases])
@@ -278,8 +278,8 @@ async def t_scope_413_closed(ctx: TestContext) -> None:
         raise TestSkip("node/tsx not available")
     cfg = GateConfig()
     were_skipped = [
-        "_inherited-from-lyra/features/equalizer.md",   # 404 of the 413
-        "esound/receipts/_index.md",                    # 16 of the 413
+        "_inherited-from-beta/features/equalizer.md",   # 404 of the 413
+        "alpha/receipts/_index.md",                    # 16 of the 413
     ]
     node = _run_node([[p, p, "---\ntitle: T\nsummary: s\n---\nBody.\n"]
                       for p in were_skipped])

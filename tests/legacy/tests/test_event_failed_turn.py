@@ -1,6 +1,6 @@
 """Un turno morto deve risultare `failed`, non `success`.
 
-Il 23-ago-2026, su eSound, 12 delivery sono state chiuse `success` con dentro
+Il 23-ago-2026, su alpha, 12 delivery sono state chiuse `success` con dentro
 l'errore che le aveva uccise: 8 su "No available ChatGPT accounts", 3 su una
 ValueError di configurazione, 1 sul contesto sfondato. Terminali, mai
 ritentate, e la coda che risultava sana mentre i messaggi dei clienti erano

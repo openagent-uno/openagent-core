@@ -379,7 +379,7 @@ async def t_bg_kill_escalate(ctx: TestContext) -> None:
 @test("shell", "BackgroundShell.kill swallows ProcessLookupError from race-exited proc")
 async def t_bg_kill_race_exited(ctx: TestContext) -> None:
     """Regression for ``ProcessLookupError: [Errno 3] No such process`` in
-    ``run_with_timeout`` (observed on lyra music, 2026-05-14): the
+    ``run_with_timeout`` (observed on beta music, 2026-05-14): the
     subprocess can exit between the ``returncode is not None`` check at
     the top of ``kill`` and the ``os.getpgid`` call below it. Before the
     fix, that race surfaced an unhandled traceback through
@@ -520,7 +520,7 @@ async def t_shell_exec_diag_events(ctx: TestContext) -> None:
 
 @test("shell", "BackgroundShell.finalise is bounded when grandchild keeps pipes open")
 async def t_shell_finalise_bounded_with_grandchild_holding_pipes(ctx: TestContext) -> None:
-    """Reproduces the performa scheduler stall (2026-05-04 06:45 UTC):
+    """Reproduces the example-node scheduler stall (2026-05-04 06:45 UTC):
     a setsid'd grandchild inherits stdout/stderr from the shell and
     keeps them open after the immediate shell exits, pinning
     asyncio.Process.wait() and the _drain tasks. Pre-fix finalise()

@@ -1,7 +1,7 @@
 """La stessa chiamata, di nuovo, con gli stessi argomenti.
 
 Il tetto c'era gia': 60 chiamate per esecuzione. Non ha visto il caso vero. Il
-25-ago su SpicySparks ``docs-keeper`` e' arrivato a 46 chiamate — SOTTO il
+25-ago su example-host ``docs-keeper`` e' arrivato a 46 chiamate — SOTTO il
 tetto — bruciando 857.876 token di input freschi, perche' ogni passo rimanda
 l'intero contesto e un agent che continua a chiedere si ripaga tutta la sua
 storia a ogni giro. Un tetto ferma la corsa dopo il danno; non riconosce che i

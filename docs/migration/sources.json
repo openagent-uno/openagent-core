@@ -424,24 +424,25 @@
     },
     {
       "name": "openagent-image",
-      "path": "/Users/alessandrogerelli/OpenAgent/openagent-image",
+      "path": null,
       "head": "62918fa697abdf9b0ff7ca2e498c977bc99e6d4c",
       "selected_commit": "62918fa697abdf9b0ff7ca2e498c977bc99e6d4c",
       "branch": "main",
-      "status": "",
-      "remote": "https://git.spicysparks.com/SpicySparks/openagent-image",
+      "status": "Operator-owned source inventory retained in the protected audit",
+      "remote": null,
       "tags": [],
-      "bundle": "/Users/alessandrogerelli/OpenAgent/.migration/openagent-v1/openagent-image.bundle",
-      "bundle_sha256": "abd4c0acbdedaee78680ddfa1e36ad53cb70ce8250c3ddc2235335bb4eb01e9d"
+      "bundle": null,
+      "bundle_sha256": "abd4c0acbdedaee78680ddfa1e36ad53cb70ce8250c3ddc2235335bb4eb01e9d",
+      "operator_reference_redacted": true
     },
     {
-      "name": "GlassPalace",
-      "path": "/Users/alessandrogerelli/GlassPalace",
+      "name": "embedding-host",
+      "path": null,
       "head": "3828cd1b9ccd433fc67e707b26fa93149d3e1e56",
       "selected_commit": "3828cd1b9ccd433fc67e707b26fa93149d3e1e56",
       "branch": "main",
-      "status": "M docs/README.md\n M docs/handbook/production.md\n?? docs/evidence/buzzerbeater-openagent-release-2026-09-16.md",
-      "remote": "https://git.spicysparks.com/SpicySparks/GlassPalace.git",
+      "status": "Operator-owned source inventory retained in the protected audit",
+      "remote": null,
       "tags": [
         "v0.1.0",
         "v0.1.1",
@@ -506,8 +507,9 @@
         "v0.1.8",
         "v0.1.9"
       ],
-      "bundle": "/Users/alessandrogerelli/OpenAgent/.migration/openagent-v1/GlassPalace.bundle",
-      "bundle_sha256": "126cd3b2afc49018af2a38c29ff470d5c6aa387e3130408c9d1c96676d39f003"
+      "bundle": null,
+      "bundle_sha256": "126cd3b2afc49018af2a38c29ff470d5c6aa387e3130408c9d1c96676d39f003",
+      "operator_reference_redacted": true
     }
   ]
 }

@@ -1,3 +1,4 @@
+<!-- Concrete host labels in this historical record are anonymized; original bytes and hashes are retained in the protected operator audit. -->
 # Automation host contract
 
 A host composes `AutomationRuntime` with an execution service; the scheduler never creates an identity or default delegation. Every firing is admitted using `Runtime.execute_operation`, and each model turn uses the same runtime and its canonical child relation. The automation tables are projections and durable input queues; `session_runs` remains the run authority.
@@ -12,4 +13,4 @@ A host composes `AutomationRuntime` with an execution service; the scheduler nev
 
 `automation_definitions` exposes graph validation, block specifications and timezone-aware schedule calculations/projection. `workflow_schedules.timezone` is an additive nullable column. Migration retains previous IDs and deadlines; synchronizing an unchanged cron and timezone retains the deadline. Changing the timezone recalculates the next occurrence using IANA/DST rules. Historical rows without a zone retain UTC behavior.
 
-Evidence: public webhook authentication 4 tests, event administration 5 tests including batch rollback, workflow timezone 3 tests including migration/reopen and DST. GlassPalace's native HTTP test also runs a queued event, disabled task manually, workflow AI block, exact retry, cancellation, and a scheduled trigger authorized by a different actor through the real scheduler and NativeProvider with a deterministic authenticated local HTTP model endpoint. This does not assert commercial-provider or Kubernetes acceptance.
+Evidence: public webhook authentication 4 tests, event administration 5 tests including batch rollback, workflow timezone 3 tests including migration/reopen and DST. embedding-host's native HTTP test also runs a queued event, disabled task manually, workflow AI block, exact retry, cancellation, and a scheduled trigger authorized by a different actor through the real scheduler and NativeProvider with a deterministic authenticated local HTTP model endpoint. This does not assert commercial-provider or Kubernetes acceptance.

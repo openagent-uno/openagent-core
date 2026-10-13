@@ -5,6 +5,7 @@ from typing import Any, Awaitable, Callable, Mapping, Protocol
 import copy
 import secrets
 import json
+from .content_privacy import ContentOrigin, ToolResultPrivacyPublisher, ToolResultProvenance
 from .contracts import Authorizer, CapabilityLease, ExecutionContext, ResourceRef, require_authorized
 
 
@@ -61,6 +62,9 @@ class _Registration:
     graph_generation: int | None = None
     visible_from_revision: int = 0
     revoked: bool = False
+    result_provenance: Callable | None = None
+    invocation_provenance: Callable | None = None
+    privacy_fenced: Mapping[str, bool] | bool = False
     references: dict[str, tuple[str, ToolDefinition]] = field(default_factory=dict)
 
 
@@ -101,10 +105,12 @@ class CapabilityCatalog:
     def register(self, source_id: str, source: CapabilitySource, executor: ToolExecutor, *,
                  target_label: str, lease: CapabilityLease | None = None,
                  trusted_effects: Mapping[str, frozenset[str]] | frozenset[str] = frozenset(),
-                 graph_generation: int | None = None) -> None:
+                 graph_generation: int | None = None, result_provenance: Callable | None = None,
+                 privacy_fenced: Mapping[str, bool] | bool = False, invocation_provenance: Callable | None = None) -> None:
         self._register(source_id, source, executor, target_label=target_label, managed=True,
                        lease=lease, trusted_effects=trusted_effects,
-                       graph_generation=graph_generation)
+                       graph_generation=graph_generation, result_provenance=result_provenance,
+                       privacy_fenced=privacy_fenced,invocation_provenance=invocation_provenance)
 
     def register_user_source(self, source_id: str, source: CapabilitySource, executor: ToolExecutor, *,
                              target_label: str, graph_generation: int | None = None) -> None:
@@ -121,15 +127,20 @@ class CapabilityCatalog:
     def _register(self, source_id: str, source: CapabilitySource, executor: ToolExecutor, *,
                   target_label: str, managed: bool, lease: CapabilityLease | None = None,
                   trusted_effects: Mapping[str, frozenset[str]] | frozenset[str] = frozenset(),
-                  graph_generation: int | None = None) -> None:
+                  graph_generation: int | None = None, result_provenance: Callable | None = None,
+                  privacy_fenced: Mapping[str, bool] | bool = False, invocation_provenance: Callable | None = None) -> None:
         key = (source_id, graph_generation)
         if not source_id or key in self._sources:
             raise ValueError("Capability source IDs must be unique")
         if lease and lease.source_id != source_id:
             raise ValueError("The lease must identify this exact source")
+        if not (type(privacy_fenced) is bool or (isinstance(privacy_fenced,Mapping)
+                and all(isinstance(name,str) and type(value) is bool for name,value in privacy_fenced.items()))):
+            raise ValueError('Privacy writer admission must be a trusted boolean policy')
         registration = _Registration(source_id, source, executor, target_label, managed,
                                      lease, trusted_effects, graph_generation,
-                                     self._next_revision())
+                                     self._next_revision(), result_provenance=result_provenance,
+                                     privacy_fenced=copy.deepcopy(privacy_fenced),invocation_provenance=invocation_provenance)
         self._sources[key] = registration
 
     def revoke(self, source_id: str) -> None:
@@ -304,16 +315,25 @@ class CapabilityCatalog:
         if not self._available(registration, context):
             raise CapabilityUnavailable("The exact capability instance is unavailable")
         resource = ResourceRef("tool", context.tenant_id, registration.source_id + "/" + definition.name)
-        from .runtime import current_runtime, current_run_id
+        from .runtime import current_runtime, current_run_id, current_provider_tool_call_id
         runtime = current_runtime()
         run_id = current_run_id()
         durable = runtime is not None and runtime.capabilities is self and run_id is not None
+        privacy_service = getattr(runtime, 'service', None)
+        privacy_publisher = privacy_service(ToolResultPrivacyPublisher) if durable and callable(privacy_service) else None
+        if registration.result_provenance is not None or registration.invocation_provenance is not None:
+            if privacy_publisher is None:
+                raise CapabilityUnavailable('This source requires a canonical provenance publisher')
         async def authorize(action):
             if durable:
                 await runtime.authorize(context,action,resource,audience=context.audience)
             else:
                 await require_authorized(self.authorizer,context,action,resource,audience=context.audience)
         await authorize("tool.call")
+        if privacy_publisher is not None:
+            await privacy_publisher.validate_tool_admission(context,run_id,
+                privacy_fenced=(registration.privacy_fenced.get(definition.name,False)
+                    if isinstance(registration.privacy_fenced,Mapping) else registration.privacy_fenced))
         current = tuple(replace(d, effects=d.effects & (registration.trusted_effects.get(d.name, frozenset()) if isinstance(registration.trusted_effects, Mapping) else registration.trusted_effects))
                         for d in await registration.source.discover(context))
         if definition not in current or not self._available(registration, context):
@@ -323,14 +343,29 @@ class CapabilityCatalog:
             host = {"kind":"capability","device_label":registration.target_label,"source_id":registration.source_id}
             if registration.lease is not None:
                 host.update(instance_id=registration.lease.instance_id,generation=registration.lease.generation)
-            await runtime.services.store.begin_tool(run_id,call_id,
-                {"tool_ref":tool_ref,"source_id":registration.source_id,"name":definition.name,
-                 "target_label":registration.target_label,"effects":sorted(definition.effects),"execution_host":host},arguments)
+            binding = {"tool_ref":tool_ref,"source_id":registration.source_id,"name":definition.name,
+                       "target_label":registration.target_label,"effects":sorted(definition.effects),"execution_host":host}
+            provider_call_id = current_provider_tool_call_id()
+            if provider_call_id is not None:
+                binding['provider_call_id'] = provider_call_id
+            if registration.invocation_provenance is not None:
+                intent_origins=await registration.invocation_provenance(descriptor,copy.deepcopy(dict(arguments)),context,call_id)
+                if (not isinstance(intent_origins,tuple) or not intent_origins or len(intent_origins)>4096
+                        or any(not isinstance(origin,ContentOrigin) or origin.tenant_id!=context.tenant_id for origin in intent_origins)):
+                    raise ValueError('Invocation scope must be host-bound to this exact tenant')
+                await authorize('tool.call')
+                if not self._available(registration,context):
+                    raise CapabilityUnavailable('The invocation source was revoked while resolving trusted scope')
+                await privacy_publisher.begin_tool(context,run_id,call_id,binding,arguments,intent_origins)
+            else:
+                await runtime.services.store.begin_tool(run_id,call_id,binding,arguments)
         try:
             result = await registration.executor.call_tool(definition.name, copy.deepcopy(dict(arguments)), context)
             # Publication is distinct from execution. Do not persist the
             # private result into shared history when this authorization fails.
             await authorize("tool.publish")
+            if not self._available(registration, context):
+                raise CapabilityUnavailable("The invocation source was revoked during execution")
             if durable:
                 if hasattr(result,"model_dump"):
                     envelope = result.model_dump(mode="json",by_alias=True)
@@ -341,13 +376,28 @@ class CapabilityCatalog:
                 # Reject an unserializable result without inventing a lossy
                 # string representation of attachments or structured content.
                 envelope = json.loads(json.dumps(envelope,allow_nan=False))
+            origins = ()
+            if registration.result_provenance is not None:
+                origins = await registration.result_provenance(descriptor, result, context, call_id)
+                if isinstance(origins,ToolResultProvenance):
+                    origins.validate_result(envelope,context.tenant_id)
+                elif (not isinstance(origins,tuple) or not origins or len(origins)>4096
+                        or any(not isinstance(origin,ContentOrigin) or origin.tenant_id != context.tenant_id
+                               for origin in origins)):
+                    raise ValueError('Provider provenance must be host-bound to this exact tenant')
+                await authorize('tool.publish')
+                if not self._available(registration, context):
+                    raise CapabilityUnavailable("The invocation source was revoked while resolving result provenance")
         except BaseException as exc:
             if durable:
                 await runtime.services.store.finish_tool(run_id,call_id,
                     error={"error_type":type(exc).__name__,"effects":"unknown","retry_allowed":False})
             raise
         if durable:
-            await runtime.services.store.finish_tool(run_id,call_id,result=envelope)
+            if privacy_publisher is not None:
+                await privacy_publisher.publish_tool_result(context,run_id,call_id,envelope,origins)
+            else:
+                await runtime.services.store.finish_tool(run_id,call_id,result=envelope)
         for observer in self.observers:
             await observer(descriptor, arguments, result, context, call_id)
         return result

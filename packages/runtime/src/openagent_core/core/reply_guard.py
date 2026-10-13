@@ -167,7 +167,7 @@ _COMPLETED_ACTION = re.compile(
 # generic pattern above would ever catch: "I've enabled diagnostic logging on
 # your account", then "we've received your logs" and "from your logs we can
 # see". Every one of those is a statement about OUR side of the system that the
-# customer cannot check, and each one was sent on a real Lyra thread
+# customer cannot check, and each one was sent on a real example-product-b thread
 # (26-ago-2026) while no capture had ever been switched on and no log existed.
 # The customer then performed the capture ritual for nothing, twice.
 _DIAGNOSTIC_SUBJECT = (
@@ -249,7 +249,7 @@ _COMMERCIAL_COMMITMENT = re.compile(
 # customer reads it as proof their report, order or refund exists. A local
 # model invented "#86cavv98q" and presented it as a tracked issue.
 #
-# Deliberately tenant-agnostic: this must hold for Lyra and any other brand on
+# Deliberately tenant-agnostic: this must hold for example-product-b and any other brand on
 # the same agent, so it keys on the CONTEXT word rather than on one workspace's
 # id shape. Matching bare alphanumerics instead would flag "iPhone16" in
 # ordinary prose, and a guard that cries wolf gets turned off.
@@ -346,7 +346,7 @@ def unbacked_identifiers(text: Optional[str], rows: list[tuple[str, str]]) -> li
     return out
 
 
-# Kept as the original name used by the eSound controller and its tests.
+# Kept as the original name used by the example-product-a controller and its tests.
 unbacked_task_ids = unbacked_identifiers
 
 
@@ -663,7 +663,7 @@ def _trace_supports_completed_action(
 def _trace_supports_account_state(
     reply: str, rows: list[tuple[str, str]],
 ) -> bool:
-    """Require a same-turn authoritative BillingBear/admin read for state."""
+    """Require a same-turn authoritative BillingBear read for state."""
     low_reply = (reply or "").lower()
     wants_active = bool(re.search(r"\b(?:active|attiv[oa])\b", low_reply)) and not bool(
         re.search(r"\b(?:inactive|inattiv[oa])\b", low_reply)
@@ -674,7 +674,7 @@ def _trace_supports_account_state(
     ))
     for name, excerpt in rows:
         tool_identity = f"{name} {excerpt}".lower()
-        if "billingbear" not in tool_identity and "esound_admin" not in tool_identity:
+        if "billingbear" not in tool_identity:
             continue
         value = str(excerpt or "").lower()
         if not _trace_result_succeeded(value):

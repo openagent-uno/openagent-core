@@ -18,7 +18,7 @@ MCP installation, shell, filesystem, browser, PTC, computer control, dashboard o
 catalog manager. Direct public catalog installation/removal also rejects these
 operations. The model sees the common opaque tool reference contract and mandatory
 framework prompt. This example deliberately selects no vault module; the
-standalone and GlassPalace presets keep their own required vault modules.
+host presets select their own required vault modules.
 
 The optional `create_app(host)` HTTP adapter validates the external bearer
 identity and current membership before building a context. Its routes are:

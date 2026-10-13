@@ -26,6 +26,7 @@ _current_runtime: ContextVar[Runtime | None] = ContextVar('openagent_runtime', d
 _current_run: ContextVar[str | None] = ContextVar('openagent_run_id', default=None)
 _current_module_generation: ContextVar[int | None] = ContextVar('openagent_module_generation', default=None)
 _current_capability_revision: ContextVar[int | None] = ContextVar('openagent_capability_revision', default=None)
+_current_provider_tool_call: ContextVar[str | None] = ContextVar('openagent_provider_tool_call', default=None)
 
 
 def current_execution_context() -> ExecutionContext | None:
@@ -48,16 +49,34 @@ def current_capability_revision() -> int | None:
     return _current_capability_revision.get()
 
 
+def current_provider_tool_call_id() -> str | None:
+    """Engine-owned provider call identity; never an authorization selector."""
+    return _current_provider_tool_call.get()
+
+
+@contextmanager
+def provider_tool_call_scope(call_id: str | None):
+    if call_id is not None and (not isinstance(call_id,str) or not call_id or len(call_id)>1024):
+        raise ValueError('Provider tool call identity must be a bounded string')
+    token = _current_provider_tool_call.set(call_id)
+    try:
+        yield
+    finally:
+        _current_provider_tool_call.reset(token)
+
+
 @contextmanager
 def execution_scope(runtime: Runtime, context: ExecutionContext, run_id: str, *,
                     module_generation: int | None = None,
                     capability_revision: int | None = None):
     tokens = (_current_runtime.set(runtime), _current_context.set(context), _current_run.set(run_id),
               _current_module_generation.set(module_generation),
-              _current_capability_revision.set(capability_revision))
+              _current_capability_revision.set(capability_revision),
+              _current_provider_tool_call.set(None))
     try:
         yield
     finally:
+        _current_provider_tool_call.reset(tokens[5])
         _current_capability_revision.reset(tokens[4])
         _current_module_generation.reset(tokens[3])
         _current_run.reset(tokens[2]); _current_context.reset(tokens[1]); _current_runtime.reset(tokens[0])
@@ -715,6 +734,13 @@ class Runtime:
                             await self.services.store.transition(request.run_id,'cancelled')
                             return
                         await self.services.store.transition(request.run_id,'running')
+                        from .content_privacy import ToolResultPrivacyPublisher
+                        privacy=self.service(ToolResultPrivacyPublisher)
+                        if privacy is not None:
+                            # A queued run may have been admitted before the
+                            # webhook fence. Recheck its trusted inherited
+                            # context immediately before executor/model IO.
+                            await privacy.origins_for_execution(context,request.run_id)
                         result=await executor.execute(request,context,self)
                         await self._authorize(context,'run.publish',request.session_id,context.tenant_id)
                         # Cancellation is an intention until execution ends.
@@ -727,7 +753,18 @@ class Runtime:
             await self.services.store.transition(request.run_id,'interrupted' if self._closing else 'cancelled')
         except Exception as exc:
             # Details may include secrets or private provider diagnostics.
-            await self.services.store.transition(request.run_id,'failed',output={'error_type':type(exc).__name__})
+            from .content_privacy import ToolResultPrivacyPublisher,PrivacyFence
+            error_output={'error_type':type(exc).__name__}
+            privacy=self.service(ToolResultPrivacyPublisher)
+            if privacy is not None:
+                try:
+                    await privacy.origins_for_execution(context,request.run_id)
+                except PrivacyFence:
+                    # Terminal metadata with no content remains writable after
+                    # revocation. Publishing a derived diagnostic would hit
+                    # the source fence and leave the run permanently active.
+                    error_output=None
+            await self.services.store.transition(request.run_id,'failed',output=error_output)
         finally:
             self._tasks.pop(request.run_id,None)
             self._run_graphs.pop(request.run_id,None)

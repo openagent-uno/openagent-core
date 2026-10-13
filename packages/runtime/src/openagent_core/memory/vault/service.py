@@ -23,6 +23,7 @@ from openagent_core.memory.vault.doctor import apply_mechanical_fixes
 from openagent_core.memory.vault.gate import _is_valid_iso, run_gate
 from openagent_core.memory.vault.index import VaultIndex
 from openagent_core.memory.vault.model import GateConfig, GateReport
+from openagent_core.memory.vault.privacy import require_unprotected_execution
 from openagent_core.memory.vault.parser import parse_note_text
 
 # ``validate_note`` below used to own a private ``_DATE_RE`` that checked only
@@ -108,6 +109,7 @@ class VaultService:
 
     async def commit_paths(self, paths, summary: str, origin: dict | None = None) -> Optional[str]:
         """Commit exactly ``paths`` with provenance (one change, one commit)."""
+        await require_unprotected_execution("Vault")
         g = await self._ensure_git()
         if not g or not paths:
             return None
@@ -125,6 +127,7 @@ class VaultService:
         sources into one commit, so it is labelled ``Origin: external`` with
         the most recent activity as an ``Around:`` hint, rather than falsely
         claiming a specific session authored the edit."""
+        await require_unprotected_execution("Vault")
         g = await self._ensure_git()
         if not g:
             return None
@@ -217,6 +220,7 @@ class VaultService:
         issues are auto-fixed and a structurally-broken note is rejected
         (``ok: False`` + ``errors``, nothing written). Returns ``{ok, existed,
         warnings, applied, commit}`` or ``{ok: False, blocked, errors}``."""
+        await require_unprotected_execution("Vault")
         rel = rel_path.replace("\\", "/").lstrip("/")
         abs_path = self.vault_root / rel
         async with self._mutation_lock:
@@ -266,6 +270,7 @@ class VaultService:
 
     async def delete_note(self, rel_path: str, origin: dict | None = None) -> dict:
         """Delete a note, de-index it, and commit the removal atomically."""
+        await require_unprotected_execution("Vault")
         rel = rel_path.replace("\\", "/").lstrip("/")
         abs_path = self.vault_root / rel
         async with self._mutation_lock:
@@ -297,6 +302,7 @@ class VaultService:
         history and this is itself revertable. Pending edits are checkpointed
         first (nothing is lost), and the index is rebuilt from disk after.
         Returns ``{ok, commit, restored_from, changed}``."""
+        await require_unprotected_execution("Vault")
         g = await self._ensure_git()
         if not g:
             return {"error": "git is disabled for this vault"}
@@ -322,6 +328,7 @@ class VaultService:
         after it (only when ``ref`` is in the current history). The index is
         rebuilt from disk after. Returns ``{ok, head, deleted}`` or
         ``{error}``."""
+        await require_unprotected_execution("Vault")
         g = await self._ensure_git()
         if not g:
             return {"error": "git is disabled for this vault"}
@@ -426,6 +433,8 @@ class VaultService:
     async def doctor(self, apply: bool = False,
                      config: GateConfig | None = None,
                      origin: dict | None = None) -> dict:
+        if apply:
+            await require_unprotected_execution("Vault")
         idx = await self._ensure_index()
         cfg = config or self.config
         await asyncio.to_thread(idx.sync, False)
@@ -458,6 +467,7 @@ class VaultService:
     # ── derived artifacts ─────────────────────────────────────────────
 
     async def regenerate_derived(self, origin: dict | None = None) -> dict:
+        await require_unprotected_execution("Vault")
         idx = await self._ensure_index()
         await asyncio.to_thread(idx.sync, False)
         llms = await asyncio.to_thread(generate_llms_txt, idx)
@@ -489,6 +499,7 @@ class VaultService:
     async def init_taxonomy(self, origin: dict | None = None) -> dict:
         """Create the Company-Brain folder system (11 folders + journal tree
         + canon workspace + templates). Idempotent."""
+        await require_unprotected_execution("Vault")
         from openagent_core.memory.vault.scaffold import scaffold
         async with self._mutation_lock:
             await self._ensure_git()
@@ -510,6 +521,7 @@ class VaultService:
         For a folder, every note underneath moves and all inbound links to
         any of them are rewritten. Link style is preserved (path stays a
         path, bare stem stays a stem) along with ``|alias`` / ``#anchor``."""
+        await require_unprotected_execution("Vault")
         from openagent_core.memory.vault.parser import rewrite_wikilinks
 
         idx = await self._ensure_index()
@@ -613,6 +625,8 @@ class VaultService:
         """One maintenance pass for dream mode: reconcile the index, run the
         gate, mechanically fix what code can, regenerate derived artifacts,
         and return a summary (the curator turns this into a dream-log)."""
+        if apply_fixes or regenerate:
+            await require_unprotected_execution("Vault")
         idx = await self._ensure_index()
         await asyncio.to_thread(idx.sync, False)
         report = await asyncio.to_thread(run_gate, idx, self.config)

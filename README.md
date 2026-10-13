@@ -1,3 +1,4 @@
+<!-- Concrete host labels in this historical record are anonymized; original bytes and hashes are retained in the protected operator audit. -->
 # OpenAgent core
 
 OpenAgent is an embeddable Python agent runtime. The minimum package exposes
@@ -6,7 +7,7 @@ without installing the standalone product or computer tools.
 
 The optional engine preserves OpenAgent's agent algorithms and memory vault.
 Products supply authentication, system instructions, resources, tools, and policy.
-GlassPalace builds its own worker and sandbox from pinned core packages; the
+embedding-host builds its own worker and sandbox from pinned core packages; the
 standalone app/CLI/server are maintained in the `openagent` product monorepo.
 
 The `1.1.0b19` kernel, SQLite adapter, gateway and SDK are the current modular

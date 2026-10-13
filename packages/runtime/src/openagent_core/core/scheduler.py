@@ -1704,8 +1704,8 @@ class Scheduler:
                     definition_ids=await self.execution_service.authorized_definition_ids("workflow") if self.execution_service else ())
         except Exception as e:  # noqa: BLE001
             # 37e99bd dropped explicit BEGIN/ROLLBACK from the claim path,
-            # but both signatures still surface across mixout / performa
-            # boss / friday on v0.12.44 — root cause not yet pinned. Capture
+            # but both signatures still surface across mixout / example-node
+            # boss / example-agent on v0.12.44 — root cause not yet pinned. Capture
             # the type and full traceback so the next run can see which
             # call site inside aiosqlite is raising the auto-begin error.
             elog(

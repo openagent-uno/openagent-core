@@ -378,7 +378,7 @@ async def t_doctor_never_regresses(ctx: TestContext) -> None:
     violations it advertised as fixable.
 
     ``e/a.md`` is the exact shape that regressed (cf. the real
-    ``esound/procedures/clickup-audit-workflow.md``), and all three of its
+    ``alpha/procedures/clickup-audit-workflow.md``), and all three of its
     properties are load-bearing: its frontmatter is VALID YAML to start with,
     its ``related:`` is a block list (so the old doctor would collapse it and
     thereby invalidate that YAML), and its dates are QUOTED (so the loose
@@ -1064,7 +1064,7 @@ async def t_repair_inline_related(ctx: TestContext) -> None:
 @test("vault_gate", "repair: space-separated inline related is the same damage")
 async def t_repair_inline_related_spaces(ctx: TestContext) -> None:
     """3 of the 27 use spaces, not commas (e.g. the real
-    ``_inherited-from-lyra/features/youtube-embed-playback.md``). A repair
+    ``_inherited-from-beta/features/youtube-embed-playback.md``). A repair
     that only handled commas would leave them broken forever."""
     import yaml
     from openagent_core.memory.vault.doctor import _repair_frontmatter_yaml

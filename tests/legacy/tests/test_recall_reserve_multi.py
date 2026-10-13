@@ -5,7 +5,7 @@ quasi-duplicato che per volume la seppellirebbe. Con UN solo posto pero' due
 sottoalberi autorevoli se lo contendono, e a ogni turno uno dei due sparisce
 senza che nessuno lo dica.
 
-Il caso misurato il 26-ago-2026 su Lyra. Le 54 regole permanenti di Replio,
+Il caso misurato il 26-ago-2026 su beta. Le 54 regole permanenti di Replio,
 rispecchiate nel vault per renderle trovabili:
 
     similarita' con domande di clienti veri : 0,36 - 0,50
@@ -50,10 +50,10 @@ async def t_single_prefix_still_works(ctx: TestContext) -> None:
     from openagent_core.core.agent import _recall_scoping
 
     ripristina = _con_env(
-        OPENAGENT_AUTO_RECALL_RESERVE_PREFIX="lyra/procedures/customer-response/")
+        OPENAGENT_AUTO_RECALL_RESERVE_PREFIX="beta/procedures/customer-response/")
     try:
         _scope, _inc, _exc, reserve = _recall_scoping("event")
-        assert reserve == ["lyra/procedures/customer-response/"], reserve
+        assert reserve == ["beta/procedures/customer-response/"], reserve
     finally:
         ripristina()
 
@@ -64,11 +64,11 @@ async def t_two_prefixes(ctx: TestContext) -> None:
 
     ripristina = _con_env(
         OPENAGENT_AUTO_RECALL_RESERVE_PREFIX=
-        "lyra/procedures/customer-response/,lyra/rules-mirror/")
+        "beta/procedures/customer-response/,beta/rules-mirror/")
     try:
         _s, _i, _e, reserve = _recall_scoping("")
-        assert reserve == ["lyra/procedures/customer-response/",
-                           "lyra/rules-mirror/"], reserve
+        assert reserve == ["beta/procedures/customer-response/",
+                           "beta/rules-mirror/"], reserve
     finally:
         ripristina()
 
@@ -109,8 +109,8 @@ async def t_leading_slash_normalised(ctx: TestContext) -> None:
     # I percorsi delle note sono relativi al vault; un prefisso scritto con lo
     # slash davanti non deve smettere di combaciare per una barra.
     ripristina = _con_env(
-        OPENAGENT_AUTO_RECALL_RESERVE_PREFIX="/lyra/rules-mirror/, /lyra/procedures/")
+        OPENAGENT_AUTO_RECALL_RESERVE_PREFIX="/beta/rules-mirror/, /beta/procedures/")
     try:
-        assert _recall_scoping("")[3] == ["lyra/rules-mirror/", "lyra/procedures/"]
+        assert _recall_scoping("")[3] == ["beta/rules-mirror/", "beta/procedures/"]
     finally:
         ripristina()

@@ -57,7 +57,7 @@ _FROZEN_RUNTIME_PRELOADS = (
     # Runtime submodules that ``native_provider`` (and ``mcp.pool``)
     # import lazily on first use. Like the src modules above, they
     # live in the PyInstaller archive; a sibling-service binary swap
-    # on performa breaks the deferred zlib extraction and surfaces as
+    # on example-node breaks the deferred zlib extraction and surfaces as
     # ``zlib.error: Error -3 ... incorrect header check`` raised out
     # of ``_ensure_team``/``_dispatch`` and reported as
     # ``agent.run.error``.
@@ -147,7 +147,7 @@ def _preload_frozen_runtime_modules() -> None:
     """Eagerly import late-loaded modules in frozen builds.
 
     PyInstaller onefile processes still lazy-read code from the on-disk
-    executable when a module hasn't been imported yet. Performa runs
+    executable when a module hasn't been imported yet. example-node runs
     multiple services from the same shared binary, so replacing that file
     during a deploy can break a long-lived sibling later when background
     warmup tasks finally import voice/discovery modules. Preloading the
@@ -477,7 +477,7 @@ async def _with_vault_reminder(
 #     returns the turn text byte-identical — retrieval falls back to FTS,
 #     exactly as before the semantic layer existed (§17).
 #   * THRESHOLDED. Only hits at/above ``min_score`` are surfaced; a weak match
-#     injects NOTHING. The real eSound vault has ~1,167 orphans and unreconciled
+#     injects NOTHING. The real example-product-a vault has ~1,167 orphans and unreconciled
 #     contradictions — blindly injecting a stale note every turn would make the
 #     agent answer confidently wrong, the exact hallucination this is meant to
 #     PREVENT. A floor is what keeps noise out.
@@ -860,7 +860,7 @@ def _recall_candidates(agent: Any, query: str, session_id: str | None = None) ->
     semantic_active = idx is not None and idx.active
     sem_hits: list[dict] = []
     # One customer sentence fans out to the main semantic search, every reserved
-    # policy subtree, and the skills leg. Embed it ONCE: production Lyra had two
+    # policy subtree, and the skills leg. Embed it ONCE: production example-product-b had two
     # reserves + skills, so the old path made four identical endpoint calls and
     # stretched a ~10s query to 30-63s, regularly crossing the 60s fail-open cap.
     query_vector: list[float] = []

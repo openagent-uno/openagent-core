@@ -34,6 +34,7 @@ repository remains the canonical source for Core contracts and evidence.
 - [Audio host and transcribed attachment contract](audio-host-contract.md)
 - [Sessions and exact run controls](../packages/module-sessions/README.md)
 - [Memory visibility and durable indexing](memory-access.md)
+- [Derived content privacy contracts and current coverage](content-privacy.md)
 - [Authorized vault administration](vault-administration.md)
 - [Vault/tool parity evidence](migration/vault-tool-parity.md)
 - [Prompt rule inventory](migration/prompts.md)

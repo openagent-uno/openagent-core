@@ -701,8 +701,8 @@ async def _arun_runtime_stream(
         # happened to the per-delta frames, a run that finished carries its own final
         # text, and both classes are already matched here for token accounting.
         #
-        # Measured on production 2026-08-09: the fallback fired on 16% of eSound runs
-        # and 25% of Lyra's, single reason ``no_deltas_yielded``, on turns whose
+        # Measured on production 2026-08-09: the fallback fired on 16% of example-product-a runs
+        # and 25% of example-product-b's, single reason ``no_deltas_yielded``, on turns whose
         # leader ran 8 tools and emitted no prose. At ~315k cumulative tokens per run
         # against a weekly quota already ~30% short, those are the most expensive
         # duplicate calls in the system.
@@ -1202,6 +1202,11 @@ class TeamRouterProvider(ProviderResources, BaseModel):
         return team
 
     # ── lifecycle ────────────────────────────────────────────────────
+
+    async def invalidate_session_context(self, session_id: str) -> None:
+        if not session_id:
+            raise ValueError("session_id is required")
+        await self._invalidate_context(lambda: self._drop_session_state(session_id))
 
     async def close_session(self, session_id: str) -> None:
         self._drop_session_state(session_id)
@@ -1854,7 +1859,7 @@ class ModelDispatcher(BaseModel):
             # dispatcher ha ancora `providers_config=[]`: senza base_url nessuna
             # riga si costruisce, ogni pedana viene saltata e la catena resta
             # VUOTA. Cosi' un rate limit uccide il run invece di scendere di
-            # pedana — misurato il 4-set-2026 su lyra ed esound, con otto
+            # pedana — misurato il 4-set-2026 su example-product-b ed example-product-a, con otto
             # `router.local_fallback_model_error` (una per pedana, haiku
             # compreso) e zero ripieghi in un giorno intero di quota ChatGPT
             # esaurita. L'ultimo ripiego riuscito risaliva al 28-ago.
@@ -2029,6 +2034,19 @@ class ModelDispatcher(BaseModel):
             return
         self._last_pick_by_session.pop(session_id, None)
         await self._fan_out_async("close_session", session_id)
+
+    async def invalidate_session_context(self, session_id: str) -> None:
+        if not session_id:
+            raise ValueError("session_id is required")
+        # Unlike best-effort lifecycle fan-out, a privacy receipt must retain
+        # failure from every active or retired provider.
+        providers = list(self._team_providers.values()) + list(self._retired_providers)
+        seen = set()
+        for provider in providers:
+            if id(provider) not in seen:
+                seen.add(id(provider))
+                await provider.invalidate_session_context(session_id)
+        self._last_pick_by_session.pop(session_id, None)
 
     async def forget_session(self, session_id: str) -> None:
         if not session_id:

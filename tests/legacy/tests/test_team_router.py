@@ -597,7 +597,7 @@ async def t_real_team_every_agent_carries_framework_prompt_e2e(
     )
     persona_marker = (
         "── User-specific identity and project context ──\n\n"
-        "I am the user's virgil agent; my voice is concise and technical."
+        "I am the user's example-peer agent; my voice is concise and technical."
     )
     composed_system = f"{framework_marker}\n\n{persona_marker}"
 

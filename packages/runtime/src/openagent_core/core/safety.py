@@ -42,7 +42,7 @@ OFF BY DEFAULT, AND THAT IS LOAD-BEARING
 ----------------------------------------
 ``check_command_allowed`` returns before compiling or matching anything unless
 ``safety.approvals.enabled: true`` is set. Existing deployments run agents that
-legitimately do what this list blocks — the Lyra agent force-pushes its own
+legitimately do what this list blocks — the example-product-b agent force-pushes its own
 branch by design and runs ``kubectl`` — so enabling this by default would turn
 a silent risk into a live outage on someone's nightly cron.
 """

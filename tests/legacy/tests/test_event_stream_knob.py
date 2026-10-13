@@ -3,7 +3,7 @@
 Perche' esiste il knob (misurato in produzione, 16-ago-2026, flotta di supporto):
 un turno di evento che finisce in chiamate a tool senza frase di chiusura non
 emette **nessun** delta di testo, quindi ``run_stream`` dichiara
-``no_deltas_yielded`` e paga una seconda ``generate()`` senza tool. Su eSound
+``no_deltas_yielded`` e paga una seconda ``generate()`` senza tool. Su alpha
 quella diramazione prendeva **558 run su 673 (83%)** in 24h: ~95s di stream a
 vuoto piu' ~230s di chiamata di recupero su un turno mediano di ~326s, cioe' il
 70% del tempo di ogni run — e la risposta cosi' recuperata finisce solo

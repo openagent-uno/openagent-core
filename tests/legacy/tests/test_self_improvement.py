@@ -10,7 +10,7 @@ deferred, exactly like the dream-mode / skill-curator live tests):
     ``_sync_quality_digest``), no live run. The load-bearing property beyond
     "it seeds" is the DEDUP: an agent that already ships its own tuned,
     NON-builtin quality-scorer / quality-digest keeps it — the builtin defers
-    rather than double-running (so eSound/Lyra don't get two).
+    rather than double-running (so alpha/beta don't get two).
 
   * **Anti-wedge timeout (Feature B)** — ``NativeProvider._construct_model``
     gives every model build a per-read socket timeout (default 90s, under the
@@ -258,7 +258,7 @@ async def t_dedup(ctx: TestContext) -> None:
     from openagent_core.core.scheduler import Scheduler
     from openagent_core.core.builtin_tasks import QUALITY_SCORER_TASK_NAME, QUALITY_DIGEST_TASK_NAME
 
-    # (a) A tuned custom task already exists (eSound/Lyra shape) → the builtin
+    # (a) A tuned custom task already exists (alpha/beta shape) → the builtin
     #     is NOT seeded; the agent keeps its own.
     db = _fresh_db(ctx, "dedup")
     await db.connect()
@@ -274,7 +274,7 @@ async def t_dedup(ctx: TestContext) -> None:
 
         assert await _scorer_row(db) is None, (
             "the builtin quality-scorer was seeded despite a tuned custom one — "
-            "eSound/Lyra would double-run their grader"
+            "alpha/beta would double-run their grader"
         )
         assert await _digest_row(db) is None, (
             "the builtin quality-digest was seeded despite a tuned custom one"
@@ -453,19 +453,19 @@ async def t_cost_gating(ctx: TestContext) -> None:
 async def t_cost_dedup(ctx: TestContext) -> None:
     from openagent_core.core.scheduler import Scheduler
 
-    # (a) eSound/Lyra ship `*-cost-observability` → the builtin must NOT seed.
+    # (a) alpha/beta ship `*-cost-observability` → the builtin must NOT seed.
     db = _fresh_db(ctx, "cost-dedup")
     await db.connect()
     try:
         srv, agent = await _bare_server({}, db)
         sched = Scheduler(db, agent)
-        await sched.add_task("esound-cost-observability", "0 * * * *", "custom cost prompt")
+        await sched.add_task("alpha-cost-observability", "0 * * * *", "custom cost prompt")
         await srv._sync_cost_observability(sched)
         assert await _cost_row(db) is None, (
             "the builtin cost-observability was seeded despite a tuned custom "
-            "one — eSound/Lyra would double-run their cost watcher"
+            "one — alpha/beta would double-run their cost watcher"
         )
-        assert await _row(db, "esound-cost-observability") is not None
+        assert await _row(db, "alpha-cost-observability") is not None
     finally:
         await db.close()
 
@@ -478,7 +478,7 @@ async def t_cost_dedup(ctx: TestContext) -> None:
         sched = Scheduler(db2, agent)
         await srv._sync_cost_observability(sched)
         assert (await _cost_row(db2))["enabled"], "builtin cost watcher should enable first"
-        await sched.add_task("lyra-cost-observability", "0 * * * *", "tuned")
+        await sched.add_task("beta-cost-observability", "0 * * * *", "tuned")
         await srv._sync_cost_observability(sched)
         row = await _cost_row(db2)
         assert row is not None and not row["enabled"], (
@@ -492,8 +492,8 @@ async def t_cost_dedup(ctx: TestContext) -> None:
 async def t_cost_dedup_name_matcher(_ctx: TestContext) -> None:
     from openagent_core.core.server import _is_custom_cost_observability_name
 
-    assert _is_custom_cost_observability_name("esound-cost-observability")
-    assert _is_custom_cost_observability_name("lyra-cost-observability")
+    assert _is_custom_cost_observability_name("alpha-cost-observability")
+    assert _is_custom_cost_observability_name("beta-cost-observability")
     assert _is_custom_cost_observability_name("Cost Anomaly Monitor")
     # Not a cost watcher → must not be swallowed.
     assert not _is_custom_cost_observability_name("response-quality-scorer")
@@ -575,12 +575,12 @@ async def t_audit_dedup(ctx: TestContext) -> None:
     try:
         srv, agent = await _bare_server({}, db)
         sched = Scheduler(db, agent)
-        # eSound/Lyra ship `support-escalation-audit` → the builtin must NOT seed.
+        # alpha/beta ship `support-escalation-audit` → the builtin must NOT seed.
         await sched.add_task("support-escalation-audit", "30 8 * * *", "custom audit prompt")
         await srv._sync_escalation_audit(sched)
         assert await _audit_row(db) is None, (
             "the builtin escalation-audit was seeded despite a tuned custom one — "
-            "eSound/Lyra would double-run their auditor"
+            "alpha/beta would double-run their auditor"
         )
         assert await _row(db, "support-escalation-audit") is not None
     finally:

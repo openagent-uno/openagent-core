@@ -32,6 +32,24 @@ class ProviderResources:
         self._closing = False
         self._idle = asyncio.Event()
         self._idle.set()
+        self._context_ready = asyncio.Event()
+        self._context_ready.set()
+        self._context_invalidation = asyncio.Lock()
+
+    async def _invalidate_context(self, drop_cached_context) -> None:
+        """Drain calls and discard memory without erasing persistent history.
+
+        Hosts invoke this outside an active model call. New calls wait until
+        cached resources have closed; cleanup failures reach the privacy job.
+        """
+        async with self._context_invalidation:
+            self._context_ready.clear()
+            try:
+                await self._idle.wait()
+                drop_cached_context()
+                await self._release_retired()
+            finally:
+                self._context_ready.set()
 
     def _retire_runtime(self, runtime) -> None:
         self._retired_runtimes.append(runtime)
@@ -55,6 +73,7 @@ class ProviderResources:
 
     @contextlib.asynccontextmanager
     async def _call_scope(self):
+        await self._context_ready.wait()
         if self._closing:
             raise RuntimeError("Model provider is closed")
         self._active_calls += 1

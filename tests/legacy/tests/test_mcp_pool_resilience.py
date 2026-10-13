@@ -148,7 +148,7 @@ class _StealthFailToolkit(_FakeToolkit):
 
 
 class _DeadSessionStealthFailToolkit(_FakeToolkit):
-    """Models the lyra-2026-05-23 workflow-manager bug.
+    """Models the beta-2026-05-23 workflow-manager bug.
 
     Same stealth-fail entry as ``_StealthFailToolkit`` (functions={} after
     __aenter__), BUT the bypass-path recovery in
@@ -415,10 +415,10 @@ async def t_stealth_fail_gives_up(ctx: TestContext) -> None:
 
 @test(
     "mcp_pool_resilience",
-    "Dead-session stealth-fail triggers full re-spawn (lyra workflow-manager regression)",
+    "Dead-session stealth-fail triggers full re-spawn (beta workflow-manager regression)",
 )
 async def t_dead_session_respawns(ctx: TestContext) -> None:
-    """The lyra-2026-05-23 workflow-manager regression: the runtime's first
+    """The beta-2026-05-23 workflow-manager regression: the runtime's first
     ``__aenter__`` stealth-failed (functions={}) but the underlying
     stdio_client streams were already closed, so the in-place bypass
     retry loop in ``_recover_dormant_toolkit`` emitted three identical

@@ -8,7 +8,7 @@ been closed, or another delivery for the same object may have handled it.
 The prompt usually knows this. A support event's instructions open with "read
 the thread; if it was already answered, stop", and that check is correct — it
 is just being performed by the most expensive component in the system. Measured
-on the eSound support webhook (2026-08-07): **~22% of deliveries** — around 200
+on the example-product-a support webhook (2026-08-07): **~22% of deliveries** — around 200
 a day — spent a full brief plus a model turn to conclude there was nothing to
 do. That is roughly 11M input tokens a day to answer a question one HTTP GET
 can answer.

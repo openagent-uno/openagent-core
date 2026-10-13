@@ -744,10 +744,10 @@ async def t_recall_scoping_helpers(ctx: TestContext) -> None:
     assert _origin_of("scheduler:x") == "scheduler"
     assert _origin_of("bare") == "" and _origin_of(None) == ""
 
-    assert _path_allowed("esound/procedures/refund.md", ["esound/"], []) is True
-    assert _path_allowed("devops/build.md", ["esound/"], []) is False
-    assert _path_allowed("esound/x.md", [], ["esound/triage/"]) is True
-    assert _path_allowed("esound/triage/t.md", [], ["esound/triage/"]) is False
+    assert _path_allowed("alpha/procedures/refund.md", ["alpha/"], []) is True
+    assert _path_allowed("devops/build.md", ["alpha/"], []) is False
+    assert _path_allowed("alpha/x.md", [], ["alpha/triage/"]) is True
+    assert _path_allowed("alpha/triage/t.md", [], ["alpha/triage/"]) is False
 
     _clear_recall_env()
     try:
@@ -779,7 +779,7 @@ async def t_search_path_prefix_filter(ctx: TestContext) -> None:
 
     db, idx_path, vault = _paths(ctx, "prefix")
     try:
-        _write_note_at(vault, "esound/procedures/refund.md", "Refund",
+        _write_note_at(vault, "alpha/procedures/refund.md", "Refund",
                        "the customer demanded a refund")
         _write_note_at(vault, "devops/build.md", "Build",
                        "the customer demanded a refund pipeline build")
@@ -793,8 +793,8 @@ async def t_search_path_prefix_filter(ctx: TestContext) -> None:
                          exclude_prefixes=["devops/"])
         assert exc and all("devops/" not in h["path"] for h in exc), f"exclude leaked: {exc}"
         inc = idx.search(q, scope="vault", limit=5, min_score=0.0,
-                         include_prefixes=["esound/procedures/"])
-        assert inc and all(h["path"].startswith("esound/procedures/") for h in inc), \
+                         include_prefixes=["alpha/procedures/"])
+        assert inc and all(h["path"].startswith("alpha/procedures/") for h in inc), \
             f"include admitted a non-matching prefix: {inc}"
         idx.close()
     finally:
@@ -840,9 +840,9 @@ async def t_reserve_prefix(ctx: TestContext) -> None:
     try:
         # A prior-thread precedent that matches the query strongly, and a playbook
         # under a reserve prefix that DOESN'T match the query (would be dropped).
-        _write_note_at(vault, "esound/triage/thread-1.md", "Prior thread",
+        _write_note_at(vault, "alpha/triage/thread-1.md", "Prior thread",
                        "the customer complained and demanded a refund twice")
-        _write_note_at(vault, "esound/procedures/customer-response/refund-policy.md",
+        _write_note_at(vault, "alpha/procedures/customer-response/refund-policy.md",
                        "Dashboard config", "quarterly metrics dashboard configuration")
         d = await _open_db(db)
         await d.close()
@@ -860,7 +860,7 @@ async def t_reserve_prefix(ctx: TestContext) -> None:
             assert "refund-policy.md" not in base, \
                 f"the off-topic playbook should NOT surface on its own: {base!r}"
             os.environ["OPENAGENT_AUTO_RECALL_RESERVE_PREFIX"] = \
-                "esound/procedures/customer-response/"
+                "alpha/procedures/customer-response/"
             withres = await agent_mod._with_recall(_fake_agent(db, vault), "event:1", q, "MSG")
             assert "refund-policy.md" in withres, \
                 f"reserve failed to surface the playbook: {withres!r}"

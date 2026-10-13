@@ -8,6 +8,15 @@ class _Agent:
     model = None
 
 
+def test_generic_admin_read_does_not_authorize_account_state() -> None:
+    from openagent_core.core.reply_guard import _trace_supports_account_state
+
+    reply = "Your subscription is active."
+    result = 'result={"isPremium":true,"status":"active"}'
+    assert not _trace_supports_account_state(reply, [("host_admin.read", result)])
+    assert _trace_supports_account_state(reply, [("billingbear.read", result)])
+
+
 def _guard(user_message: str, reply: str, rows: list[tuple[str, str]]) -> str:
     from openagent_core.core import reply_guard, tool_trace
 
@@ -53,7 +62,7 @@ def test_real_authorization_error_can_be_reported() -> None:
 
 
 def test_attributed_user_report_is_not_misclassified_as_a_tool_claim() -> None:
-    user = "Friday mi ha mostrato Not authorized for memory.manage"
+    user = "Un altro agente mi ha mostrato Not authorized for memory.manage"
     reply = (
         "L'errore che hai segnalato, Not authorized for memory.manage, "
         "va verificato con una chiamata reale."

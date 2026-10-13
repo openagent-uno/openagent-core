@@ -115,14 +115,14 @@ def is_in_quality_scope(rel_path: str, excluded_folders: tuple[str, ...],
       * ``VaultService._enforce_write`` skipped nothing at all.
 
     So **413 notes — 20% of the vault — were skipped by the Node writer and
-    graded by the Python gate**: 404 under ``_inherited-from-lyra/**`` and 16
+    graded by the Python gate**: 404 under ``_inherited-from-example-product-b/**`` and 16
     ``_index.md`` hubs (7 of them in both sets). The agent wrote those notes
     through a writer that never validated them, and the gate then failed them
     forever with no path to green. Worse, the ``_``-prefix heuristic was
     simply wrong about what it caught: ``_index.md`` hubs are first-class
     notes the gate has explicit support for (``is_index_note`` exempts them
     from orphan/min_links precisely BECAUSE it grades them), and
-    ``_inherited-from-lyra/`` is 404 notes of real memory, not scratch.
+    ``_inherited-from-example-product-b/`` is 404 notes of real memory, not scratch.
 
     Folder semantics are a vault-taxonomy question, so the taxonomy owns the
     answer and the other two derive from it: Python calls this function, and

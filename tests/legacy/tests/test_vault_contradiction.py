@@ -67,12 +67,12 @@ def _anchors(report) -> set[str]:
 @test("vault_gate", "contradiction: deprecated-vs-used surfaces a candidate")
 async def t_basic_polarity(ctx: TestContext) -> None:
     d, vault, idx = _mkvault()
-    _write(vault, "a.md", "`esound-admin.py` is **DEPRECATED** for subscription ops.")
-    _write(vault, "b.md", "Run `esound-admin.py` to cancel a subscription.")
+    _write(vault, "a.md", "`alpha-admin.py` is **DEPRECATED** for subscription ops.")
+    _write(vault, "b.md", "Run `alpha-admin.py` to cancel a subscription.")
     rep = _run(vault, idx)
     assert len(rep.candidates) == 1, f"want 1 candidate, got {len(rep.candidates)}"
     c = rep.candidates[0]
-    assert c.anchors == ["esound-admin.py"], c.anchors
+    assert c.anchors == ["alpha-admin.py"], c.anchors
     assert [s.path for s in c.retired_sites] == ["a.md"], c.retired_sites
     assert [s.path for s in c.active_sites] == ["b.md"], c.active_sites
     # Evidence must carry a real line number + the source text, so a human can
@@ -173,7 +173,7 @@ async def t_no_fp_bare_word(ctx: TestContext) -> None:
     cfg = ContradictionConfig()
     for word in ("vault", "docker", "npx", "cat"):
         assert not _is_specific_anchor(word, cfg), f"{word!r} is a word, not a subject"
-    for subject in ("esound-admin.py", "hermes_home", "api.esound.app"):
+    for subject in ("alpha-admin.py", "hermes_home", "api.alpha.invalid"):
         assert _is_specific_anchor(subject, cfg), f"{subject!r} should be an anchor"
 
 

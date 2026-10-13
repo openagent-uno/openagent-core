@@ -178,7 +178,7 @@ class PromptContractTests(unittest.TestCase):
             self.assertIn("BEFORE any non-trivial action", prompt)
             self.assertIn("### Default = SAVE.", prompt)
             self.assertIn("Host configured role", prompt)
-            self.assertNotIn("esound/procedures", prompt)
+            self.assertNotIn("customer-response/_routing.md", prompt)
             self.assertNotIn("OA-UI", prompt)
         self.assertEqual(split_prompt(normal)[0], split_prompt(event)[0])
         self.assertTrue(agent.prompt_receipt("event"))

@@ -46,7 +46,7 @@ async def t_parse_metadata_unwraps_double_encoded(ctx: TestContext) -> None:
     The parser must recover the inner dict so the session-list filter in
     ``list_all_sessions`` sees the right ``client_id``.
 
-    Observed in the wild on lyra: rows shaped like
+    Observed in the wild on beta: rows shaped like
     ``"{\\"client_id\\": \\"alessandro\\", ...}"`` caused every
     desktop-originated session to vanish from ``/api/sessions``.
     """

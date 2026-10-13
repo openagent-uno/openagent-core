@@ -832,7 +832,7 @@ def _fts_query(q: str) -> str:
         terms = _TERM_CHARS.findall(word.lower())
         if not terms:
             continue
-        # A token like ``com.lyramusic`` is several FTS terms; keep it
+        # A token like ``com.example.client`` is several FTS terms; keep it
         # together as a phrase so it stays one unit.
         expr = _quote(" ".join(terms)) + ("*" if len(terms) == 1 else "")
         if sign == "-":

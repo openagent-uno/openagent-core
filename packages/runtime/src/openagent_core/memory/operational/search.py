@@ -102,7 +102,7 @@ def _harden_index_files(path: Path) -> None:
             os.chmod(candidate, 0o600)
         except OSError as exc:
             raise RuntimeError("operational search files cannot be made owner-only") from exc
-        # POSIX mode bits are authoritative on Friday/Linux and macOS.  Windows
+        # POSIX mode bits are authoritative on example-agent/Linux and macOS.  Windows
         # chmod only exposes the read-only bit; its effective ACL is inherited
         # from the already-private agent directory instead.
         if os.name != "nt" and candidate.stat().st_mode & 0o077:
@@ -118,6 +118,7 @@ def _open_index(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA secure_delete=ON")
     conn.execute("PRAGMA trusted_schema=OFF")
     conn.execute("PRAGMA journal_mode=WAL")
     # Rebuildable derived index: NORMAL preserves WAL atomicity without paying
@@ -1160,7 +1161,7 @@ async def warm_operational_search(db: Any, *, batch_size: int = 10_000) -> Searc
     Capability discovery uses this on fresh installs so clients never need to
     call an unadvertised endpoint to advance a capped one-shot warm-up. Each
     transaction remains bounded; yielding between batches keeps cancellation
-    responsive even for Friday-scale imports.
+    responsive even for example-agent-scale imports.
     """
 
     while True:
@@ -1168,6 +1169,49 @@ async def warm_operational_search(db: Any, *, batch_size: int = 10_000) -> Searc
         if status.ready:
             return status
         await asyncio.sleep(0)
+
+
+async def refresh_privacy_search(db: Any, *, through_seq: int, batch_size: int = 1000) -> bool:
+    """Drain a committed privacy outbox boundary and scrub the canonical FTS copy.
+
+    A delivery intent alone does not prove erasure. This uses the normal source
+    projector under its single-owner lock, then requires a truncated WAL. Older
+    SQLite without FTS secure-delete and readers retaining a snapshot fail closed.
+    The host must own this index; external search services require other adapters.
+    """
+    if type(through_seq) is not int or through_seq<0 or type(batch_size) is not int or not 1<=batch_size<=10000:
+        raise ValueError('A bounded committed search boundary is required')
+    key=str(Path(str(db.db_path)).resolve())
+    lock=_SYNC_LOCKS.setdefault(key,asyncio.Lock())
+    async with lock:
+        target=operational_search_path(db.db_path)
+        index=await asyncio.to_thread(_open_index,target)
+        try:
+            index.execute('PRAGMA secure_delete=ON')
+            # FTS5 tombstones otherwise retain terms even after source refresh.
+            index.execute("INSERT INTO search_fts(search_fts,rank) VALUES('secure-delete',1)")
+            index.commit()
+        except sqlite3.DatabaseError:
+            return False
+        finally:
+            index.close()
+        while True:
+            status=await _sync_operational_search_unlocked(db,limit=batch_size)
+            if status.seq>=through_seq:
+                break
+            if status.pending==0:
+                return False
+            await asyncio.sleep(0)
+        def scrub():
+            index=_open_index(target)
+            try:
+                index.execute('PRAGMA secure_delete=ON')
+                index.execute("INSERT INTO search_fts(search_fts) VALUES('optimize')")
+                index.commit()
+                return index.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0]==0
+            finally:
+                index.close()
+        return await asyncio.to_thread(scrub)
 
 
 def read_search_rows(

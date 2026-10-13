@@ -43,16 +43,16 @@ async def t_two_handles_coexist(ctx: TestContext) -> None:
     _, old_home = _fake_home(ctx)
     try:
         store = user_store.UserStore()
-        # Alessandro joins lyra-agent.
+        # Alessandro joins beta-agent.
         user_store.add_or_update(
-            store, name="lyra-agent", network_id="netid-1",
+            store, name="beta-agent", network_id="netid-1",
             coordinator_node_id="node-1", coordinator_pubkey_hex="aa" * 32,
             handle="alessandro",
         )
         # Marco redeems the user invite for the SAME network — a new
         # handle, NOT a re-login. Pre-fix this clobbered Alessandro's row.
         user_store.add_or_update(
-            store, name="lyra-agent", network_id="netid-1",
+            store, name="beta-agent", network_id="netid-1",
             coordinator_node_id="node-1", coordinator_pubkey_hex="aa" * 32,
             handle="marco",
         )
@@ -61,24 +61,24 @@ async def t_two_handles_coexist(ctx: TestContext) -> None:
         )
 
         # Each handle resolves to its own row.
-        a = user_store.find(store, "lyra-agent", "alessandro")
-        m = user_store.find(store, "lyra-agent", "marco")
+        a = user_store.find(store, "beta-agent", "alessandro")
+        m = user_store.find(store, "beta-agent", "marco")
         assert a is not None and a.handle == "alessandro"
         assert m is not None and m.handle == "marco"
 
         # A non-member handle is not found even though the name matches.
-        assert user_store.find(store, "lyra-agent", "nobody") is None
+        assert user_store.find(store, "beta-agent", "nobody") is None
 
         # Handle-less find still works — returns the first matching row.
-        first = user_store.find(store, "lyra-agent")
+        first = user_store.find(store, "beta-agent")
         assert first is not None and first.handle == "alessandro"
 
         # Survives a save + reload round-trip.
         user_store.save(store)
         reloaded = user_store.load()
         assert len(reloaded.networks) == 2
-        assert user_store.find(reloaded, "lyra-agent", "alessandro") is not None
-        assert user_store.find(reloaded, "lyra-agent", "marco") is not None
+        assert user_store.find(reloaded, "beta-agent", "alessandro") is not None
+        assert user_store.find(reloaded, "beta-agent", "marco") is not None
     finally:
         _restore_home(old_home)
 
@@ -119,14 +119,14 @@ async def t_remove_targets_handle(ctx: TestContext) -> None:
         store = user_store.UserStore()
         for h in ("alessandro", "marco"):
             user_store.add_or_update(
-                store, name="lyra-agent", network_id="netid-1",
+                store, name="beta-agent", network_id="netid-1",
                 coordinator_node_id="node-1", coordinator_pubkey_hex="aa" * 32,
                 handle=h,
             )
-        assert user_store.remove(store, "lyra-agent", "alessandro") is True
+        assert user_store.remove(store, "beta-agent", "alessandro") is True
         assert len(store.networks) == 1
         assert store.networks[0].handle == "marco"
         # Removing a (name, handle) pair that isn't there is a no-op.
-        assert user_store.remove(store, "lyra-agent", "ghost") is False
+        assert user_store.remove(store, "beta-agent", "ghost") is False
     finally:
         _restore_home(old_home)

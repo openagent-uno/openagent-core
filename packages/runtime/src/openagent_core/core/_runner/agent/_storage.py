@@ -1,6 +1,7 @@
 """Database persistence and serialization helpers for Agent."""
 
 from __future__ import annotations
+from openagent_core.content_privacy import PrivacyFence, PrivacyConflict
 
 from openagent_core.persistence import run_sync
 
@@ -137,6 +138,8 @@ def read_session(
         if not agent.db:
             raise ValueError("Db not initialized")
         return agent.db.get_session(session_id=session_id, session_type=session_type, user_id=user_id)  # type: ignore
+    except (PrivacyFence, PrivacyConflict):
+        raise
     except Exception as e:
         import traceback
 
@@ -158,6 +161,8 @@ async def aread_session(
             return await agent.db.get_session(session_id=session_id, session_type=session_type, user_id=user_id)  # type: ignore
         else:
             return await run_sync(agent.db.get_session, session_id=session_id, session_type=session_type, user_id=user_id)  # type: ignore
+    except (PrivacyFence, PrivacyConflict):
+        raise
     except Exception as e:
         import traceback
 
@@ -175,6 +180,8 @@ def upsert_session(
         if not agent.db:
             raise ValueError("Db not initialized")
         return agent.db.upsert_session(session=session)  # type: ignore
+    except (PrivacyFence, PrivacyConflict):
+        raise
     except Exception as e:
         import traceback
 
@@ -196,6 +203,8 @@ async def aupsert_session(
             return await agent.db.upsert_session(session=session)  # type: ignore
         else:
             return await run_sync(agent.db.upsert_session, session=session)  # type: ignore
+    except (PrivacyFence, PrivacyConflict):
+        raise
     except Exception as e:
         import traceback
 
@@ -572,6 +581,8 @@ def to_dict(agent: Agent) -> Dict[str, Any]:
                     serialized_tools.append(tool.to_dict())
                 else:
                     serialized_tools.append(tool)
+            except (PrivacyFence, PrivacyConflict):
+                raise
             except Exception as e:
                 # Skip tools that can't be serialized
                 log_warning(f"Could not serialize tool {tool}: {str(e)}")
@@ -1049,6 +1060,8 @@ def save(
 
         return config.get("version")
 
+    except (PrivacyFence, PrivacyConflict):
+        raise
     except Exception as e:
         log_error(f"Error saving Agent to database: {str(e)}")
         raise

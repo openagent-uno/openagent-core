@@ -164,7 +164,7 @@ _DORMANT_RECOVERY_BACKOFF = 0.5
 
 # Cold-start stagger between subprocess MCP spawns.
 #
-# Field evidence (friday-agent post-v0.12.51 deploy, 2026-05-05):
+# Field evidence (example-agent-agent post-v0.12.51 deploy, 2026-05-05):
 # 12/20 MCPs came up cleanly via the dormant-recovery loop, but 8 — all
 # slow Python builtins or first-spawn npm packages — still hit
 # ``TimeoutError`` in ``session.initialize`` with
@@ -200,7 +200,7 @@ _STARTUP_STAGGER_SECONDS = 0.25
 # acts on this by re-running ``_build_and_enter_toolkit`` for the spec
 # (see the re-spawn branch around line 685).
 #
-# Discovered 2026-05-23 on lyra-music/virgil v0.13.29: workflow-manager
+# Discovered 2026-05-23 on example-product-b-music/example-orchestrator v0.13.29: workflow-manager
 # specifically (not its sibling Python MCPs) repeatedly came up
 # dormant with the recovery loop emitting three identical
 # ``ClosedResourceError`` failures from ``send_nowait`` on the

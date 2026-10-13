@@ -372,9 +372,9 @@ async def t_builder_unit(_ctx: TestContext) -> None:
     assert _fts_query("how do I get the premium note") == '("premium"* OR "note"*)'
     # ...but never to the point of leaving nothing to search for.
     assert _fts_query("how do I") == '("how"* OR "do"* OR "i"*)'
-    # A dotted token stays ONE unit: com.lyramusic must not become a loose
-    # OR of "com" (which matches every URL in the vault) and "lyramusic".
-    assert _fts_query("com.lyramusic") == '"com lyramusic"'
+    # A dotted token stays ONE unit: com.betamusic must not become a loose
+    # OR of "com" (which matches every URL in the vault) and "betamusic".
+    assert _fts_query("com.betamusic") == '"com betamusic"'
     # The contract is not "quotes get escaped" but "no user punctuation can
     # ever reach FTS5 as syntax". Two independent layers deliver that, so
     # pin both: the tokenizer keeps only word characters...
@@ -397,12 +397,12 @@ async def t_canonical_first_ranking(_ctx: TestContext) -> None:
     from openagent_core.mcp.servers.vault_gate.handlers import _canonical_first
 
     raw = [
-        {"path": "esound/receipts/support-triage-a.md", "title": "receipt A"},
+        {"path": "alpha/receipts/support-triage-a.md", "title": "receipt A"},
         {"path": "briefings/today.md", "title": "briefing"},
-        {"path": "esound/dev/bug-analysis-wrong-audio.md", "title": "analysis"},
-        {"path": "esound/receipts/support-grounding-sort.md", "title": "grounding"},
-        {"path": "esound/procedures/triage.receipts-archive.md", "title": "archive"},
-        {"path": "esound/receipts/support-triage-b.md", "title": "receipt B"},
+        {"path": "alpha/dev/bug-analysis-wrong-audio.md", "title": "analysis"},
+        {"path": "alpha/receipts/support-grounding-sort.md", "title": "grounding"},
+        {"path": "alpha/procedures/triage.receipts-archive.md", "title": "archive"},
+        {"path": "alpha/receipts/support-triage-b.md", "title": "receipt B"},
     ]
     ranked = _canonical_first(raw, 4)
     assert [item["title"] for item in ranked[:2]] == ["analysis", "grounding"]
