@@ -319,7 +319,8 @@ class CapabilityCatalog:
         runtime = current_runtime()
         run_id = current_run_id()
         durable = runtime is not None and runtime.capabilities is self and run_id is not None
-        privacy_publisher = runtime.service(ToolResultPrivacyPublisher) if durable else None
+        privacy_service = getattr(runtime, 'service', None)
+        privacy_publisher = privacy_service(ToolResultPrivacyPublisher) if durable and callable(privacy_service) else None
         if registration.result_provenance is not None or registration.invocation_provenance is not None:
             if privacy_publisher is None:
                 raise CapabilityUnavailable('This source requires a canonical provenance publisher')

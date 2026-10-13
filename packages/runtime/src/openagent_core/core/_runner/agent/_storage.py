@@ -582,8 +582,8 @@ def to_dict(agent: Agent) -> Dict[str, Any]:
                 else:
                     serialized_tools.append(tool)
             except (PrivacyFence, PrivacyConflict):
-        raise
-    except Exception as e:
+                raise
+            except Exception as e:
                 # Skip tools that can't be serialized
                 log_warning(f"Could not serialize tool {tool}: {str(e)}")
         if serialized_tools:

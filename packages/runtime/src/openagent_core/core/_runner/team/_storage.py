@@ -582,8 +582,8 @@ def to_dict(team: "Team") -> Dict[str, Any]:
                     func = Function.from_callable(tool)
                     serialized_tools.append(func.to_dict())
             except (PrivacyFence, PrivacyConflict):
-        raise
-    except Exception as e:
+                raise
+            except Exception as e:
                 log_warning(f"Could not serialize tool {tool}: {str(e)}")
         if serialized_tools:
             config["tools"] = serialized_tools
