@@ -928,6 +928,13 @@ class NativeProvider(ProviderResources, BaseModel):
         """The runtime persists session history in DB but keeps no per-session subprocess."""
         return None
 
+    async def invalidate_session_context(self, session_id: str) -> None:
+        if not session_id:
+            raise ValueError("session_id is required")
+        # Engine objects are shared across sessions. Release those objects,
+        # retaining every durable session row and its selective redactions.
+        await self._invalidate_context(self._clear_runtime_caches)
+
     async def forget_session(self, session_id: str) -> None:
         """Erase the runtime's stored history for ``session_id`` so the next
         call on that session id starts empty.

@@ -407,3 +407,15 @@ executor, rejects a response bound to a different shop, and confirms revoked
 scope causes no subsequent API invocation. Result-only callbacks remain a
 compatibility entrypoint; an official provider host must install both callbacks
 before claiming first-invocation crash/privacy coverage.
+
+### Cached model context
+
+`SessionControl.invalidate_context(session_id)` is an opt-in host operation for
+background privacy work. Native providers drain active calls, pause admission
+while cached engine objects are discarded, and retain durable session rows.
+Routing providers invalidate their exact session cache. Dispatcher propagation
+includes retired providers and reports unsupported adapters or cleanup errors;
+it does not substitute best-effort `close_session` or destructive `forget_session`.
+The host must install its source fence before draining and only acknowledge a
+privacy action after canonical sinks and this operation succeed. Third-party
+provider resume state needs its own adapter and cannot be attested by this API.

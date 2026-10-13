@@ -1203,6 +1203,11 @@ class TeamRouterProvider(ProviderResources, BaseModel):
 
     # ── lifecycle ────────────────────────────────────────────────────
 
+    async def invalidate_session_context(self, session_id: str) -> None:
+        if not session_id:
+            raise ValueError("session_id is required")
+        await self._invalidate_context(lambda: self._drop_session_state(session_id))
+
     async def close_session(self, session_id: str) -> None:
         self._drop_session_state(session_id)
         await self._release_retired()
@@ -2029,6 +2034,19 @@ class ModelDispatcher(BaseModel):
             return
         self._last_pick_by_session.pop(session_id, None)
         await self._fan_out_async("close_session", session_id)
+
+    async def invalidate_session_context(self, session_id: str) -> None:
+        if not session_id:
+            raise ValueError("session_id is required")
+        # Unlike best-effort lifecycle fan-out, a privacy receipt must retain
+        # failure from every active or retired provider.
+        providers = list(self._team_providers.values()) + list(self._retired_providers)
+        seen = set()
+        for provider in providers:
+            if id(provider) not in seen:
+                seen.add(id(provider))
+                await provider.invalidate_session_context(session_id)
+        self._last_pick_by_session.pop(session_id, None)
 
     async def forget_session(self, session_id: str) -> None:
         if not session_id:

@@ -137,6 +137,14 @@ class BaseModel(ABC):
         """
         await self.close_session(session_id)
 
+    async def invalidate_session_context(self, session_id: str) -> None:
+        """Discard cached context after selective erasure, preserving history.
+
+        This opt-in operation must drain in-flight calls and report failures.
+        A no-op or ``forget_session`` fallback cannot qualify privacy cleanup.
+        """
+        raise NotImplementedError("This provider cannot invalidate cached session context")
+
     async def request_cancel(self, session_id: str) -> bool:
         """Cooperatively cancel the session's in-flight run, if supported.
 

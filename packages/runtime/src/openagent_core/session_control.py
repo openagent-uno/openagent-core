@@ -52,3 +52,14 @@ class SessionControl:
         if not session_id:
             raise ValueError("session_id is required")
         await self._db.unpin_session_model(session_id)
+
+    async def invalidate_context(self, session_id: str) -> None:
+        """Drain cached model context without deleting persistent session data.
+
+        Host authorization and admission fencing precede this operation. It is
+        invoked by a background privacy job, never inside its own model call.
+        Unsupported providers and cleanup failures block the host receipt.
+        """
+        if not session_id:
+            raise ValueError("session_id is required")
+        await self.agent.model.invalidate_session_context(session_id)
