@@ -108,6 +108,8 @@ def build_runtime_toolkit() -> Any:
         Args:
             path: Absolute path to the file on the agent's filesystem.
         """
+        from openagent_core.memory.vault.privacy import require_unprotected_execution
+        await require_unprotected_execution("Attachment delivery")
         return _send_file_impl(path)
 
     return Toolkit(
