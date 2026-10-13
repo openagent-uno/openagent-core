@@ -100,3 +100,69 @@ class EnginePrivacy(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('PRIVATE SHOP RESULT',str(source))
         self.assertIn('CUSTOMER TWO RESULT',str(source))
         self.assertIn('UNRELATED MAIL RESULT',str(source))
+
+    async def test_real_compaction_records_recap_and_redacts_folded_compatibility_copy(self):
+        from unittest.mock import patch
+        from openagent_core.core.compaction import compact
+        from openagent_core.runtime import runtime_scope
+        from openagent_core.content_privacy import ContentRevision
+        with execution_scope(self.runtime,self.context,'run'):
+            self.db.upsert_session(self.session)
+        await self.store.transition('run','success',output='PRIVATE DERIVED FINAL')
+        async def summarize(*args): return 'PRIVATE COMPACTED RECAP'
+        agent=SimpleNamespace(_db=SimpleNamespace(db_path=str(self.store.path)))
+        model=SimpleNamespace(model='fixture')
+        with runtime_scope(self.runtime),patch('openagent_core.core.compaction._summarize_runs',summarize):
+            result=await compact('session',model,agent,keep=0)
+        self.assertIsNotNone(result)
+        self.assertIn('PRIVATE COMPACTED RECAP',str(self.db.get_session('session',deserialize=False)))
+        request=PrivacyRequest('compaction-event','tenant','shopify/app','group',10,'redact')
+        await self.ledger.enqueue(request)
+        nodes=self.store.connection.execute("SELECT r.* FROM privacy_targets t JOIN privacy_revisions r ON t.tenant=r.tenant AND t.artifact=r.artifact AND t.revision=r.revision WHERE t.request_id=? AND r.sink='engine-history' ORDER BY r.rowid DESC",('compaction-event',)).fetchall()
+        self.assertEqual(len(nodes),7)
+        for node in nodes:
+            revision=ContentRevision(node['tenant'],node['artifact'],node['revision'],node['sink'],node['digest'])
+            self.assertEqual(await self.sink.apply(request,revision),'complete')
+        source=self.db.get_session('session',deserialize=False)
+        self.assertNotIn('PRIVATE COMPACTED RECAP',str(source))
+        compatibility=self.store.connection.execute('SELECT raw_envelope_json FROM session_runs WHERE id=?',('run',)).fetchone()[0]
+        self.assertNotIn('PRIVATE SHOP RESULT',compatibility)
+        self.assertIn('HUMAN INPUT',compatibility)
+        self.assertIn('UNRELATED MAIL RESULT',compatibility)
+
+    async def test_revocation_during_compaction_does_not_persist_generated_recap(self):
+        from unittest.mock import patch
+        from openagent_core.core.compaction import compact
+        from openagent_core.runtime import runtime_scope
+        with execution_scope(self.runtime,self.context,'run'):
+            self.db.upsert_session(self.session)
+        request=PrivacyRequest('during-summary','tenant','shopify/app','group',10,'redact')
+        async def summarize(*args):
+            await self.ledger.enqueue(request)
+            return 'LATE REVOKED RECAP'
+        agent=SimpleNamespace(_db=SimpleNamespace(db_path=str(self.store.path)))
+        with runtime_scope(self.runtime),patch('openagent_core.core.compaction._summarize_runs',summarize):
+            with self.assertRaises(PrivacyFence):
+                await compact('session',SimpleNamespace(model='fixture'),agent,keep=0)
+        self.assertNotIn('LATE REVOKED RECAP',str(self.db.get_session('session',deserialize=False)))
+        self.assertEqual(self.store.connection.execute('SELECT count(*) FROM engine_privacy_recaps').fetchone()[0],0)
+
+    async def test_compaction_does_not_overwrite_human_change_during_summary(self):
+        from unittest.mock import patch
+        from openagent_core.core.compaction import compact
+        from openagent_core.runtime import runtime_scope
+        from openagent_core.content_privacy import PrivacyConflict
+        with execution_scope(self.runtime,self.context,'run'):
+            self.db.upsert_session(self.session)
+        async def summarize(*args):
+            current=self.store.connection.execute('SELECT runs FROM sessions WHERE session_id=?',('session',)).fetchone()[0]
+            values=json.loads(json.loads(current))
+            values[0]['messages'][0]['content']='NEW HUMAN CONTENT'
+            self.store.connection.execute('UPDATE sessions SET runs=? WHERE session_id=?',(json.dumps(values),'session'))
+            return 'STALE RECAP'
+        agent=SimpleNamespace(_db=SimpleNamespace(db_path=str(self.store.path)))
+        with runtime_scope(self.runtime),patch('openagent_core.core.compaction._summarize_runs',summarize):
+            with self.assertRaises(PrivacyConflict):
+                await compact('session',SimpleNamespace(model='fixture'),agent,keep=0)
+        self.assertIn('NEW HUMAN CONTENT',str(self.db.get_session('session',deserialize=False)))
+        self.assertNotIn('STALE RECAP',str(self.db.get_session('session',deserialize=False)))

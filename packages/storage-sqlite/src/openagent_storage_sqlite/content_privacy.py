@@ -190,7 +190,7 @@ class SqliteContentPrivacyStore:
                        (token, self.clock()+self.lease_ms, request_id))
             targets = db.execute('''SELECT r.* FROM privacy_targets t JOIN privacy_revisions r
                 ON (t.tenant=r.tenant AND t.artifact=r.artifact AND t.revision=r.revision)
-                WHERE t.request_id=? AND t.complete=0''', (request_id,)).fetchall()
+                WHERE t.request_id=? AND t.complete=0 ORDER BY t.artifact ASC,r.rowid DESC''', (request_id,)).fetchall()
             db.commit()
             return self._request(json.loads(row['request'])), token, tuple(ContentRevision(
                 r['tenant'], r['artifact'], r['revision'], r['sink'], r['digest']) for r in targets)

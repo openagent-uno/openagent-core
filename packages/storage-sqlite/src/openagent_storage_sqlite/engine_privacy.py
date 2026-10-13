@@ -51,6 +51,11 @@ class SqliteEngineContentPrivacy:
             run_id TEXT NOT NULL,path TEXT NOT NULL)''')
         public_store.connection.execute('''CREATE TABLE IF NOT EXISTS engine_privacy_erased(
             artifact TEXT NOT NULL,revision TEXT NOT NULL,PRIMARY KEY(artifact,revision))''')
+        public_store.connection.execute('''CREATE TABLE IF NOT EXISTS engine_privacy_recaps(
+            run_id TEXT PRIMARY KEY,tenant TEXT NOT NULL,session TEXT NOT NULL,origins TEXT NOT NULL)''')
+        public_store.connection.execute('''CREATE TABLE IF NOT EXISTS engine_privacy_folds(
+            tenant TEXT NOT NULL,session TEXT NOT NULL,source_run TEXT NOT NULL,recap TEXT NOT NULL,
+            PRIMARY KEY(tenant,session,source_run,recap))''')
 
     def record_engine_session(self,transaction,session_id,source_row,context,run_id):
         main=next((row[2] for row in transaction.execute('PRAGMA database_list') if row[1]=='main'),None)
@@ -116,17 +121,82 @@ class SqliteEngineContentPrivacy:
                 transaction.execute('INSERT OR IGNORE INTO engine_privacy_nodes VALUES(?,?,?,?,?)',
                                     (artifact,trusted[0],session_id,identity,json.dumps(path)))
 
+    def _fold_origins(self,transaction,session_id,identities):
+        tenant_row=transaction.execute('SELECT tenant_id FROM sessions_v2 WHERE id=?',(session_id,)).fetchone()
+        if tenant_row is None:
+            raise PrivacyConflict('Compaction session has no trusted canonical identity')
+        origins=set()
+        for identity in identities:
+            owned=transaction.execute('SELECT tenant_id,session_id FROM session_runs WHERE id=?',(identity,)).fetchone()
+            if owned:
+                if tuple(owned)!=(tenant_row[0],session_id):
+                    raise PrivacyConflict('Compaction crossed an admitted session boundary')
+                origins.update(self.publisher._origins(transaction,identity))
+            else:
+                recap=transaction.execute('SELECT tenant,session,origins FROM engine_privacy_recaps WHERE run_id=?',(identity,)).fetchone()
+                if recap:
+                    if tuple(recap[:2])!=(tenant_row[0],session_id):
+                        raise PrivacyConflict('Compaction crossed a recap boundary')
+                    origins.update(self.ledger._origin(value) for value in json.loads(recap[2]))
+        return tenant_row[0],tuple(origins)
+
+    def _guard_origins(self,transaction,origins):
+        from openagent_core.content_privacy import PrivacyFence
+        for row in transaction.execute('SELECT request FROM privacy_requests'):
+            request=self.ledger._request(json.loads(row[0]))
+            if request.operation=='redact' and any(request.matches(origin) for origin in origins):
+                raise PrivacyFence('Revoked folded context cannot be summarized or persisted')
+
+    def validate_compaction(self,session_id,folded_run_ids):
+        with self.ledger._db() as transaction:
+            _tenant,origins=self._fold_origins(transaction,session_id,folded_run_ids)
+            self._guard_origins(transaction,origins)
+
+    def record_compaction(self,transaction,session_id,runs,folded_run_ids,recap_id):
+        tenant,origins=self._fold_origins(transaction,session_id,folded_run_ids)
+        self._guard_origins(transaction,origins)
+        if not origins:
+            return
+        recap=next((run for run in runs if isinstance(run,dict) and run.get('run_id')==recap_id),None)
+        if recap is None or recap_id in folded_run_ids:
+            raise PrivacyConflict('Compaction has no new exact recap identity')
+        encoded_origins=json.dumps([dict(tenant_id=o.tenant_id,source_id=o.source_id,group_id=o.group_id,
+                                         generation=o.generation,subjects=o.subjects) for o in origins])
+        transaction.execute('INSERT INTO engine_privacy_recaps VALUES(?,?,?,?)',(recap_id,tenant,session_id,encoded_origins))
+        parents=[]
+        for identity in folded_run_ids:
+            for row in transaction.execute('SELECT artifact FROM engine_privacy_nodes WHERE tenant=? AND session=? AND run_id=?',(tenant,session_id,identity)):
+                latest=transaction.execute('SELECT revision FROM privacy_revisions WHERE tenant=? AND artifact=? ORDER BY rowid DESC LIMIT 1',(tenant,row[0])).fetchone()
+                if latest:
+                    parents.append((row[0],latest[0]))
+        paths=[('content',)]
+        paths.extend(('messages',index,'content') for index,value in enumerate(recap.get('messages') or [])
+                     if isinstance(value,dict) and value.get('role')=='assistant' and value.get('content') is not None)
+        for path in paths:
+            artifact=base64.urlsafe_b64encode(_encoded([session_id,recap_id,list(path)])).decode().rstrip('=')
+            digest=hashlib.sha256(_encoded(_get(recap,path))).hexdigest()
+            revision=ContentRevision(tenant,artifact,digest,self.sink_id,digest)
+            self.ledger._record_transaction(transaction,revision,origins,tuple(parents))
+            transaction.execute('INSERT OR IGNORE INTO engine_privacy_nodes VALUES(?,?,?,?,?)',
+                                (artifact,tenant,session_id,recap_id,json.dumps(path)))
+        for source in folded_run_ids:
+            transaction.execute('INSERT OR IGNORE INTO engine_privacy_folds VALUES(?,?,?,?)',
+                                (tenant,session_id,source,recap_id))
+
     async def apply(self,request,revision):
         from openagent_core.persistence import run_sync
         async with self.store._operation_lock:
             result=await run_sync(self._apply,request,revision)
             if request.operation=='redact' and result=='complete':
-                if self.store.connection.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0]!=0:
+                if not await run_sync(self._scrub):
                     return 'conflict'
         if request.operation=='export' and result!='conflict':
             await self.export(request,revision,result)
             return 'complete'
         return result
+
+    def _scrub(self):
+        return self.store.connection.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0]==0
 
     def _apply(self,request,revision):
         if revision.sink_id!=self.sink_id or request.tenant_id!=revision.tenant_id:
@@ -145,35 +215,42 @@ class SqliteEngineContentPrivacy:
                 return b'' if request.operation=='export' else 'complete'
             runs=loads_maybe_double(row[0],[])
             run=next((run for run in runs if isinstance(run,dict) and (run.get('run_id') or run.get('id'))==node['run_id']),None)
-            if run is None:
-                return 'conflict'  # Compaction may hold an untracked copy.
+            folded=db.execute('SELECT 1 FROM engine_privacy_folds WHERE tenant=? AND session=? AND source_run=?',
+                              (revision.tenant_id,node['session'],node['run_id'])).fetchone()
+            if run is None and not folded:
+                return 'conflict'
+            public=db.execute('SELECT raw_envelope_json FROM session_runs WHERE id=? AND tenant_id=?',
+                              (node['run_id'],revision.tenant_id)).fetchone()
+            envelope=json.loads(public[0]) if public and public[0] and public[0]!='{}' else None
             path=json.loads(node['path'])
-            try:
-                value=_get(run,path)
-            except (KeyError,IndexError,TypeError):
+            def read(value):
+                try:
+                    return _get(value,path) if value is not None else None
+                except (KeyError,IndexError,TypeError):
+                    return None
+            value=read(run) if run is not None else read(envelope)
+            if value is None:
+                # A newer tracked revision of this exact field may already be
+                # erased. Never treat a changed nonempty human value as gone.
+                marker=db.execute('SELECT 1 FROM engine_privacy_erased WHERE artifact=?',(revision.artifact_id,)).fetchone()
+                if marker and read(envelope) is None:
+                    return b'' if request.operation=='export' else 'complete'
                 return 'conflict'
             encoded=_encoded(value)
             if hashlib.sha256(encoded).hexdigest()!=revision.content_sha256:
                 return 'conflict'
             if request.operation=='export':
                 return encoded
-            _set(run,path,None)
-            db.execute('UPDATE sessions SET runs=?,updated_at=? WHERE session_id=?',
-                       (json.dumps(runs,ensure_ascii=False),int(time.time()),node['session']))
-            # The public run's compatibility envelope is another canonical copy.
-            public=db.execute('SELECT raw_envelope_json FROM session_runs WHERE id=? AND tenant_id=?',
-                              (node['run_id'],revision.tenant_id)).fetchone()
-            if public and public[0] and public[0]!='{}':
-                envelope=json.loads(public[0])
-                try:
-                    copied=_get(envelope,path)
-                except (KeyError,IndexError,TypeError):
-                    copied=None
-                if copied is not None:
-                    if hashlib.sha256(_encoded(copied)).hexdigest()!=revision.content_sha256:
-                        raise PrivacyConflict('Compatibility envelope changed independently')
-                    _set(envelope,path,None)
-                    db.execute('UPDATE session_runs SET raw_envelope_json=? WHERE id=?',
-                               (json.dumps(envelope,ensure_ascii=False),node['run_id']))
+            if run is not None:
+                _set(run,path,None)
+                db.execute('UPDATE sessions SET runs=?,updated_at=? WHERE session_id=?',
+                           (json.dumps(runs,ensure_ascii=False),int(time.time()),node['session']))
+            copied=read(envelope)
+            if copied is not None:
+                if hashlib.sha256(_encoded(copied)).hexdigest()!=revision.content_sha256:
+                    raise PrivacyConflict('Compatibility envelope changed independently')
+                _set(envelope,path,None)
+                db.execute('UPDATE session_runs SET raw_envelope_json=? WHERE id=?',
+                           (json.dumps(envelope,ensure_ascii=False),node['run_id']))
             db.execute('INSERT INTO engine_privacy_erased VALUES(?,?)',(revision.artifact_id,revision.revision_id))
             return 'complete'

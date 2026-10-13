@@ -761,7 +761,9 @@ def _load_runs(db_path: str, session_id: str) -> list[dict[str, Any]]:
         conn.close()
 
 
-def _save_runs(db_path: str, session_id: str, runs: list[dict[str, Any]]) -> bool:
+def _save_runs(db_path: str, session_id: str, runs: list[dict[str, Any]], *,
+               privacy_folded_ids: tuple[str, ...] = (), privacy_recap_id: str | None = None,
+               privacy_source_digest: str | None = None) -> bool:
     """Persist *runs* back to ``sessions.runs`` for *session_id*.
 
     Touches the row's ``updated_at`` so the session-list UI orders the
@@ -784,17 +786,33 @@ def _save_runs(db_path: str, session_id: str, runs: list[dict[str, Any]]) -> boo
         return False
     try:
         try:
+            conn.execute('BEGIN IMMEDIATE')
             cursor = conn.execute(
-                "SELECT 1 FROM sessions WHERE session_id = ?",
+                "SELECT runs FROM sessions WHERE session_id = ?",
                 (session_id,),
             )
-            if cursor.fetchone() is None:
+            original = cursor.fetchone()
+            if original is None:
                 return False
+            if privacy_source_digest is not None:
+                import hashlib
+                from openagent_core.memory.operational.projection import loads_maybe_double
+                current = loads_maybe_double(original[0],[])
+                digest = hashlib.sha256(json.dumps(current,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+                if digest != privacy_source_digest:
+                    from openagent_core.content_privacy import PrivacyConflict
+                    raise PrivacyConflict('Compaction source changed while the model was summarizing')
             conn.execute(
                 "UPDATE sessions SET runs = ?, updated_at = ? "
                 "WHERE session_id = ?",
                 (json.dumps(runs), int(time.time()), session_id),
             )
+            from openagent_core.runtime import current_runtime
+            from openagent_core.content_privacy import EngineContentPrivacyWriter
+            runtime = current_runtime()
+            writer = runtime.service(EngineContentPrivacyWriter) if runtime is not None else None
+            if writer is not None and privacy_recap_id is not None:
+                writer.record_compaction(conn,session_id,runs,privacy_folded_ids,privacy_recap_id)
             conn.commit()
             return True
         except sqlite3.Error as exc:
@@ -1637,6 +1655,16 @@ async def compact(
         "tokens_before": tokens_before,
     })
 
+    from openagent_core.runtime import current_runtime
+    from openagent_core.content_privacy import EngineContentPrivacyWriter
+    runtime = current_runtime()
+    privacy_writer = runtime.service(EngineContentPrivacyWriter) if runtime is not None else None
+    folded_ids = tuple(str(run.get('run_id') or run.get('id')) for run in old_runs if isinstance(run,dict) and (run.get('run_id') or run.get('id')))
+    source_digest = None
+    if privacy_writer is not None:
+        import hashlib
+        privacy_writer.validate_compaction(session_id,folded_ids)
+        source_digest = hashlib.sha256(json.dumps(runs,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     skills_folded = _skills_loaded_in(old_runs)
     summary = await _summarize_runs(old_runs, model, agent)
     if summary:
@@ -1657,7 +1685,7 @@ async def compact(
     tokens_after = _estimate_text_tokens(summary, model_id)
 
     recap_run: dict[str, Any] = {
-        "run_id": f"compaction-{int(time.time())}",
+        "run_id": f"compaction-{uuid.uuid4().hex}",
         "session_id": session_id,
         "content": summary,
         "content_type": "str",
@@ -1687,7 +1715,9 @@ async def compact(
     # sets OPENAGENT_COMPACTION_HISTORY_TOOL_RESULT_CHARS.
     kept, results_elided, chars_elided = _trim_kept_tool_results(kept)
     new_runs = [recap_run, *kept]
-    if not _save_runs(db_path, session_id, new_runs):
+    if not _save_runs(db_path, session_id, new_runs,
+                      privacy_folded_ids=folded_ids,privacy_recap_id=recap_run['run_id'],
+                      privacy_source_digest=source_digest):
         elog(
             "runtime.compaction.skipped",
             level="warning",

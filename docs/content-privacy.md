@@ -173,3 +173,22 @@ result: those require trusted per-record result fragments rather than whole JSON
 origins. It also excludes arbitrary session state/provider metadata, event/media
 replicas, prior untracked history, compaction and search completion. No full
 `engine-history` coverage or product privacy completion is asserted.
+
+## Canonical compaction checkpoint
+
+The real `core.compaction.compact` path now asks the registered writer to validate
+folded origins before sending history to the summarizer. Save compares the exact
+source digest after model IO, then writes recap content, parent revision lineage
+and a durable fold receipt in the same SQLite transaction. Concurrent human
+changes block replacement; revocation during summarization rolls the recap back.
+Recap IDs use unique opaque suffixes, so two folds cannot reuse a second-level
+clock identifier. Source/runtime identifiers and timestamps remain available.
+
+The engine sink follows only these trusted fold receipts to redact original
+compatibility copies when a run has moved into a tracked recap. Later recaps
+inherit prior recap origins. Existing untracked compaction metadata cannot
+manufacture a lineage or completion proof. These tests run the actual compact
+reader, writer, serializer and sink, stubbing only the external model response.
+They cover normal fold erasure, revocation during model IO and a concurrent human
+change. Arbitrary context_snapshots, journal/export/index/media copies and unknown
+historical folds remain outside this checkpoint's coverage gates.
