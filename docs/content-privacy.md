@@ -262,3 +262,24 @@ human and unrelated Gmail results remain. External indexes, Vault indexes and
 unknown historical index generations still require their own inventory/adapters.
 `context_snapshots` currently has schema but no Core insert/update entrypoint;
 host-written snapshots cannot be claimed covered without their writer adapter.
+
+## Canonical session journal
+
+The real `MemoryDB.append_session_event` delegates protected run publication to
+the registered public `SessionJournalPrivacyWriter`. Without that service,
+protected payloads are refused before insertion; ordinary journal writes retain
+their existing behavior. `SqliteSessionJournalContentPrivacy` owns the same SQLite
+transaction for journal data and fragment graph writes. Its sink redacts/exports
+only the exact attributed subtree and requires WAL truncation. The default ledger
+coverage set now includes `session-journal` explicitly.
+
+Typed generated event kinds use the validated run-origin union. Raw tool/command
+and human payload kinds require a host-bound schema resolver returning a complete
+`ToolResultProvenance` partition; metadata inside the payload cannot confer source
+or tenant authority. Human messages written outside a protected run remain
+unattributed and preserved. Tests use the real MemoryDB writer/reader and verify
+adapter admission, raw partition export/erasure, retained human/other-customer
+payloads, and revocation during schema resolution rolling back the whole insert.
+Products must qualify their actual journal payload schemas before declaring this
+surface covered; the generic generated-kind adapter is insufficient for arbitrary
+host replay formats or previously untracked journal rows.

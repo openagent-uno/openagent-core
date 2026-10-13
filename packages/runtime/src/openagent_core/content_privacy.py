@@ -216,3 +216,9 @@ class EngineContentPrivacyWriter(Protocol):
     def validate_compaction(self, session_id: str, folded_run_ids: tuple[str, ...]) -> None: ...
     def record_compaction(self, transaction, session_id: str, runs,
                           folded_run_ids: tuple[str, ...], recap_id: str) -> None: ...
+
+
+class SessionJournalPrivacyWriter(Protocol):
+    """Canonical journal write owner, bound before a protected run is admitted."""
+    async def append_session_event(self, database_path, session_id: str, event_type: str,
+                                   data, context, run_id: str) -> int: ...

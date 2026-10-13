@@ -6630,13 +6630,23 @@ class MemoryDB:
         """
         if not session_id or not event_type:
             return 0
+        conn = await self._ensure_connected()
+        from openagent_core.runtime import current_runtime,current_execution_context,current_run_id
+        from openagent_core.content_privacy import SessionJournalPrivacyWriter,ToolResultPrivacyPublisher,PrivacyFence
+        runtime=current_runtime();context=current_execution_context();run_id=current_run_id()
+        if runtime is not None and context is not None and run_id is not None:
+            writer=runtime.service(SessionJournalPrivacyWriter)
+            if writer is not None:
+                return await writer.append_session_event(self.db_path,session_id,event_type,data or {},context,run_id)
+            publisher=runtime.service(ToolResultPrivacyPublisher)
+            if publisher is not None and await publisher.origins_for_execution(context,run_id):
+                raise PrivacyFence('Protected journal publication requires a canonical privacy writer')
         payload = "{}"
         if data:
             try:
                 payload = json.dumps(data, default=str)
             except (TypeError, ValueError):
                 payload = json.dumps({"unserializable": True})
-        conn = await self._ensure_connected()
         for _attempt in range(3):
             try:
                 cursor = await conn.execute(

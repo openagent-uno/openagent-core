@@ -24,7 +24,7 @@ from openagent_core.content_privacy import (ContentOrigin, ContentRevision, Priv
 
 
 REQUIRED_CONTENT_SURFACES = frozenset({"transcripts", "compaction", "children", "vault",
-    "attachments", "files", "search", "run-replay"})
+    "attachments", "files", "search", "run-replay", "session-journal"})
 
 
 def _json(value):
