@@ -109,3 +109,16 @@ class ContentPrivacySink(Protocol):
     """
     sink_id: str
     async def apply(self, request: PrivacyRequest, revision: ContentRevision) -> Literal["complete", "conflict"]: ...
+
+
+class ToolResultPrivacyPublisher(Protocol):
+    """Backend-owned atomic tool publication and trusted provenance write.
+
+    Registered explicitly by a host in Runtime's service registry. A capability
+    requiring provenance cannot execute without this service. Callback origins
+    identify provider-verified scope; the publisher serializes publication with
+    durable revocation fences in its canonical storage transaction.
+    """
+    async def validate_tool_admission(self, context, run_id: str) -> None: ...
+    async def publish_tool_result(self, context, run_id: str, call_id: str,
+                                  result, origins: tuple[ContentOrigin, ...]) -> None: ...

@@ -26,6 +26,7 @@ _current_runtime: ContextVar[Runtime | None] = ContextVar('openagent_runtime', d
 _current_run: ContextVar[str | None] = ContextVar('openagent_run_id', default=None)
 _current_module_generation: ContextVar[int | None] = ContextVar('openagent_module_generation', default=None)
 _current_capability_revision: ContextVar[int | None] = ContextVar('openagent_capability_revision', default=None)
+_current_provider_tool_call: ContextVar[str | None] = ContextVar('openagent_provider_tool_call', default=None)
 
 
 def current_execution_context() -> ExecutionContext | None:
@@ -46,6 +47,22 @@ def current_module_generation() -> int | None:
 
 def current_capability_revision() -> int | None:
     return _current_capability_revision.get()
+
+
+def current_provider_tool_call_id() -> str | None:
+    """Engine-owned provider call identity; never an authorization selector."""
+    return _current_provider_tool_call.get()
+
+
+@contextmanager
+def provider_tool_call_scope(call_id: str | None):
+    if call_id is not None and (not isinstance(call_id,str) or not call_id or len(call_id)>1024):
+        raise ValueError('Provider tool call identity must be a bounded string')
+    token = _current_provider_tool_call.set(call_id)
+    try:
+        yield
+    finally:
+        _current_provider_tool_call.reset(token)
 
 
 @contextmanager

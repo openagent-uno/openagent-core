@@ -10,7 +10,7 @@ import hashlib
 import json
 import time
 
-from openagent_core.content_privacy import ContentRevision, PrivacyConflict
+from openagent_core.content_privacy import ContentRevision, PrivacyConflict, PrivacyFence
 from .content_privacy import SqliteContentPrivacyStore
 from .search import enqueue_source
 
@@ -173,3 +173,93 @@ class SqliteRuntimeContentPrivacySink:
             db.execute('INSERT INTO runtime_privacy_erased VALUES(?,?,?)',
                        (revision.tenant_id,revision.artifact_id,revision.revision_id))
             return 'complete'
+
+
+class SqliteToolResultPrivacyPublisher:
+    """Atomic live public-ledger provenance, explicitly installed by a host.
+
+    This is not a legacy-engine or Vault writer. Enabling it alone never attests
+    full surface coverage. The same canonical transaction writes source result,
+    generation fence checks, lineage and later generated public stream records.
+    """
+    def __init__(self, runtime_store, ledger):
+        if runtime_store.path != ledger.path:
+            raise ValueError('Live provenance must use the canonical transaction database')
+        if getattr(runtime_store,'_content_privacy_publication',None) is not None:
+            raise ValueError('Only one canonical provenance publisher may bind a store')
+        self.runtime_store, self.ledger = runtime_store, ledger
+        runtime_store.connection.execute('''CREATE TABLE IF NOT EXISTS runtime_privacy_origins(
+            run_id TEXT PRIMARY KEY REFERENCES session_runs(id), origins TEXT NOT NULL)''')
+        runtime_store._content_privacy_publication = self
+
+    def _origins(self, db, run_id):
+        row=db.execute('SELECT origins FROM runtime_privacy_origins WHERE run_id=?',(run_id,)).fetchone()
+        return tuple(self.ledger._origin(value) for value in json.loads(row[0])) if row else ()
+
+    def _merge(self, db, run_id, origins):
+        merged=set(self._origins(db,run_id)).union(origins)
+        encoded=json.dumps(sorted((dict(tenant_id=o.tenant_id,source_id=o.source_id,group_id=o.group_id,
+                                       generation=o.generation,subjects=o.subjects) for o in merged),
+                                  key=lambda v:json.dumps(v,sort_keys=True)),sort_keys=True,separators=(',',':'))
+        db.execute('INSERT INTO runtime_privacy_origins VALUES(?,?) ON CONFLICT(run_id) DO UPDATE SET origins=excluded.origins',(run_id,encoded))
+        return tuple(merged)
+
+    def inherit(self, db, run_id, session_id, parent_run_id):
+        origins=set()
+        if parent_run_id:
+            origins.update(self._origins(db,parent_run_id))
+        for row in db.execute('SELECT id FROM session_runs WHERE session_id=? AND id!=?',(session_id,run_id)):
+            origins.update(self._origins(db,row['id']))
+        if origins:
+            self._merge(db,run_id,origins)
+
+    def _record(self,db,kind,identity,origins):
+        if not origins:
+            return
+        table,fields=_FIELDS[kind]
+        key='event_id' if kind=='event' else 'id'
+        row=db.execute(f'SELECT * FROM {table} WHERE {key}=?',(identity,)).fetchone()
+        digest=hashlib.sha256(_content(row,fields)).hexdigest()
+        revision=ContentRevision(row['tenant_id'],kind+'/'+identity,digest,'runtime-ledger',digest)
+        self.ledger._record_transaction(db,revision,tuple(origins))
+
+    def generated(self,db,kind,identity,run_id):
+        self._record(db,kind,identity,self._origins(db,run_id))
+
+    def _guard(self,db,run_id):
+        origins=self._origins(db,run_id)
+        for row in db.execute('SELECT request FROM privacy_requests'):
+            request=self.ledger._request(json.loads(row[0]))
+            if request.operation=='redact' and any(request.matches(origin) for origin in origins):
+                raise PrivacyFence('Revoked run context cannot invoke or publish derived content')
+
+    async def validate_tool_admission(self,context,run_id):
+        from openagent_core.persistence import run_sync
+        def validate():
+            db=self.runtime_store.connection
+            row=db.execute('SELECT tenant_id,session_id FROM session_runs WHERE id=?',(run_id,)).fetchone()
+            if row is None or (row['tenant_id'],row['session_id'])!=(context.tenant_id,context.session_id):
+                raise PrivacyConflict('Admission context does not identify this exact run')
+            self._guard(db,run_id)
+        async with self.runtime_store._operation_lock:
+            await run_sync(validate)
+
+    def record_completed_tool(self,db,run_id,call_id,origins):
+        self._guard(db,run_id)
+        self._merge(db,run_id,origins)
+        tool=db.execute('SELECT id FROM tool_invocations WHERE session_run_id=? AND tool_call_id=?',(run_id,call_id)).fetchone()
+        self._record(db,'tool',tool['id'],origins)
+        for row in db.execute("SELECT id FROM session_messages WHERE run_id=? AND role='tool' AND tool_call_id=?",(run_id,call_id)):
+            self._record(db,'message',row['id'],origins)
+        for row in db.execute("SELECT event_id,metadata_json FROM domain_events WHERE run_id=? AND event_type='tool.completed'",(run_id,)):
+            if json.loads(row['metadata_json']).get('call_id')==call_id:
+                self._record(db,'event',row['event_id'],origins)
+
+    async def publish_tool_result(self,context,run_id,call_id,result,origins):
+        from openagent_core.persistence import run_sync
+        async with self.runtime_store._operation_lock:
+            row=self.runtime_store.connection.execute('SELECT tenant_id,session_id FROM session_runs WHERE id=?',(run_id,)).fetchone()
+            if row is None or row['tenant_id']!=context.tenant_id or row['session_id']!=context.session_id:
+                raise PrivacyConflict('Publication context does not identify this exact run')
+            await run_sync(self.runtime_store._finish_tool,run_id,call_id,result=result,
+                           _privacy_provenance=(self,origins))

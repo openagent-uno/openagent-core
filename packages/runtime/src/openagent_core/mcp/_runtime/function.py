@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from functools import partial
+from functools import partial, wraps
 from importlib.metadata import version
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Type, TypeVar, get_type_hints
 
@@ -13,6 +13,29 @@ from openagent_core.core._run_state import RunContext
 from openagent_core.core._runner.utils.log import log_debug, log_exception, log_warning
 
 T = TypeVar("T")
+
+
+def _provider_call_identity(operation):
+    """Retain the model call identity across nested catalog dispatch.
+
+    The identity links canonical raw engine envelopes to the separately durable
+    catalog invocation. It grants no authority and cannot select a source.
+    Lazy generator consumers remain a separate instrumentation boundary.
+    """
+    from inspect import iscoroutinefunction
+    if iscoroutinefunction(operation):
+        @wraps(operation)
+        async def execute(self,*args,**kwargs):
+            from openagent_core.runtime import provider_tool_call_scope
+            with provider_tool_call_scope(self.call_id):
+                return await operation(self,*args,**kwargs)
+    else:
+        @wraps(operation)
+        def execute(self,*args,**kwargs):
+            from openagent_core.runtime import provider_tool_call_scope
+            with provider_tool_call_scope(self.call_id):
+                return operation(self,*args,**kwargs)
+    return execute
 
 
 def signature_help(entrypoint, tool_name: str, exc: Exception) -> Optional[str]:
@@ -1113,6 +1136,7 @@ class FunctionCall(BaseModel):
         chain = reduce(create_hook_wrapper, hooks, execute_entrypoint)
         return chain
 
+    @_provider_call_identity
     def execute(self) -> FunctionExecutionResult:
         """Runs the function call."""
         from inspect import isgenerator, isgeneratorfunction
@@ -1319,6 +1343,7 @@ class FunctionCall(BaseModel):
             chain = reduce(create_hook_wrapper, hooks, execute_entrypoint)
         return chain
 
+    @_provider_call_identity
     async def aexecute(self) -> FunctionExecutionResult:
         """Runs the function call asynchronously."""
         from inspect import isasyncgen, isasyncgenfunction, iscoroutinefunction, isgenerator, isgeneratorfunction

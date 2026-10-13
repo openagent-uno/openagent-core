@@ -18,6 +18,7 @@ import asyncio
 import functools
 import base64
 from openagent_core.persistence import run_sync
+from openagent_core.content_privacy import PrivacyConflict
 from openagent_core.configuration import sqlite_busy_timeout_ms, sqlite_busy_timeout_s
 
 from .search import enqueue_source, restore_runtime_search_intents
@@ -41,6 +42,7 @@ class SqliteRuntimeStore:
         self._db: sqlite3.Connection | None = None
         self._lock_fd: int | None = None
         self._operation_lock = asyncio.Lock()
+        self._content_privacy_publication = None
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -152,6 +154,11 @@ class SqliteRuntimeStore:
             actor_principal_id,resource_type,resource_id,session_id,run_id,event_type,occurred_at_ms,schema_version,metadata_json)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''', (str(uuid.uuid4()),row['tenant_id'],actor.get('kind'),
             canonical_json(actor),'run',run_id,row['session_id'],run_id,kind,int(time.time()*1000),1,canonical_json(dict(payload)))).lastrowid
+        if self._content_privacy_publication is not None and (
+                kind == 'run.status' or (kind == 'run.stream' and payload.get('kind') in {'delta','done'})
+                or (kind.startswith('run.') and payload.get('output') is not None)):
+            event_id=db.execute('SELECT event_id FROM domain_events WHERE sequence=?',(cursor,)).fetchone()[0]
+            self._content_privacy_publication.generated(db,'event',event_id,run_id)
         return RunEvent(cursor,run_id,kind,dict(payload))
 
     def _accept(self, request: RunRequest, context: ExecutionContext) -> tuple[RunRecord,bool]:
@@ -206,6 +213,8 @@ class SqliteRuntimeStore:
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(request.run_id,context.tenant_id,request.session_id,ordinal,
                 request.idempotency_key,'agent',context.agent_id,'queued','accepted',canonical_json(request.input),
                 canonical_json(metadata),'{}',1,now,context.parent_run_id))
+            if self._content_privacy_publication is not None:
+                self._content_privacy_publication.inherit(db,request.run_id,request.session_id,context.parent_run_id)
             if reservation:
                 db.execute("UPDATE session_runs SET status='cancelled',status_raw='cancelled_before_accept',finished_at_ms=? WHERE id=?",(now,request.run_id))
             self._message(db,request.run_id,'user',request.input,context.author.key,context.author.kind,now)
@@ -234,6 +243,8 @@ class SqliteRuntimeStore:
         for tool in db.execute('SELECT id FROM tool_invocations WHERE session_run_id=?', (run_id,)).fetchall():
             db.execute('UPDATE tool_invocations SET source_version=source_version+1 WHERE id=?', (tool['id'],))
             enqueue_source(db, 'tool_invocation', tool['id'], now)
+        if self._content_privacy_publication is not None and role in {'assistant','compaction'} and status=='complete':
+            self._content_privacy_publication.generated(db,'message',message_id,run_id)
         return message_id
 
     def _transition(self, run_id: str, status: str, *, output: Any = None) -> RunRecord:
@@ -252,6 +263,8 @@ class SqliteRuntimeStore:
             db.execute('UPDATE session_runs SET status=?,status_raw=?,output_json=?,finished_at_ms=? WHERE id=?',
                        (status,status,canonical_json(output) if output is not None else None,
                         now if status in TERMINAL_STATUSES else None,run_id))
+            if self._content_privacy_publication is not None and output is not None:
+                self._content_privacy_publication.generated(db,'output',run_id,run_id)
             if status=='success' and output is not None:
                 context=json.loads(row['metadata_json'])['execution_context']
                 principal={'authority':context['authority']['authority'],'tenant_id':row['tenant_id'],
@@ -329,7 +342,8 @@ class SqliteRuntimeStore:
             self._message(db,run_id,'tool','',principal.key,'agent',now,tool_call_id=call_id,status='streaming')
             self._event(db,run_id,'tool.invoking',payload)
 
-    def _finish_tool(self, run_id: str, call_id: str, *, result: Any = None, error: Mapping[str, Any] | None = None) -> None:
+    def _finish_tool(self, run_id: str, call_id: str, *, result: Any = None, error: Mapping[str, Any] | None = None,
+                     _privacy_provenance=None) -> None:
         with self._transaction() as db:
             row = db.execute('SELECT * FROM tool_invocations WHERE session_run_id=? AND tool_call_id=?',(run_id,call_id)).fetchone()
             if row is None:
@@ -358,6 +372,11 @@ class SqliteRuntimeStore:
                     (encoded if error is None else canonical_json(error),now,now,anchor['id']))
                 enqueue_source(db,'message',anchor['id'],now)
             self._event(db,run_id,'tool.completed',payload)
+            if _privacy_provenance is not None:
+                publisher,origins=_privacy_provenance
+                if publisher is not self._content_privacy_publication:
+                    raise PrivacyConflict('A stale provenance publisher cannot write this store')
+                publisher.record_completed_tool(db,run_id,call_id,origins)
 
     def _events(self,run_id: str,after: int=0) -> tuple[RunEvent,...]:
         rows=self.connection.execute('SELECT sequence,event_type,metadata_json FROM domain_events WHERE run_id=? AND sequence>? ORDER BY sequence',(run_id,after))

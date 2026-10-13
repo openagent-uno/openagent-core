@@ -111,3 +111,38 @@ this table complete. Existing untracked installations need an explicit historica
 baseline migration or reviewed reconciliation; a new tracker cannot retrospectively
 identify unknown old customer-derived text. Provider admission remains gated until
 all enabled surfaces are covered and actual product restart/recovery cases pass.
+
+## Live public writer checkpoint
+
+The candidate `ToolResultPrivacyPublisher` service and host-only
+`CapabilityCatalog.register(..., result_provenance=...)` callback run **before**
+canonical publication, rather than relying on the existing post-persistence
+`EffectObserver`. A source requiring attribution cannot execute without an
+explicit canonical publisher. Origins must be a bounded immutable tuple bound to
+the current tenant; model arguments cannot install the callback. Local tool
+publication authorization is rechecked after the callback.
+
+`SqliteToolResultPrivacyPublisher` writes the exact source tool result, message
+anchor, replay event, origin registry and revocation fence in one canonical
+transaction. Generated public stream/status, assistant text and output writers
+inherit those origins and also fence late publication. New public runs inherit
+an admitted parent/earlier-session origin snapshot. All tool admissions, including
+sources without their own provenance callback, recheck revoked inherited run
+context when the publisher is installed. This cannot undo an external effect
+already in flight; external capability recipients require their own policy and
+privacy adapter. It does not establish complete child-session content coverage.
+
+The engine's real `FunctionCall.execute/aexecute` dispatch now retains the
+provider tool-call identity through nested catalog calls in a context scope.
+Canonical invocation bindings include `provider_call_id` while keeping their
+separate catalog invocation ID. Concurrent/nested dispatch restores scopes and
+does not share identity between tasks. A call identity links content; it grants
+no capability or provider/store authority. Deferred lazy generator consumption
+and tool caches remain separate writer boundaries.
+
+The legacy engine serializer and compaction writer still need to consume those
+exact identities/origins within their own transactions, and already persisted
+legacy data still requires baseline reconciliation. No standalone runtime
+installs this publisher or callback yet. These live public-ledger tests remain
+source qualification and never establish Shopify readiness or released artifact
+compatibility.
