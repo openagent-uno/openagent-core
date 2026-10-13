@@ -364,6 +364,8 @@ class CapabilityCatalog:
             # Publication is distinct from execution. Do not persist the
             # private result into shared history when this authorization fails.
             await authorize("tool.publish")
+            if not self._available(registration, context):
+                raise CapabilityUnavailable("The invocation source was revoked during execution")
             if durable:
                 if hasattr(result,"model_dump"):
                     envelope = result.model_dump(mode="json",by_alias=True)
@@ -384,6 +386,8 @@ class CapabilityCatalog:
                                for origin in origins)):
                     raise ValueError('Provider provenance must be host-bound to this exact tenant')
                 await authorize('tool.publish')
+                if not self._available(registration, context):
+                    raise CapabilityUnavailable("The invocation source was revoked while resolving result provenance")
         except BaseException as exc:
             if durable:
                 await runtime.services.store.finish_tool(run_id,call_id,

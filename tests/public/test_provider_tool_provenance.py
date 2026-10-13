@@ -12,6 +12,59 @@ from openagent_storage_sqlite import SqliteRuntimeStore
 
 
 class ToolProvenance(unittest.IsolatedAsyncioTestCase):
+    async def _revoked_result(self, *, during_callback):
+        from openagent_core.capabilities import CapabilityUnavailable
+        from openagent_core.content_privacy import ContentOrigin, ToolResultPrivacyPublisher
+        from openagent_storage_sqlite.content_privacy import SqliteContentPrivacyStore
+        from openagent_storage_sqlite.runtime_privacy import SqliteToolResultPrivacyPublisher
+        with tempfile.TemporaryDirectory() as directory:
+            p = PrincipalRef('host', 'tenant', 'user')
+            context = ExecutionContext(p, p, p, 'session', 'agent', (p,))
+            class Allow:
+                async def authorize(self, *args, **kwargs): return True
+            policy = Allow()
+            store = SqliteRuntimeStore(Path(directory) / 'state.sqlite')
+            callbacks, observations = [], []
+            async def observer(*args): observations.append('published')
+            catalog = CapabilityCatalog(policy, observers=(observer,))
+            async def read(args, context):
+                if not during_callback:
+                    catalog.revoke('source')
+                return {'private': 'REVOKED PROVIDER CONTENT'}
+            async def provenance(*args):
+                callbacks.append('resolved')
+                await asyncio.sleep(0)
+                catalog.revoke('source')
+                return (ContentOrigin('tenant', 'shopify/app', 'group', 1, ('customer:23',)),)
+            source = FunctionSource((ToolDefinition('read', 'Read', {}),), {'read': read})
+            catalog.register('source', source, source, target_label='Host', result_provenance=provenance)
+            async def execute(request, context, runtime):
+                reference = (await catalog.discover(context))[0].tool_ref
+                with self.assertRaises(CapabilityUnavailable):
+                    await catalog.call_tool(reference, {}, context, call_id='revoked')
+                return 'done'
+            runtime = Runtime(RuntimeSettings('agent', Path(directory)),
+                RuntimeServices(store, SimpleNamespace(execute=execute), policy, catalog))
+            await runtime.start()
+            try:
+                ledger = SqliteContentPrivacyStore(store.path)
+                runtime.services.registry.bind(ToolResultPrivacyPublisher, SqliteToolResultPrivacyPublisher(store, ledger))
+                await runtime.submit(RunRequest('run', 'session', 'key', 'human'), context)
+                self.assertEqual((await runtime.wait('run', context)).status, 'success')
+                row = store.connection.execute('SELECT * FROM tool_invocations').fetchone()
+                self.assertIsNone(row['result_json'])
+                self.assertNotIn('REVOKED PROVIDER CONTENT', str(dict(row)))
+                self.assertEqual(callbacks, ['resolved'] if during_callback else [])
+                self.assertEqual(observations, [])
+            finally:
+                await runtime.close()
+
+    async def test_registration_revoked_during_io_cannot_publish_or_resolve_provenance(self):
+        await self._revoked_result(during_callback=False)
+
+    async def test_registration_revoked_by_async_provenance_cannot_publish_result(self):
+        await self._revoked_result(during_callback=True)
+
     async def test_actual_function_dispatch_retains_engine_id_in_public_invocation(self):
         with tempfile.TemporaryDirectory() as directory:
             principal=PrincipalRef('host','tenant','user')
