@@ -75,6 +75,24 @@ class VaultPrivacyAdmission(unittest.IsolatedAsyncioTestCase):
                 await self.service.delete_note('human.md')
         self.assertTrue(self.note.exists())
 
+    async def test_existing_git_history_reflog_index_and_restore_remain_unchanged(self):
+        from openagent_core.memory.vault.gitrepo import VaultGit
+        git=VaultGit(self.vault)
+        git._gitconfig=self.root/'fixture.gitconfig'
+        self.assertTrue(git.ensure_repo())
+        self.service._git=git
+        before={p.relative_to(self.vault).as_posix():p.read_bytes()
+            for p in self.vault.rglob('*') if p.is_file()}
+        with execution_scope(self.runtime,self.context,'admitted-run'):
+            for operation in (lambda:self.service.write_note('human.md','secret',validate=False),
+                              lambda:self.service.restore_to('HEAD'),
+                              lambda:self.service.autocommit()):
+                with self.assertRaises(PrivacyFence):
+                    await operation()
+        after={p.relative_to(self.vault).as_posix():p.read_bytes()
+            for p in self.vault.rglob('*') if p.is_file()}
+        self.assertEqual(before,after)
+
     async def test_attachment_does_not_publish_untracked_marker_in_protected_run(self):
         toolkit=build_runtime_toolkit()
         entry=toolkit.async_functions['send_file_to_user'].entrypoint
