@@ -122,3 +122,15 @@ class ToolResultPrivacyPublisher(Protocol):
     async def validate_tool_admission(self, context, run_id: str) -> None: ...
     async def publish_tool_result(self, context, run_id: str, call_id: str,
                                   result, origins: tuple[ContentOrigin, ...]) -> None: ...
+
+
+class EngineContentPrivacyWriter(Protocol):
+    """Trusted storage-owner hook in canonical engine serialization transactions.
+
+    The storage adapter supplies its transaction handle, actual persisted source
+    row and framework-owned run/context. Models cannot choose those envelopes.
+    This hook must raise on a revocation fence; projection fallback must never
+    swallow privacy failure or commit the legacy private source independently.
+    """
+    def record_engine_session(self, transaction, session_id: str, source_row,
+                              context, run_id: str | None) -> None: ...

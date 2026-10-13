@@ -127,10 +127,10 @@ class SqliteContentPrivacyStore:
             request = self._request(json.loads(row[0]))
             if request.operation == 'redact' and any(request.matches(o) for o in inherited):
                 raise PrivacyFence("Revoked origin cannot publish derived content")
-        old = db.execute('SELECT * FROM privacy_revisions WHERE tenant=? AND artifact=? AND revision=?',
+        old = db.execute('SELECT sink,digest,origins,parents FROM privacy_revisions WHERE tenant=? AND artifact=? AND revision=?',
                          (revision.tenant_id, revision.artifact_id, revision.revision_id)).fetchone()
         if old:
-            if (old['sink'], old['digest'], old['origins'], old['parents']) != (revision.sink_id, revision.content_sha256, encoded, parent_json):
+            if (old[0],old[1],old[2],old[3]) != (revision.sink_id, revision.content_sha256, encoded, parent_json):
                 raise PrivacyConflict("Revision metadata is immutable")
             return
         db.execute('INSERT INTO privacy_revisions VALUES(?,?,?,?,?,?,?)',

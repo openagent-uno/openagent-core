@@ -209,7 +209,7 @@ class SqliteToolResultPrivacyPublisher:
         if parent_run_id:
             origins.update(self._origins(db,parent_run_id))
         for row in db.execute('SELECT id FROM session_runs WHERE session_id=? AND id!=?',(session_id,run_id)):
-            origins.update(self._origins(db,row['id']))
+            origins.update(self._origins(db,row[0]))
         if origins:
             self._merge(db,run_id,origins)
             # Reject admission before a model can consume revoked historical

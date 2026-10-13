@@ -146,3 +146,30 @@ legacy data still requires baseline reconciliation. No standalone runtime
 installs this publisher or callback yet. These live public-ledger tests remain
 source qualification and never establish Shopify readiness or released artifact
 compatibility.
+
+## Legacy engine field checkpoint
+
+`EngineContentPrivacyWriter` now participates in the real `SqliteDb` session
+upsert transaction before the optional projection savepoint. Privacy fences are
+propagated by Agent/Team persistence helpers rather than swallowed as best-effort
+projection failures. `SqliteEngineContentPrivacy` derives scope solely from the
+public run origin registry and exact `provider_call_id` bindings. Serialized
+metadata cannot label its own origin, choose a recipient or acquire a tenant.
+
+The candidate records exact field revisions for selected provider tool results
+and arguments, their message anchors, later generated assistant fields and known
+output/reasoning/media-reference fields. Raw calls for different customers keep
+their specific origins; generated summaries inherit the union. Its selective
+sink updates legacy `sessions.runs` and the public run compatibility envelope in
+one transaction, preserving original human messages and unrelated raw tool data.
+Digest mismatch blocks a changed field. The generation fence prevents a cached
+old engine object from restoring private values after redaction.
+
+Real source tests use `SqliteDb.upsert_session/get_session`, the public run store
+and its normal serializer/projector. They verify both canonical copies, retained
+human/Gmail content, exact separate-customer selection, and rollback of attempted
+restoration. This checkpoint still excludes mixed customers within a single raw
+result: those require trusted per-record result fragments rather than whole JSON
+origins. It also excludes arbitrary session state/provider metadata, event/media
+replicas, prior untracked history, compaction and search completion. No full
+`engine-history` coverage or product privacy completion is asserted.
