@@ -235,7 +235,11 @@ async def _verified_backup(
 
     await conn.commit()
     try:
-        await conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        # Consume and close the checkpoint statement before the separate
+        # privacy-checked snapshot and subsequent self-transactional DDL.
+        # An unfinished PRAGMA cursor can prevent executescript's COMMIT.
+        async with conn.execute("PRAGMA wal_checkpoint(PASSIVE)") as cursor:
+            await cursor.fetchall()
     except sqlite3.OperationalError:
         # A non-WAL fresh fixture is still safe to back up through the API.
         pass

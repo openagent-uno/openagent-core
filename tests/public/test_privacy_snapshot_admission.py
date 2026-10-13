@@ -16,6 +16,23 @@ from openagent_storage_sqlite.migration import prepare_migration,restore_to_new_
 
 
 class SnapshotPrivacy(unittest.IsolatedAsyncioTestCase):
+    async def test_fresh_memorydb_boot_completes_checked_backup_and_first_ddl(self):
+        from openagent_core.engine import MemoryDB
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);path=root/'fresh.sqlite'
+            memory=MemoryDB(str(path))
+            try:
+                await memory.connect()
+                with sqlite3.connect(path) as database:
+                    self.assertEqual(database.execute('PRAGMA integrity_check').fetchone()[0],'ok')
+                    self.assertIsNotNone(database.execute("SELECT 1 FROM sqlite_master WHERE name='operational_storage_state'").fetchone())
+                snapshots=list((root/'backups').glob('*.db'))
+                self.assertEqual(len(snapshots),1)
+                with sqlite3.connect(snapshots[0]) as snapshot:
+                    self.assertEqual(snapshot.execute('PRAGMA integrity_check').fetchone()[0],'ok')
+            finally:
+                await memory.close()
+
     async def test_preddl_backup_refuses_protected_cohort_before_creating_copy(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);path=root/'state.sqlite'
