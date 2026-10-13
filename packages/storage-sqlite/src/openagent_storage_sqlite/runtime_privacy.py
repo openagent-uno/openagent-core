@@ -212,6 +212,9 @@ class SqliteToolResultPrivacyPublisher:
             origins.update(self._origins(db,row['id']))
         if origins:
             self._merge(db,run_id,origins)
+            # Reject admission before a model can consume revoked historical
+            # context. A source/tool-only fence is too late for provider IO.
+            self._guard(db,run_id)
 
     def _record(self,db,kind,identity,origins):
         if not origins:
