@@ -27,11 +27,15 @@ class ManagedFilePin:
 
 class ManagedFilePrivacySink:
     def __init__(self, sink_id: str, root: Path, pins: tuple[ManagedFilePin, ...], *,
-                 writer_lock, export: Callable[[PrivacyRequest, ContentRevision, bytes], Awaitable[None]]):
+                 writer_lock, export: Callable[[PrivacyRequest, ContentRevision, bytes], Awaitable[None]],
+                 max_file_bytes: int = 8 << 20):
         self.sink_id = sink_id
         self.root = root.absolute()
         self.writer_lock = writer_lock
         self.export = export
+        if type(max_file_bytes) is not int or max_file_bytes < 1:
+            raise ValueError("A positive file export/redaction size bound is required")
+        self.max_file_bytes = max_file_bytes
         self.pins = {(pin.artifact_id, pin.revision_id): pin for pin in pins}
         if len(self.pins) != len(pins):
             raise ValueError("Managed revision pins must be unique")
@@ -65,10 +69,12 @@ class ManagedFilePrivacySink:
                 return 'complete'
             try:
                 original = os.fstat(descriptor)
-                if not stat.S_ISREG(original.st_mode):
+                if not stat.S_ISREG(original.st_mode) or original.st_size > self.max_file_bytes:
                     return 'conflict'
                 with os.fdopen(descriptor, 'rb', closefd=False) as stream:
-                    data = stream.read()
+                    data = stream.read(self.max_file_bytes + 1)
+                if len(data) > self.max_file_bytes:
+                    return 'conflict'
                 if hashlib.sha256(data).hexdigest() != revision.content_sha256:
                     return 'conflict'
                 current = path.stat(follow_symlinks=False)

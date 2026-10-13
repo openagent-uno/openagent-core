@@ -62,7 +62,7 @@ content backups also need the host's retention/redaction policy.
 **terminal public RuntimeStore records** by trusted, exact provider invocation
 call IDs. It selects those invocation envelopes and message anchors, later
 assistant/compaction messages in that run, the corresponding durable result
-replay events and final run output. Earlier human input and other raw provider
+replay events, later generated text/status stream events and final run output. Earlier human input and other raw provider
 invocations are preserved. The provenance ledger must share the runtime database;
 capture uses the canonical store transaction lane and commits attribution
 atomically with its exact snapshots. Active or missing invocations fail closed.
@@ -73,7 +73,8 @@ status. The ordinary immutable event trigger is suspended and restored inside
 the same exclusive SQLite transaction solely for the selected privacy tombstone;
 no other connection observes an unprotected schema. Changed schema/trigger or
 changed content blocks the operation. Exact revision markers make retries
-idempotent. `secure_delete` scrubs replaced cells and a successful truncating
+idempotent. Started metadata transactions use the public cancellation-drain helper. Managed
+file operations have an explicit byte bound. `secure_delete` scrubs replaced cells and a successful truncating
 WAL checkpoint is required; a reader holding old pages blocks completion.
 
 Search refresh intents are enqueued with new source versions, but enqueue is not

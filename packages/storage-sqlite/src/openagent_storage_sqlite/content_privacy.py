@@ -16,6 +16,8 @@ import sqlite3
 import time
 import uuid
 
+from openagent_core.persistence import run_sync
+
 from openagent_core.content_privacy import (ContentOrigin, ContentRevision, PrivacyRequest,
     PrivacyProgress, PrivacyConflict, PrivacyFence)
 
@@ -95,7 +97,7 @@ class SqliteContentPrivacyStore:
         return PrivacyRequest(**{**value, 'subjects': tuple(value['subjects'])})
 
     async def record(self, revision, *, origins=(), parents=()):
-        await asyncio.to_thread(self._record, revision, origins, parents)
+        await run_sync(self._record, revision, origins, parents)
 
     def _record(self, revision, origins, parents):
         with self._db() as db:
@@ -135,7 +137,7 @@ class SqliteContentPrivacyStore:
                    (revision.tenant_id, revision.artifact_id, revision.revision_id,
                     revision.sink_id, revision.content_sha256, encoded, parent_json))
     async def enqueue(self, request):
-        return await asyncio.to_thread(self._enqueue, request)
+        return await run_sync(self._enqueue, request)
 
     def _enqueue(self, request):
         if not isinstance(request, PrivacyRequest):
@@ -168,7 +170,7 @@ class SqliteContentPrivacyStore:
         def read():
             with self._db() as db:
                 return self._progress(db, request_id)
-        return await asyncio.to_thread(read)
+        return await run_sync(read)
 
     def _claim(self, request_id, covered):
         with self._db() as db:
@@ -223,7 +225,7 @@ class SqliteContentPrivacyStore:
         bindings = {sink.sink_id: sink for sink in sinks}
         if len(bindings) != len(sinks):
             raise ValueError("Canonical sink identities must be unique")
-        request, token, targets = await asyncio.to_thread(self._claim, request_id, covered_surfaces)
+        request, token, targets = await run_sync(self._claim, request_id, covered_surfaces)
         if token is None:
             return await self.progress(request_id)
         reason = None
@@ -237,7 +239,7 @@ class SqliteContentPrivacyStore:
                 if outcome != 'complete':
                     reason = 'revision_conflict'
                     break
-                if not await asyncio.to_thread(self._finish_revision, request_id, token, target):
+                if not await run_sync(self._finish_revision, request_id, token, target):
                     return await self.progress(request_id)
         except asyncio.CancelledError:
             # A started sink may have completed. Retry is idempotent; the lease
@@ -246,4 +248,4 @@ class SqliteContentPrivacyStore:
         except Exception:
             # No exception text/content enters durable receipts or logs.
             reason = 'sink_failed'
-        return await asyncio.to_thread(self._finish_job, request_id, token, reason)
+        return await run_sync(self._finish_job, request_id, token, reason)

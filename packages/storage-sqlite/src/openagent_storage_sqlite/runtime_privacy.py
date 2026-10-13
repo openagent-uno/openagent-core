@@ -71,10 +71,19 @@ class SqliteRuntimeContentPrivacySink:
             first_sequence = min(r['sequence'] for r in selected_anchors)
             messages = selected_anchors + list(db.execute("SELECT * FROM session_messages WHERE run_id=? AND sequence>? AND role IN ('assistant','compaction')", (run_id,first_sequence)))
             events = []
-            for row in db.execute('SELECT * FROM domain_events WHERE run_id=?', (run_id,)):
+            replay_rows = db.execute('SELECT * FROM domain_events WHERE run_id=? ORDER BY sequence', (run_id,)).fetchall()
+            results = [row for row in replay_rows if row['event_type'] == 'tool.completed'
+                       and json.loads(row['metadata_json']).get('call_id') in call_ids]
+            if len(results) != len(call_ids):
+                raise PrivacyConflict('Exact provider results have no complete replay provenance')
+            first_result_sequence = min(row['sequence'] for row in results)
+            for row in replay_rows:
                 value = json.loads(row['metadata_json'])
                 if ((row['event_type'] == 'tool.completed' and value.get('call_id') in call_ids)
-                        or (row['event_type'].startswith('run.') and value.get('output') is not None)):
+                        or (row['event_type'].startswith('run.') and value.get('output') is not None)
+                        or (row['sequence'] > first_result_sequence and row['event_type'] == 'run.status')
+                        or (row['sequence'] > first_result_sequence and row['event_type'] == 'run.stream'
+                            and value.get('kind') in {'delta','done'})):
                     events.append(row)
             records = [('tool', r) for r in tools] + [('message', r) for r in messages] + [('event', r) for r in events]
             if run['output_json'] is not None:

@@ -35,12 +35,15 @@ class RuntimePrivacy(unittest.IsolatedAsyncioTestCase):
         for call, source, data in (('other','gmail','UNRELATED GMAIL DATA'),('shop','shopify','PRIVATE CUSTOMER DATA')):
             await self.store.begin_tool('run',call,{'source_id':source,'name':'read'}, {})
             await self.store.finish_tool('run',call,result={'data':data})
+        await self.store.append_event('run','run.stream',{'kind':'delta','text':'PRIVATE STREAM DELTA'})
+        await self.store.append_event('run','run.stream',{'kind':'done','text':'PRIVATE STREAM FINAL'})
+        await self.store.append_event('run','run.status',{'text':'PRIVATE GENERATED STATUS'})
         await self.store.transition('run','success',output='DERIVED PRIVATE SUMMARY')
 
     async def test_actual_runtime_read_and_replay_redacted_without_session_purge(self):
         await self.populate()
         revisions = await self.sink.capture('run',('shop',),(self.origin,))
-        self.assertEqual(len(revisions),6)  # tool, tool message, assistant, tool event, terminal event, output
+        self.assertEqual(len(revisions),9)  # tool, tool message, assistant, tool event, terminal event, output
         await self.ledger.enqueue(self.request)
         result = await self.ledger.process('event',(self.sink,),covered_surfaces=frozenset({'terminal-public-run'}))
         self.assertEqual(result.status,'complete')
@@ -48,6 +51,8 @@ class RuntimePrivacy(unittest.IsolatedAsyncioTestCase):
         wire = str(await self.store.events('run'))
         self.assertNotIn('PRIVATE CUSTOMER DATA', wire)
         self.assertNotIn('DERIVED PRIVATE SUMMARY',wire)
+        self.assertNotIn('PRIVATE STREAM',wire)
+        self.assertNotIn('PRIVATE GENERATED STATUS',wire)
         messages = self.store.connection.execute('SELECT text FROM session_messages').fetchall()
         self.assertIn('UNRELATED HUMAN INPUT',[r[0] for r in messages])
         self.assertIn('{"data":"UNRELATED GMAIL DATA"}',[r[0] for r in messages])
