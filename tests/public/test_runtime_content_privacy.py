@@ -2,6 +2,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+import sqlite3
 import unittest
 
 from openagent_core import PrincipalRef, ExecutionContext, RunRequest
@@ -92,6 +93,34 @@ class RuntimePrivacy(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('UNRELATED HUMAN INPUT',str(self.exports))
         self.assertNotIn('UNRELATED GMAIL DATA',str(self.exports))
         self.assertEqual((await self.store.get('run')).output,'DERIVED PRIVATE SUMMARY')
+
+    async def test_existing_real_search_index_blocks_completion_until_canonical_refresh_and_scrub(self):
+        from openagent_core.memory.db import MemoryDB
+        from openagent_core.memory.operational.search import warm_operational_search,operational_search_path
+        from openagent_storage_sqlite.search import SqliteOperationalSearchPrivacy
+        await self.populate()
+        memory=MemoryDB(str(self.store.path))
+        await memory.connect()
+        self.addAsyncCleanup(memory.close)
+        await warm_operational_search(memory)
+        path=operational_search_path(self.store.path)
+        def text():
+            with sqlite3.connect(path) as index:
+                return str(index.execute('SELECT body_safe FROM search_fts').fetchall())
+        self.assertIn('PRIVATE CUSTOMER DATA',text())
+        revisions=await self.sink.capture('run',('shop',),(self.origin,))
+        await self.ledger.enqueue(self.request)
+        result=await self.ledger.process('event',(self.sink,),covered_surfaces=frozenset({'terminal-public-run'}))
+        self.assertEqual((result.status,result.reason),('blocked','revision_conflict'))
+        self.sink.search_privacy=SqliteOperationalSearchPrivacy(self.store,memory)
+        result=await self.ledger.process('event',(self.sink,),covered_surfaces=frozenset({'terminal-public-run'}))
+        self.assertEqual(result.status,'complete')
+        self.assertNotIn('PRIVATE CUSTOMER DATA',text())
+        self.assertIn('UNRELATED GMAIL DATA',text())
+        self.assertIn('UNRELATED HUMAN INPUT',text())
+        self.assertNotIn(b'PRIVATE CUSTOMER DATA',path.read_bytes())
+        wal=Path(str(path)+'-wal')
+        self.assertTrue(not wal.exists() or b'PRIVATE CUSTOMER DATA' not in wal.read_bytes())
 
     async def test_changed_canonical_revision_does_not_erase_new_content(self):
         await self.populate()

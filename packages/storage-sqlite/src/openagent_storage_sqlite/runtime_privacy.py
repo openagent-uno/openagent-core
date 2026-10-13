@@ -46,10 +46,11 @@ class SqliteRuntimeContentPrivacySink:
     """
     sink_id = 'runtime-ledger'
 
-    def __init__(self, runtime_store, ledger: SqliteContentPrivacyStore, *, export):
+    def __init__(self, runtime_store, ledger: SqliteContentPrivacyStore, *, export, search_privacy=None):
         if runtime_store.path != ledger.path:
             raise ValueError('Canonical run content and provenance must share one transaction database')
         self.runtime_store, self.ledger, self.export = runtime_store, ledger, export
+        self.search_privacy=search_privacy
 
     async def capture(self, run_id: str, call_ids: tuple[str, ...], origins: tuple):
         """Called by a trusted host, never model-supplied IDs or scope labels."""
@@ -110,6 +111,14 @@ class SqliteRuntimeContentPrivacySink:
             result = await run_sync(self._apply, request, revision)
             if request.operation == 'redact' and result == 'complete':
                 if not await run_sync(self._scrub):
+                    return 'conflict'
+        if request.operation=='redact' and result=='complete':
+            from openagent_core.memory.operational.search import operational_search_path
+            if operational_search_path(self.runtime_store.path).exists():
+                if self.search_privacy is None:
+                    return 'conflict'
+                through=await run_sync(lambda:self.runtime_store.connection.execute('SELECT coalesce(max(seq),0) FROM search_outbox').fetchone()[0])
+                if not await self.search_privacy.refresh(through):
                     return 'conflict'
         if request.operation == 'export' and result != 'conflict':
             await self.export(request, revision, result)

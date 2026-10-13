@@ -184,6 +184,11 @@ class ContentPrivacySink(Protocol):
     async def apply(self, request: PrivacyRequest, revision: ContentRevision) -> Literal["complete", "conflict"]: ...
 
 
+class ContentSearchPrivacy(Protocol):
+    """Host-bound canonical index refresh through a durable committed outbox seq."""
+    async def refresh(self, through_seq: int) -> bool: ...
+
+
 class ToolResultPrivacyPublisher(Protocol):
     """Backend-owned atomic tool publication and trusted provenance write.
 

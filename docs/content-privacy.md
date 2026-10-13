@@ -242,3 +242,23 @@ before canonical publication. These APIs do not infer Shopify selectors from
 model output: product/provider schema adapters must classify actual provider
 responses before any Shopify source is admitted. Search/index/media replicas,
 unknown historical data and consumer coverage gates remain separate work.
+
+## Canonical search completion boundary
+
+`SqliteRuntimeContentPrivacySink(..., search_privacy=...)` requires a refresh
+adapter whenever the canonical operational search index exists. Without it,
+canonical source erasure stays retryable and the revision cannot report complete.
+`SqliteOperationalSearchPrivacy(runtime_store, memory_db)` binds the same canonical
+database and calls the public Core `refresh_privacy_search` function. It drains
+the actual outbox/projector through the committed boundary under the normal index
+owner lock, enables FTS secure deletion, merges tombstones and requires WAL
+truncation. Unsupported SQLite FTS versions and retained old reader snapshots
+block completion. No whole unrelated index, session or human document is deleted.
+
+The real MemoryDB/FTS test first indexes provider data, demonstrates the missing
+adapter blocks completion, then retries through the canonical projector. Both
+live FTS results and database/WAL bytes no longer contain the targeted raw value;
+human and unrelated Gmail results remain. External indexes, Vault indexes and
+unknown historical index generations still require their own inventory/adapters.
+`context_snapshots` currently has schema but no Core insert/update entrypoint;
+host-written snapshots cannot be claimed covered without their writer adapter.
