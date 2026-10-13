@@ -108,6 +108,38 @@ class Privacy(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PrivacyConflict):
             await self.store.record(self.revision, parents=(('untracked', 'v1'),))
 
+    async def test_unknown_subject_blocks_customer_processing_without_deleting_other_data(self):
+        await self.store.record(self.revision,origins=(replace(self.origin,subjects=()),))
+        await self.store.enqueue(self.request)
+        calls=[]
+        class Sink:
+            sink_id='sink'
+            async def apply(self,*args):
+                calls.append('unsafe')
+                return 'complete'
+        result=await self.store.process('event',(Sink(),),covered_surfaces=REQUIRED_CONTENT_SURFACES)
+        self.assertEqual((result.status,result.reason),('blocked','subject_scope_unknown'))
+        self.assertEqual(calls,[])
+        # The unknown origin remains fenced rather than silently treated as nonpersonal.
+        with self.assertRaises(PrivacyFence):
+            await self.store.record(replace(self.revision,revision_id='late'),origins=(replace(self.origin,subjects=()),))
+
+    async def test_trusted_json_partition_requires_exact_complete_disjoint_tenant_bound_classification(self):
+        from openagent_core.content_privacy import ContentFragment,ToolResultProvenance
+        result={'customers':[{'name':'first'},{'name':'second'}],'count':2}
+        partition=ToolResultProvenance((ContentFragment(('customers',0),(self.origin,)),
+                                        ContentFragment(('customers',1),(replace(self.origin,subjects=('customer-2',)),)),
+                                        ContentFragment(('count',),())))
+        partition.validate_result(result,'tenant')
+        with self.assertRaises(PrivacyConflict):
+            partition.validate_result(result|{'unclassified':'secret'},'tenant')
+        with self.assertRaises(PrivacyConflict):
+            partition.validate_result(result,'other')
+        with self.assertRaises(ValueError):
+            ToolResultProvenance((ContentFragment(('customers',),(self.origin,)),ContentFragment(('customers',0),(self.origin,))))
+        with self.assertRaises(ValueError):
+            ContentFragment(('customers',True),(self.origin,))
+
     async def test_replayed_request_and_revision_metadata_are_immutable(self):
         await self.store.record(self.revision, origins=(self.origin,))
         with self.assertRaises(PrivacyConflict):

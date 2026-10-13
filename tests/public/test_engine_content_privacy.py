@@ -101,6 +101,57 @@ class EnginePrivacy(unittest.IsolatedAsyncioTestCase):
         self.assertIn('CUSTOMER TWO RESULT',str(source))
         self.assertIn('UNRELATED MAIL RESULT',str(source))
 
+    async def test_mixed_customer_one_call_preserves_sibling_across_real_public_and_engine_copies(self):
+        from dataclasses import replace
+        from openagent_core.content_privacy import ContentFragment,ToolResultProvenance,ContentRevision
+        from openagent_storage_sqlite.runtime_privacy import SqliteRuntimeContentPrivacySink
+        second=replace(self.origin,subjects=('customer:24',))
+        result={'customers':[{'id':23,'name':'FIRST CUSTOMER PRIVATE'},
+                             {'id':24,'name':'SECOND CUSTOMER RETAIN'}],'inventory':'NONPERSONAL INVENTORY'}
+        provenance=ToolResultProvenance((ContentFragment(('customers',0),(self.origin,)),
+                                       ContentFragment(('customers',1),(second,)),
+                                       ContentFragment(('inventory',),())))
+        provenance.validate_result(result,'tenant')
+        await self.store.begin_tool('run','mixed-catalog',{'source_id':'shopify','name':'read','provider_call_id':'mixed-model'}, {})
+        await self.publisher.publish_tool_result(self.context,'run','mixed-catalog',result,provenance)
+        encoded=json.dumps(result)
+        run=self.session.runs[0]
+        run.messages.insert(2,Message(role='tool',tool_call_id='mixed-model',content=encoded))
+        run.tools.append(ToolExecution(tool_call_id='mixed-model',tool_name='read',tool_args={},result=encoded))
+        with execution_scope(self.runtime,self.context,'run'):
+            self.db.upsert_session(self.session)
+        await self.store.transition('run','success',output='PRIVATE GENERATED BOTH')
+        request=PrivacyRequest('mixed-event','tenant','shopify/app','group',10,'redact',('customer:23',))
+        await self.ledger.enqueue(request)
+        async def export(*args): self.fail('redaction must not export')
+        public=SqliteRuntimeContentPrivacySink(self.store,self.ledger,export=export)
+        targets=self.store.connection.execute('''SELECT r.* FROM privacy_targets t JOIN privacy_revisions r
+            ON t.tenant=r.tenant AND t.artifact=r.artifact AND t.revision=r.revision WHERE t.request_id=?''',('mixed-event',)).fetchall()
+        for node in targets:
+            revision=ContentRevision(node['tenant'],node['artifact'],node['revision'],node['sink'],node['digest'])
+            sink=public if node['sink']=='runtime-ledger' else self.sink
+            self.assertEqual(await sink.apply(request,revision),'complete')
+        source=str(self.db.get_session('session',deserialize=False))
+        self.assertNotIn('FIRST CUSTOMER PRIVATE',source)
+        self.assertIn('SECOND CUSTOMER RETAIN',source)
+        self.assertIn('NONPERSONAL INVENTORY',source)
+        self.assertIn('HUMAN INPUT',source)
+        for table,column in (('tool_invocations','result_json'),('tool_invocations','raw_envelope_json'),
+                             ('session_messages','text'),('domain_events','metadata_json'),('session_runs','raw_envelope_json')):
+            copies=' '.join(str(row[0]) for row in self.store.connection.execute(f'SELECT {column} FROM {table}'))
+            self.assertNotIn('FIRST CUSTOMER PRIVATE',copies)
+            self.assertIn('SECOND CUSTOMER RETAIN',copies)
+        # Exact sibling selectors continue to work after the first request.
+        second_request=replace(request,request_id='second-mixed-event',subjects=('customer:24',))
+        await self.ledger.enqueue(second_request)
+        targets=self.store.connection.execute('''SELECT r.* FROM privacy_targets t JOIN privacy_revisions r
+            ON t.tenant=r.tenant AND t.artifact=r.artifact AND t.revision=r.revision WHERE t.request_id=?''',('second-mixed-event',)).fetchall()
+        for node in targets:
+            revision=ContentRevision(node['tenant'],node['artifact'],node['revision'],node['sink'],node['digest'])
+            self.assertEqual(await (public if node['sink']=='runtime-ledger' else self.sink).apply(second_request,revision),'complete')
+        self.assertNotIn('SECOND CUSTOMER RETAIN',str(self.db.get_session('session',deserialize=False)))
+        self.assertIn('NONPERSONAL INVENTORY',str(self.db.get_session('session',deserialize=False)))
+
     async def test_real_compaction_records_recap_and_redacts_folded_compatibility_copy(self):
         from unittest.mock import patch
         from openagent_core.core.compaction import compact

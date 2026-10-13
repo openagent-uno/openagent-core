@@ -211,3 +211,43 @@ class ToolProvenance(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(calls,['ordinary','read','safe'])
             finally:
                 await runtime.close()
+
+    async def test_host_partition_callback_rejects_unclassified_result_before_canonical_publication(self):
+        from openagent_core.content_privacy import ContentOrigin,ContentFragment,ToolResultProvenance,PrivacyConflict,ToolResultPrivacyPublisher
+        from openagent_storage_sqlite.content_privacy import SqliteContentPrivacyStore
+        from openagent_storage_sqlite.runtime_privacy import SqliteToolResultPrivacyPublisher
+        with tempfile.TemporaryDirectory() as directory:
+            p=PrincipalRef('host','tenant','user')
+            context=ExecutionContext(p,p,p,'session','agent',(p,))
+            class Allow:
+                async def authorize(self,*args,**kwargs): return True
+            policy=Allow();store=SqliteRuntimeStore(Path(directory)/'state.sqlite');catalog=CapabilityCatalog(policy)
+            async def read(args,context):
+                result={'customer':{'name':'CLASSIFIED PRIVATE'},'inventory':'PUBLIC'}
+                if args.get('extra'): result['unexpected']='UNCLASSIFIED NEVER PERSIST'
+                return result
+            async def provenance(descriptor,result,context,call_id):
+                return ToolResultProvenance((ContentFragment(('customer',),(ContentOrigin('tenant','shopify/app','shop',1,('customer:23',)),)),
+                                             ContentFragment(('inventory',),())))
+            source=FunctionSource((ToolDefinition('read','Read',{}),),{'read':read})
+            catalog.register('shop',source,source,target_label='Shop',result_provenance=provenance,privacy_fenced=True)
+            async def execute(request,context,runtime):
+                ref=(await catalog.discover(context))[0].tool_ref
+                await catalog.call_tool(ref,{},context,call_id='good')
+                with self.assertRaises(PrivacyConflict):
+                    await catalog.call_tool(ref,{'extra':True},context,call_id='rejected')
+                return 'done'
+            runtime=Runtime(RuntimeSettings('agent',Path(directory)),RuntimeServices(store,SimpleNamespace(execute=execute),policy,catalog))
+            await runtime.start()
+            try:
+                ledger=SqliteContentPrivacyStore(store.path)
+                runtime.services.registry.bind(ToolResultPrivacyPublisher,SqliteToolResultPrivacyPublisher(store,ledger))
+                await runtime.submit(RunRequest('run','session','key','human'),context)
+                self.assertEqual((await runtime.wait('run',context)).status,'success')
+                rows=store.connection.execute('SELECT tool_call_id,result_json FROM tool_invocations').fetchall()
+                self.assertEqual(len(rows),2)
+                self.assertIsNotNone(rows[0]['result_json'])
+                self.assertIsNone(rows[1]['result_json'])
+                self.assertNotIn('UNCLASSIFIED NEVER PERSIST',str(await store.events('run')))
+            finally:
+                await runtime.close()

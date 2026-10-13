@@ -5,7 +5,7 @@ from typing import Any, Awaitable, Callable, Mapping, Protocol
 import copy
 import secrets
 import json
-from .content_privacy import ContentOrigin, ToolResultPrivacyPublisher
+from .content_privacy import ContentOrigin, ToolResultPrivacyPublisher, ToolResultProvenance
 from .contracts import Authorizer, CapabilityLease, ExecutionContext, ResourceRef, require_authorized
 
 
@@ -365,7 +365,9 @@ class CapabilityCatalog:
             origins = ()
             if registration.result_provenance is not None:
                 origins = await registration.result_provenance(descriptor, result, context, call_id)
-                if (not isinstance(origins,tuple) or not origins or len(origins)>4096
+                if isinstance(origins,ToolResultProvenance):
+                    origins.validate_result(envelope,context.tenant_id)
+                elif (not isinstance(origins,tuple) or not origins or len(origins)>4096
                         or any(not isinstance(origin,ContentOrigin) or origin.tenant_id != context.tenant_id
                                for origin in origins)):
                     raise ValueError('Provider provenance must be host-bound to this exact tenant')
@@ -376,7 +378,7 @@ class CapabilityCatalog:
                     error={"error_type":type(exc).__name__,"effects":"unknown","retry_allowed":False})
             raise
         if durable:
-            if registration.result_provenance is not None:
+            if privacy_publisher is not None:
                 await privacy_publisher.publish_tool_result(context,run_id,call_id,envelope,origins)
             else:
                 await runtime.services.store.finish_tool(run_id,call_id,result=envelope)

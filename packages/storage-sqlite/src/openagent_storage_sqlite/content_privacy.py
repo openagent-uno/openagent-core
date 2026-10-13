@@ -212,8 +212,14 @@ class SqliteContentPrivacyStore:
             targets = db.execute('''SELECT r.* FROM privacy_targets t JOIN privacy_revisions r
                 ON (t.tenant=r.tenant AND t.artifact=r.artifact AND t.revision=r.revision)
                 WHERE t.request_id=? AND t.complete=0 ORDER BY t.artifact ASC,r.rowid DESC''', (request_id,)).fetchall()
+            request=self._request(json.loads(row['request']))
+            if request.subjects and any(not origin.subjects and request.matches(origin)
+                    for target in targets for origin in (self._origin(value) for value in json.loads(target['origins']))):
+                db.execute("UPDATE privacy_requests SET status='blocked',reason='subject_scope_unknown',lease=NULL,lease_until=0 WHERE id=?",(request_id,))
+                db.commit()
+                return None,None,()
             db.commit()
-            return self._request(json.loads(row['request'])), token, tuple(ContentRevision(
+            return request, token, tuple(ContentRevision(
                 r['tenant'], r['artifact'], r['revision'], r['sink'], r['digest']) for r in targets)
 
     def _finish_revision(self, request_id, token, revision):

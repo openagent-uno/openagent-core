@@ -16,6 +16,7 @@ import time
 
 from openagent_core.content_privacy import ContentRevision, PrivacyConflict
 from openagent_core.memory.operational.projection import loads_maybe_double
+from .privacy_json import get as _get, replace as _replace
 
 
 _GENERATED_FIELDS = ('content','reasoning_content','reasoning_steps','reasoning_messages',
@@ -27,16 +28,8 @@ def _encoded(value):
     return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
 
 
-def _get(root,path):
-    value=root
-    for component in path:
-        value=value[component]
-    return value
-
-
 def _set(root,path,value):
-    parent=_get(root,path[:-1])
-    parent[path[-1]]=value
+    _replace(root,path,value)
 
 
 class SqliteEngineContentPrivacy:
@@ -86,6 +79,7 @@ class SqliteEngineContentPrivacy:
                 raise PrivacyConflict('Engine write crossed a tenant boundary')
             self.publisher._guard(transaction,identity)
             model_calls={}
+            model_partitions={}
             for row in transaction.execute('SELECT id,raw_envelope_json FROM tool_invocations WHERE session_run_id=?',(identity,)):
                 binding=json.loads(row[1]).get('binding',{})
                 # Only source results carrying trusted origins qualify, not any
@@ -95,14 +89,27 @@ class SqliteEngineContentPrivacy:
                 if source and binding.get('provider_call_id'):
                     model_calls.setdefault(binding['provider_call_id'],set()).update(
                         self.ledger._origin(value) for value in json.loads(source[0]))
+                partition=transaction.execute('SELECT partition_json FROM runtime_privacy_tool_partitions WHERE invocation=?',(row[0],)).fetchone()
+                if partition and binding.get('provider_call_id'):
+                    fragments=json.loads(partition[0])['fragments']
+                    model_partitions[binding['provider_call_id']]=fragments
+                    model_calls.setdefault(binding['provider_call_id'],set()).update(
+                        self.ledger._origin(origin) for fragment in fragments for origin in fragment['origins'])
             paths=[]
             messages=run.get('messages') or []
             first_source=None
             for index,message in enumerate(messages):
                 if isinstance(message,dict) and message.get('role')=='tool' and message.get('tool_call_id') in model_calls:
                     first_source=index if first_source is None else first_source
-                    paths.extend((('messages',index,field),tuple(model_calls[message['tool_call_id']]))
-                                 for field in _MESSAGE_FIELDS if message.get(field) is not None)
+                    fragments=model_partitions.get(message['tool_call_id'])
+                    for field in _MESSAGE_FIELDS:
+                        if message.get(field) is None: continue
+                        if fragments and field=='content':
+                            paths.extend((('messages',index,field)+tuple(fragment['path']),
+                                          tuple(self.ledger._origin(origin) for origin in fragment['origins']))
+                                         for fragment in fragments if fragment['origins'])
+                        else:
+                            paths.append((('messages',index,field),tuple(model_calls[message['tool_call_id']])))
             if first_source is not None:
                 for index,message in enumerate(messages):
                     if index>first_source and isinstance(message,dict) and message.get('role')=='assistant':
@@ -110,8 +117,15 @@ class SqliteEngineContentPrivacy:
                 paths.extend(((field,),origins) for field in _GENERATED_FIELDS if run.get(field) is not None)
             for index,tool in enumerate(run.get('tools') or []):
                 if isinstance(tool,dict) and tool.get('tool_call_id') in model_calls:
-                    paths.extend((('tools',index,field),tuple(model_calls[tool['tool_call_id']]))
-                                 for field in ('tool_args','result') if tool.get(field) is not None)
+                    fragments=model_partitions.get(tool['tool_call_id'])
+                    for field in ('tool_args','result'):
+                        if tool.get(field) is None: continue
+                        if fragments and field=='result':
+                            paths.extend((('tools',index,field)+tuple(fragment['path']),
+                                          tuple(self.ledger._origin(origin) for origin in fragment['origins']))
+                                         for fragment in fragments if fragment['origins'])
+                        else:
+                            paths.append((('tools',index,field),tuple(model_calls[tool['tool_call_id']])))
             for path,node_origins in paths:
                 locator=[session_id,identity,list(path)]
                 artifact=base64.urlsafe_b64encode(_encoded(locator)).decode().rstrip('=')

@@ -7,11 +7,13 @@ Hosts must keep those coverage gates closed until their own adapters qualify.
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import time
 
-from openagent_core.content_privacy import ContentRevision, PrivacyConflict, PrivacyFence
+from openagent_core.content_privacy import ContentRevision, PrivacyConflict, PrivacyFence, ToolResultProvenance
 from .content_privacy import SqliteContentPrivacyStore
+from .privacy_json import get as json_get, replace as json_replace
 from .search import enqueue_source
 
 
@@ -26,6 +28,10 @@ _FIELDS = {
 
 def _content(row, fields):
     return json.dumps({field: row[field] for field in fields}, sort_keys=True, separators=(',', ':')).encode()
+
+
+def _fragment_content(value):
+    return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
 
 
 class SqliteRuntimeContentPrivacySink:
@@ -120,6 +126,8 @@ class SqliteRuntimeContentPrivacySink:
         if revision.sink_id != self.sink_id or revision.tenant_id != request.tenant_id:
             return 'conflict'
         kind, _, identity = revision.artifact_id.partition('/')
+        if kind=='fragment':
+            return self._apply_fragment(request,revision)
         if kind not in _FIELDS or not identity:
             return 'conflict'
         table, fields = _FIELDS[kind]
@@ -174,6 +182,57 @@ class SqliteRuntimeContentPrivacySink:
                        (revision.tenant_id,revision.artifact_id,revision.revision_id))
             return 'complete'
 
+    def _apply_fragment(self,request,revision):
+        self.runtime_store.connection.execute('PRAGMA secure_delete=ON')
+        with self.runtime_store._transaction() as db:
+            node=db.execute('SELECT * FROM runtime_privacy_fragments WHERE artifact=? AND tenant=?',
+                            (revision.artifact_id,revision.tenant_id)).fetchone()
+            if node is None:
+                return 'conflict'
+            db.execute('''CREATE TABLE IF NOT EXISTS runtime_privacy_erased(
+                tenant TEXT NOT NULL, artifact TEXT NOT NULL, revision TEXT NOT NULL,
+                PRIMARY KEY(tenant,artifact,revision))''')
+            if db.execute('SELECT 1 FROM runtime_privacy_erased WHERE tenant=? AND artifact=? AND revision=?',
+                          (revision.tenant_id,revision.artifact_id,revision.revision_id)).fetchone():
+                return b'' if request.operation=='export' else 'complete'
+            kind=node['kind'];table=_FIELDS[kind][0];key='event_id' if kind=='event' else 'id'
+            field=node['field'];path=json.loads(node['path'])
+            if field not in _FIELDS[kind][1]:
+                return 'conflict'
+            row=db.execute(f'SELECT {field} FROM {table} WHERE {key}=? AND tenant_id=?',(node['identity'],revision.tenant_id)).fetchone()
+            if row is None:
+                return b'' if request.operation=='export' else 'complete'
+            try:
+                root=json.loads(row[0]);value=json_get(root,path)
+            except (ValueError,TypeError,IndexError,KeyError):
+                return 'conflict'
+            content=_fragment_content(value)
+            if hashlib.sha256(content).hexdigest()!=revision.content_sha256:
+                return 'conflict'
+            if request.operation=='export':
+                return content
+            replacement=json.dumps(json_replace(root,path,None),sort_keys=True,separators=(',',':'),ensure_ascii=False)
+            trigger=None
+            if kind=='event':
+                trigger=db.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='trg_domain_events_no_update'").fetchone()
+                expected="CREATE TRIGGER trg_domain_events_no_update BEFORE UPDATE ON domain_events BEGIN SELECT RAISE(ABORT, 'domain_events rows are immutable'); END"
+                if trigger is None or ' '.join(trigger[0].split())!=expected:
+                    return 'conflict'
+                db.execute('DROP TRIGGER trg_domain_events_no_update')
+            try:
+                db.execute(f'UPDATE {table} SET {field}=? WHERE {key}=? AND tenant_id=?',(replacement,node['identity'],revision.tenant_id))
+            finally:
+                if trigger: db.execute(trigger[0])
+            now=int(time.time()*1000)
+            if kind=='message':
+                db.execute('UPDATE session_messages SET source_version=source_version+1,updated_at_ms=? WHERE id=?',(now,node['identity']))
+                enqueue_source(db,'message',node['identity'],now)
+            elif kind=='tool':
+                db.execute('UPDATE tool_invocations SET source_version=source_version+1,result_sha256=NULL,result_size_bytes=NULL WHERE id=?',(node['identity'],))
+                enqueue_source(db,'tool_invocation',node['identity'],now)
+            db.execute('INSERT INTO runtime_privacy_erased VALUES(?,?,?)',(revision.tenant_id,revision.artifact_id,revision.revision_id))
+            return 'complete'
+
 
 class SqliteToolResultPrivacyPublisher:
     """Atomic live public-ledger provenance, explicitly installed by a host.
@@ -190,6 +249,11 @@ class SqliteToolResultPrivacyPublisher:
         self.runtime_store, self.ledger = runtime_store, ledger
         runtime_store.connection.execute('''CREATE TABLE IF NOT EXISTS runtime_privacy_origins(
             run_id TEXT PRIMARY KEY REFERENCES session_runs(id), origins TEXT NOT NULL)''')
+        runtime_store.connection.execute('''CREATE TABLE IF NOT EXISTS runtime_privacy_fragments(
+            artifact TEXT PRIMARY KEY,tenant TEXT NOT NULL,kind TEXT NOT NULL,identity TEXT NOT NULL,
+            field TEXT NOT NULL,path TEXT NOT NULL)''')
+        runtime_store.connection.execute('''CREATE TABLE IF NOT EXISTS runtime_privacy_tool_partitions(
+            invocation TEXT PRIMARY KEY,partition_json TEXT NOT NULL)''')
         runtime_store._content_privacy_publication = self
 
     def _origins(self, db, run_id):
@@ -267,8 +331,15 @@ class SqliteToolResultPrivacyPublisher:
 
     def record_completed_tool(self,db,run_id,call_id,origins):
         self._guard(db,run_id)
+        partition=origins if isinstance(origins,ToolResultProvenance) else None
+        origins=partition.origins if partition else (origins or self._origins(db,run_id))
         self._merge(db,run_id,origins)
         tool=db.execute('SELECT id FROM tool_invocations WHERE session_run_id=? AND tool_call_id=?',(run_id,call_id)).fetchone()
+        if partition:
+            from dataclasses import asdict
+            db.execute('INSERT INTO runtime_privacy_tool_partitions VALUES(?,?)',(tool['id'],json.dumps(asdict(partition),sort_keys=True)))
+            self._record_partition(db,run_id,call_id,tool['id'],partition)
+            return
         self._record(db,'tool',tool['id'],origins)
         for row in db.execute("SELECT id FROM session_messages WHERE run_id=? AND role='tool' AND tool_call_id=?",(run_id,call_id)):
             self._record(db,'message',row['id'],origins)
@@ -276,8 +347,38 @@ class SqliteToolResultPrivacyPublisher:
             if json.loads(row['metadata_json']).get('call_id')==call_id:
                 self._record(db,'event',row['event_id'],origins)
 
+    def _fragment(self,db,kind,identity,field,path,origins):
+        if not origins:
+            return
+        table=_FIELDS[kind][0];key='event_id' if kind=='event' else 'id'
+        row=db.execute(f'SELECT tenant_id,{field} FROM {table} WHERE {key}=?',(identity,)).fetchone()
+        value=json_get(json.loads(row[field]),path)
+        artifact='fragment/'+base64.urlsafe_b64encode(_fragment_content([kind,str(identity),field,list(path)])).decode().rstrip('=')
+        digest=hashlib.sha256(_fragment_content(value)).hexdigest()
+        self.ledger._record_transaction(db,ContentRevision(row['tenant_id'],artifact,digest,'runtime-ledger',digest),origins)
+        db.execute('INSERT OR IGNORE INTO runtime_privacy_fragments VALUES(?,?,?,?,?,?)',
+                   (artifact,row['tenant_id'],kind,str(identity),field,json.dumps(path)))
+
+    def _record_partition(self,db,run_id,call_id,tool_id,partition):
+        for fragment in partition.fragments:
+            self._fragment(db,'tool',tool_id,'result_json',fragment.path,fragment.origins)
+            self._fragment(db,'tool',tool_id,'raw_envelope_json',('result',)+fragment.path,fragment.origins)
+            for row in db.execute("SELECT id FROM session_messages WHERE run_id=? AND role='tool' AND tool_call_id=?",(run_id,call_id)):
+                self._fragment(db,'message',row['id'],'text',fragment.path,fragment.origins)
+            for row in db.execute("SELECT event_id,metadata_json FROM domain_events WHERE run_id=? AND event_type='tool.completed'",(run_id,)):
+                if json.loads(row['metadata_json']).get('call_id')==call_id:
+                    self._fragment(db,'event',row['event_id'],'metadata_json',('result',)+fragment.path,fragment.origins)
+        # Invocation arguments are one source-bound query, not a mixed response.
+        for field,path in (('args_json',()),('raw_envelope_json',('arguments',))):
+            self._fragment(db,'tool',tool_id,field,path,partition.origins)
+        for row in db.execute("SELECT event_id,metadata_json FROM domain_events WHERE run_id=? AND event_type IN ('tool.invoking','tool.completed')",(run_id,)):
+            if json.loads(row['metadata_json']).get('call_id')==call_id:
+                self._fragment(db,'event',row['event_id'],'metadata_json',('arguments',),partition.origins)
+
     async def publish_tool_result(self,context,run_id,call_id,result,origins):
         from openagent_core.persistence import run_sync
+        if isinstance(origins,ToolResultProvenance):
+            origins.validate_result(result,context.tenant_id)
         async with self.runtime_store._operation_lock:
             row=self.runtime_store.connection.execute('SELECT tenant_id,session_id FROM session_runs WHERE id=?',(run_id,)).fetchone()
             if row is None or row['tenant_id']!=context.tenant_id or row['session_id']!=context.session_id:

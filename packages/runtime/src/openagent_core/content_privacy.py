@@ -88,6 +88,67 @@ class PrivacyProgress:
     reason: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ContentFragment:
+    """Host-classified exact JSON subtree; empty origins explicitly mean nonpersonal.
+
+    The path is into the normalized provider result, not into arbitrary storage.
+    A trusted schema adapter must classify every leaf and cannot overlap paths.
+    """
+    path: tuple[str | int, ...]
+    origins: tuple[ContentOrigin, ...]
+
+    def __post_init__(self):
+        if (not isinstance(self.path,tuple) or len(self.path)>64
+                or any(not (type(value) is int and value>=0 or isinstance(value,str) and len(value)<=1024) for value in self.path)
+                or not isinstance(self.origins,tuple) or len(self.origins)>4096
+                or any(not isinstance(origin,ContentOrigin) for origin in self.origins)):
+            raise ValueError('Typed bounded JSON fragments are required')
+
+
+@dataclass(frozen=True, slots=True)
+class ToolResultProvenance:
+    """Complete trusted classification for one normalized provider JSON result."""
+    fragments: tuple[ContentFragment, ...]
+
+    def __post_init__(self):
+        if (not isinstance(self.fragments,tuple) or not self.fragments or len(self.fragments)>4096
+                or any(not isinstance(fragment,ContentFragment) for fragment in self.fragments)):
+            raise ValueError('A bounded immutable fragment partition is required')
+        for index,fragment in enumerate(self.fragments):
+            for other in self.fragments[:index]:
+                if fragment.path[:len(other.path)]==other.path or other.path[:len(fragment.path)]==fragment.path:
+                    raise ValueError('Overlapping provenance fragments are forbidden')
+
+    @property
+    def origins(self) -> tuple[ContentOrigin, ...]:
+        return tuple(dict.fromkeys(origin for fragment in self.fragments for origin in fragment.origins))
+
+    def validate_result(self,result,tenant_id:str) -> None:
+        paths={fragment.path for fragment in self.fragments}
+        def walk(value,path=()):
+            if path in paths:
+                return
+            if isinstance(value,dict) and value:
+                for key,child in value.items(): walk(child,path+(key,))
+            elif isinstance(value,list) and value:
+                for index,child in enumerate(value): walk(child,path+(index,))
+            else:
+                raise PrivacyConflict('Provider JSON has an unclassified fragment')
+        for fragment in self.fragments:
+            value=result
+            for component in fragment.path:
+                if ((isinstance(value,dict) and not isinstance(component,str))
+                        or (isinstance(value,list) and type(component) is not int)):
+                    raise PrivacyConflict('Fragment selector does not match provider JSON')
+                try: value=value[component]
+                except (KeyError,IndexError,TypeError):
+                    raise PrivacyConflict('Fragment selector does not match provider JSON') from None
+            if any(origin.tenant_id!=tenant_id for origin in fragment.origins):
+                raise PrivacyConflict('Provider fragment crossed tenant authority')
+        walk(result)
+
+
 class ContentPrivacyStore(Protocol):
     """Trusted host metadata API. Never accepts model-supplied provenance."""
     async def record(self, revision: ContentRevision, *, origins: tuple[ContentOrigin, ...] = (),
@@ -134,7 +195,7 @@ class ToolResultPrivacyPublisher(Protocol):
     async def origins_for_execution(self, context, run_id: str) -> tuple[ContentOrigin, ...]: ...
     async def validate_tool_admission(self, context, run_id: str, *, privacy_fenced: bool = False) -> None: ...
     async def publish_tool_result(self, context, run_id: str, call_id: str,
-                                  result, origins: tuple[ContentOrigin, ...]) -> None: ...
+                                  result, origins: tuple[ContentOrigin, ...] | ToolResultProvenance) -> None: ...
 
 
 class EngineContentPrivacyWriter(Protocol):

@@ -168,9 +168,8 @@ old engine object from restoring private values after redaction.
 Real source tests use `SqliteDb.upsert_session/get_session`, the public run store
 and its normal serializer/projector. They verify both canonical copies, retained
 human/Gmail content, exact separate-customer selection, and rollback of attempted
-restoration. This checkpoint still excludes mixed customers within a single raw
-result: those require trusted per-record result fragments rather than whole JSON
-origins. It also excludes arbitrary session state/provider metadata, event/media
+restoration. The fragment checkpoint below also covers mixed customers in one
+normalized JSON response. It still excludes arbitrary session state/provider metadata, event/media
  replicas, prior untracked history and search completion. No full
 `engine-history` coverage or product privacy completion is asserted.
 
@@ -213,3 +212,33 @@ external file/Git changes: the persisted intent and prior graph record must
 recover a crash or partial failure. Tests exercise concurrent revocation and a
 writer failing after changing its real temporary file; recovery metadata remains
 targetable after restart. This primitive alone is not Vault/Git qualification.
+
+## Trusted result fragments
+
+`result_provenance` may return either the legacy whole-result tuple of origins or
+`ToolResultProvenance(fragments=(ContentFragment(path, origins), ...))`. Paths are
+immutable JSON key/index tuples into the normalized provider result. The trusted
+schema adapter must provide a complete, disjoint partition: missing fields,
+invalid selectors, overlaps or a foreign tenant reject publication. A fragment
+with no origins explicitly classifies nonpersonal data; an origin with no subjects
+means unknown customer scope. Customer-specific processing of such an unknown
+scope blocks with `subject_scope_unknown` before invoking any sink. Storewide
+requests still match unknown origins, and revoked unknown scope remains fenced.
+
+The SQLite publisher stores only classification metadata and exact field digests.
+Protected raw fragments retain separate selectors in invocation result/envelope,
+tool message text and replay event result. Invocation arguments are source-bound
+as their own query. The actual engine serializer reads this trusted partition by
+canonical provider call identity and records JSON subtree revisions in legacy
+tool/message copies, including JSON serialized as text. Generated summaries and
+attested downstream tool results inherit the origin union. They cannot pretend
+to preserve a customer merely because their model text omitted its identifier.
+
+Tests exercise the real publisher, serializer and sinks with one provider result
+containing two customers and nonpersonal inventory. Erasing the first preserves
+the second in every canonical raw copy, and the second can then be erased with
+its own selectors. The catalog callback also rejects an unexpected new field
+before canonical publication. These APIs do not infer Shopify selectors from
+model output: product/provider schema adapters must classify actual provider
+responses before any Shopify source is admitted. Search/index/media replicas,
+unknown historical data and consumer coverage gates remain separate work.
