@@ -35,8 +35,12 @@ class Exports(unittest.IsolatedAsyncioTestCase):
         async def authorize(request, actor):
             return self.allowed and request.tenant_id == 'tenant' and actor == 'current-owner'
         self.authorize = authorize
+        self.denied_revisions = set()
+        async def authorize_revision(request, revision, actor):
+            return await authorize(request, actor) and revision.artifact_id not in self.denied_revisions
+        self.authorize_revision = authorize_revision
         self.spool = EncryptedPrivacyExports(self.root / 'exports.sqlite', self.ledger,
-                                            cipher=self.cipher, authorize=authorize)
+                                            cipher=self.cipher, authorize=authorize, authorize_revision=authorize_revision)
         self.source = ContentRevision('tenant', 'source', 'r1', 'test-source', hashlib.sha256(b'PRIVATE CUSTOMER A').hexdigest())
         self.origin = ContentOrigin('tenant', 'shopify/app', 'shop', 1, ('customer:23',))
         await self.ledger.record(self.source, origins=(self.origin,))
@@ -61,7 +65,8 @@ class Exports(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.spool.delivered('export'))
         with self.assertRaises(PermissionError):
             await self.spool.download('export', 'other-owner')
-        restored = EncryptedPrivacyExports(self.spool.path, self.ledger, cipher=self.cipher, authorize=self.authorize)
+        restored = EncryptedPrivacyExports(self.spool.path, self.ledger, cipher=self.cipher,
+                                           authorize=self.authorize, authorize_revision=self.authorize_revision)
         bundle = await restored.download('export', 'current-owner')
         packet = json.loads(bundle.payload)
         self.assertEqual(base64.b64decode(packet['parts'][0]['content_base64']), b'PRIVATE CUSTOMER A')
@@ -73,6 +78,37 @@ class Exports(unittest.IsolatedAsyncioTestCase):
         self.allowed = True
         await restored.acknowledge('export', 'current-owner', bundle.delivery_token)
         self.assertTrue(await restored.delivered('export'))
+
+    async def test_same_tenant_shared_provider_does_not_grant_another_session_export(self):
+        await self.finish_export()
+        private = ContentRevision('tenant', 'other-session', 'r1', 'test-source', hashlib.sha256(b'PRIVATE OTHER SESSION').hexdigest())
+        await self.ledger.record(private, origins=(self.origin,))
+        await self.spool.export(self.request, private, b'PRIVATE OTHER SESSION')
+        self.denied_revisions.add('other-session')
+        from unittest.mock import patch
+        # The whole bundle is denied before decrypting even an allowed part.
+        with patch.object(self.cipher, 'decrypt', side_effect=AssertionError('No plaintext before all ACLs')):
+            with self.assertRaises(PermissionError):
+                await self.spool.download('export', 'current-owner')
+        self.assertFalse(await self.spool.delivered('export'))
+        self.denied_revisions.clear()
+        bundle = await self.spool.download('export', 'current-owner')
+        self.denied_revisions.add('other-session')
+        with self.assertRaises(PermissionError):
+            await self.spool.acknowledge('export', 'current-owner', bundle.delivery_token)
+        self.assertFalse(await self.spool.delivered('export'))
+
+    async def test_ack_rechecks_source_revocation_and_exact_copy_parent(self):
+        await self.finish_export()
+        bundle = await self.spool.download('export', 'current-owner')
+        with self.spool._db() as db:
+            row = db.execute('SELECT * FROM export_parts').fetchone()
+        staged = ContentRevision('tenant', row['artifact'], row['revision'], self.spool.sink_id, row['payload_digest'])
+        self.assertEqual(await self.spool.source_for_revision(staged), self.source)
+        await self.ledger.enqueue(PrivacyRequest('erase', 'tenant', 'shopify/app', 'shop', 1, 'redact'))
+        with self.assertRaises(PrivacyFence):
+            await self.spool.acknowledge('export', 'current-owner', bundle.delivery_token)
+        self.assertFalse(await self.spool.delivered('export'))
 
     async def test_retry_dedup_and_later_redaction_revoke_prior_export_copies(self):
         await self.finish_export()

@@ -450,3 +450,24 @@ in-memory run cannot restore deleted fields or move the data into another field.
 Only content-free serialization defaults are normalized. Changed historical
 human revisions cause a conflict instead of deletion. Compaction provenance
 retains surviving source revisions and omits erased source fields.
+
+### Export recipient access
+
+`EncryptedPrivacyExports` requires both request authorization and the host's
+`authorize_revision(request, revision, actor)` callback. A connection to a shared
+provider grant does not authorize reading another user's session. The spool
+checks every source revision before decrypting any bundle part and checks access
+again before acknowledging delivery. A revoked source fence also prevents ACK.
+If one part is unavailable, the entire bundle remains undelivered; the processor
+must retain its durable job rather than report partial delivery as completion.
+
+The public `SqliteToolResultPrivacyPublisher.resource_for_revision` resolves an
+exact registered canonical history, state or journal copy to a session resource.
+The host then checks its current `run.read` authorization and audience. External
+or unknown copies have no implicit ACL and fail closed. An encrypted export copy
+can resolve its exact parent through `source_for_revision`; hosts must bound that
+walk. Neither lookup exposes plaintext or grants access by itself.
+
+This recipient check is a source candidate. Its new tests and installed consumer
+qualification have not run during the current resource pause; earlier test
+receipts do not qualify this change or permit Shopify activation.

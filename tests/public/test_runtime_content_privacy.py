@@ -79,6 +79,20 @@ class RuntimePrivacy(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PrivacyConflict):
             await self.sink.capture('run',('missing',),(self.origin,))
 
+    async def test_public_exact_revision_resource_resolves_canonical_history_only(self):
+        from dataclasses import replace
+        from openagent_core.contracts import ResourceRef
+        from openagent_storage_sqlite.runtime_privacy import SqliteToolResultPrivacyPublisher
+        publisher = SqliteToolResultPrivacyPublisher(self.store, self.ledger)
+        await self.populate()
+        revisions = await self.sink.capture('run', ('shop',), (self.origin,))
+        for revision in revisions:
+            self.assertEqual(await publisher.resource_for_revision(revision), ResourceRef('session', 'tenant', 'session'))
+        for invalid in (replace(revisions[0], tenant_id='other'), replace(revisions[0], content_sha256='0'*64),
+                        replace(revisions[0], sink_id='external-file')):
+            with self.assertRaises(PermissionError):
+                await publisher.resource_for_revision(invalid)
+
     async def test_actual_replay_export_and_search_coverage_gate(self):
         await self.populate()
         await self.sink.capture('run',('shop',),(self.origin,))

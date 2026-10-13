@@ -33,18 +33,22 @@ class EncryptedPrivacyExports:
     """Opt-in spool using a host cipher ``encrypt/decrypt(aad, bytes)`` contract.
 
     ``authorize(request, actor)`` must check the host's current authenticated
-    principal and destination policy. This service must never be a model tool.
+    principal and destination policy. ``authorize_revision(request, revision,
+    actor)`` must additionally check current access to each exact source copy.
+    A shared provider grant never grants access to another user's history.
+    This service must never be a model tool.
     The host ACKs delivery only after its authorized transport delivered the
     bundle. An encrypted durable snapshot alone does not complete that action.
     """
     sink_id = 'privacy-export-spool'
 
-    def __init__(self, path, ledger, *, cipher, authorize, max_part_bytes=8 << 20):
+    def __init__(self, path, ledger, *, cipher, authorize, authorize_revision, max_part_bytes=8 << 20):
         self.path, self.ledger = Path(path).absolute(), ledger
         self.cipher, self.authorize = cipher, authorize
+        self.authorize_revision = authorize_revision
         if self.path == ledger.path or self.path.is_symlink():
             raise ValueError('Export staging needs its own host-owned database')
-        if not callable(authorize) or max_part_bytes < 1:
+        if not callable(authorize) or not callable(authorize_revision) or max_part_bytes < 1:
             raise ValueError('Current host authorization and a bounded export are required')
         self.max_part_bytes = max_part_bytes
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -152,11 +156,9 @@ class EncryptedPrivacyExports:
 
     async def download(self, request_id, actor):
         request = await self._authorized(request_id, actor)
-        def parts():
-            with self._db() as db:
-                return db.execute('SELECT * FROM export_parts WHERE request_id=? ORDER BY artifact', (request_id,)).fetchall()
+        rows = await self._authorized_parts(request, actor)
         output = []
-        for row in await run_sync(parts):
+        for row in rows:
             revision = ContentRevision(request.tenant_id, row['artifact'], row['revision'], self.sink_id, row['payload_digest'])
             received = []
             def read():
@@ -182,7 +184,8 @@ class EncryptedPrivacyExports:
         return PrivacyExportBundle(_json({'request_id': request_id, 'parts': output}), token)
 
     async def acknowledge(self, request_id, actor, delivery_token):
-        await self._authorized(request_id, actor)
+        request = await self._authorized(request_id, actor)
+        await self._authorized_parts(request, actor)
         if not isinstance(delivery_token, str) or len(delivery_token) > 128:
             raise PermissionError('Export delivery is unavailable')
         def delivered():
@@ -193,6 +196,58 @@ class EncryptedPrivacyExports:
                     raise PermissionError('Export delivery is unavailable')
                 db.execute('UPDATE export_requests SET delivered=1 WHERE id=?', (request_id,))
         await run_sync(delivered)
+
+    def _source(self, row, revision=None):
+        try:
+            request, source, staged = json.loads(row['aad'])
+            source, staged = ContentRevision(**source), ContentRevision(**staged)
+            if (source.artifact_id, source.revision_id) != (row['parent_artifact'], row['parent_revision']):
+                raise ValueError('Invalid source locator')
+            if (staged.artifact_id, staged.revision_id, staged.content_sha256, staged.sink_id) != (
+                    row['artifact'], row['revision'], row['payload_digest'], self.sink_id):
+                raise ValueError('Invalid staged locator')
+            if source.tenant_id != staged.tenant_id or request['tenant_id'] != source.tenant_id:
+                raise ValueError('Invalid source tenant')
+            if request['request_id'] != row['request_id']:
+                raise ValueError('Invalid export request')
+            if revision is not None and staged != revision:
+                raise ValueError('Different exact revision')
+            return source
+        except (ValueError, TypeError, KeyError):
+            raise PermissionError('Export is unavailable') from None
+
+    async def source_for_revision(self, revision):
+        """Resolve one exact staged copy for the host's bounded ACL walk.
+
+        Unknown, erased and mismatched revisions are unavailable. This returns
+        only an immutable source locator, never decrypted export content.
+        """
+        if not isinstance(revision, ContentRevision) or revision.sink_id != self.sink_id:
+            raise PermissionError('Export is unavailable')
+        def read():
+            with self._db() as db:
+                row = db.execute('SELECT * FROM export_parts WHERE artifact=?', (revision.artifact_id,)).fetchone()
+                if row is None or row['erased'] or row['ciphertext'] is None:
+                    raise PermissionError('Export is unavailable')
+                return self._source(row, revision)
+        return await run_sync(read)
+
+    async def _authorized_parts(self, request, actor):
+        def parts():
+            with self._db() as db:
+                return db.execute('SELECT * FROM export_parts WHERE request_id=? ORDER BY artifact',
+                                  (request.request_id,)).fetchall()
+        rows = await run_sync(parts)
+        # Check the entire bundle before decrypting any part. Partial delivery
+        # must not turn a multi-owner request into a false completion receipt.
+        for row in rows:
+            source = self._source(row)
+            if source.tenant_id != request.tenant_id or not await self.authorize_revision(request, source, actor):
+                raise PermissionError('Export is unavailable')
+        for row in rows:
+            staged = ContentRevision(request.tenant_id, row['artifact'], row['revision'], self.sink_id, row['payload_digest'])
+            await self.ledger.publish(staged, parents=((row['parent_artifact'], row['parent_revision']),), publish=lambda: None)
+        return rows
 
     async def delivered(self, request_id):
         def read():

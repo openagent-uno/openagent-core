@@ -356,6 +356,57 @@ class SqliteToolResultPrivacyPublisher:
         async with self.runtime_store._operation_lock:
             return await run_sync(read)
 
+    async def resource_for_revision(self, revision):
+        """Resolve a registered canonical copy to its current session ACL.
+
+        This public lookup never grants access. Hosts must authorize ``run.read``
+        on the returned resource for the current principal and audience. Missing
+        or external sink revisions have no implied session owner.
+        """
+        from openagent_core.contracts import ResourceRef
+        from openagent_core.persistence import run_sync
+        if not isinstance(revision, ContentRevision):
+            raise ValueError('An exact typed content revision is required')
+        def read():
+            db = self.runtime_store.connection
+            recorded = db.execute('SELECT sink,digest FROM privacy_revisions WHERE tenant=? AND artifact=? AND revision=?',
+                                  (revision.tenant_id, revision.artifact_id, revision.revision_id)).fetchone()
+            if recorded is None or tuple(recorded) != (revision.sink_id, revision.content_sha256):
+                raise PermissionError('Content resource is unavailable')
+            if revision.sink_id in {'engine-history', 'session-journal'}:
+                table = ('engine_privacy_state_nodes' if revision.artifact_id.startswith('engine-state/')
+                         else 'engine_privacy_nodes') if revision.sink_id == 'engine-history' else 'journal_privacy_nodes'
+                if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                    raise PermissionError('Content resource is unavailable')
+                row = db.execute(f'SELECT session FROM {table} WHERE artifact=? AND tenant=?',
+                                 (revision.artifact_id, revision.tenant_id)).fetchone()
+            elif revision.sink_id == 'runtime-ledger':
+                kind, _, identity = revision.artifact_id.partition('/')
+                if kind == 'fragment':
+                    node = db.execute('SELECT kind,identity FROM runtime_privacy_fragments WHERE artifact=? AND tenant=?',
+                                      (revision.artifact_id, revision.tenant_id)).fetchone()
+                    if node is None:
+                        raise PermissionError('Content resource is unavailable')
+                    kind, identity = node
+                if kind not in _FIELDS:
+                    raise PermissionError('Content resource is unavailable')
+                table = _FIELDS[kind][0]
+                if kind == 'event':
+                    row = db.execute('SELECT r.session_id FROM domain_events e JOIN session_runs r ON r.id=e.run_id '
+                                     'WHERE e.event_id=? AND e.tenant_id=? AND r.tenant_id=e.tenant_id',
+                                     (identity, revision.tenant_id)).fetchone()
+                else:
+                    row = db.execute(f'SELECT session_id FROM {table} WHERE id=? AND tenant_id=?',
+                                     (identity, revision.tenant_id)).fetchone()
+            else:
+                raise PermissionError('Content resource is unavailable')
+            if row is None or not db.execute('SELECT 1 FROM sessions_v2 WHERE id=? AND tenant_id=?',
+                                            (row[0], revision.tenant_id)).fetchone():
+                raise PermissionError('Content resource is unavailable')
+            return ResourceRef('session', revision.tenant_id, row[0])
+        async with self.runtime_store._operation_lock:
+            return await run_sync(read)
+
     async def origins_for_execution(self,context,run_id):
         from openagent_core.persistence import run_sync
         from dataclasses import asdict
