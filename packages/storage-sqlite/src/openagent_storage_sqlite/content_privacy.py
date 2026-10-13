@@ -103,9 +103,19 @@ class SqliteContentPrivacyStore:
     @staticmethod
     def _history_is_empty(db):
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        for name in ('sessions', 'sessions_v2', 'session_runs', 'session_messages',
-                     'session_events', 'runs', 'task_runs', 'memories'):
-            if name in tables and db.execute('SELECT 1 FROM "' + name + '" LIMIT 1').fetchone():
+        history = frozenset({'sessions', 'sessions_v2', 'session_runs', 'session_messages',
+            'session_message_parts', 'session_events', 'runs', 'task_runs', 'memories',
+            'tool_invocations', 'domain_events', 'artifacts', 'artifact_links', 'context_snapshots',
+            'activity_items', 'search_documents', 'search_chunks', 'query_snapshots',
+            'query_snapshot_items', 'query_snapshot_hits', 'ui_views', 'ui_view_revisions',
+            'ui_data_state', 'ui_action_runs', 'ui_message_links'})
+        for name in tables:
+            quoted = '"' + name.replace('"', '""') + '"'
+            columns = {row[1] for row in db.execute('PRAGMA table_info(' + quoted + ')')}
+            # The public legacy store supports a configurable session table
+            # name. Identify its schema rather than trusting a fixed name.
+            if (name in history or {'session_id', 'runs'} <= columns) and db.execute(
+                    'SELECT 1 FROM ' + quoted + ' LIMIT 1').fetchone():
                 return False
         return True
 

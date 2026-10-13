@@ -44,6 +44,19 @@ class PrivacyBaseline(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await SqliteContentPrivacyStore(self.path).qualify_empty_history())
         self.assertEqual(backup.read_bytes(), original)
 
+    async def test_configurable_legacy_table_and_orphan_canonical_copies_block_admission(self):
+        for index, name in enumerate(('custom_engine_history', 'tool_invocations', 'context_snapshots', 'search_chunks')):
+            path = self.root / ('unknown-'+str(index)+'.sqlite')
+            with sqlite3.connect(path) as db:
+                if name == 'custom_engine_history':
+                    db.execute('CREATE TABLE custom_engine_history(session_id TEXT, runs TEXT)')
+                    db.execute("INSERT INTO custom_engine_history VALUES('old','PRIVATE HISTORY')")
+                else:
+                    db.execute('CREATE TABLE "'+name+'"(content TEXT)')
+                    db.execute('INSERT INTO "'+name+'" VALUES(?)', ('PRIVATE OLD COPY',))
+            with self.subTest(table=name):
+                self.assertFalse(await SqliteContentPrivacyStore(path).qualify_empty_history())
+
     async def test_empty_bootstrap_snapshot_is_allowed_but_unreadable_and_symlink_backups_are_not(self):
         backups = self.root / 'backups'
         backups.mkdir()
