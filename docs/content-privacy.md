@@ -91,3 +91,23 @@ private content is absent from the canonical file and WAL, unrelated human input
 and Gmail result remain, ordinary events remain immutable, missing/active exact
 calls are rejected, and exports remain scoped. These tests do not qualify an
 actual provider consent or a running product with the legacy engine adapter.
+
+## Remaining canonical writer integration
+
+| Surface | Existing canonical write/read point | Required completion work |
+| --- | --- | --- |
+| Live tool results | `CapabilityCatalog.call_tool` → `RuntimeStore.finish_tool` | Bind origins from trusted host connector executor before publication; atomically commit provenance with content; serialize revocation with in-flight publication |
+| Generated stream | `AgentExecutor.execute` → `RuntimeStore.append_event` | Carry run origins through live delta/status/done events and inherited earlier context; fence late writes and cancellation |
+| Engine transcripts | runner `aupsert_session` → `memory.store.sqlite.SqliteDb.upsert_session` | Track exact original tool-call/results and derived messages within legacy run envelopes and normalized projections; redact both authorities without broad session deletion |
+| Compaction | `core.compaction._save_runs` and operational `context_snapshots` | Carry folded source revisions/predecessors into summary lineage; erase eligible recaps plus legacy copies and reject restoration of revoked generations |
+| Child sessions | `ExecutionContext.child` and `Runtime.spawn` | Inherit only the admitted parent snapshot's origins, persist mission/result lineage and cover later child continuation without deleting unrelated human input |
+| Vault | `VaultService.write_note/delete_note/restore_to` and `VaultGit` | Track mixed note revisions/spans and originals; redact historical Git blobs/reflogs with preserved unrelated revisions, rebuild derived indexes and fence restore/autocommit |
+| Attachments/files | attachment store and host-managed file writers | Bind managed artifact origins and revisions; erase replicas/derivatives, enforce paths, preserve untracked human edits, exclude arbitrary external shell/MCP writes from claimed coverage |
+| Search | operational search outbox/extractor/index | Require consumed erasure confirmation and cache/WAL cleanup; an enqueued source-version update alone is not completion |
+| Export delivery | product-authorized privacy delivery path | Protect export staging, validate destination and explicit recipient authority, support exact request/revision deduplication and durable retry without central content persistence |
+
+The protocol/metadata and terminal sink checkpoints intentionally cannot assert
+this table complete. Existing untracked installations need an explicit historical
+baseline migration or reviewed reconciliation; a new tracker cannot retrospectively
+identify unknown old customer-derived text. Provider admission remains gated until
+all enabled surfaces are covered and actual product restart/recovery cases pass.
