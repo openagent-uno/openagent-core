@@ -365,6 +365,30 @@ A future managed backup implementation must register lineage, exact snapshots
 and erasure/recovery before this fence can be relaxed. A generic coverage string
 does not authorize an unmanaged snapshot of protected state.
 
+## Encrypted local exports and delivery receipts
+
+`EncryptedPrivacyExports` is an opt-in SQLite adapter. The host supplies its
+cipher and a current authenticated-principal/destination authorization callback.
+Canonical export sinks call `export(request, revision, bytes)`. Each encrypted
+copy inherits that exact parent revision in the public ledger before publication
+under the same revocation fence; later redaction also erases prior export copies.
+The spool has its own host-owned database and contains no plaintext payloads.
+
+`seal(request)` makes a bundle ready only after the canonical export job completes.
+That is not delivery completion. `download(request_id, actor)` rechecks local
+authorization and each origin fence and returns the scoped bundle with a delivery
+token. The host calls `acknowledge` only after its authorized transport delivered
+the complete bundle. `delivered` supplies the durable completion state to the
+product's privacy receipt processor. Staging, missing delivery, revoked access or
+an unavailable sink must never be reported as provider-request completion.
+
+The adapter is not installed automatically and does not select recipients, send
+email or forward customer content through the central OAuth broker. Source tests
+exercise real encrypted SQLite snapshots, restart, current ACL revocation,
+deduplication and later erasure through the ledger. Product transport integration,
+canonical runtime cache eviction and full cohort coverage still require their
+consumer qualification before Shopify can be admitted.
+
 ## First provider invocation scope
 
 Trusted registration may also supply
