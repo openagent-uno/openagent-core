@@ -103,14 +103,21 @@ class EnginePrivacy(unittest.IsolatedAsyncioTestCase):
 
     async def test_mixed_customer_one_call_preserves_sibling_across_real_public_and_engine_copies(self):
         from dataclasses import replace
-        from openagent_core.content_privacy import ContentFragment,ToolResultProvenance,ContentRevision
+        from openagent_core.content_privacy import ContentFragment,ToolResultProvenance,ContentRevision,JsonStringBoundary
         from openagent_storage_sqlite.runtime_privacy import SqliteRuntimeContentPrivacySink
         second=replace(self.origin,subjects=('customer:24',))
-        result={'customers':[{'id':23,'name':'FIRST CUSTOMER PRIVATE'},
-                             {'id':24,'name':'SECOND CUSTOMER RETAIN'}],'inventory':'NONPERSONAL INVENTORY'}
-        provenance=ToolResultProvenance((ContentFragment(('customers',0),(self.origin,)),
-                                       ContentFragment(('customers',1),(second,)),
-                                       ContentFragment(('inventory',),())))
+        payload={'data':{'customers':[{'id':23,'name':'FIRST CUSTOMER PRIVATE'},
+                                     {'id':24,'name':'SECOND CUSTOMER RETAIN'}],'inventory':'NONPERSONAL INVENTORY'},
+                 '_glasspalace':{'count':2}}
+        result={'content':[{'type':'text','text':json.dumps(payload)}],'structuredContent':payload}
+        boundary=JsonStringBoundary()
+        fragments=[]
+        for prefix in (('structuredContent',),('content',0,'text',boundary)):
+            fragments.extend((ContentFragment(prefix+('data','customers',0),(self.origin,)),
+                              ContentFragment(prefix+('data','customers',1),(second,)),
+                              ContentFragment(prefix+('data','inventory'),()),ContentFragment(prefix+('_glasspalace',),())))
+        fragments.append(ContentFragment(('content',0,'type'),()))
+        provenance=ToolResultProvenance(tuple(fragments))
         provenance.validate_result(result,'tenant')
         await self.store.begin_tool('run','mixed-catalog',{'source_id':'shopify','name':'read','provider_call_id':'mixed-model'}, {})
         await self.publisher.publish_tool_result(self.context,'run','mixed-catalog',result,provenance)

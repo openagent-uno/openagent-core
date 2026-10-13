@@ -9,7 +9,7 @@ import time
 
 from openagent_core.content_privacy import ContentFragment,ContentRevision,ToolResultProvenance,PrivacyFence,PrivacyConflict
 from openagent_core.persistence import run_sync
-from .privacy_json import get,replace
+from .privacy_json import get,replace,encode_path
 
 
 def _json(value):
@@ -66,10 +66,11 @@ class SqliteSessionJournalContentPrivacy:
             seq=row[0]
             for fragment in plan.fragments:
                 if not fragment.origins: continue
-                artifact='journal/'+base64.urlsafe_b64encode(_json([session_id,seq,list(fragment.path)]).encode()).decode().rstrip('=')
+                path=encode_path(fragment.path)
+                artifact='journal/'+base64.urlsafe_b64encode(_json([session_id,seq,list(path)]).encode()).decode().rstrip('=')
                 digest=hashlib.sha256(_json(get(payload,fragment.path)).encode()).hexdigest()
                 self.ledger._record_transaction(db,ContentRevision(context.tenant_id,artifact,digest,self.sink_id,digest),fragment.origins)
-                db.execute('INSERT INTO journal_privacy_nodes VALUES(?,?,?,?,?)',(artifact,context.tenant_id,session_id,seq,_json(fragment.path)))
+                db.execute('INSERT INTO journal_privacy_nodes VALUES(?,?,?,?,?)',(artifact,context.tenant_id,session_id,seq,_json(path)))
             return seq
 
     async def apply(self,request,revision):

@@ -89,18 +89,47 @@ class PrivacyProgress:
 
 
 @dataclass(frozen=True, slots=True)
+class JsonStringBoundary:
+    """Explicit transition from a JSON string into its encoded JSON value."""
+    decode_json: Literal[True] = True
+
+    def __post_init__(self):
+        if self.decode_json is not True:
+            raise ValueError('JSON string boundary is a fixed typed marker')
+
+
+def decode_fragment_json(value):
+    """Reject ambiguous duplicate object keys at a trusted encoded boundary."""
+    import json
+    if not isinstance(value,str) or len(value.encode('utf-8'))>8*1024*1024:
+        raise PrivacyConflict('Fragment JSON boundary must be a bounded string')
+    def object_pairs(pairs):
+        result={}
+        for key,item in pairs:
+            if key in result:
+                raise PrivacyConflict('Encoded JSON contains duplicate keys')
+            result[key]=item
+        return result
+    try:
+        return json.loads(value,object_pairs_hook=object_pairs,parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+    except (ValueError,TypeError,RecursionError):
+        raise PrivacyConflict('Fragment boundary is not unambiguous JSON') from None
+
+
+@dataclass(frozen=True, slots=True)
 class ContentFragment:
     """Host-classified exact JSON subtree; empty origins explicitly mean nonpersonal.
 
     The path is into the normalized provider result, not into arbitrary storage.
     A trusted schema adapter must classify every leaf and cannot overlap paths.
     """
-    path: tuple[str | int, ...]
+    path: tuple[str | int | JsonStringBoundary, ...]
     origins: tuple[ContentOrigin, ...]
 
     def __post_init__(self):
         if (not isinstance(self.path,tuple) or len(self.path)>64
-                or any(not (type(value) is int and value>=0 or isinstance(value,str) and len(value)<=1024) for value in self.path)
+                or any(not (type(value) is int and value>=0 or isinstance(value,str) and len(value)<=1024
+                            or isinstance(value,JsonStringBoundary)) for value in self.path)
                 or not isinstance(self.origins,tuple) or len(self.origins)>4096
                 or any(not isinstance(origin,ContentOrigin) for origin in self.origins)):
             raise ValueError('Typed bounded JSON fragments are required')
@@ -129,6 +158,10 @@ class ToolResultProvenance:
         def walk(value,path=()):
             if path in paths:
                 return
+            encoded_path=path+(JsonStringBoundary(),)
+            if isinstance(value,str) and any(candidate[:len(encoded_path)]==encoded_path for candidate in paths):
+                walk(decode_fragment_json(value),encoded_path)
+                return
             if isinstance(value,dict) and value:
                 for key,child in value.items(): walk(child,path+(key,))
             elif isinstance(value,list) and value:
@@ -138,6 +171,9 @@ class ToolResultProvenance:
         for fragment in self.fragments:
             value=result
             for component in fragment.path:
+                if isinstance(component,JsonStringBoundary):
+                    value=decode_fragment_json(value)
+                    continue
                 if ((isinstance(value,dict) and not isinstance(component,str))
                         or (isinstance(value,list) and type(component) is not int)):
                     raise PrivacyConflict('Fragment selector does not match provider JSON')

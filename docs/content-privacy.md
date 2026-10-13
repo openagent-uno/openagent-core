@@ -283,3 +283,21 @@ payloads, and revocation during schema resolution rolling back the whole insert.
 Products must qualify their actual journal payload schemas before declaring this
 surface covered; the generic generated-kind adapter is insufficient for arbitrary
 host replay formats or previously untracked journal rows.
+
+## JSON encoded inside MCP text
+
+`JsonStringBoundary()` is an explicit typed fragment path component, serialized
+as `{"decode_json":true}` in SQLite-owned metadata. For example
+`('content', 0, 'text', JsonStringBoundary(), 'data', 'customers', 0)` selects one
+customer inside MCP text containing JSON. A provider adapter supplies matching
+selectors for both that text copy and `structuredContent`. Partition validation
+decodes only explicit boundaries, rejects duplicate keys/invalid JSON, and still
+requires every inner leaf to be classified. Sinks compare the selected subtree
+digest and reserialize the surrounding text after replacement, preserving other
+customers and metadata. They retain the existing MCP envelope and tool contracts.
+
+The mixed-customer canonical test uses the real GlassPalace MCP envelope shape
+with text plus structured copies, then the engine's own JSON-text serialization.
+Both copies retain the second customer after the first request; its later request
+also succeeds. Unclassified, ambiguous or malformed encoded provider JSON cannot
+be published through a fragment partition.

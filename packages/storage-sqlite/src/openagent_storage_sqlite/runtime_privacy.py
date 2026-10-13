@@ -13,7 +13,7 @@ import time
 
 from openagent_core.content_privacy import ContentRevision, PrivacyConflict, PrivacyFence, ToolResultProvenance
 from .content_privacy import SqliteContentPrivacyStore
-from .privacy_json import get as json_get, replace as json_replace
+from .privacy_json import get as json_get, replace as json_replace, encode_path
 from .search import enqueue_source
 
 
@@ -359,6 +359,7 @@ class SqliteToolResultPrivacyPublisher:
     def _fragment(self,db,kind,identity,field,path,origins):
         if not origins:
             return
+        path=encode_path(path)
         table=_FIELDS[kind][0];key='event_id' if kind=='event' else 'id'
         row=db.execute(f'SELECT tenant_id,{field} FROM {table} WHERE {key}=?',(identity,)).fetchone()
         value=json_get(json.loads(row[field]),path)

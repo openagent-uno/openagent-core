@@ -140,6 +140,19 @@ class Privacy(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             ContentFragment(('customers',True),(self.origin,))
 
+    async def test_encoded_json_partition_rejects_duplicate_keys_invalid_boundary_and_missing_sibling(self):
+        from openagent_core.content_privacy import ContentFragment,ToolResultProvenance,JsonStringBoundary
+        boundary=JsonStringBoundary()
+        plan=ToolResultProvenance((ContentFragment(('text',boundary,'customer'),(self.origin,)),
+                                  ContentFragment(('text',boundary,'count'),())))
+        plan.validate_result({'text':'{"customer":"private","count":1}'},'tenant')
+        for text in ('{"customer":"private","customer":"ambiguous","count":1}',
+                     '{"customer":"private","count":1,"new":"unclassified"}','not JSON'):
+            with self.assertRaises(PrivacyConflict):
+                plan.validate_result({'text':text},'tenant')
+        with self.assertRaises(PrivacyConflict):
+            plan.validate_result({'text':{'customer':'private','count':1}},'tenant')
+
     async def test_replayed_request_and_revision_metadata_are_immutable(self):
         await self.store.record(self.revision, origins=(self.origin,))
         with self.assertRaises(PrivacyConflict):
