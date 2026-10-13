@@ -117,7 +117,7 @@ class ToolProvenance(unittest.IsolatedAsyncioTestCase):
                     await ledger.enqueue(request)
                 return {'private':'NEVER PUBLISH AFTER REVOCATION'}
             source=FunctionSource((ToolDefinition('read','Read',{}),),{'read':read})
-            catalog.register('shop',source,source,target_label='Shop',result_provenance=provenance)
+            catalog.register('shop',source,source,target_label='Shop',result_provenance=provenance,privacy_fenced=True)
             calls=[]
             async def execute(request,context,runtime):
                 ref=(await catalog.discover(context))[0].tool_ref
@@ -167,3 +167,47 @@ class ToolProvenance(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(current_provider_tool_call_id())
             self.assertEqual(current_provider_tool_call_id(),'parent-model-call')
         self.assertIsNone(current_provider_tool_call_id())
+
+    async def test_unattested_tools_stay_visible_but_are_fenced_before_io_after_protected_read(self):
+        from openagent_core.content_privacy import ContentOrigin,PrivacyFence,ToolResultPrivacyPublisher
+        from openagent_storage_sqlite.content_privacy import SqliteContentPrivacyStore
+        from openagent_storage_sqlite.runtime_privacy import SqliteToolResultPrivacyPublisher
+        with tempfile.TemporaryDirectory() as directory:
+            p=PrincipalRef('host','tenant','user')
+            context=ExecutionContext(p,p,p,'session','agent',(p,))
+            class Allow:
+                async def authorize(self,*args,**kwargs): return True
+            policy=Allow()
+            store=SqliteRuntimeStore(Path(directory)/'state.sqlite')
+            catalog=CapabilityCatalog(policy)
+            calls=[]
+            async def effect(args,context):
+                calls.append(args['tag'])
+                return 'ok'
+            async def provenance(*args):
+                return (ContentOrigin('tenant','shopify/app','shop',1,('customer:23',)),)
+            read=FunctionSource((ToolDefinition('read','Read',{}),),{'read':effect})
+            writer=FunctionSource((ToolDefinition('safe','Safe',{}),ToolDefinition('unsafe','Unsafe',{})),{'safe':effect,'unsafe':effect})
+            catalog.register('shop',read,read,target_label='Shop',result_provenance=provenance,privacy_fenced={'read':True})
+            catalog.register('writer',writer,writer,target_label='Writer',privacy_fenced={'safe':True})
+            async def execute(request,context,runtime):
+                descriptors=await catalog.discover(context)
+                refs={d.name:d.tool_ref for d in descriptors}
+                await catalog.call_tool(refs['unsafe'],{'tag':'ordinary'},context)
+                await catalog.call_tool(refs['read'],{'tag':'read'},context)
+                # Discovery is unchanged; only a host-attested writer is admitted.
+                self.assertEqual(len(await catalog.discover(context)),3)
+                with self.assertRaises(PrivacyFence):
+                    await catalog.call_tool(refs['unsafe'],{'tag':'must-not-execute'},context)
+                await catalog.call_tool(refs['safe'],{'tag':'safe'},context)
+                return 'done'
+            runtime=Runtime(RuntimeSettings('agent',Path(directory)),RuntimeServices(store,SimpleNamespace(execute=execute),policy,catalog))
+            await runtime.start()
+            try:
+                ledger=SqliteContentPrivacyStore(store.path)
+                runtime.services.registry.bind(ToolResultPrivacyPublisher,SqliteToolResultPrivacyPublisher(store,ledger))
+                await runtime.submit(RunRequest('run','session','key','human'),context)
+                self.assertEqual((await runtime.wait('run',context)).status,'success')
+                self.assertEqual(calls,['ordinary','read','safe'])
+            finally:
+                await runtime.close()

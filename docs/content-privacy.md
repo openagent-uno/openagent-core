@@ -140,9 +140,9 @@ does not share identity between tasks. A call identity links content; it grants
 no capability or provider/store authority. Deferred lazy generator consumption
 and tool caches remain separate writer boundaries.
 
-The legacy engine serializer and compaction writer still need to consume those
-exact identities/origins within their own transactions, and already persisted
-legacy data still requires baseline reconciliation. No standalone runtime
+The legacy engine serializer and compaction writer consume those exact
+identities/origins in the checkpoints below; already persisted legacy data still
+requires baseline reconciliation. No standalone runtime
 installs this publisher or callback yet. These live public-ledger tests remain
 source qualification and never establish Shopify readiness or released artifact
 compatibility.
@@ -171,7 +171,7 @@ human/Gmail content, exact separate-customer selection, and rollback of attempte
 restoration. This checkpoint still excludes mixed customers within a single raw
 result: those require trusted per-record result fragments rather than whole JSON
 origins. It also excludes arbitrary session state/provider metadata, event/media
-replicas, prior untracked history, compaction and search completion. No full
+ replicas, prior untracked history and search completion. No full
 `engine-history` coverage or product privacy completion is asserted.
 
 ## Canonical compaction checkpoint
@@ -192,3 +192,24 @@ reader, writer, serializer and sink, stubbing only the external model response.
 They cover normal fold erasure, revocation during model IO and a concurrent human
 change. Arbitrary context_snapshots, journal/export/index/media copies and unknown
 historical folds remain outside this checkpoint's coverage gates.
+
+## External writer admission and publication
+
+Trusted host registration accepts `privacy_fenced=True` or a mapping of exact
+tool names to booleans. The default is false; user sources and MCP annotations
+cannot grant this policy. A run without protected origins retains normal tool
+access. After a protected read, an unattested tool remains discoverable but is
+rejected before API/filesystem IO. This includes the separate Node MCP Vault
+writer until it has a canonical privacy adapter. Even attested tools recheck the
+generation fence and ordinary authorization. A host must mark a writer attested
+only after instrumenting and qualifying every content copy that writer owns.
+
+For canonical files/Vault, `ContentPrivacyStore.publish(revision, publish=...)`
+executes a synchronous callback under the same SQLite write fence as enqueue.
+It requires the exact revision to have been recorded durably before publication.
+The writer first persists its recovery intent/pin and uses a shared writer/sink
+mutex. The callback cannot await or reenter the ledger. SQLite cannot roll back
+external file/Git changes: the persisted intent and prior graph record must
+recover a crash or partial failure. Tests exercise concurrent revocation and a
+writer failing after changing its real temporary file; recovery metadata remains
+targetable after restart. This primitive alone is not Vault/Git qualification.

@@ -252,7 +252,7 @@ class SqliteToolResultPrivacyPublisher:
         async with self.runtime_store._operation_lock:
             return await run_sync(read)
 
-    async def validate_tool_admission(self,context,run_id):
+    async def validate_tool_admission(self,context,run_id,*,privacy_fenced=False):
         from openagent_core.persistence import run_sync
         def validate():
             db=self.runtime_store.connection
@@ -260,6 +260,8 @@ class SqliteToolResultPrivacyPublisher:
             if row is None or (row['tenant_id'],row['session_id'])!=(context.tenant_id,context.session_id):
                 raise PrivacyConflict('Admission context does not identify this exact run')
             self._guard(db,run_id)
+            if self._origins(db,run_id) and not privacy_fenced:
+                raise PrivacyFence('This capability has no attested canonical writer for protected-origin context')
         async with self.runtime_store._operation_lock:
             await run_sync(validate)
 

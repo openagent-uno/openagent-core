@@ -8,7 +8,7 @@ operations. A delivery ACK is never a completion receipt.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Callable, Literal, Protocol
 import re
 
 
@@ -92,6 +92,18 @@ class ContentPrivacyStore(Protocol):
     """Trusted host metadata API. Never accepts model-supplied provenance."""
     async def record(self, revision: ContentRevision, *, origins: tuple[ContentOrigin, ...] = (),
                      parents: tuple[tuple[str, str], ...] = ()) -> None: ...
+    async def publish(self, revision: ContentRevision, *, publish: Callable[[], None],
+                      origins: tuple[ContentOrigin, ...] = (),
+                      parents: tuple[tuple[str, str], ...] = ()) -> None:
+        """Run a synchronous canonical writer while holding the revocation fence.
+
+        External writers must first persist a recovery intent and ``record`` the
+        revision before changing content. The callback may not reenter this store,
+        await, or assume external writes roll back with SQLite. Its writer/sink
+        lock and durable intent must recover a crash after publication. This API
+        serializes publication with enqueue; it is not a filesystem transaction.
+        """
+        ...
     async def enqueue(self, request: PrivacyRequest) -> PrivacyProgress: ...
     async def progress(self, request_id: str) -> PrivacyProgress: ...
     async def process(self, request_id: str, sinks: tuple[ContentPrivacySink, ...], *,
@@ -120,7 +132,7 @@ class ToolResultPrivacyPublisher(Protocol):
     durable revocation fences in its canonical storage transaction.
     """
     async def origins_for_execution(self, context, run_id: str) -> tuple[ContentOrigin, ...]: ...
-    async def validate_tool_admission(self, context, run_id: str) -> None: ...
+    async def validate_tool_admission(self, context, run_id: str, *, privacy_fenced: bool = False) -> None: ...
     async def publish_tool_result(self, context, run_id: str, call_id: str,
                                   result, origins: tuple[ContentOrigin, ...]) -> None: ...
 

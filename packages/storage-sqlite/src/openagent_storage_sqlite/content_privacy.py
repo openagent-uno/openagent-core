@@ -11,6 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 import asyncio
 import json
+import inspect
 import os
 import sqlite3
 import time
@@ -103,6 +104,26 @@ class SqliteContentPrivacyStore:
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
             self._record_transaction(db, revision, origins, parents)
+            db.commit()
+
+    async def publish(self, revision, *, publish, origins=(), parents=()):
+        if not callable(publish) or inspect.iscoroutinefunction(publish):
+            raise ValueError("A synchronous canonical publication callback is required")
+        await run_sync(self._publish, revision, origins, parents, publish)
+
+    def _publish(self, revision, origins, parents, publish):
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            old = db.execute('SELECT 1 FROM privacy_revisions WHERE tenant=? AND artifact=? AND revision=?',
+                             (revision.tenant_id, revision.artifact_id, revision.revision_id)).fetchone()
+            if not old:
+                raise PrivacyConflict("External publication requires a durable recorded recovery intent")
+            self._record_transaction(db, revision, origins, parents)
+            result = publish()
+            if inspect.isawaitable(result):
+                if inspect.iscoroutine(result):
+                    result.close()
+                raise ValueError("Canonical publication cannot return an awaitable")
             db.commit()
 
     def _record_transaction(self, db, revision, origins=(), parents=()):

@@ -3,6 +3,7 @@ from dataclasses import replace
 import hashlib
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 
 from openagent_core.content_privacy import (ContentOrigin, ContentRevision, PrivacyRequest,
@@ -54,6 +55,47 @@ class Privacy(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PrivacyFence):
             await store.record(replace(self.revision, artifact_id='late-compaction'), parents=(('result', 'v1'),))
         await store.record(replace(self.revision, artifact_id='reauthorized'), origins=(replace(self.origin, generation=11),))
+
+    async def test_external_publication_serializes_with_revocation_and_has_durable_recovery(self):
+        entered, release = threading.Event(), threading.Event()
+        path = self.root/'canonical.txt'
+        def publish():
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError('test publication timeout')
+            path.write_text('secret')
+        with self.assertRaises(PrivacyConflict):
+            await self.store.publish(self.revision,publish=publish,origins=(self.origin,))
+        self.assertFalse(entered.is_set())
+        await self.store.record(self.revision,origins=(self.origin,))
+        other_store=SqliteContentPrivacyStore(self.store.path)
+        publication = asyncio.create_task(self.store.publish(self.revision,publish=publish,origins=(self.origin,)))
+        self.assertTrue(await asyncio.to_thread(entered.wait,3))
+        revocation = asyncio.create_task(other_store.enqueue(self.request))
+        try:
+            await asyncio.sleep(.05)
+            self.assertFalse(revocation.done())
+        finally:
+            release.set()
+        await publication
+        self.assertEqual((await revocation).remaining_revisions,1)
+        self.assertEqual(path.read_text(),'secret')
+        callbacks=[]
+        with self.assertRaises(PrivacyFence):
+            await self.store.publish(self.revision,publish=lambda:callbacks.append('unsafe'),origins=(self.origin,))
+        self.assertEqual(callbacks,[])
+
+    async def test_external_writer_failure_does_not_erase_preexisting_recovery_metadata(self):
+        await self.store.record(self.revision,origins=(self.origin,))
+        path=self.root/'canonical.txt'
+        def partial():
+            path.write_text('secret')
+            raise RuntimeError('simulated crash after canonical write')
+        with self.assertRaises(RuntimeError):
+            await self.store.publish(self.revision,publish=partial,origins=(self.origin,))
+        restarted=SqliteContentPrivacyStore(self.store.path)
+        self.assertEqual((await restarted.enqueue(self.request)).remaining_revisions,1)
+        self.assertEqual(path.read_text(),'secret')
 
     async def test_subject_source_group_and_tenant_are_exact(self):
         for i, origin in enumerate((replace(self.origin, subjects=('customer-2',)),

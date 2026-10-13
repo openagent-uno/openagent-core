@@ -63,6 +63,7 @@ class _Registration:
     visible_from_revision: int = 0
     revoked: bool = False
     result_provenance: Callable | None = None
+    privacy_fenced: Mapping[str, bool] | bool = False
     references: dict[str, tuple[str, ToolDefinition]] = field(default_factory=dict)
 
 
@@ -103,10 +104,12 @@ class CapabilityCatalog:
     def register(self, source_id: str, source: CapabilitySource, executor: ToolExecutor, *,
                  target_label: str, lease: CapabilityLease | None = None,
                  trusted_effects: Mapping[str, frozenset[str]] | frozenset[str] = frozenset(),
-                 graph_generation: int | None = None, result_provenance: Callable | None = None) -> None:
+                 graph_generation: int | None = None, result_provenance: Callable | None = None,
+                 privacy_fenced: Mapping[str, bool] | bool = False) -> None:
         self._register(source_id, source, executor, target_label=target_label, managed=True,
                        lease=lease, trusted_effects=trusted_effects,
-                       graph_generation=graph_generation, result_provenance=result_provenance)
+                       graph_generation=graph_generation, result_provenance=result_provenance,
+                       privacy_fenced=privacy_fenced)
 
     def register_user_source(self, source_id: str, source: CapabilitySource, executor: ToolExecutor, *,
                              target_label: str, graph_generation: int | None = None) -> None:
@@ -123,15 +126,20 @@ class CapabilityCatalog:
     def _register(self, source_id: str, source: CapabilitySource, executor: ToolExecutor, *,
                   target_label: str, managed: bool, lease: CapabilityLease | None = None,
                   trusted_effects: Mapping[str, frozenset[str]] | frozenset[str] = frozenset(),
-                  graph_generation: int | None = None, result_provenance: Callable | None = None) -> None:
+                  graph_generation: int | None = None, result_provenance: Callable | None = None,
+                  privacy_fenced: Mapping[str, bool] | bool = False) -> None:
         key = (source_id, graph_generation)
         if not source_id or key in self._sources:
             raise ValueError("Capability source IDs must be unique")
         if lease and lease.source_id != source_id:
             raise ValueError("The lease must identify this exact source")
+        if not (type(privacy_fenced) is bool or (isinstance(privacy_fenced,Mapping)
+                and all(isinstance(name,str) and type(value) is bool for name,value in privacy_fenced.items()))):
+            raise ValueError('Privacy writer admission must be a trusted boolean policy')
         registration = _Registration(source_id, source, executor, target_label, managed,
                                      lease, trusted_effects, graph_generation,
-                                     self._next_revision(), result_provenance=result_provenance)
+                                     self._next_revision(), result_provenance=result_provenance,
+                                     privacy_fenced=copy.deepcopy(privacy_fenced))
         self._sources[key] = registration
 
     def revoke(self, source_id: str) -> None:
@@ -321,7 +329,9 @@ class CapabilityCatalog:
                 await require_authorized(self.authorizer,context,action,resource,audience=context.audience)
         await authorize("tool.call")
         if privacy_publisher is not None:
-            await privacy_publisher.validate_tool_admission(context,run_id)
+            await privacy_publisher.validate_tool_admission(context,run_id,
+                privacy_fenced=(registration.privacy_fenced.get(definition.name,False)
+                    if isinstance(registration.privacy_fenced,Mapping) else registration.privacy_fenced))
         current = tuple(replace(d, effects=d.effects & (registration.trusted_effects.get(d.name, frozenset()) if isinstance(registration.trusted_effects, Mapping) else registration.trusted_effects))
                         for d in await registration.source.discover(context))
         if definition not in current or not self._available(registration, context):
