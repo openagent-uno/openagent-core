@@ -14,8 +14,8 @@ artifact/revision pairs; origins propagate transitively within the same tenant.
 Missing parents fail rather than lose attribution. Generation identifies an
 original authorization grant, not a rotating token version. A newer verified
 grant may coexist with a request limited to older generations. Unknown subject
-attribution conservatively matches customer redaction within the authorized
-store; it must not turn missing identity into an exemption.
+attribution conservatively fences customer redaction within the authorized
+store; customer-specific processing remains blocked until that scope is resolved.
 
 `PrivacyRequest.operation` is `redact` or `export`. Enqueue is idempotent for an
 exact immutable request and snapshots matching revisions while admitting the
@@ -34,8 +34,8 @@ and must be idempotent. The host delivers exports through its authorized,
 protected destination; this metadata ledger never archives exported content.
 
 Every ledger retains an immutable required-surface configuration. Defaults cover
-transcripts, compaction, child sessions, Vault, attachments, files, search and run
-replay. A host must add enabled external surfaces and attest writer instrumentation
+transcripts, compaction, child sessions, Vault, attachments, files, search, run
+replay and session journal. A host must add enabled external surfaces and attest writer instrumentation
 and historical baseline coverage before processing. Missing coverage blocks even
 requests with no tracked targets. An authenticated broker delivery ACK establishes
 durable receipt only; it cannot establish privacy completion.
@@ -49,9 +49,11 @@ compliant by registering a root directory. Mixed revisions require their own
 span/revision-aware sink, or explicit human review. Local exports must not be
 emailed or returned to a provider without the host's explicit delivery policy.
 
-This contract is an implementation checkpoint. It does **not** instrument the
-engine's existing transcript, legacy run replay, compaction, Vault or attachment
-writers. Until those canonical writers and historical data are covered, the
+This candidate instruments selected real public/engine/compaction/child/journal
+writers and canonical search refresh, and fences unsupported Vault/channel and
+snapshot publication. It does not establish coverage of every historical record,
+cached context, media, Vault/Git revision or actual product schema. Until every
+enabled writer and historical baseline is qualified through published APIs, the
 standalone Shopify enrollment gate remains closed. A successful graph/job test
 is not a complete Shopify privacy qualification. Metadata backups and canonical
 content backups also need the host's retention/redaction policy.
@@ -77,11 +79,11 @@ idempotent. Started metadata transactions use the public cancellation-drain help
 file operations have an explicit byte bound. `secure_delete` scrubs replaced cells and a successful truncating
 WAL checkpoint is required; a reader holding old pages blocks completion.
 
-Search refresh intents are enqueued with new source versions, but enqueue is not
-proof of index redaction. The **only qualified coverage** of this adapter is
-`terminal-public-run`; the normal required-surface set remains closed. Legacy
-engine projections, active streaming, child-session propagation, Vault/Git,
-attachments, context snapshots, search replicas and backups are not qualified.
+This terminal-capture entrypoint alone qualifies only `terminal-public-run`.
+The later checkpoints instrument live source/engine/child publication, and its
+optional canonical search adapter requires consumed erasure and WAL cleanup.
+The normal required-surface set remains gated: cached engine context, Vault/Git,
+external indexes, host snapshots and baseline historical copies remain gaps.
 It is not yet connected to the standalone connector pipeline or its public wheel
 pins. Do not use this narrower receipt as a Shopify privacy-completion claim.
 
@@ -92,18 +94,20 @@ and Gmail result remain, ordinary events remain immutable, missing/active exact
 calls are rejected, and exports remain scoped. These tests do not qualify an
 actual provider consent or a running product with the legacy engine adapter.
 
-## Remaining canonical writer integration
+## Canonical writer coverage and remaining integration
 
 | Surface | Existing canonical write/read point | Required completion work |
 | --- | --- | --- |
-| Live tool results | `CapabilityCatalog.call_tool` → `RuntimeStore.finish_tool` | Bind origins from trusted host connector executor before publication; atomically commit provenance with content; serialize revocation with in-flight publication |
-| Generated stream | `AgentExecutor.execute` → `RuntimeStore.append_event` | Carry run origins through live delta/status/done events and inherited earlier context; fence late writes and cancellation |
-| Engine transcripts | runner `aupsert_session` → `memory.store.sqlite.SqliteDb.upsert_session` | Track exact original tool-call/results and derived messages within legacy run envelopes and normalized projections; redact both authorities without broad session deletion |
-| Compaction | `core.compaction._save_runs` and operational `context_snapshots` | Carry folded source revisions/predecessors into summary lineage; erase eligible recaps plus legacy copies and reject restoration of revoked generations |
-| Child sessions | `ExecutionContext.child` and `Runtime.spawn` | Inherit only the admitted parent snapshot's origins, persist mission/result lineage and cover later child continuation without deleting unrelated human input |
+| Live tool results | `CapabilityCatalog.call_tool` → `RuntimeStore.finish_tool` | Candidate atomic source/fragment/intent hooks covered; host provider schemas and public artifact consumers still require qualification |
+| Generated stream | `AgentExecutor.execute` → `RuntimeStore.append_event` | Candidate delta/status/done and inherited origin fences covered; external executor/cached stream copies still need inventory |
+| Engine transcripts | runner `aupsert_session` → `memory.store.sqlite.SqliteDb.upsert_session` | Selected raw fragments/final fields and legacy/public copies covered; cached context, arbitrary metadata/session state, events/media remain gaps |
+| Compaction | `core.compaction._save_runs` and operational `context_snapshots` | Real recap/fold lineage covered; context_snapshots has no Core writer, host-written/historical snapshots require separate adapters |
+| Child sessions | `ExecutionContext.child` and `Runtime.spawn` | Real agent mission/final copies covered; attachments blocked, external executors and copied historical contexts remain gaps |
+| Session journal | `MemoryDB.append_session_event` | Candidate canonical transaction/fragment sink covered; actual host raw/user replay schemas and historical rows need qualification |
 | Vault | `VaultService.write_note/delete_note/restore_to` and `VaultGit` | Track mixed note revisions/spans and originals; redact historical Git blobs/reflogs with preserved unrelated revisions, rebuild derived indexes and fence restore/autocommit |
 | Attachments/files | attachment store and host-managed file writers | Bind managed artifact origins and revisions; erase replicas/derivatives, enforce paths, preserve untracked human edits, exclude arbitrary external shell/MCP writes from claimed coverage |
-| Search | operational search outbox/extractor/index | Require consumed erasure confirmation and cache/WAL cleanup; an enqueued source-version update alone is not completion |
+| Search | operational search outbox/extractor/index | Canonical refresh boundary/FTS/WAL qualified; external/Vault indexes and historical generations remain host inventory |
+| State snapshots | pre-DDL backup and public migration/restore | Protected cohorts fenced before copying; historical backups require inventory, managed backup lineage/sink remains future work |
 | Export delivery | product-authorized privacy delivery path | Protect export staging, validate destination and explicit recipient authority, support exact request/revision deduplication and durable retry without central content persistence |
 
 The protocol/metadata and terminal sink checkpoints intentionally cannot assert
@@ -360,3 +364,22 @@ explicit host inventory/manual reconciliation gap; no existing backup is deleted
 A future managed backup implementation must register lineage, exact snapshots
 and erasure/recovery before this fence can be relaxed. A generic coverage string
 does not authorize an unmanaged snapshot of protected state.
+
+## First provider invocation scope
+
+Trusted registration may also supply
+`invocation_provenance(descriptor, arguments, context, call_id) -> tuple[ContentOrigin]`.
+The callback resolves the installation/app/shop/grant before external IO, and the
+public publisher `begin_tool` writes that scope, argument revisions and durable
+intent atomically. Technical pagination queries can retain source-bound
+`nonpersonal=True`; unclassifiable customer queries retain unknown scope and block
+customer-specific completion. Source labels in model arguments cannot choose the
+provider/app/grant. The provider response's attributed scopes must retain the
+exact admitted installation binding; a changed group/generation/app fails
+publication. Source revocation is rechecked after resolving scope.
+
+The real catalog test observes a recorded first-source intent inside the API
+executor, rejects a response bound to a different shop, and confirms revoked
+scope causes no subsequent API invocation. Result-only callbacks remain a
+compatibility entrypoint; an official provider host must install both callbacks
+before claiming first-invocation crash/privacy coverage.

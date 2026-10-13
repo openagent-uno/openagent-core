@@ -319,7 +319,7 @@ class SqliteRuntimeStore:
         with self._transaction() as db:
             return self._event(db,run_id,kind,payload)
 
-    def _begin_tool(self, run_id: str, call_id: str, binding: Mapping[str, Any], arguments: Mapping[str, Any]) -> None:
+    def _begin_tool(self, run_id: str, call_id: str, binding: Mapping[str, Any], arguments: Mapping[str, Any], *, _privacy_intent=None) -> None:
         """Commit the invocation intent before allowing an external effect."""
         with self._transaction() as db:
             run = db.execute('SELECT * FROM session_runs WHERE id=?', (run_id,)).fetchone()
@@ -345,7 +345,12 @@ class SqliteRuntimeStore:
             principal=PrincipalRef(context['authority']['authority'],run['tenant_id'],context['agent_id'],'agent')
             self._message(db,run_id,'tool','',principal.key,'agent',now,tool_call_id=call_id,status='streaming')
             self._event(db,run_id,'tool.invoking',payload)
-            if self._content_privacy_publication is not None:
+            if _privacy_intent is not None:
+                publisher,origins=_privacy_intent
+                if publisher is not self._content_privacy_publication:
+                    raise PrivacyConflict('A stale intent publisher cannot write this store')
+                publisher.record_invocation_intent(db,run_id,call_id,source_origins=origins)
+            elif self._content_privacy_publication is not None:
                 self._content_privacy_publication.record_invocation_intent(db,run_id,call_id)
 
     def _finish_tool(self, run_id: str, call_id: str, *, result: Any = None, error: Mapping[str, Any] | None = None,

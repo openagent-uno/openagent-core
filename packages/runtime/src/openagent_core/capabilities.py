@@ -63,6 +63,7 @@ class _Registration:
     visible_from_revision: int = 0
     revoked: bool = False
     result_provenance: Callable | None = None
+    invocation_provenance: Callable | None = None
     privacy_fenced: Mapping[str, bool] | bool = False
     references: dict[str, tuple[str, ToolDefinition]] = field(default_factory=dict)
 
@@ -105,11 +106,11 @@ class CapabilityCatalog:
                  target_label: str, lease: CapabilityLease | None = None,
                  trusted_effects: Mapping[str, frozenset[str]] | frozenset[str] = frozenset(),
                  graph_generation: int | None = None, result_provenance: Callable | None = None,
-                 privacy_fenced: Mapping[str, bool] | bool = False) -> None:
+                 privacy_fenced: Mapping[str, bool] | bool = False, invocation_provenance: Callable | None = None) -> None:
         self._register(source_id, source, executor, target_label=target_label, managed=True,
                        lease=lease, trusted_effects=trusted_effects,
                        graph_generation=graph_generation, result_provenance=result_provenance,
-                       privacy_fenced=privacy_fenced)
+                       privacy_fenced=privacy_fenced,invocation_provenance=invocation_provenance)
 
     def register_user_source(self, source_id: str, source: CapabilitySource, executor: ToolExecutor, *,
                              target_label: str, graph_generation: int | None = None) -> None:
@@ -127,7 +128,7 @@ class CapabilityCatalog:
                   target_label: str, managed: bool, lease: CapabilityLease | None = None,
                   trusted_effects: Mapping[str, frozenset[str]] | frozenset[str] = frozenset(),
                   graph_generation: int | None = None, result_provenance: Callable | None = None,
-                  privacy_fenced: Mapping[str, bool] | bool = False) -> None:
+                  privacy_fenced: Mapping[str, bool] | bool = False, invocation_provenance: Callable | None = None) -> None:
         key = (source_id, graph_generation)
         if not source_id or key in self._sources:
             raise ValueError("Capability source IDs must be unique")
@@ -139,7 +140,7 @@ class CapabilityCatalog:
         registration = _Registration(source_id, source, executor, target_label, managed,
                                      lease, trusted_effects, graph_generation,
                                      self._next_revision(), result_provenance=result_provenance,
-                                     privacy_fenced=copy.deepcopy(privacy_fenced))
+                                     privacy_fenced=copy.deepcopy(privacy_fenced),invocation_provenance=invocation_provenance)
         self._sources[key] = registration
 
     def revoke(self, source_id: str) -> None:
@@ -319,7 +320,7 @@ class CapabilityCatalog:
         run_id = current_run_id()
         durable = runtime is not None and runtime.capabilities is self and run_id is not None
         privacy_publisher = runtime.service(ToolResultPrivacyPublisher) if durable else None
-        if registration.result_provenance is not None:
+        if registration.result_provenance is not None or registration.invocation_provenance is not None:
             if privacy_publisher is None:
                 raise CapabilityUnavailable('This source requires a canonical provenance publisher')
         async def authorize(action):
@@ -346,7 +347,17 @@ class CapabilityCatalog:
             provider_call_id = current_provider_tool_call_id()
             if provider_call_id is not None:
                 binding['provider_call_id'] = provider_call_id
-            await runtime.services.store.begin_tool(run_id,call_id,binding,arguments)
+            if registration.invocation_provenance is not None:
+                intent_origins=await registration.invocation_provenance(descriptor,copy.deepcopy(dict(arguments)),context,call_id)
+                if (not isinstance(intent_origins,tuple) or not intent_origins or len(intent_origins)>4096
+                        or any(not isinstance(origin,ContentOrigin) or origin.tenant_id!=context.tenant_id for origin in intent_origins)):
+                    raise ValueError('Invocation scope must be host-bound to this exact tenant')
+                await authorize('tool.call')
+                if not self._available(registration,context):
+                    raise CapabilityUnavailable('The invocation source was revoked while resolving trusted scope')
+                await privacy_publisher.begin_tool(context,run_id,call_id,binding,arguments,intent_origins)
+            else:
+                await runtime.services.store.begin_tool(run_id,call_id,binding,arguments)
         try:
             result = await registration.executor.call_tool(definition.name, copy.deepcopy(dict(arguments)), context)
             # Publication is distinct from execution. Do not persist the

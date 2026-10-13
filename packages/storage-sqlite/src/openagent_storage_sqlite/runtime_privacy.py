@@ -264,6 +264,8 @@ class SqliteToolResultPrivacyPublisher:
             field TEXT NOT NULL,path TEXT NOT NULL)''')
         runtime_store.connection.execute('''CREATE TABLE IF NOT EXISTS runtime_privacy_tool_partitions(
             invocation TEXT PRIMARY KEY,partition_json TEXT NOT NULL)''')
+        runtime_store.connection.execute('''CREATE TABLE IF NOT EXISTS runtime_privacy_intent_scopes(
+            invocation TEXT PRIMARY KEY,origins TEXT NOT NULL)''')
         runtime_store._content_privacy_publication = self
 
     def _origins(self, db, run_id):
@@ -348,10 +350,16 @@ class SqliteToolResultPrivacyPublisher:
 
     def record_completed_tool(self,db,run_id,call_id,origins):
         self._guard(db,run_id)
+        source_assertion=isinstance(origins,ToolResultProvenance) or bool(origins)
         partition=origins if isinstance(origins,ToolResultProvenance) else None
         origins=partition.origins if partition else (origins or self._origins(db,run_id))
-        self._merge(db,run_id,origins)
         tool=db.execute('SELECT id FROM tool_invocations WHERE session_run_id=? AND tool_call_id=?',(run_id,call_id)).fetchone()
+        intent=db.execute('SELECT origins FROM runtime_privacy_intent_scopes WHERE invocation=?',(tool['id'],)).fetchone()
+        if intent and source_assertion:
+            admitted={tuple(value[key] for key in ('tenant_id','source_id','group_id','generation')) for value in json.loads(intent[0])}
+            if any((origin.tenant_id,origin.source_id,origin.group_id,origin.generation) not in admitted for origin in origins):
+                raise PrivacyConflict('Provider result does not retain its admitted connection scope')
+        self._merge(db,run_id,origins)
         if partition is None and origins:
             partition=ToolResultProvenance((ContentFragment((),tuple(origins)),))
         if partition:
@@ -373,8 +381,13 @@ class SqliteToolResultPrivacyPublisher:
             ORDER BY r.rowid DESC LIMIT 1''',(tool_id,)).fetchone()
         return tuple(self.ledger._origin(origin) for origin in json.loads(row[0])) if row else ()
 
-    def record_invocation_intent(self,db,run_id,call_id):
+    def record_invocation_intent(self,db,run_id,call_id,*,source_origins=()):
         self._guard(db,run_id)
+        if source_origins:
+            from dataclasses import asdict
+            self._merge(db,run_id,source_origins)
+            tool=db.execute('SELECT id FROM tool_invocations WHERE session_run_id=? AND tool_call_id=?',(run_id,call_id)).fetchone()
+            db.execute('INSERT INTO runtime_privacy_intent_scopes VALUES(?,?)',(tool['id'],json.dumps([asdict(origin) for origin in source_origins])))
         origins=self._origins(db,run_id)
         if not origins: return
         tool=db.execute('SELECT id FROM tool_invocations WHERE session_run_id=? AND tool_call_id=?',(run_id,call_id)).fetchone()
@@ -383,6 +396,14 @@ class SqliteToolResultPrivacyPublisher:
         for row in db.execute("SELECT event_id,metadata_json FROM domain_events WHERE run_id=? AND event_type='tool.invoking'",(run_id,)):
             if json.loads(row['metadata_json']).get('call_id')==call_id:
                 self._fragment(db,'event',row['event_id'],'metadata_json',('arguments',),origins)
+
+    async def begin_tool(self,context,run_id,call_id,binding,arguments,origins):
+        await self.origins_for_execution(context,run_id)
+        if (not isinstance(origins,tuple) or not origins or any(origin.tenant_id!=context.tenant_id for origin in origins)):
+            raise PrivacyConflict('Invocation scope crossed the admitted tenant')
+        from openagent_core.persistence import run_sync
+        async with self.runtime_store._operation_lock:
+            await run_sync(self.runtime_store._begin_tool,run_id,call_id,binding,arguments,_privacy_intent=(self,origins))
 
     def record_failed_tool(self,db,run_id,call_id):
         self._guard(db,run_id)

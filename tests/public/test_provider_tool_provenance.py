@@ -251,3 +251,49 @@ class ToolProvenance(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn('UNCLASSIFIED NEVER PERSIST',str(await store.events('run')))
             finally:
                 await runtime.close()
+
+    async def test_first_source_intent_is_bound_before_api_io_and_result_cannot_change_scope(self):
+        from dataclasses import replace
+        from openagent_core.content_privacy import ContentOrigin,PrivacyRequest,PrivacyFence,PrivacyConflict,ToolResultPrivacyPublisher
+        from openagent_storage_sqlite.content_privacy import SqliteContentPrivacyStore
+        from openagent_storage_sqlite.runtime_privacy import SqliteToolResultPrivacyPublisher
+        with tempfile.TemporaryDirectory() as directory:
+            p=PrincipalRef('host','tenant','user');context=ExecutionContext(p,p,p,'session','agent',(p,))
+            class Allow:
+                async def authorize(self,*args,**kwargs): return True
+            policy=Allow();store=SqliteRuntimeStore(Path(directory)/'state.sqlite');catalog=CapabilityCatalog(policy)
+            connection=ContentOrigin('tenant','shopify/app','shop',1,nonpersonal=True)
+            result_origin=replace(connection,nonpersonal=False,subjects=('customer:23',))
+            calls=[]
+            async def intent(descriptor,arguments,context,call_id):return (connection,)
+            async def read(arguments,context):
+                calls.append(arguments)
+                self.assertGreater(store.connection.execute('SELECT count(*) FROM runtime_privacy_intent_scopes').fetchone()[0],0)
+                self.assertGreater(store.connection.execute("SELECT count(*) FROM runtime_privacy_fragments WHERE field='args_json'").fetchone()[0],0)
+                return {'private':'PROVIDER RESPONSE','wrong_scope':arguments.get('wrong',False)}
+            async def provenance(descriptor,result,context,call_id):
+                return (replace(result_origin,group_id='different-shop') if result['wrong_scope'] else result_origin,)
+            source=FunctionSource((ToolDefinition('read','Read',{}),),{'read':read})
+            catalog.register('shop',source,source,target_label='Shop',result_provenance=provenance,
+                             invocation_provenance=intent,privacy_fenced=True)
+            async def execute(request,context,runtime):
+                ref=(await catalog.discover(context))[0].tool_ref
+                await catalog.call_tool(ref,{'page':1},context,call_id='first')
+                with self.assertRaises(PrivacyConflict):
+                    await catalog.call_tool(ref,{'wrong':True},context,call_id='wrong')
+                await ledger.enqueue(PrivacyRequest('revoke','tenant','shopify/app','shop',1,'redact'))
+                with self.assertRaises(PrivacyFence):
+                    await catalog.call_tool(ref,{'page':3},context,call_id='revoked')
+                return None
+            runtime=Runtime(RuntimeSettings('agent',Path(directory)),RuntimeServices(store,SimpleNamespace(execute=execute),policy,catalog))
+            await runtime.start()
+            try:
+                ledger=SqliteContentPrivacyStore(store.path)
+                runtime.services.registry.bind(ToolResultPrivacyPublisher,SqliteToolResultPrivacyPublisher(store,ledger))
+                await runtime.submit(RunRequest('run','session','key','human'),context)
+                self.assertEqual((await runtime.wait('run',context)).status,'success')
+                self.assertEqual(len(calls),2)
+                rows=store.connection.execute('SELECT tool_call_id,result_json FROM tool_invocations').fetchall()
+                self.assertEqual(len(rows),2)
+                self.assertIsNotNone(rows[0]['result_json']);self.assertIsNone(rows[1]['result_json'])
+            finally:await runtime.close()
