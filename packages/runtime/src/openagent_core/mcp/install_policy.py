@@ -55,8 +55,8 @@ nightly cron.
 WHY ENABLING IT IS ONE LINE FOR THE FLEET
 -----------------------------------------
 The default-on posture, with no allowlist at all, is "freeze the capability
-set": no new MCPs at runtime. For an unattended production agent (eSound,
-Lyra, Spicysparks) that is the correct posture and needs no per-package
+set": no new MCPs at runtime. For an unattended production agent (example-product-a,
+example-product-b, example-host) that is the correct posture and needs no per-package
 knowledge — their capability set is provisioned once and should not change
 because a model read a web page. ``allow_patterns`` is the escape hatch for
 the agents that genuinely install, and exists for the same reason

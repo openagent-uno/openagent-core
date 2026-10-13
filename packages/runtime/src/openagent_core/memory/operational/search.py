@@ -102,7 +102,7 @@ def _harden_index_files(path: Path) -> None:
             os.chmod(candidate, 0o600)
         except OSError as exc:
             raise RuntimeError("operational search files cannot be made owner-only") from exc
-        # POSIX mode bits are authoritative on Friday/Linux and macOS.  Windows
+        # POSIX mode bits are authoritative on example-agent/Linux and macOS.  Windows
         # chmod only exposes the read-only bit; its effective ACL is inherited
         # from the already-private agent directory instead.
         if os.name != "nt" and candidate.stat().st_mode & 0o077:
@@ -1161,7 +1161,7 @@ async def warm_operational_search(db: Any, *, batch_size: int = 10_000) -> Searc
     Capability discovery uses this on fresh installs so clients never need to
     call an unadvertised endpoint to advance a capped one-shot warm-up. Each
     transaction remains bounded; yielding between batches keeps cancellation
-    responsive even for Friday-scale imports.
+    responsive even for example-agent-scale imports.
     """
 
     while True:

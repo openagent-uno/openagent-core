@@ -288,7 +288,7 @@ def _keep_runs() -> int:
 # re-fetch pointer. This is the second half of the bound-session bloat fix:
 # ``src/core/tool_output.py`` caps ONE tool result at fetch time, but a long
 # tool-loop's MANY (individually-capped) results still SUM into a kept run, and
-# every kept run is re-sent on every following turn — the live symptom was lyra
+# every kept run is re-sent on every following turn — the live symptom was example-product-b
 # turns at 0.9–1.2M input tokens. Eliding stale tool output from history bounds
 # that footprint WITHOUT touching the turn that fetched it (it already reasoned
 # over the full result) and WITHOUT touching the most recent run (its tool

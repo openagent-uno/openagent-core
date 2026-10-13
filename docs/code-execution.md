@@ -1,3 +1,4 @@
+<!-- Concrete host labels in this historical record are anonymized; original bytes and hashes are retained in the protected operator audit. -->
 # Host-owned code execution
 
 `RuntimeServices.code_executor` accepts a structural implementation of the public
@@ -15,7 +16,7 @@ end of the call; the host owns executor lifecycle and infrastructure cleanup.
 
 `openagent-execution` in the tools repository is an independent implementation
 backed by `openagent-shell`. It has no engine dependency. OpenAgent standalone
-composes its explicitly selected local or Docker backend; GlassPalace supplies
+composes its explicitly selected local or Docker backend; embedding-host supplies
 its already provisioned dedicated agent pod and forwards no provider or workload
 credentials. Replio does not enable PTC or provide an executor.
 

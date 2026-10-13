@@ -701,8 +701,8 @@ async def _arun_runtime_stream(
         # happened to the per-delta frames, a run that finished carries its own final
         # text, and both classes are already matched here for token accounting.
         #
-        # Measured on production 2026-08-09: the fallback fired on 16% of eSound runs
-        # and 25% of Lyra's, single reason ``no_deltas_yielded``, on turns whose
+        # Measured on production 2026-08-09: the fallback fired on 16% of example-product-a runs
+        # and 25% of example-product-b's, single reason ``no_deltas_yielded``, on turns whose
         # leader ran 8 tools and emitted no prose. At ~315k cumulative tokens per run
         # against a weekly quota already ~30% short, those are the most expensive
         # duplicate calls in the system.
@@ -1859,7 +1859,7 @@ class ModelDispatcher(BaseModel):
             # dispatcher ha ancora `providers_config=[]`: senza base_url nessuna
             # riga si costruisce, ogni pedana viene saltata e la catena resta
             # VUOTA. Cosi' un rate limit uccide il run invece di scendere di
-            # pedana — misurato il 4-set-2026 su lyra ed esound, con otto
+            # pedana — misurato il 4-set-2026 su example-product-b ed example-product-a, con otto
             # `router.local_fallback_model_error` (una per pedana, haiku
             # compreso) e zero ripieghi in un giorno intero di quota ChatGPT
             # esaurita. L'ultimo ripiego riuscito risaliva al 28-ago.

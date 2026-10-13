@@ -1,7 +1,7 @@
 """Deterministic execution block for scheduled tasks.
 
 Some scheduled tasks carry no judgement at all. The three ``reply-*`` tasks in
-the eSound agent say it outright: send THIS EXACT TEXT, do not rephrase, do not
+the example-product-a agent say it outright: send THIS EXACT TEXT, do not rephrase, do not
 add a signature. A human already approved the wording; routing it through a
 model can only subtract.
 

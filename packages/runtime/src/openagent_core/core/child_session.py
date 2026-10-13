@@ -82,7 +82,7 @@ _GLOBAL_CONCURRENCY = 16
 # global pool and queued every other session on the server — one misbehaving
 # cron could freeze the whole agent.
 #
-# Why 5: the production crons on this runtime (eSound, Lyra, Spicysparks) fan
+# Why 5: the production crons on this runtime (example-product-a, example-product-b, example-host) fan
 # out cron → per-item sub-agent → that sub-agent's own helper, so depth 2-3 is
 # NORMAL traffic, not an anomaly. 5 leaves two clear levels of headroom above
 # the deepest legitimate workload while still cutting an unbounded self-

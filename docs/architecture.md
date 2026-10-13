@@ -1,3 +1,4 @@
+<!-- Concrete host labels in this historical record are anonymized; original bytes and hashes are retained in the protected operator audit. -->
 # Embedding architecture
 
 ## Packages and products
@@ -14,7 +15,7 @@ the agent engine. The product monorepo `openagent` owns the standalone server,
 app, CLI, MCP bridge, native identity, dashboards, configuration, installers,
 updaters, and support integrations.
 
-GlassPalace imports pinned library distributions into its own Python worker and
+embedding-host imports pinned library distributions into its own Python worker and
 image. Its Go control plane owns authentication, delivery, projections, connector
 policy, computers, pods, sandboxes, resource limits, credentials, and volumes.
 The runtime accepts resources already prepared by the host and has no Kubernetes
@@ -103,7 +104,7 @@ existing immutable domain event log; it invents neither a message nor a session
 owner. If the delayed request arrives, its real author and input are stored with
 terminal cancelled status and no executor starts.
 
-GlassPalace's delivery record tracks attempts, leases, frozen input, acceptance,
+embedding-host's delivery record tracks attempts, leases, frozen input, acceptance,
 and uncertainty. Its runtime projection consumes durable events with a cursor.
 The 16-minute execution deadline belongs to the runtime; the acceptance request
 has a short timeout. A failed HTTP read triggers reconciliation of the same run.

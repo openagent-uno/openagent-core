@@ -53,7 +53,7 @@ def test_real_authorization_error_can_be_reported() -> None:
 
 
 def test_attributed_user_report_is_not_misclassified_as_a_tool_claim() -> None:
-    user = "Friday mi ha mostrato Not authorized for memory.manage"
+    user = "Un altro agente mi ha mostrato Not authorized for memory.manage"
     reply = (
         "L'errore che hai segnalato, Not authorized for memory.manage, "
         "va verificato con una chiamata reale."

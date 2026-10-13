@@ -2,7 +2,7 @@
 
 Abbiamo gia' un tetto: 60 chiamate per esecuzione, oltre il quale il runtime
 smette di eseguire. Il tetto pero' non ha visto il caso vero. Il 25-ago su
-SpicySparks ``docs-keeper`` e' arrivato a 46 chiamate — SOTTO il tetto — e ha
+example-host ``docs-keeper`` e' arrivato a 46 chiamate — SOTTO il tetto — e ha
 bruciato 857.876 token di input freschi, perche' ogni passo rimanda l'INTERO
 contesto e un agent che continua a chiedere si ripaga tutta la sua storia a
 ogni giro. Un tetto ferma la corsa dopo che il danno e' fatto; non riconosce

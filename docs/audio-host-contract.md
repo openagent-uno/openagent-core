@@ -1,3 +1,4 @@
+<!-- Concrete host labels in this historical record are anonymized; original bytes and hashes are retained in the protected operator audit. -->
 # Explicit host audio
 
 `openagent_core.audio.VoiceService(db, fallback=None, worker_command=None, timeout_seconds=120)` resolves the latest enabled audio model using the existing provider/model IDs and metadata. `transcribe(path, language=None)` returns text or `None`; `synthesize(text, language=None)` returns `SynthesizedAudio(data, media_type)` or `None`.
@@ -8,6 +9,6 @@ A frozen product supplies `worker_command=(executable, '_audio-worker')` and dis
 
 Configured audio requires an explicit key and endpoint (registered OpenAI, Groq and ElevenLabs default endpoints are available); other vendors retain their LiteLLM adapter and require a configured endpoint. TTS sanitization and model metadata remain unchanged. Hosts authorize before invocation and again before publishing results.
 
-The GlassPalace consumer contract suite tests real isolated workers against a deterministic authenticated HTTP provider, STT metadata, TTS WAV/voice/speed, ambient credential/proxy canaries and cancellation reaping. This is not a commercial provider or physical microphone qualification.
+The embedding-host consumer contract suite tests real isolated workers against a deterministic authenticated HTTP provider, STT metadata, TTS WAV/voice/speed, ambient credential/proxy canaries and cancellation reaping. This is not a commercial provider or physical microphone qualification.
 
 When a host submits a `TextFinal` with `source="stt"`, the stream keeps the original voice file in the durable user message and attachment links, while passing the transcript as text to the chat model. Other attachments in the same turn still reach the model. A typed turn with untranscribed audio retains native audio capability routing. This lets a host use a text-only chat model with a separate STT provider without falsely claiming the chat model accepts audio.

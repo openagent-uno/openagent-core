@@ -99,7 +99,7 @@ everything. Known and accepted residual FP modes:
 * A note can retire a subject and then self-correct on the SAME line ("canale
   primario ... -- NON primario; BillingBear MCP prevale"). The line reads as
   affirmative, so it pairs against the note it actually agrees with. Also a
-  real FP in the measured run (``esound-admin.py``).
+  real FP in the measured run (``example-product-a-admin.py``).
 * An instruction can be scope-limited ("do not use ``send_message`` *in dream
   mode*") without contradicting the note that uses it elsewhere. Third real FP
   in the measured run.
@@ -311,7 +311,7 @@ def _is_specific_anchor(anchor: str, cfg: ContradictionConfig) -> bool:
     """True for a specific technical subject; False for a word, hash or phrase.
 
     Requiring a separator (``_`` / ``.`` / ``/``) is the single highest-value
-    precision filter: it is what distinguishes ``esound-admin.py`` (a subject)
+    precision filter: it is what distinguishes ``example-product-a-admin.py`` (a subject)
     from ``cat`` (a word that happens to appear near the word "mai").
     """
     if " " in anchor or not _IDENT_SHAPE_RE.match(anchor):
@@ -365,7 +365,7 @@ _LIST_GLUE_RE = re.compile(r"^[\s,;/()\[\]|+&]*(?:and|or|e|o|ed|od)?[\s,;/()\[\]
 # Deliberately only UNAMBIGUOUS boundaries. Two near-misses drove this list
 # down rather than up:
 #   * ``|`` is NOT a boundary. It separates markdown table CELLS, and a table
-#     row describes one subject ("| **FORBIDDEN** | `api.esound.app` |
+#     row describes one subject ("| **FORBIDDEN** | `api.example-product-a.invalid` |
 #     DEPRECATE |"). Treating it as a break suppressed the real negation and
 #     paired two notes that AGREE.
 #   * ``per``/``and`` are NOT boundaries. "DEPRECATE per AI agent" is one
@@ -501,7 +501,7 @@ def find_contradiction_candidates(
     # so it is dropped rather than guessed at.
     # Group by the exact set of notes on each side, so anchors that are always
     # named together collapse into the one decision they represent:
-    # `accounts.spicysparks.com` and `api.esound.app` are deprecated on the same
+    # `accounts.example-host.invalid` and `api.example-product-a.invalid` are deprecated on the same
     # line by the same notes and used by the same note — one issue, not two.
     grouped: dict[tuple, dict] = {}
     for anchor, per_note in table.items():

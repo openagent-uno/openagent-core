@@ -1,3 +1,4 @@
+<!-- Concrete host labels in this historical record are anonymized; original bytes and hashes are retained in the protected operator audit. -->
 # Authorized memory retrieval
 
 Every agent turn retains the framework's existing memory discipline. Recall remains a lead to verify against the current note or source; it is never promoted to an instruction or established fact. The host's system prompt does not replace these rules.
@@ -12,4 +13,4 @@ The tool response omits corpus-wide document totals, pending counts and index se
 
 The SQLite runtime writer appends search intents to the existing `search_outbox` in the same transaction as canonical session, message and tool changes. Acceptance retries create no duplicate message or intent. Starting a store restores missing intents for public runtime rows from early beta versions, without changing their authors or contents. The existing search consumer rebuilds its derived index from the retained latest intents after index loss.
 
-Verification lives in `tests/public/test_memory_access.py` and `test_runtime_search_outbox.py`: real SQLite private/shared/multi-tenant history, pagination, canonical grant revocation, abstract-principal MCP invocation, read-only recall, unknown historical owners, atomic failure rollback, tool redaction, idempotent retry, startup repair and derived-index reconstruction. These deterministic checks do not constitute authenticated App or GlassPalace UI acceptance.
+Verification lives in `tests/public/test_memory_access.py` and `test_runtime_search_outbox.py`: real SQLite private/shared/multi-tenant history, pagination, canonical grant revocation, abstract-principal MCP invocation, read-only recall, unknown historical owners, atomic failure rollback, tool redaction, idempotent retry, startup repair and derived-index reconstruction. These deterministic checks do not constitute authenticated App or embedding-host UI acceptance.

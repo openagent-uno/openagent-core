@@ -274,7 +274,7 @@ async def skill_manage(
     # prompt. An autonomous pass may create freely, but every mutation of an
     # existing skill is checked against who owns it and whether it is pinned.
     # A prompt is guidance a model follows most of the time; this decides
-    # whether a scheduled job can rewrite the playbook eSound answers
+    # whether a scheduled job can rewrite the playbook example-product-a answers
     # customers with.
     if action in ("update", "archive", "remove"):
         from openagent_core.mcp.servers.skills.provenance import mutation_refusal

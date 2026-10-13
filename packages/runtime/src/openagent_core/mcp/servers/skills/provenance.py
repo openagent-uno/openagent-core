@@ -5,7 +5,7 @@ user present to stop them. Their whole safety story is a boundary — they may
 only touch what the agent authored (``created_by: agent``) — and until now that
 boundary lived in a PROMPT. A prompt is guidance a model follows most of the
 time, which is the wrong strength for "may this process rewrite the playbook
-eSound answers customers with".
+example-product-a answers customers with".
 
 So the boundary moves into code. A ContextVar records the write origin for the
 duration of an autonomous pass; the skill tool consults it and refuses the

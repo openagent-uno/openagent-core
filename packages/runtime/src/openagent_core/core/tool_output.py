@@ -5,7 +5,7 @@ the conversation, and every subsequent model call in the turn — and, in a boun
 session, every subsequent turn — re-sends it. So one unbounded result is not
 paid once: it is paid on every step that follows it, forever.
 
-On 2026-07-13 an eSound vault note had grown to 642 KB (~160k tokens) of
+On 2026-07-13 an example-product-a vault note had grown to 642 KB (~160k tokens) of
 appended run-logs, and the support prompt mandated reading it before acting.
 It entered the context uncapped, was replayed on every agentic step (3.3 on
 average, 13 at worst), and the webhook lane alone burned ~412M input tokens in

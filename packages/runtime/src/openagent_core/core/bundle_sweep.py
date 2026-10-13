@@ -8,11 +8,11 @@ i 170 MB e i 900 MB.
 Misurato il 26-ago-2026 su tre agent in produzione, dopo una giornata di
 comandi da riga di comando dentro i pod:
 
-    lyra         130 estrazioni,  121 orfane,  35,2 GB
-    esound       150 estrazioni,  141 orfane,  66,0 GB
-    spicysparks   98 estrazioni,   89 orfane,  27,6 GB
+    example-product-b         130 estrazioni,  121 orfane,  35,2 GB
+    example-product-a       150 estrazioni,  141 orfane,  66,0 GB
+    example-host   98 estrazioni,   89 orfane,  27,6 GB
 
-L'overlay di Lyra era al **100%**: il nodo non riusciva piu' a scrivere
+L'overlay di example-product-b era al **100%**: il nodo non riusciva piu' a scrivere
 nemmeno il file di processo per aprire una shell nel container. Nessun allarme
 lo aveva detto, e i nodi non risultavano in ``DiskPressure`` — il pieno era
 dentro il container, non sul nodo. Si e' scoperto inciampandoci.
