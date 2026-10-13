@@ -663,7 +663,7 @@ def _trace_supports_completed_action(
 def _trace_supports_account_state(
     reply: str, rows: list[tuple[str, str]],
 ) -> bool:
-    """Require a same-turn authoritative BillingBear/admin read for state."""
+    """Require a same-turn authoritative BillingBear read for state."""
     low_reply = (reply or "").lower()
     wants_active = bool(re.search(r"\b(?:active|attiv[oa])\b", low_reply)) and not bool(
         re.search(r"\b(?:inactive|inattiv[oa])\b", low_reply)
@@ -674,7 +674,7 @@ def _trace_supports_account_state(
     ))
     for name, excerpt in rows:
         tool_identity = f"{name} {excerpt}".lower()
-        if "billingbear" not in tool_identity and "esound_admin" not in tool_identity:
+        if "billingbear" not in tool_identity:
             continue
         value = str(excerpt or "").lower()
         if not _trace_result_succeeded(value):

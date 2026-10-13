@@ -8,6 +8,15 @@ class _Agent:
     model = None
 
 
+def test_generic_admin_read_does_not_authorize_account_state() -> None:
+    from openagent_core.core.reply_guard import _trace_supports_account_state
+
+    reply = "Your subscription is active."
+    result = 'result={"isPremium":true,"status":"active"}'
+    assert not _trace_supports_account_state(reply, [("host_admin.read", result)])
+    assert _trace_supports_account_state(reply, [("billingbear.read", result)])
+
+
 def _guard(user_message: str, reply: str, rows: list[tuple[str, str]]) -> str:
     from openagent_core.core import reply_guard, tool_trace
 
