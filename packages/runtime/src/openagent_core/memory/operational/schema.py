@@ -268,7 +268,9 @@ async def _verified_backup(
         finally:
             destination.close()
 
-        with temp_path.open("rb") as handle:
+        # FlushFileBuffers on Windows needs a writable handle, even though
+        # SQLite has finished writing this consistent snapshot already.
+        with temp_path.open("r+b") as handle:
             os.fsync(handle.fileno())
         os.chmod(temp_path, 0o600)
         os.replace(temp_path, backup_path)
