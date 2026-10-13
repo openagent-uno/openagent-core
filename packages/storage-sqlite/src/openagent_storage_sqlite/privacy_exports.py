@@ -82,6 +82,11 @@ class EncryptedPrivacyExports:
             raise PrivacyConflict('Export source is outside the authenticated request')
         if not isinstance(payload, bytes) or len(payload) > self.max_part_bytes:
             raise ValueError('Export payload exceeds its host bound')
+        if not payload:
+            # Canonical sinks use empty bytes only for an absent/erased exact
+            # revision. There is no new content copy or inherited source to
+            # stage; seal records the fully covered empty delivery explicitly.
+            return
         request_bytes = _json(asdict(request))
         artifact = hashlib.sha256(_json([request.request_id, revision.artifact_id, revision.revision_id])).hexdigest()
         digest = hashlib.sha256(payload).hexdigest()
@@ -197,7 +202,26 @@ class EncryptedPrivacyExports:
         return await run_sync(read)
 
     async def apply(self, request, revision):
-        if request.operation != 'redact' or revision.sink_id != self.sink_id or revision.tenant_id != request.tenant_id:
+        if revision.sink_id != self.sink_id or revision.tenant_id != request.tenant_id:
+            return 'conflict'
+        if request.operation == 'export':
+            def read():
+                with self._db() as db:
+                    row = db.execute('SELECT * FROM export_parts WHERE artifact=?', (revision.artifact_id,)).fetchone()
+                    if row is None or row['erased'] or row['ciphertext'] is None:
+                        return b''
+                    if row['payload_digest'] != revision.content_sha256:
+                        raise PrivacyConflict('Export snapshot changed independently')
+                    value = self.cipher.decrypt(bytes(row['aad']), bytes(row['ciphertext']))
+                    if hashlib.sha256(value).hexdigest() != revision.content_sha256:
+                        raise PrivacyConflict('Encrypted export integrity failed')
+                    return value
+            # A subsequent request includes previously staged local copies.
+            # They retain their own lineage, instead of being skipped or
+            # blocking every later data request as an unsupported sink.
+            await self.export(request, revision, await run_sync(read))
+            return 'complete'
+        if request.operation != 'redact':
             return 'conflict'
         def erase():
             with self._db() as db:

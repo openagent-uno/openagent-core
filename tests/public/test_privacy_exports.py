@@ -99,6 +99,30 @@ class Exports(unittest.IsolatedAsyncioTestCase):
             await self.spool.export(self.request, self.source, b'PRIVATE CUSTOMER A')
         self.assertNotIn(b'PRIVATE CUSTOMER A', self.spool.path.read_bytes())
 
+    async def test_subsequent_data_request_includes_prior_encrypted_copies_and_is_redactable(self):
+        await self.finish_export()
+        request=PrivacyRequest('second-export','tenant','shopify/app','shop',1,'export',('customer:23',))
+        await self.ledger.enqueue(request)
+        spool=self.spool
+        class Source:
+            sink_id='test-source'
+            async def apply(self,request,revision):
+                if request.operation=='export':
+                    await spool.export(request,revision,b'PRIVATE CUSTOMER A')
+                return 'complete'
+        progress=await self.ledger.process(request.request_id,(Source(),self.spool),covered_surfaces=frozenset({'test-source'}))
+        self.assertEqual(progress.status,'complete')
+        await self.spool.seal(request)
+        bundle=await self.spool.download(request.request_id,'current-owner')
+        self.assertEqual(len(json.loads(bundle.payload)['parts']),2)
+        redact=PrivacyRequest('later-erasure','tenant','shopify/app','shop',1,'redact',('customer:23',))
+        await self.ledger.enqueue(redact)
+        progress=await self.ledger.process(redact.request_id,(Source(),self.spool),covered_surfaces=frozenset({'test-source'}))
+        self.assertEqual(progress.status,'complete')
+        self.assertNotIn(b'PRIVATE CUSTOMER A',self.spool.path.read_bytes())
+        with self.assertRaises(PermissionError):
+            await self.spool.download(request.request_id,'current-owner')
+
     async def test_selective_redaction_preserves_other_customer_export_and_rejects_wrong_payload(self):
         await self.finish_export()
         other = ContentRevision('tenant', 'other', 'r1', 'test-source', hashlib.sha256(b'OTHER CUSTOMER B').hexdigest())

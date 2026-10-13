@@ -335,6 +335,27 @@ class SqliteToolResultPrivacyPublisher:
             if request.operation=='redact' and any(request.matches(origin) for origin in origins):
                 raise PrivacyFence('Revoked run context cannot invoke or publish derived content')
 
+    async def sessions_for_request(self,request):
+        """Return exact admitted sessions for a host-authenticated privacy job.
+
+        Hosts use this public API to invalidate model caches after enqueueing
+        the source fence, without reading Core's private storage schema.
+        """
+        from openagent_core.content_privacy import PrivacyRequest
+        from openagent_core.persistence import run_sync
+        if not isinstance(request,PrivacyRequest):
+            raise ValueError('A typed authenticated privacy request is required')
+        def read():
+            sessions=set()
+            for row in self.runtime_store.connection.execute('''SELECT r.session_id,p.origins
+                FROM session_runs r JOIN runtime_privacy_origins p ON p.run_id=r.id
+                WHERE r.tenant_id=?''',(request.tenant_id,)):
+                if any(request.matches(self.ledger._origin(value)) for value in json.loads(row[1])):
+                    sessions.add(row[0])
+            return tuple(sorted(sessions))
+        async with self.runtime_store._operation_lock:
+            return await run_sync(read)
+
     async def origins_for_execution(self,context,run_id):
         from openagent_core.persistence import run_sync
         from dataclasses import asdict
