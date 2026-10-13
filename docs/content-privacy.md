@@ -55,3 +55,38 @@ writers. Until those canonical writers and historical data are covered, the
 standalone Shopify enrollment gate remains closed. A successful graph/job test
 is not a complete Shopify privacy qualification. Metadata backups and canonical
 content backups also need the host's retention/redaction policy.
+
+## Canonical public run ledger checkpoint
+
+`openagent_storage_sqlite.runtime_privacy.SqliteRuntimeContentPrivacySink` captures
+**terminal public RuntimeStore records** by trusted, exact provider invocation
+call IDs. It selects those invocation envelopes and message anchors, later
+assistant/compaction messages in that run, the corresponding durable result
+replay events and final run output. Earlier human input and other raw provider
+invocations are preserved. The provenance ledger must share the runtime database;
+capture uses the canonical store transaction lane and commits attribution
+atomically with its exact snapshots. Active or missing invocations fail closed.
+
+Export reads only those exact revisions through the host-bound callback.
+Redaction clears canonical content while retaining session/run identity and
+status. The ordinary immutable event trigger is suspended and restored inside
+the same exclusive SQLite transaction solely for the selected privacy tombstone;
+no other connection observes an unprotected schema. Changed schema/trigger or
+changed content blocks the operation. Exact revision markers make retries
+idempotent. `secure_delete` scrubs replaced cells and a successful truncating
+WAL checkpoint is required; a reader holding old pages blocks completion.
+
+Search refresh intents are enqueued with new source versions, but enqueue is not
+proof of index redaction. The **only qualified coverage** of this adapter is
+`terminal-public-run`; the normal required-surface set remains closed. Legacy
+engine projections, active streaming, child-session propagation, Vault/Git,
+attachments, context snapshots, search replicas and backups are not qualified.
+It is not yet connected to the standalone connector pipeline or its public wheel
+pins. Do not use this narrower receipt as a Shopify privacy-completion claim.
+
+Source qualification uses real canonical run acceptance, tool intent/result,
+assistant publication, read/replay and restart paths. It verifies that selected
+private content is absent from the canonical file and WAL, unrelated human input
+and Gmail result remain, ordinary events remain immutable, missing/active exact
+calls are rejected, and exports remain scoped. These tests do not qualify an
+actual provider consent or a running product with the legacy engine adapter.

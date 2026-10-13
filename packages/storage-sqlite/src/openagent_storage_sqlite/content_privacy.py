@@ -98,41 +98,42 @@ class SqliteContentPrivacyStore:
         await asyncio.to_thread(self._record, revision, origins, parents)
 
     def _record(self, revision, origins, parents):
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self._record_transaction(db, revision, origins, parents)
+            db.commit()
+
+    def _record_transaction(self, db, revision, origins=(), parents=()):
         if not isinstance(revision, ContentRevision) or not isinstance(origins, tuple) or not isinstance(parents, tuple):
             raise ValueError("Typed immutable provenance required")
         if len(origins) > 4096 or len(parents) > 4096 or any(not isinstance(o, ContentOrigin) for o in origins):
             raise ValueError("Bounded provenance required")
-        with self._db() as db:
-            db.execute('BEGIN IMMEDIATE')
-            inherited = set(origins)
-            for parent in parents:
-                if not isinstance(parent, tuple) or len(parent) != 2 or parent == (revision.artifact_id, revision.revision_id):
-                    raise ValueError("Invalid parent revision")
-                row = db.execute('SELECT origins FROM privacy_revisions WHERE tenant=? AND artifact=? AND revision=?',
-                                 (revision.tenant_id, *parent)).fetchone()
-                if not row:
-                    raise PrivacyConflict("Parent revision is untracked or belongs to another tenant")
-                inherited.update(self._origin(o) for o in json.loads(row[0]))
-            if any(origin.tenant_id != revision.tenant_id for origin in inherited):
-                raise PrivacyConflict("Cross-tenant provenance is forbidden")
-            encoded = _json(sorted((asdict(o) for o in inherited), key=_json))
-            parent_json = _json(sorted(set(parents)))
-            for row in db.execute('SELECT request FROM privacy_requests'):
-                request = self._request(json.loads(row[0]))
-                if request.operation == 'redact' and any(request.matches(o) for o in inherited):
-                    raise PrivacyFence("Revoked origin cannot publish derived content")
-            old = db.execute('SELECT * FROM privacy_revisions WHERE tenant=? AND artifact=? AND revision=?',
-                             (revision.tenant_id, revision.artifact_id, revision.revision_id)).fetchone()
-            if old:
-                if (old['sink'], old['digest'], old['origins'], old['parents']) != (revision.sink_id, revision.content_sha256, encoded, parent_json):
-                    raise PrivacyConflict("Revision metadata is immutable")
-                db.commit()
-                return
-            db.execute('INSERT INTO privacy_revisions VALUES(?,?,?,?,?,?,?)',
-                       (revision.tenant_id, revision.artifact_id, revision.revision_id,
-                        revision.sink_id, revision.content_sha256, encoded, parent_json))
-            db.commit()
-
+        inherited = set(origins)
+        for parent in parents:
+            if not isinstance(parent, tuple) or len(parent) != 2 or parent == (revision.artifact_id, revision.revision_id):
+                raise ValueError("Invalid parent revision")
+            row = db.execute('SELECT origins FROM privacy_revisions WHERE tenant=? AND artifact=? AND revision=?',
+                             (revision.tenant_id, *parent)).fetchone()
+            if not row:
+                raise PrivacyConflict("Parent revision is untracked or belongs to another tenant")
+            inherited.update(self._origin(o) for o in json.loads(row[0]))
+        if any(origin.tenant_id != revision.tenant_id for origin in inherited):
+            raise PrivacyConflict("Cross-tenant provenance is forbidden")
+        encoded = _json(sorted((asdict(o) for o in inherited), key=_json))
+        parent_json = _json(sorted(set(parents)))
+        for row in db.execute('SELECT request FROM privacy_requests'):
+            request = self._request(json.loads(row[0]))
+            if request.operation == 'redact' and any(request.matches(o) for o in inherited):
+                raise PrivacyFence("Revoked origin cannot publish derived content")
+        old = db.execute('SELECT * FROM privacy_revisions WHERE tenant=? AND artifact=? AND revision=?',
+                         (revision.tenant_id, revision.artifact_id, revision.revision_id)).fetchone()
+        if old:
+            if (old['sink'], old['digest'], old['origins'], old['parents']) != (revision.sink_id, revision.content_sha256, encoded, parent_json):
+                raise PrivacyConflict("Revision metadata is immutable")
+            return
+        db.execute('INSERT INTO privacy_revisions VALUES(?,?,?,?,?,?,?)',
+                   (revision.tenant_id, revision.artifact_id, revision.revision_id,
+                    revision.sink_id, revision.content_sha256, encoded, parent_json))
     async def enqueue(self, request):
         return await asyncio.to_thread(self._enqueue, request)
 
