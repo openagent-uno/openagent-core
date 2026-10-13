@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 from typing import Any
+from openagent_core.memory.operational.privacy_snapshots import guard_snapshot_transaction
 
 MANIFEST = '.openagent-state-manifest.json'
 
@@ -37,9 +38,15 @@ def _empty_destination(path: Path) -> None:
 
 
 def _snapshot(source: Path, destination: Path, databases: tuple[str,...], fence_id: str) -> dict[str,Any]:
-    _empty_destination(destination)
     database_paths={_relative(p) for p in databases}
     if not database_paths:raise ValueError('At least one canonical database must be declared')
+    # The product's quiesce receipt is not permission to create untracked copies
+    # of a protected cohort. Reject before copying any accompanying state files.
+    for relative in database_paths:
+        with closing(sqlite3.connect((source/relative).as_uri()+'?mode=ro',uri=True)) as original:
+            original.execute('BEGIN')
+            guard_snapshot_transaction(original)
+    _empty_destination(destination)
     excluded={Path(str(p)+suffix) for p in database_paths for suffix in ('-wal','-shm','-journal','.runtime.lock')}
     entries={}
     for path in sorted(source.rglob('*')):
@@ -50,6 +57,8 @@ def _snapshot(source: Path, destination: Path, databases: tuple[str,...], fence_
         mode=path.stat().st_mode&0o777
         if relative in database_paths:
             with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as original,closing(sqlite3.connect(target)) as backup:
+                original.execute('BEGIN')
+                guard_snapshot_transaction(original)
                 original.backup(backup)
                 if backup.execute('PRAGMA integrity_check').fetchone()[0]!='ok':
                     raise ValueError('SQLite backup integrity verification failed')
@@ -95,6 +104,10 @@ def restore_to_new_directory(snapshot: str|Path,destination: str|Path) -> dict[s
     """Restore to a new writer location; never overwrite an active deployment."""
     root=Path(snapshot).resolve();target=Path(destination).resolve()
     manifest=verify_snapshot(root)
+    for name in manifest['databases']:
+        with closing(sqlite3.connect((root/_relative(name)).as_uri()+'?mode=ro&immutable=1',uri=True)) as source:
+            source.execute('BEGIN')
+            guard_snapshot_transaction(source)
     _empty_destination(target)
     for name,entry in manifest['files'].items():
         output=target/_relative(name);output.parent.mkdir(parents=True,exist_ok=True,mode=0o700)

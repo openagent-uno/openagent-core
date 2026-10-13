@@ -240,6 +240,14 @@ async def _verified_backup(
         # A non-WAL fresh fixture is still safe to back up through the API.
         pass
 
+    from .privacy_snapshots import checked_snapshot_source
+    async with checked_snapshot_source(db_path) as snapshot:
+        return await _verified_backup_snapshot(snapshot,db_path,app_version=app_version)
+
+
+async def _verified_backup_snapshot(conn,db_path,*,app_version):
+    """Copy only the source read snapshot whose privacy admission was checked."""
+
     backup_dir = db_path.parent / "backups"
     backup_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:

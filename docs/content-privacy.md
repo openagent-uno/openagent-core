@@ -341,3 +341,22 @@ Tests place one customer's private data in the later query for another customer,
 then erase the query in public and engine copies while retaining the second raw
 result. Another real failed invocation proves its query and error copies are
 targetable even without a successful provider result.
+
+## Canonical database snapshots
+
+The pre-DDL backup now checks privacy admission in a dedicated pinned read
+transaction before creating a backup destination. A later protected writer does
+not enter that already checked SQLite snapshot. If the cohort already contains
+source-bound privacy revisions (including nonpersonal store data), this unmanaged
+backup is refused. The public state-migration snapshot and restore entrypoints
+also refuse protected copies before creating destination trees. They still require
+the host's real quiescence fence for ordinary files and database migration.
+
+Tests use actual SQLite backup/restore paths: an existing protected cohort makes
+no copy, a concurrent later protected write is excluded from the pinned read
+snapshot, and an older checksummed protected snapshot cannot be restored into an
+untracked writer. Existing historical backups without attribution remain an
+explicit host inventory/manual reconciliation gap; no existing backup is deleted.
+A future managed backup implementation must register lineage, exact snapshots
+and erasure/recovery before this fence can be relaxed. A generic coverage string
+does not authorize an unmanaged snapshot of protected state.
