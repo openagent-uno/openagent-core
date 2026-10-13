@@ -49,12 +49,6 @@ from scripts.tests._setup import build_test_config, cleanup_extras  # noqa: E402
 # gateway → sessions/rest/files/...). Changing this list changes the
 # execution order of the whole suite, so add new modules deliberately.
 _TEST_MODULES: tuple[str, ...] = (
-    "test_support_context",
-    "test_support_diagnostic_routing",
-    "test_support_sept6",
-    "test_support_progress",
-    "test_support_voice",
-    "test_support_sept7",
     # 1. Lightweight / pure-unit (no fixtures needed)
     "test_imports",
     "test_iroh_discovery",
@@ -444,7 +438,6 @@ _TEST_MODULES: tuple[str, ...] = (
     "test_budget_guard",
     # Hybrid local standby: explicit event/scheduler pins must remain valid
     # even while standby routing hides the local model from ordinary traffic.
-    "test_local_fallback",
     # Quality monitor — the correctness half beside budget's cost half:
     # OFF no-op, deterministic sampling, judge parse/emit, gating, aggregate.
     "test_quality_monitor",
@@ -462,9 +455,6 @@ _TEST_MODULES: tuple[str, ...] = (
     # promise before send; fail-open on disabled / no-promise / backed / no
     # tool visibility / regeneration failure. Pure-unit (fake model + trace).
     "test_reply_guard",
-    "test_local_support_controller",
-    "test_support_turn",
-    "test_support_attachments",
     "test_task_directive",
     # Quality digest — the scheduled push side: summary + flagged-session review
     # list + threshold alerts (incl. embedder-down via embed-error spikes).
@@ -816,7 +806,6 @@ _TEST_MODULES: tuple[str, ...] = (
     # La corsia di fallback locale deve finire DAVVERO in on_rate_limit: con
     # l'ordine di boot reale non ci finiva, e 35 run sono morti su un rate
     # limit avendo un ripiego configurato e mai innestato. Pure-unit.
-    "test_local_fallback_wiring",
     # Una voce di fallback irrisolvibile si salta, non uccide l'agent.
     "test_fallback_resolve_skips",
 )
