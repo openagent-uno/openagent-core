@@ -236,6 +236,22 @@ class SqliteToolResultPrivacyPublisher:
             if request.operation=='redact' and any(request.matches(origin) for origin in origins):
                 raise PrivacyFence('Revoked run context cannot invoke or publish derived content')
 
+    async def origins_for_execution(self,context,run_id):
+        from openagent_core.persistence import run_sync
+        from dataclasses import asdict
+        def read():
+            db=self.runtime_store.connection
+            row=db.execute('SELECT tenant_id,session_id,metadata_json FROM session_runs WHERE id=?',(run_id,)).fetchone()
+            if row is None or (row['tenant_id'],row['session_id'])!=(context.tenant_id,context.session_id):
+                raise PrivacyConflict('Origin reader does not identify this exact run')
+            accepted=json.loads(row['metadata_json']).get('execution_context',{})
+            if accepted.get('initiator')!=asdict(context.initiator) or accepted.get('authority')!=asdict(context.authority):
+                raise PrivacyConflict('Origin reader does not retain admitted authority')
+            self._guard(db,run_id)
+            return self._origins(db,run_id)
+        async with self.runtime_store._operation_lock:
+            return await run_sync(read)
+
     async def validate_tool_admission(self,context,run_id):
         from openagent_core.persistence import run_sync
         def validate():

@@ -122,6 +122,11 @@ class ToolProvenance(unittest.IsolatedAsyncioTestCase):
             async def execute(request,context,runtime):
                 ref=(await catalog.discover(context))[0].tool_ref
                 calls.append(await catalog.call_tool(ref,{},context,call_id='first'))
+                self.assertEqual(await publisher.origins_for_execution(context,'run'),(origin,))
+                from dataclasses import replace
+                wrong=replace(context,initiator=PrincipalRef('host','tenant','another-user'))
+                with self.assertRaisesRegex(Exception,'admitted authority'):
+                    await publisher.origins_for_execution(wrong,'run')
                 await store.append_event('run','run.stream',{'kind':'delta','text':'DERIVED PRIVATE LIVE TEXT'})
                 try:
                     await catalog.call_tool(ref,{'revoke':True},context,call_id='revoked')
