@@ -750,7 +750,7 @@ async def t_validate_repairs_hyphenated_prefix(ctx: TestContext) -> None:
     the safe prefix, not the raw mcp_name — otherwise it builds
     ``aaa-support_threads_list`` (hyphen), never matches, and the block
     fails validation against a tool the pool actually exposes. Regression
-    for lyra's customer-support-coverage workflow."""
+    for beta's customer-support-coverage workflow."""
     from openagent_core.workflow.validate import validate_graph
 
     config = {"mcp_name": "aaa-support", "tool_name": "threads_list", "args": {}}
@@ -779,7 +779,7 @@ async def t_validate_empty_mcp_surfaces_connect_error(ctx: TestContext) -> None:
     """When an MCP is loaded but exposes 0 tools (a swallowed 401 /
     handshake failure), validation must say so and surface the captured
     cause — NOT the misleading "has no tool X. Available: []" that sent
-    lyra (and a human triager) hunting for a nonexistent naming bug."""
+    beta (and a human triager) hunting for a nonexistent naming bug."""
     from openagent_core.workflow.validate import ValidationError, validate_graph
 
     config = {"mcp_name": "aaa-support", "tool_name": "threads_list", "args": {}}

@@ -35,12 +35,12 @@ async def t_detects_loaded_skills(ctx: TestContext) -> None:
     from openagent_core.core.compaction import _skills_loaded_in
 
     runs = [
-        _run_with_skill("delete-lyra-account"),
+        _run_with_skill("delete-beta-account"),
         {"messages": [{"role": "user", "content": "ciao"}]},
-        _run_with_skill("esound-refund"),
-        _run_with_skill("delete-lyra-account"),  # duplicata: una volta sola
+        _run_with_skill("alpha-refund"),
+        _run_with_skill("delete-beta-account"),  # duplicata: una volta sola
     ]
-    assert _skills_loaded_in(runs) == ["delete-lyra-account", "esound-refund"]
+    assert _skills_loaded_in(runs) == ["delete-beta-account", "alpha-refund"]
     assert _skills_loaded_in([]) == []
     # Argomenti come dict (non stringa JSON) e argomenti illeggibili non devono
     # far esplodere niente: e' codice che gira dentro una compattazione.
@@ -55,8 +55,8 @@ async def t_detects_loaded_skills(ctx: TestContext) -> None:
 async def t_reinjects_the_notice(ctx: TestContext) -> None:
     from openagent_core.core.compaction import _reinject_skill_notice
 
-    out = _reinject_skill_notice("L'utente ha chiesto un rimborso.", ["esound-refund"])
-    assert "esound-refund" in out
+    out = _reinject_skill_notice("L'utente ha chiesto un rimborso.", ["alpha-refund"])
+    assert "alpha-refund" in out
     assert "skill_view" in out, "deve dire COME rileggerla, non solo che manca"
     assert out.startswith("L'utente ha chiesto un rimborso.")
 

@@ -4,7 +4,7 @@ Il curatore e il distiller girano senza nessuno che guardi, e tutta la loro
 storia di sicurezza e' un confine: possono toccare solo cio' che l'agent ha
 scritto (``created_by: agent``). Finora quel confine viveva in un PROMPT —
 cioe' un'indicazione che un modello segue quasi sempre, che e' la robustezza
-sbagliata per "questo processo puo' riscrivere il playbook con cui eSound
+sbagliata per "questo processo puo' riscrivere il playbook con cui alpha
 risponde ai clienti?".
 
 Preso da Hermes, con la regola che lo rende utile: una skill **pinnata** blocca
@@ -35,7 +35,7 @@ async def t_background_respects_authorship(ctx: TestContext) -> None:
     token = set_write_origin(BACKGROUND)
     try:
         # Skill di seed / dell'utente: intoccabile.
-        refusal = mutation_refusal("archive", "esound-project-ops",
+        refusal = mutation_refusal("archive", "alpha-project-ops",
                                    created_by=None, pinned=False)
         assert refusal and "not authored by the agent" in refusal
 
@@ -57,9 +57,9 @@ async def t_pin_blocks_the_author_too(ctx: TestContext) -> None:
 
     token = set_write_origin(BACKGROUND)
     try:
-        # Il caso vero: esound-support-thread-triage e' created_by=agent, ma e'
+        # Il caso vero: alpha-support-thread-triage e' created_by=agent, ma e'
         # diventata portante. Il pin e' come l'utente lo dice.
-        refusal = mutation_refusal("update", "esound-support-thread-triage",
+        refusal = mutation_refusal("update", "alpha-support-thread-triage",
                                    created_by="agent", pinned=True)
         assert refusal and "pinned" in refusal
         assert "leave the file alone" in refusal

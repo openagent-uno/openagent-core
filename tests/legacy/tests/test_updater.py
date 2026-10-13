@@ -209,7 +209,7 @@ async def t_updater_rejects_cli_only_archive(ctx: TestContext) -> None:
 
 @test("updater", "download_update streams the archive — never holds the full body in RAM")
 async def t_updater_streaming_bound(ctx: TestContext) -> None:
-    """Defends against the OOM kill on performa-agent (2026-05-04).
+    """Defends against the OOM kill on example-node-agent (2026-05-04).
 
     The previous implementation called ``resp.read()`` which loaded the
     entire 200 MB archive into a single bytes object before writing one
@@ -514,7 +514,7 @@ async def t_apply_update_rollback_bare(ctx: TestContext) -> None:
 @test("updater", "_swap_lock serialises concurrent apply_update on the same binary")
 async def t_swap_lock_blocks(ctx: TestContext) -> None:
     """Three OpenAgent services on one VPS share the same binary
-    (performa-box: openagent + yoanna + friday). Without a lock the
+    (example-node-box: openagent + secondary-agent + friday). Without a lock the
     second to call apply_update would hit ``rename(current → .old)``
     on a path the first already moved away."""
     import asyncio
@@ -589,8 +589,8 @@ async def t_try_elog_safe(ctx: TestContext) -> None:
 
 @test("updater", "run_upgrade short-circuits when a sibling already swapped the binary")
 async def t_run_upgrade_sibling_swap(ctx: TestContext) -> None:
-    """When two services share an on-disk binary (e.g. performa
-    boss / yoanna / friday all run from ~/.local/bin/openagent-stable),
+    """When two services share an on-disk binary (e.g. example-node
+    primary / secondary / tertiary services all run from ~/.local/bin/openagent-stable),
     the first /api/update swaps the file. A subsequent /api/update on a
     sibling whose process is still running the OLD binary used to
     crash with ``zlib.error: Error -3 while decompressing data:
@@ -850,9 +850,9 @@ async def t_verify_new_binary(ctx: TestContext) -> None:
 
 @test("updater", "candidate selfcheck uses an isolated accessible cwd, agent dir, and frozen env")
 async def t_verify_new_binary_isolated_context(ctx: TestContext) -> None:
-    """Regression for Friday's v0.20.5 -> v0.20.6 false rejection.
+    """Regression for a deployed instance's v0.20.5 -> v0.20.6 false rejection.
 
-    ``runuser -u friday`` inherited ``/root``. The candidate tried to stat
+    ``runuser -u agent-user`` inherited ``/root``. The candidate tried to stat
     ``openagent.yaml`` there, exited 1, and the updater mislabeled that as a
     version mismatch. The candidate must never inherit that cwd/config scope.
     """

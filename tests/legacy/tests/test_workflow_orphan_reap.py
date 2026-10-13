@@ -1,6 +1,6 @@
 """Workflow runs stuck in ``running`` are reaped on agent startup.
 
-Regression pin for lyra-music 2026-05-19: the ``dev-coverage`` workflow
+Regression pin for beta-music 2026-05-19: the ``dev-coverage`` workflow
 hit DeepSeek's HTTP 402 (Insufficient Balance) on every scheduled tick.
 Each retry hammered ``sessions`` while OpenAgent's executor was
 trying to finalize the run, the two writers contended on the same

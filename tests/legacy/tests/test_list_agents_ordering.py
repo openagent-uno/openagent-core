@@ -1,11 +1,11 @@
 """``list_agents`` returns the coordinator's own agent FIRST.
 
-Real-world failure on lyra (2026-05-19): the lyra-agent network had
-``virgil`` registered as an agent (NodeId pointing at a *different*
+Real-world failure on beta (2026-05-19): the beta-agent network had
+``example-peer`` registered as an agent (NodeId pointing at a *different*
 network's coordinator). ``list_agents`` ordered by ``added_at``, so
-``virgil`` (registered earlier) came back first. The Electron app
-picks ``agents[0]`` for its WS target, dialed virgil's gateway with
-a cert for the lyra-agent network, and got a 401 — surfacing as
+``example-peer`` (registered earlier) came back first. The Electron app
+picks ``agents[0]`` for its WS target, dialed example-peer's gateway with
+a cert for the beta-agent network, and got a 401 — surfacing as
 ``WebSocket closed before authentication (code=1006)`` on the
 client side.
 
@@ -39,28 +39,28 @@ async def t_coord_agent_first(ctx: TestContext) -> None:
         await store.set_network_role(
             role="coordinator",
             network_id="net-uuid-1",
-            name="lyra-agent",
+            name="beta-agent",
             coordinator_node_id=coord_node,
             coordinator_pubkey=b"\x00" * 32,
         )
 
-        # Register the FOREIGN agent first (lyra's bad state on 2026-05-19).
+        # Register the FOREIGN agent first (beta's bad state on 2026-05-19).
         await store.register_agent(
-            handle="virgil", node_id=foreign_node,
-            owner_handle="system", label="Virgil",
+            handle="example-peer", node_id=foreign_node,
+            owner_handle="system", label="example-peer",
         )
         # Then the coordinator's own agent.
         await store.register_agent(
-            handle="lyra-agent", node_id=coord_node,
-            owner_handle="system", label="Lyra Agent",
+            handle="beta-agent", node_id=coord_node,
+            owner_handle="system", label="beta Agent",
         )
 
         agents = await store.list_agents()
         handles = [a.handle for a in agents]
-        assert handles[0] == "lyra-agent", (
+        assert handles[0] == "beta-agent", (
             f"coordinator's own agent must be first, got order: {handles}"
         )
-        assert set(handles) == {"lyra-agent", "virgil"}, \
+        assert set(handles) == {"beta-agent", "example-peer"}, \
             f"both rows must remain visible: {handles}"
     finally:
         try:

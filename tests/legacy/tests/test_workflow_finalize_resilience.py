@@ -1,6 +1,6 @@
 """WorkflowExecutor._finalize_run survives transient SQLite locks.
 
-The lyra-music 2026-05-19 regression: a workflow's ``ai-prompt`` node
+The beta-music 2026-05-19 regression: a workflow's ``ai-prompt`` node
 hits HTTP 402 from DeepSeek. Inside the node the runtime's SqliteDb
 hammers ``sessions`` from a SQLAlchemy connection while
 OpenAgent's aiosqlite connection on the same file tries to write the

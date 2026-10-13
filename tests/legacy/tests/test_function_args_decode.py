@@ -3,7 +3,7 @@
 Models occasionally emit valid JSON arguments followed by extra data (a second
 object, a stray token, trailing prose). ``json.loads`` raises "Extra data" and
 the decoder fell through to failure, forcing a full retry round-trip (~13/10min
-observed on esound-openagent). ``_decode_function_arguments`` now recovers the
+observed on alpha-openagent). ``_decode_function_arguments`` now recovers the
 leading object via ``raw_decode`` before giving up. Pure-unit (string in, dict
 out), so it can run anywhere in the order.
 """

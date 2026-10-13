@@ -178,7 +178,7 @@ _TEST_MODULES: tuple[str, ...] = (
     # quality-digest (daily synthesis) built-ins. They are opt-in because each
     # firing consumes background model capacity. Pins the capacity-safe default,
     # explicit enable, per-task/master toggles, and the DEDUP that defers
-    # to an agent's own tuned custom scorer/digest (so eSound/Lyra don't
+    # to an agent's own tuned custom scorer/digest (so alpha/beta don't
     # double-run), and the prompt discipline. Also pins Feature B: the
     # anti-wedge per-LLM-call timeout in native_provider._construct_model and its
     # model.timeout_seconds yaml wiring. Pure-unit; sits by the skills tests
@@ -387,7 +387,7 @@ _TEST_MODULES: tuple[str, ...] = (
     "test_e2e_unified_flow",
     "test_runtime_tool_filter",
     # NativeProvider.stream — hermetic zero-delta fallback coverage
-    # (Friday's stuck Telegram turns; provider falls back to its own
+    # (a deployed instance's stuck Telegram turns; provider falls back to its own
     # generate() before control returns to Agent.run_stream).
     "test_runtime_stream",
     # A delegated sub-agent streams into its OWN child session live (over the
@@ -657,7 +657,7 @@ _TEST_MODULES: tuple[str, ...] = (
     "test_spam_e2e",
     "test_bridge_session",
     # Coordinator login_finish must NOT die on SQLite locks for the
-    # non-critical touch_device write (lyra-agent outage 2026-05-18 —
+    # non-critical touch_device write (beta-agent outage 2026-05-18 —
     # heavy runtime session writes held the writer lock and broke every
     # returning device's login).
     "test_coordinator_login_resilience",
@@ -679,7 +679,7 @@ _TEST_MODULES: tuple[str, ...] = (
     "test_network_naming",
     # list_agents: coordinator's own agent comes FIRST so default-picking
     # clients (agents[0]) don't dial a foreign-network agent and
-    # surface as WS code 1006 (lyra-agent regression 2026-05-19).
+    # surface as WS code 1006 (beta-agent regression 2026-05-19).
     "test_list_agents_ordering",
     # ``openagent invite [HANDLE]`` auto-picks user-role for new
     # handles + device-role bound for existing ones, dropping the
@@ -691,7 +691,7 @@ _TEST_MODULES: tuple[str, ...] = (
     # and remote invite minting.
     "test_gateway_network_api",
     # workflow_runs left in ``running`` by a prior process must be
-    # reaped on startup — without this, the lyra-music ``dev-coverage``
+    # reaped on startup — without this, the beta-music ``dev-coverage``
     # zombies pin the executor's per-workflow lock forever and the
     # next scheduled tick can't make progress.
     "test_workflow_orphan_reap",

@@ -48,7 +48,7 @@ async def t_find_stale_filters(ctx: TestContext) -> None:
     assert 3333 not in found, f"different agent dir incorrectly matched: {found}"
     assert 4444 not in found, f"unrelated python process matched: {found}"
     assert 5555 not in found, f"non-serve subcommand matched: {found}"
-    # 6666 IS the pattern that burned us on performa 2026-04-22: a shell
+    # 6666 IS the pattern that burned us on example-node 2026-04-22: a shell
     # wrapper that `cd`s into the agent dir then runs `openagent serve .`.
     # The absolute path shows up in the cmdline via `cd`, so we match it —
     # intentional; killing that wrapper unblocks port 8765 on systemd start.

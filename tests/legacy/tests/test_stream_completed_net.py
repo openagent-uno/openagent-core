@@ -2,7 +2,7 @@
 
 Un turno che non emette delta non deve costare una seconda chiamata al modello.
 
-Contesto (produzione, 9-ago-2026): il 16% dei run di eSound e il 25% di Lyra
+Contesto (produzione, 9-ago-2026): il 16% dei run di alpha e il 25% di beta
 finivano in ``agent.run_stream.fallback_to_generate`` con motivo unico
 ``no_deltas_yielded``. Quel fallback rifa' l'INTERO turno con ``generate()``:
 una seconda chiamata al modello, a prezzo pieno, per una risposta che il runtime

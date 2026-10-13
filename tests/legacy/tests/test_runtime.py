@@ -15,7 +15,7 @@ from ._framework import TestContext, TestSkip, have_openai_key, test
 
 @test("runtime", "tool-search schema accepts target tool arguments")
 async def t_tool_search_freeform_args_schema(_ctx: TestContext) -> None:
-    """Regression for Friday's GLM/Kimi all-arguments outage.
+    """Regression for a deployed instance's GLM/Kimi all-arguments outage.
 
     A bare ``dict`` used to become ``additionalProperties: false`` in the
     provider schema.  Models therefore emitted the valid-but-useless

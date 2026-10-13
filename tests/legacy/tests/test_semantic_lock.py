@@ -2,7 +2,7 @@
 
 `sync_vault` embeds through the network, and `search` takes the same lock. With
 the embed call inside that lock, every recall landing mid-sync waited for the
-whole batch to come back. Measured on lyra-agent: the query embedding cost
+whole batch to come back. Measured on beta-agent: the query embedding cost
 342ms and the vector scan 420ms, yet recall ran to a 7.4s median, a 25.6s p90
 and a 56.6s max — the remainder was purely this wait. Five turns in 76 blew the
 30s recall ceiling, and a recall that times out does not raise: it answers the

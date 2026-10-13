@@ -1,6 +1,6 @@
 """End-to-end coordinator: N users each with their own invite + device.
 
-This is the real-wire test the lyra-agent regression demanded: spin
+This is the real-wire test the beta-agent regression demanded: spin
 up a coordinator backed by a fresh MemoryDB, mint one invite per test
 user, run the full SRP-6a register + login wire flow over an
 ``InProcConnection`` (the same CBOR framing the iroh transport uses,
@@ -9,7 +9,7 @@ verifiable, per-device cert.
 
 A second round runs ``login`` again for each device to hit the
 ``existing active device`` branch — the one that calls
-``touch_device`` and was the crash site on lyra. We separately drive
+``touch_device`` and was the crash site on beta. We separately drive
 that branch with ``touch_device`` rigged to raise a SQLite
 ``OperationalError`` to confirm the v0.13.14 fix holds at the wire
 level (not just inside the dispatcher).

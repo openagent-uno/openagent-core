@@ -162,7 +162,7 @@ async def t_requeue_ignores_historical_reaps(ctx: TestContext) -> None:
 
     A fresh process that reaps no current run must not rediscover and replay a
     run another process already settled.  This is the production shape that
-    turned every eSound/Lyra restart into a scheduled-task stampede.
+    turned every alpha/beta restart into a scheduled-task stampede.
     """
     from openagent_core.memory.db import MemoryDB
 

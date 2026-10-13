@@ -66,7 +66,7 @@ async def _seed_network_and_user(
         await store.set_network_role(
             role="coordinator",
             network_id=uuid.uuid4().hex,
-            name="lyra-agent",
+            name="beta-agent",
             coordinator_node_id="cb" + "0" * 62,
             coordinator_pubkey=b"\x00" * 32,
         )

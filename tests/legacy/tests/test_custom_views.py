@@ -1747,7 +1747,7 @@ async def t_message_parts_fk_check_is_scoped(ctx: TestContext) -> None:
     """The same unscoped check, in the migration that runs right after.
 
     Fixing only `custom-views-v1` moved the production crash one migration
-    down: the Lyra agent then died on `message-parts-v1 foreign key
+    down: the beta agent then died on `message-parts-v1 foreign key
     verification failed`, from the identical whole-database PRAGMA.
     """
     from openagent_core.memory.message_parts_migration import (

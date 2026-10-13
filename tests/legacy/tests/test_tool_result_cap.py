@@ -91,7 +91,7 @@ async def t_cap_applied_to_model_message(_ctx: TestContext) -> None:
     class _FunctionCall:
         call_id = "call_1"
         function = _Fn()
-        arguments = {"note": "esound/config/support-coverage"}
+        arguments = {"note": "alpha/config/support-coverage"}
         error = None
 
     huge = "N" * (limit * 5)

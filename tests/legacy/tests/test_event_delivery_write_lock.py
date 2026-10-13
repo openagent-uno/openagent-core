@@ -1,6 +1,6 @@
 """An inbound webhook must not be refused because something else was reading.
 
-The failure (lyra-agent, 2-set-2026): every inbound conversation from Replio
+The failure (beta-agent, 2-set-2026): every inbound conversation from Replio
 came back HTTP 500 with ``sqlite3.OperationalError: database is locked``, for
 hours, while three task runs sat holding the database. Before Replio had a
 durable delivery queue those events were simply gone — the customer wrote and
@@ -66,7 +66,7 @@ async def t_stale_read_snapshot_does_not_refuse_an_inbound(
     SQLite cannot promote a snapshot that is no longer current, so it returns
     SQLITE_BUSY *without calling the busy handler*: the failure is instant and
     a three-minute ``busy_timeout`` is not consulted. That is why the timeout
-    that was already configured on the Lyra agent did nothing.
+    that was already configured on the beta agent did nothing.
     """
     path = ctx.db_path.with_name(f"evlock-{uuid.uuid4().hex[:8]}.db")
     db = await _make_db(path)
@@ -167,7 +167,7 @@ async def t_supplied_delivery_id_is_kept(ctx: TestContext) -> None:
 async def t_finaliser_survives_a_stale_snapshot(ctx: TestContext) -> None:
     """The other half, found by fixing the first half.
 
-    With ingest repaired the Lyra agent recorded nine deliveries and finalised
+    With ingest repaired the beta agent recorded nine deliveries and finalised
     none: every one sat at ``received``. ``update_event_delivery`` had a
     bounded retry, but it retried the SAME promotion on the SAME connection —
     and a stale snapshot cannot be promoted however many times you ask, so
@@ -217,7 +217,7 @@ async def t_claim_survives_a_stale_snapshot(ctx: TestContext) -> None:
 
     A claim is a SELECT followed by an UPDATE — the read-then-promote shape
     SQLite refuses instantly on a snapshot the database has moved past. With
-    ingest and finalisation already repaired, the Lyra agent logged
+    ingest and finalisation already repaired, the beta agent logged
     ``scheduler.event_claim_failed`` 49 times in ten minutes and every
     re-enqueued orphan sat unclaimed: the conversation was captured and never
     answered, which from the outside is indistinguishable from losing it.
@@ -328,7 +328,7 @@ async def t_lease_reaper_survives_a_stale_snapshot(ctx: TestContext) -> None:
     """The recovery path, which is the last thing standing between a frozen
     turn and a customer who is never answered.
 
-    `scheduler.lease_reap_loop_error` fired 1144 times in an hour on the Lyra
+    `scheduler.lease_reap_loop_error` fired 1144 times in an hour on the beta
     agent. The cause was invisible from `kubectl logs`, because the console
     renderer drops the structured fields — the reason only appears in
     `logs/events.jsonl`, where every one of them reads
@@ -443,9 +443,9 @@ async def t_task_run_finalises_under_contention(ctx: TestContext) -> None:
     """Chosen from the logs, not from a hunch.
 
     Across two agents over six hours: ``task.run_finish_failed`` with
-    ``database is locked``, 30 times on lyra and 22 on esound. A firing that
+    ``database is locked``, 30 times on beta and 22 on alpha. A firing that
     cannot be finalised stays ``running`` forever — which is precisely the
-    state that wedged the Lyra agent, because a run stuck ``running`` holds
+    state that wedged the beta agent, because a run stuck ``running`` holds
     the database and the reaper that should recover it fails on the same lock.
 
     The cancellation invariant has to survive the move: a firing flagged

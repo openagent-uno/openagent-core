@@ -71,10 +71,10 @@ async def t_write_mode_keeps_the_ordinary_boundary(ctx: TestContext) -> None:
         assert mutation_refusal("update", "self-remediation",
                                 created_by="agent", pinned=False) is None
         # Pinnata: no, nemmeno se l'ha scritta lui.
-        assert mutation_refusal("update", "esound-support-thread-triage",
+        assert mutation_refusal("update", "alpha-support-thread-triage",
                                 created_by="agent", pinned=True)
         # Di seed: no.
-        assert mutation_refusal("archive", "esound-project-ops",
+        assert mutation_refusal("archive", "alpha-project-ops",
                                 created_by=None, pinned=False)
     finally:
         reset_write_origin(token)

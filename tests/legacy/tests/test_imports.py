@@ -42,7 +42,7 @@ async def t_bundle_groq_and_src(ctx: TestContext) -> None:
     ``openagent_core.models.providers``) and that the groq Python SDK is a declared
     project dependency. Both are required so
     ``openagent_core.models.providers.groq`` is importable from the frozen binary;
-    the original incident was a per-session ImportError on lyra-virgil
+    the original incident was a per-session ImportError on beta-example-peer
     whenever a groq model was selected."""
     import re
 

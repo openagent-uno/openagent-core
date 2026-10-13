@@ -6,7 +6,7 @@ la CONFIG a ogni avvio: se il cancello e' chiuso, ``_sync_scheduled_task``
 riparcheggia la riga a ``enabled=0``. Giusto — la config e' la fonte di
 verita'. Il problema e' che lo faceva in silenzio.
 
-Misurato su SpicySparks il 26-ago-2026. ``quality-scorer``,
+Misurato su example-host il 26-ago-2026. ``quality-scorer``,
 ``quality-digest``, ``cost-observability`` ed ``escalation-audit`` erano
 stati creati il 21-22 luglio con ``enabled=1``; la config non li ha mai
 chiesti (``self_improvement`` non compare in NESSUN backup di

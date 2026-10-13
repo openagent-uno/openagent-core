@@ -3,7 +3,7 @@
 `_MAX_EMBED_CHARS` caps text in CHARACTERS, but an embedding window is
 measured in TOKENS, and the exchange rate moves with the tokenizer and the
 LANGUAGE — Italian costs more tokens per character than English. Measured on
-the eSound vault: a 5,871-char Italian note, under the 6,000 cap, is refused
+the alpha vault: a 5,871-char Italian note, under the 6,000 cap, is refused
 by `snowflake-arctic-embed2` with "the input length exceeds the context
 length".
 
