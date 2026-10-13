@@ -870,6 +870,15 @@ class SqliteDb(BaseDb):
         return database is not None and self.db_file is not None and Path(database).resolve() == Path(self.db_file).resolve()
 
     def _preserve_runtime_user(self, table, database_session, serialized: dict) -> None:
+        from openagent_core.runtime import current_runtime, current_execution_context, current_run_id
+        from openagent_core.content_privacy import EngineContentPrivacyWriter
+        runtime = current_runtime()
+        writer = runtime.service(EngineContentPrivacyWriter) if runtime is not None else None
+        if writer is not None:
+            from openagent_core.memory.operational.repository import sqlalchemy_driver_connection
+            writer.begin_engine_session(sqlalchemy_driver_connection(database_session),
+                                        serialized.get('session_id'), serialized,
+                                        current_execution_context(), current_run_id())
         if not self._runtime_session(serialized.get('session_id')):
             return
         row = database_session.execute(select(table.c.user_id).where(table.c.session_id == serialized['session_id'])).first()

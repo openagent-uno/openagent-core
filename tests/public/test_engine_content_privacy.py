@@ -144,6 +144,66 @@ class EnginePrivacy(unittest.IsolatedAsyncioTestCase):
                 self.db.upsert_session(self.session)
         self.assertNotIn('PRIVATE SHOP RESULT',str(self.db.get_session('session',deserialize=False)))
 
+    async def test_summary_and_changed_state_leaves_are_selective_across_canonical_copies(self):
+        from openagent_core.memory.sessions.summary import SessionSummary
+        from openagent_storage_sqlite.runtime_privacy import SqliteRuntimeContentPrivacySink
+        baseline=AgentSession(session_id='session',agent_id='agent',user_id=self.context.authority.key,
+            runs=[],session_data={'session_state':{'human_preference':'HUMAN KEEP'},'session_name':'HUMAN TITLE'},
+            created_at=1,updated_at=1)
+        self.db.upsert_session(baseline)
+        self.session.session_data={'session_state':{'human_preference':'HUMAN KEEP','derived':'PRIVATE STATE A'},
+                                   'session_name':'PRIVATE GENERATED TITLE',
+                                   'session_metrics':{'input_tokens':12,'details':{'model':[{'id':'fixture','provider':'fixture','input_tokens':12}]}}}
+        self.session.summary=SessionSummary(summary='PRIVATE ROLLING SUMMARY')
+        self.session.runs[0].session_state=dict(self.session.session_data['session_state'])
+        with execution_scope(self.runtime,self.context,'run'):
+            self.db.upsert_session(self.session)
+        await self.store.transition('run','success',output='PRIVATE DERIVED FINAL')
+        request=PrivacyRequest('state-erasure','tenant','shopify/app','group',10,'redact',('customer:23',))
+        await self.ledger.enqueue(request)
+        async def export(*args):self.fail('unexpected export')
+        public=SqliteRuntimeContentPrivacySink(self.store,self.ledger,export=export)
+        progress=await self.ledger.process(request.request_id,(public,self.sink),covered_surfaces=self.ledger.required_surfaces)
+        self.assertEqual(progress.status,'complete')
+        stored=str(self.db.get_session('session',deserialize=False))
+        self.assertIn('HUMAN KEEP',stored)
+        for value in ('PRIVATE STATE A','PRIVATE ROLLING SUMMARY','PRIVATE GENERATED TITLE'):
+            self.assertNotIn(value,stored)
+            for table,column in (('sessions_v2','metadata_json'),('sessions_v2','title'),('session_runs','raw_envelope_json')):
+                self.assertNotIn(value,str([tuple(row) for row in self.store.connection.execute(f'SELECT {column} FROM {table}')]))
+        with execution_scope(self.runtime,self.context,'run'):
+            with self.assertRaises(PrivacyFence):self.db.upsert_session(self.session)
+
+    async def test_unattested_changed_session_field_fails_before_commit(self):
+        self.session.session_data={'unknown_extension_copy':'UNTRACKED PRIVATE COPY'}
+        with execution_scope(self.runtime,self.context,'run'):
+            with self.assertRaises(PrivacyFence):self.db.upsert_session(self.session)
+        self.assertIsNone(self.db.get_session('session',deserialize=False))
+
+    async def test_revoked_queued_run_performs_no_executor_io_and_active_run_becomes_terminal(self):
+        import asyncio
+        from openagent_core.content_privacy import ToolResultPrivacyPublisher
+        self.runtime.services.registry.bind(ToolResultPrivacyPublisher,self.publisher)
+        await self.store.transition('run','success',output='OLDER SOURCE ANSWER')
+        entered=asyncio.Event();release=asyncio.Event();calls=[]
+        async def execute(request,context,runtime):
+            calls.append(request.run_id)
+            entered.set();await release.wait()
+            return 'PRIVATE LATE OUTPUT'
+        self.runtime.services.executor=SimpleNamespace(execute=execute)
+        await self.runtime.submit(RunRequest('active','session','active-key','Active question'),self.context)
+        await entered.wait()
+        await self.runtime.submit(RunRequest('queued','session','queued-key','Queued question'),self.context)
+        await self.ledger.enqueue(PrivacyRequest('concurrent-erasure','tenant','shopify/app','group',10,'redact',('customer:23',)))
+        release.set()
+        active=await self.runtime.wait('active',self.context)
+        queued=await self.runtime.wait('queued',self.context)
+        self.assertEqual(calls,['active'])
+        self.assertEqual((active.status,queued.status),('failed','failed'))
+        self.assertIsNone(active.output);self.assertIsNone(queued.output)
+        self.assertNotIn('PRIVATE LATE OUTPUT',str([tuple(row) for row in self.store.connection.execute('SELECT output_json,raw_envelope_json FROM session_runs')]))
+
+
 
     async def test_mixed_customer_one_call_preserves_sibling_across_real_public_and_engine_copies(self):
         from dataclasses import replace
@@ -153,14 +213,14 @@ class EnginePrivacy(unittest.IsolatedAsyncioTestCase):
         inventory=replace(self.origin,subjects=(),nonpersonal=True)
         payload={'data':{'customers':[{'id':23,'name':'FIRST CUSTOMER PRIVATE'},
                                      {'id':24,'name':'SECOND CUSTOMER RETAIN'}],'inventory':'NONPERSONAL INVENTORY'},
-                 '_glasspalace':{'count':2}}
+                 '_host':{'count':2}}
         result={'content':[{'type':'text','text':json.dumps(payload)}],'structuredContent':payload}
         boundary=JsonStringBoundary()
         fragments=[]
         for prefix in (('structuredContent',),('content',0,'text',boundary)):
             fragments.extend((ContentFragment(prefix+('data','customers',0),(self.origin,)),
                               ContentFragment(prefix+('data','customers',1),(second,)),
-                              ContentFragment(prefix+('data','inventory'),(inventory,)),ContentFragment(prefix+('_glasspalace',),())))
+                              ContentFragment(prefix+('data','inventory'),(inventory,)),ContentFragment(prefix+('_host',),())))
         fragments.append(ContentFragment(('content',0,'type'),()))
         provenance=ToolResultProvenance(tuple(fragments))
         provenance.validate_result(result,'tenant')

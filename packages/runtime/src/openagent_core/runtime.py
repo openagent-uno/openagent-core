@@ -734,6 +734,13 @@ class Runtime:
                             await self.services.store.transition(request.run_id,'cancelled')
                             return
                         await self.services.store.transition(request.run_id,'running')
+                        from .content_privacy import ToolResultPrivacyPublisher
+                        privacy=self.service(ToolResultPrivacyPublisher)
+                        if privacy is not None:
+                            # A queued run may have been admitted before the
+                            # webhook fence. Recheck its trusted inherited
+                            # context immediately before executor/model IO.
+                            await privacy.origins_for_execution(context,request.run_id)
                         result=await executor.execute(request,context,self)
                         await self._authorize(context,'run.publish',request.session_id,context.tenant_id)
                         # Cancellation is an intention until execution ends.
@@ -746,7 +753,18 @@ class Runtime:
             await self.services.store.transition(request.run_id,'interrupted' if self._closing else 'cancelled')
         except Exception as exc:
             # Details may include secrets or private provider diagnostics.
-            await self.services.store.transition(request.run_id,'failed',output={'error_type':type(exc).__name__})
+            from .content_privacy import ToolResultPrivacyPublisher,PrivacyFence
+            error_output={'error_type':type(exc).__name__}
+            privacy=self.service(ToolResultPrivacyPublisher)
+            if privacy is not None:
+                try:
+                    await privacy.origins_for_execution(context,request.run_id)
+                except PrivacyFence:
+                    # Terminal metadata with no content remains writable after
+                    # revocation. Publishing a derived diagnostic would hit
+                    # the source fence and leave the run permanently active.
+                    error_output=None
+            await self.services.store.transition(request.run_id,'failed',output=error_output)
         finally:
             self._tasks.pop(request.run_id,None)
             self._run_graphs.pop(request.run_id,None)

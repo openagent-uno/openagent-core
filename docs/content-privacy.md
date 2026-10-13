@@ -173,8 +173,9 @@ Real source tests use `SqliteDb.upsert_session/get_session`, the public run stor
 and its normal serializer/projector. They verify both canonical copies, retained
 human/Gmail content, exact separate-customer selection, and rollback of attempted
 restoration. The fragment checkpoint below also covers mixed customers in one
-normalized JSON response. It still excludes arbitrary session state/provider metadata, event/media
- replicas, prior untracked history and search completion. No full
+normalized JSON response. The session-state checkpoint below covers canonical
+summary and changed state leaves; arbitrary provider metadata, external media,
+prior untracked history and unknown extensions remain excluded. No full
 `engine-history` coverage or product privacy completion is asserted.
 
 ## Canonical compaction checkpoint
@@ -303,7 +304,7 @@ requires every inner leaf to be classified. Sinks compare the selected subtree
 digest and reserialize the surrounding text after replacement, preserving other
 customers and metadata. They retain the existing MCP envelope and tool contracts.
 
-The mixed-customer canonical test uses the real GlassPalace MCP envelope shape
+The mixed-customer canonical test uses a host MCP envelope with duplicate JSON copies
 with text plus structured copies, then the engine's own JSON-text serialization.
 Both copies retain the second customer after the first request; its later request
 also succeeds, and a later whole-shop request removes source-bound inventory in
@@ -407,6 +408,27 @@ executor, rejects a response bound to a different shop, and confirms revoked
 scope causes no subsequent API invocation. Result-only callbacks remain a
 compatibility entrypoint; an official provider host must install both callbacks
 before claiming first-invocation crash/privacy coverage.
+
+### Session summary and mutable state
+
+The canonical SQLite writer calls `begin_engine_session` before its legacy
+upsert. `SqliteEngineContentPrivacy` attributes changed rolling summaries,
+generated session names and changed `session_state` leaves to the admitted run.
+It preserves unchanged human preferences and configured numeric/provider metrics.
+The raw run's state copy must equal the canonical state baseline; its changed
+leaves inherit those exact origins. Unknown changed session fields and a first
+nonempty state without a persisted baseline fail before commit.
+
+The selective sink checks each exact field digest, updates its legacy value and
+normalized header copy, preserves unrelated state, and refreshes the canonical
+search index when present. Changed human revisions conflict rather than being
+deleted. Tests exercise the actual `SqliteDb` writer, retain a human preference,
+and remove the rolling summary, changed state and matching raw run replicas.
+
+A queued run rechecks inherited context immediately before executor/model IO.
+If revocation arrives during an active call, terminal status can still be saved
+without derived output or diagnostics. This keeps retries actionable without
+allowing the failed run to revive protected content.
 
 ### Cached model context
 

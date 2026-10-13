@@ -3,8 +3,8 @@
 A trusted host binds this writer through EngineContentPrivacyWriter. It consumes
 framework-owned public run origins and exact provider call identities; it never
 accepts origin labels from serialized model data. Historical untracked state,
-extra session-state keys, provider caches and external media still require their
-own qualified adapters before a full privacy request can complete.
+unknown session fields and external media still require their own qualified
+adapters before a full privacy request can complete.
 """
 from __future__ import annotations
 
@@ -51,10 +51,11 @@ def _archived_envelope(value):
 class SqliteEngineContentPrivacy:
     sink_id='engine-history'
 
-    def __init__(self,public_store,ledger,publisher,*,export):
+    def __init__(self,public_store,ledger,publisher,*,export,search_privacy=None):
         if public_store.path!=ledger.path or publisher.runtime_store is not public_store:
             raise ValueError('Engine provenance must share the canonical runtime database')
         self.store,self.ledger,self.publisher,self.export=public_store,ledger,publisher,export
+        self.search_privacy=search_privacy
         public_store.connection.execute('''CREATE TABLE IF NOT EXISTS engine_privacy_nodes(
             artifact TEXT PRIMARY KEY,tenant TEXT NOT NULL,session TEXT NOT NULL,
             run_id TEXT NOT NULL,path TEXT NOT NULL)''')
@@ -65,6 +66,11 @@ class SqliteEngineContentPrivacy:
         public_store.connection.execute('''CREATE TABLE IF NOT EXISTS engine_privacy_folds(
             tenant TEXT NOT NULL,session TEXT NOT NULL,source_run TEXT NOT NULL,recap TEXT NOT NULL,
             PRIMARY KEY(tenant,session,source_run,recap))''')
+        from .engine_state_privacy import EngineSessionState
+        self._state=EngineSessionState(self)
+
+    def begin_engine_session(self,transaction,session_id,incoming_row,context,run_id):
+        self._state.begin(transaction,session_id,incoming_row,context,run_id)
 
     def record_engine_session(self,transaction,session_id,source_row,context,run_id):
         main=next((row[2] for row in transaction.execute('PRAGMA database_list') if row[1]=='main'),None)
@@ -131,6 +137,7 @@ class SqliteEngineContentPrivacy:
                     model_calls.setdefault(binding['provider_call_id'],set()).update(
                         self.ledger._origin(origin) for fragment in fragments for origin in fragment['origins'])
             paths=[]
+            paths.extend(self._state.run_paths(transaction,trusted[0],session_id,run))
             messages=run.get('messages') or []
             first_source=None
             admitted=transaction.execute('SELECT input_json,delegated_parent_run_id,metadata_json FROM session_runs WHERE id=?',(identity,)).fetchone()
@@ -266,6 +273,12 @@ class SqliteEngineContentPrivacy:
         if request.operation=='export' and result!='conflict':
             await self.export(request,revision,result)
             return 'complete'
+        if request.operation=='redact' and result=='complete':
+            from openagent_core.memory.operational.search import operational_search_path
+            if operational_search_path(self.store.path).exists():
+                if self.search_privacy is None:return 'conflict'
+                through=await run_sync(lambda:self.store.connection.execute('SELECT coalesce(max(seq),0) FROM search_outbox').fetchone()[0])
+                if not await self.search_privacy.refresh(through):return 'conflict'
         return result
 
     def _scrub(self):
@@ -277,6 +290,8 @@ class SqliteEngineContentPrivacy:
         db=self.store.connection
         db.execute('PRAGMA secure_delete=ON')
         with self.store._transaction():
+            if revision.artifact_id.startswith('engine-state/'):
+                return self._state.apply(db,request,revision)
             node=db.execute('SELECT * FROM engine_privacy_nodes WHERE artifact=? AND tenant=?',
                             (revision.artifact_id,revision.tenant_id)).fetchone()
             if node is None:
