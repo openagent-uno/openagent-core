@@ -1936,6 +1936,9 @@ class NativeProvider(ProviderResources, BaseModel):
         # into an NativeProviderError so the surrounding empty-stream /
         # bridge layers format a clean error message.
         status_obj = getattr(response, "status", None)
+        status_value = str(getattr(status_obj,'value',status_obj) or '').upper()
+        if status_value in {'CANCELLED','CANCELED'}:
+            raise asyncio.CancelledError(str(getattr(response,'content',None) or 'Runtime run was cancelled.'))
         if _is_error_status(status_obj):
             raw_error = (getattr(response, "content", None) or "").strip() \
                 or "runtime run finished with status=error and no detail"

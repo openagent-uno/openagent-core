@@ -191,25 +191,39 @@ class VaultGit:
                     r = self._git("init", "-b", "main")
                     if r.returncode != 0:
                         # older git without -b: fall back, then rename.
-                        self._git("init")
-                        self._git("symbolic-ref", "HEAD", "refs/heads/main")
+                        if self._git("init").returncode != 0:
+                            logger.warning("vault git initialization failed")
+                            return False
+                        if self._git("symbolic-ref", "HEAD", "refs/heads/main").returncode != 0:
+                            logger.warning("vault git branch initialization failed")
+                            return False
+                if not self.is_repo():
+                    logger.warning("vault git initialization produced no repository")
+                    return False
                 # Pin the identity into the repo's local config too, so a
                 # human running git in the vault sees the same author.
                 name, email = _author()
-                self._git("config", "user.name", name)
-                self._git("config", "user.email", email)
+                if self._git("config", "user.name", name).returncode != 0:
+                    logger.warning("vault git identity configuration failed")
+                    return False
+                if self._git("config", "user.email", email).returncode != 0:
+                    logger.warning("vault git identity configuration failed")
+                    return False
                 gi = self.vault_root / ".gitignore"
                 if not gi.exists():
                     gi.write_text(_GITIGNORE)
+                # commit_all re-enters ensure_repo. Mark readiness only after
+                # a real repository and both identity settings exist.
+                self._repo_ready = True
                 if fresh:
                     self.commit_all(
                         "vault: initialise git repository",
                         ["Origin: system", "Action: git-init"],
                     )
-                self._repo_ready = True
                 return True
             except Exception as e:  # noqa: BLE001
-                logger.warning("vault git ensure_repo failed: %s", e)
+                self._repo_ready = False
+                logger.warning("vault git ensure_repo failed (%s)", type(e).__name__)
                 return False
 
     # ── commits ───────────────────────────────────────────────────────
@@ -246,11 +260,11 @@ class VaultGit:
                               "--only", "--", *paths)
                 if r.returncode != 0:
                     logger.debug("vault git commit (paths) noop/failed: %s",
-                                 (r.stderr or r.stdout or "").strip()[:200])
+                                 _redact_url((r.stderr or r.stdout or "").strip())[:200])
                     return None
                 return self._head()
             except Exception as e:  # noqa: BLE001
-                logger.warning("vault git commit failed: %s", e)
+                logger.warning("vault git commit failed (%s)", type(e).__name__)
                 return None
 
     def commit_all(self, summary: str, trailers: list[str]) -> Optional[str]:
@@ -268,11 +282,11 @@ class VaultGit:
                 r = self._git("commit", "-m", self._message(summary, trailers))
                 if r.returncode != 0:
                     logger.debug("vault git commit_all noop/failed: %s",
-                                 (r.stderr or r.stdout or "").strip()[:200])
+                                 _redact_url((r.stderr or r.stdout or "").strip())[:200])
                     return None
                 return self._head()
             except Exception as e:  # noqa: BLE001
-                logger.warning("vault git commit_all failed: %s", e)
+                logger.warning("vault git commit_all failed (%s)", type(e).__name__)
                 return None
 
     def _head(self) -> Optional[str]:
@@ -400,7 +414,7 @@ class VaultGit:
                     return None
                 return self._head()
             except Exception as e:  # noqa: BLE001
-                logger.warning("vault git restore_to failed: %s", e)
+                logger.warning("vault git restore_to failed (%s)", type(e).__name__)
                 return None
 
     def reset_to(self, ref: str) -> dict:
@@ -425,5 +439,5 @@ class VaultGit:
                 return {"ok": True, "head": self._head(),
                         "deleted": int(cnt or 0)}
             except Exception as e:  # noqa: BLE001
-                logger.warning("vault git reset_to failed: %s", e)
-                return {"error": str(e)}
+                logger.warning("vault git reset_to failed (%s)", type(e).__name__)
+                return {"error": type(e).__name__}

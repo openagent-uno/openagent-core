@@ -336,6 +336,13 @@ async def _arun_runtime_collect(
     finally:
         turn_cache_read = read_turn_cache_read()
         close_turn_cache_read(_cr_token)
+    status = getattr(run_output,"status",None)
+    status = str(getattr(status,"value",status) or '').upper()
+    if status in {'ERROR','FAILED'}:
+        from openagent_core.core.public_errors import RunTurnError
+        raise RunTurnError(str(getattr(run_output,'content',None) or 'Runtime run failed.'))
+    if status in {'CANCELLED','CANCELED'}:
+        raise asyncio.CancelledError(str(getattr(run_output,'content',None) or 'Runtime run was cancelled.'))
     content = str(getattr(run_output, "content", "") or "")
     # Team/Agent runtimes keep tool-produced media typed on RunOutput. Carry
     # it through the same internal boundary NativeProvider uses; StreamSession
@@ -666,7 +673,8 @@ async def _arun_runtime_stream(
         if terminal_cancel_reason is not None:
             raise asyncio.CancelledError(terminal_cancel_reason)
         if terminal_error is not None:
-            raise RuntimeError(terminal_error)
+            from openagent_core.core.public_errors import RunTurnError
+            raise RunTurnError(terminal_error)
 
         # Silent-leader safety net: a turn that delegated but whose leader
         # emitted NO synthesis of its own would otherwise yield zero content
