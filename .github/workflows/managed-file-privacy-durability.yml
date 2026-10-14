@@ -1,0 +1,30 @@
+name: Managed file privacy durability source qualification
+on:
+  pull_request:
+    paths:
+      - packages/runtime/src/openagent_core/privacy_files.py
+      - tests/public/test_managed_file_privacy_durability.py
+      - .github/workflows/managed-file-privacy-durability.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+      PYTHONPATH: packages/runtime/src:packages/storage-sqlite/src
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Source-only regression with real temporary files and SQLite
+        run: |
+          nice -n 10 python -m unittest discover -s tests/public -p test_managed_file_privacy_durability.py -v
+          nice -n 10 python -m unittest discover -s tests/public -p test_content_privacy.py -v
