@@ -52,6 +52,10 @@ class ManagedFilePrivacySink:
         pin = self.pins.get((revision.artifact_id, revision.revision_id))
         if pin is None or not pin.wholly_attributed or revision.sink_id != self.sink_id or revision.tenant_id != request.tenant_id:
             return 'conflict'
+        # Python cannot flush directory metadata portably on Windows. Until a
+        # host supplies a separately qualified sink, do not attest durable erase.
+        if request.operation == 'redact' and os.name == 'nt':
+            return 'conflict'
         async with self.writer_lock:
             path = self.root
             for part in Path(pin.relative_path).parts:
@@ -66,6 +70,10 @@ class ManagedFilePrivacySink:
                 # authorized delivery callback, never silently fabricated data.
                 if request.operation == 'export':
                     await self.export(request, revision, b'')
+                else:
+                    # A retry may follow unlink succeeding but directory fsync
+                    # failing. Missing bytes alone do not prove durable erasure.
+                    self._sync_directory(path.parent)
                 return 'complete'
             try:
                 original = os.fstat(descriptor)
@@ -85,6 +93,18 @@ class ManagedFilePrivacySink:
                     await self.export(request, revision, data)
                 else:
                     path.unlink()
+                    self._sync_directory(path.parent)
                 return 'complete'
             finally:
                 os.close(descriptor)
+
+    @staticmethod
+    def _sync_directory(path):
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+                             | getattr(os, 'O_NOFOLLOW', 0))
+        try:
+            if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError('Managed file parent is not a directory')
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
