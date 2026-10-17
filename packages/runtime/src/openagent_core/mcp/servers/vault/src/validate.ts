@@ -52,8 +52,8 @@ export function validationEnabled(): boolean {
  * This USED TO be a hand-kept heuristic — skip any path segment starting with
  * `_` or `.`, plus `templates/` — written to "mirror taxonomy.is_raw/is_index".
  * It did not mirror them. Measured on the owner's real 2,116-note vault, it
- * skipped **413 notes (20%) that the Python gate grades**: 404 under
- * `_inherited-from-lyra/**` and 16 `_index.md` hubs. The agent wrote them
+ * skipped **413 notes (20%) that the Python gate grades**: 404 under a subtree
+ * anonymized here as `_inherited-from-template/**`, and 16 `_index.md` hubs. The agent wrote them
  * through a writer that never validated them, and the gate then failed them
  * forever with no path to green. The `_` rule was wrong on its own terms too:
  * `_index.md` hubs are first-class notes the gate has explicit support for.

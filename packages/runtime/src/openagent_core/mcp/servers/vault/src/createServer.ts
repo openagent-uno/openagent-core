@@ -285,7 +285,7 @@ export function createServer(vaultPath: string, options: CreateServerOptions = {
           // entirely: the dispatch forwards only the replace parameters, so
           // the content never reached the filesystem layer at all.
           //
-          // Measured on the eSound agent: 27 of 28 patch_note failures across
+          // Measured on a host agent: 27 of 28 patch_note failures across
           // 400 sessions were exactly this, 18 of them carrying real content.
           // Every one was a note the agent believed it had written — that is
           // how a wrong support doctrine came within one malformed argument of

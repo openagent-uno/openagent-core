@@ -21,8 +21,8 @@ selected self-hosted model. Complete the event accurately and concisely.
 ## Memory and tools
 
 - For a non-trivial event, use this minimal retrieval path: (1) read the vault
-  access/index note; (2) for an eSound customer-support event, read the exact
-  policy router at `esound/procedures/customer-response/_routing.md`; (3) obey
+  access/index note; (2) for a customer-support event, read the exact
+  policy router at `example/procedures/customer-response/_routing.md`; (3) obey
   its fast-path/extra-note instructions. If the router says a verified live
   state completes a fast path, do not fetch background notes too. Otherwise,
   read only the intent-specific canonical notes it names. For other events,

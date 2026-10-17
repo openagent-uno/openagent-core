@@ -1461,16 +1461,16 @@ describe("classifyWriteError (#109)", () => {
 // ============================================================================
 
 describe("readNote resolves the .md sibling of an extension-less path", () => {
-  test("the exact production miss: a governing procedure asked for without .md", async () => {
+  test("a nested governing procedure asked for without .md", async () => {
     // Measured in production: read_note failed 46 times in 300 sessions, and the
-    // top two misses were these very paths, asked for in wikilink form.
-    await mkdir(join(testVaultPath, "esound/procedures/customer-response"), { recursive: true });
+    // top misses used this nested procedure shape, asked for in wikilink form.
+    await mkdir(join(testVaultPath, "example/procedures/customer-response"), { recursive: true });
     await writeFile(
-      join(testVaultPath, "esound/procedures/customer-response/triage-workflow.md"),
+      join(testVaultPath, "example/procedures/customer-response/triage-workflow.md"),
       "---\ntitle: Triage\n---\n\n# Triage workflow\n"
     );
 
-    const note = await fileSystem.readNote("esound/procedures/customer-response/triage-workflow");
+    const note = await fileSystem.readNote("example/procedures/customer-response/triage-workflow");
     expect(note.content).toContain("Triage workflow");
   });
 
