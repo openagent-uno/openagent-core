@@ -68,3 +68,46 @@ Delegation session IDs are also independent of arbitrary model labels and
 nesting depth. A bounded root display prefix plus parent/model digest and UUID
 keeps IDs under 128 ASCII bytes. Exact parent, model routing and authority remain
 in their existing durable metadata and authorization flow; IDs grant no scope.
+
+## Public conversation presentation
+
+`SessionInspection.transcript(context, session_id, limit=20)` returns additive
+ordered `parts`: text parts and path-free attachment parts for both roles.
+`attachments` remains the compatibility list. Exact tenant/session/run linkage
+selects the original admitted input, including literal `attachment_reference`
+or memory-checkpoint text written by the person. Provider previews, prompts and
+machine context are never recovered by stripping strings. Runtime-owned run IDs
+and the deterministic legacy projection IDs retain their separate provenance;
+message roles and provider IDs (when present) fence the correspondence.
+
+A host file stays an opaque `file_id`/`id`, with safe filename/MIME/size if
+provided. It is not a CAS artifact. Only the host's current authorized snapshot
+or content resolver can open it. CAS refs retain `artifact_id`, link, filename,
+MIME and size; current session links and availability are rechecked on reads.
+Public responses never contain local paths, binary bodies or caller URLs.
+Canonical mixed text/file order is preserved. Without a canonical capability,
+a legacy local path does not become a downloadable public attachment.
+
+Hosts with sandbox readers may explicitly register an
+`openagent_core.artifacts.AttachmentPublisher` as the runtime service
+`attachments.publisher`. Its async `publish(context, path)` must authorize the
+current context, use the host-selected reader and return the session-linked ref
+from `ArtifactRepository.upload`. Core does not discover a device by tool name
+or grant filesystem access. The standard `send_file_to_user` tool uses this
+publisher; a Runtime without it reports capability unavailable without examining
+the path. Historical standalone Stream callers outside Runtime keep their
+existing delivery contract.
+
+Engine resolves delivered markers only against already-published CAS bytes in
+the same tenant/session, adds output links and records ordered public parts in
+the existing terminal journal. MIME and the session link preserve the original
+filename/media type even when the compatibility marker uses a content hash.
+An unavailable file adds a static notice while retaining valid answer text;
+revoked session publication still denies the entire publication. Stream retains
+its existing canonical part persistence. Both public paths use the same reader.
+
+Deterministic regressions in `test_workspace_administration.py` and
+`test_engine_executor.py` exercise a real Stream turn with prepared provider
+text, and AgentExecutor through the standard delivery tool, an explicitly
+selected publisher, real CAS upload, live/history read and current ACL checks.
+These tests do not claim a real provider, browser preview or product acceptance.

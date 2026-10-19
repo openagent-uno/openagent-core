@@ -57,6 +57,8 @@ def expand_run_messages(
     parent_session_id: str | None = None,
     child_by_run_id: dict[str, str] | None = None,
     authorized_child_sessions: frozenset[str] = frozenset(),
+    canonical_inputs: dict[str, dict] | None = None,
+    canonical_messages: dict[tuple[str, int, str], dict] | None = None,
 ) -> list[dict]:
     """Expand ONE runtime run dict into the flat ``ChatMessage`` shape the
     universal app expects, mirroring the live-wire event ordering.
@@ -151,7 +153,9 @@ def expand_run_messages(
         (parent_images if parent_images is not None else run.get("images")) or []
     )
 
-    for m in run.get("messages") or []:
+    original = None if is_member_run else (canonical_inputs or {}).get(str(run.get("run_id") or ""))
+    original_used = False
+    for message_ordinal, m in enumerate(run.get("messages") or []):
         if not isinstance(m, dict):
             continue
         role = m.get("role", "user")
@@ -275,6 +279,7 @@ def expand_run_messages(
                         parent_session_id=parent_session_id,
                         child_by_run_id=child_by_run_id,
                         authorized_child_sessions=authorized_child_sessions,
+                        canonical_inputs=canonical_inputs, canonical_messages=canonical_messages,
                     ))
             continue
 
@@ -283,7 +288,8 @@ def expand_run_messages(
         # have empty content by design and are dropped here too — the
         # ``tool`` role message that follows carries the structured
         # ``toolInfo`` chip the UI renders.
-        if not content and role == "assistant":
+        canonical = None if is_member_run else (canonical_messages or {}).get((str(run.get("run_id") or ""), message_ordinal, role))
+        if not content and role == "assistant" and not (canonical and (canonical.get("parts") or canonical.get("attachments"))):
             continue
 
         msg_counter[0] += 1
@@ -337,6 +343,26 @@ def expand_run_messages(
             if atts:
                 entry["attachments"] = atts
             images_for_assistant = []  # only emit once per run
+        # Public presentation comes from durable original input / canonical
+        # parts, never from provider-only previews or string stripping.
+        canonical = None if is_member_run else (canonical_messages or {}).get((str(run.get("run_id") or ""), message_ordinal, role))
+        if canonical is not None:
+            entry.update(canonical)
+        if role == "user" and not original_used and original is not None:
+            original_value = dict(original)
+            if canonical is not None and not original_value.get("attachments"):
+                original_value.pop("attachments", None)
+            if canonical is not None and canonical.get("parts") is not None:
+                original_value.pop("text", None)
+            entry.update(original_value)
+            original_used = True
+        # Legacy paths are not a public file capability. Keep structured host
+        # IDs and canonical CAS references only; never expose local paths/data.
+        if entry.get("attachments"):
+            entry["attachments"] = public_transcript_attachments(entry["attachments"])
+        if "parts" not in entry and (entry.get("attachments") or canonical is not None or original is not None and role == "user"):
+            entry["parts"] = ([{"kind": "text", "text": entry["text"]}] if entry["text"] else []) + [
+                {"kind": "attachment", "attachment": ref} for ref in entry.get("attachments", ())]
         out.append(entry)
 
     # Any member_responses that weren't spliced inline (e.g. the
@@ -360,9 +386,41 @@ def expand_run_messages(
             is_member_run=True,
             parent_session_id=parent_session_id,
             child_by_run_id=child_by_run_id,
-                        authorized_child_sessions=authorized_child_sessions,
+            authorized_child_sessions=authorized_child_sessions,
+            canonical_inputs=canonical_inputs, canonical_messages=canonical_messages,
         ))
 
     return out
 
 
+
+
+def public_transcript_attachments(values):
+    """Path-free references; opaque host IDs never become CAS artifact IDs."""
+    import re
+    from .memory.artifacts import public_attachment_ref, safe_attachment_filename
+    result = []
+    for value in values if isinstance(values, (list, tuple)) else ():
+        if not isinstance(value, dict):
+            continue
+        host_id = value.get("file_id") or value.get("fileId") or (value.get("id") if not value.get("artifact_id") else None)
+        if isinstance(host_id, str) and host_id and len(host_id) <= 1024:
+            ref = {"file_id" if value.get("file_id") or value.get("fileId") else "id": host_id}
+            if isinstance(value.get("filename"), str):
+                ref["filename"] = safe_attachment_filename(value["filename"])
+            mime = value.get("mime_type")
+            if isinstance(mime, str) and re.fullmatch(r"[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+", mime) and len(mime) <= 255:
+                ref["mime_type"] = mime
+            size = value.get("size_bytes")
+            if isinstance(size, int) and not isinstance(size, bool) and 0 <= size <= 2**53:
+                ref["size_bytes"] = size
+            if value.get("type") in {"file", "image", "video", "audio", "voice"}:
+                ref["type"] = value["type"]
+            result.append(ref)
+        elif isinstance(value.get("artifact_id"), str) and re.fullmatch(r"art_[0-9a-f]{32}", value["artifact_id"]):
+            ref = public_attachment_ref(value)
+            # Canonical endpoints are reconstructed, never caller-supplied.
+            ref.pop("url", None)
+            ref["url"] = f"/api/artifacts/{ref['artifact_id']}/content"
+            result.append(ref)
+    return result

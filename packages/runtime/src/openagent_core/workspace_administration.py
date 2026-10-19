@@ -134,6 +134,45 @@ class SessionInspection:
             if len(result)>=max(1,min(int(limit),200)):break
         return {"sessions":result}
 
+    async def _public_input_refs(self, context, session_id, values):
+        from .session_transcript import public_transcript_attachments
+        from .artifacts import session_output_reference
+        result = []
+        for value in values if isinstance(values,(list,tuple)) else ():
+            if not isinstance(value,dict):
+                continue
+            if value.get("artifact_id"):
+                ref = await session_output_reference(self.db,tenant_id=context.tenant_id,session_id=session_id,value=value)
+                if ref is not None:
+                    result.append(ref)
+            else:
+                result.extend(public_transcript_attachments([value]))
+        return result
+
+    async def _public_output_frame(self, context, session_id, frame):
+        if not isinstance(frame,dict) or frame.get("kind") != "done":
+            return frame
+        from .artifacts import session_output_reference
+        from .stream.content_parts import parse_response_content
+        parts = frame.get("parts")
+        if not isinstance(parts,list):
+            parsed = parse_response_content(frame.get("text", ""),allow_inline_ui=False)
+            if not parsed.attachments:
+                return frame
+            parts = list(parsed.parts)
+        public = []
+        for part in parts[:512]:
+            if not isinstance(part,dict):
+                continue
+            if part.get("kind")=="text" and isinstance(part.get("text"),str):
+                public.append({"kind":"text","text":part["text"]})
+            elif part.get("kind")=="attachment":
+                ref=await session_output_reference(self.db,tenant_id=context.tenant_id,session_id=session_id,value=part.get("attachment"))
+                if ref is not None:
+                    public.append({"kind":"attachment","attachment":ref})
+        return {**frame,"text":"".join(p["text"] for p in public if p["kind"]=="text").strip(),
+            "parts":public,"attachments":[p["attachment"] for p in public if p["kind"]=="attachment"]}
+
     async def live_runs(self,context,session_id,*,limit=8):
         """Bounded canonical stream snapshots, without authority/credential data.
 
@@ -148,16 +187,113 @@ class SessionInspection:
             metadata=json.loads(row["metadata_json"])
             author=metadata.get("execution_context",{}).get("author",{})
             events=await (await conn.execute("SELECT sequence,event_type,metadata_json,occurred_at_ms FROM domain_events WHERE tenant_id=? AND session_id=? AND run_id=? ORDER BY sequence LIMIT 2001",(context.tenant_id,session_id,row["id"]))).fetchall()
+            truncated = len(events) > 2000
+            if truncated:
+                terminal = await (await conn.execute(
+                    "SELECT sequence,event_type,metadata_json,occurred_at_ms FROM domain_events "
+                    "WHERE tenant_id=? AND session_id=? AND run_id=? AND event_type='run.stream' "
+                    "AND json_extract(metadata_json,'$.kind')='done' ORDER BY sequence DESC LIMIT 1",
+                    (context.tenant_id,session_id,row["id"]))).fetchone()
+                if terminal is not None and terminal["sequence"] > events[1999]["sequence"]:
+                    events = events[:1999] + [terminal]
             # A monotonically increasing journal cursor survives reconnects and
             # restarts. Large streams retain their final canonical output too.
             latest=await (await conn.execute("SELECT max(sequence) FROM domain_events WHERE tenant_id=? AND run_id=?",(context.tenant_id,row["id"]))).fetchone()
             revision=max(revision,int(latest[0] or 0))
-            result.append({"id":row["id"],"status":row["status"],"input":json.loads(row["input_json"]),"output":json.loads(row["output_json"]) if row["output_json"] else None,
+            from .session_transcript import public_transcript_attachments
+            result.append({"id":row["id"],"status":row["status"],"input":json.loads(row["input_json"]),
+                "attachments":await self._public_input_refs(context,session_id,metadata.get("attachments", ())),
+                "output":json.loads(row["output_json"]) if row["output_json"] else None,
                 "created_at_ms":row["created_at_ms"],"finished_at_ms":row["finished_at_ms"],
                 "author":{key:author[key] for key in ("authority","tenant_id","subject_id","kind") if isinstance(author.get(key),str)},
-                "events":[{"cursor":e["sequence"],"kind":e["event_type"],"payload":json.loads(e["metadata_json"]),"timestamp_ms":e["occurred_at_ms"]} for e in events[:2000] if e["event_type"] in {"run.stream","run.status","run.delta"}],"truncated":len(events)>2000})
+                "events":[{"cursor":e["sequence"],"kind":e["event_type"],"payload":await self._public_output_frame(context,session_id,json.loads(e["metadata_json"])),"timestamp_ms":e["occurred_at_ms"]} for e in events[:2000] if e["event_type"] in {"run.stream","run.status","run.delta"}],"truncated":truncated})
         await self.authorize(context,session_id)
         return {"session_id":session_id,"revision":revision,"runs":result}
+
+    async def _public_transcript_sources(self, context, session_id, runs):
+        """Exact tenant/session/run linkage; no positional prompt guessing."""
+        from .session_transcript import public_transcript_attachments
+        from .memory.artifacts import attachment_refs_for_messages_on_connection
+        from .memory.message_parts import canonical_parts_for_messages_on_connection
+        conn = await self.db._ensure_connected()
+        inputs, messages = {}, {}
+        for run in runs:
+            run_id = str(run.get("run_id") or "")
+            row = await (await conn.execute(
+                "SELECT id,input_json,metadata_json FROM session_runs WHERE tenant_id=? AND session_id=? AND "
+                "(id=? OR (id=? AND (json_extract(raw_envelope_json,'$.run_id')=? OR json_extract(raw_envelope_json,'$.id')=?))) "
+                "ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END LIMIT 1",
+                (context.tenant_id,session_id,run_id,f"run:{session_id}:{run_id}",run_id,run_id,run_id))).fetchone()
+            if row is not None:
+                metadata = json.loads(row["metadata_json"] or "{}")
+                if metadata.get("runtime_contract") == 1 and row["input_json"] is not None:
+                    original = json.loads(row["input_json"])
+                    if isinstance(original, str):
+                        inputs[run_id] = {"text": original, "runId": run_id,
+                            "attachments": await self._public_input_refs(context,session_id,metadata.get("attachments", ()))}
+            normalized = await (await conn.execute(
+                "SELECT id,ordinal,role,raw_envelope_json FROM session_messages WHERE run_id=? AND tenant_id=? AND session_id=? AND visibility='user_visible' ORDER BY ordinal",
+                ((row["id"] if row is not None else run_id), context.tenant_id, session_id))).fetchall()
+            # Projection ordinal is run-local (projection.py enumerates the
+            # original raw list), including system/history/tool slots. Verify
+            # role, plus a source message ID when the provider supplied one.
+            # Provider content is prepared for inference and deliberately differs
+            # from the canonical original; text equality is not identity.
+            raw_messages = run.get("messages") or []
+            targets = {}
+            verified = []
+            for message in normalized:
+                source = json.loads(message["raw_envelope_json"])
+                ordinal = message["ordinal"]
+                if row is not None and json.loads(row["metadata_json"] or "{}").get("runtime_contract") == 1 and "author" in source and "role" not in source:
+                    # RuntimeStore writes one canonical user input and final
+                    # answer, independently of provider history/tool slots.
+                    candidates = [i for i,m in enumerate(raw_messages) if isinstance(m,dict)
+                        and m.get("role")==message["role"] and not m.get("from_history") and not m.get("tool_calls")]
+                    if message["role"] not in {"user","assistant"} or not candidates:
+                        continue
+                    ordinal = candidates[0] if message["role"]=="user" else candidates[-1]
+                if not 0 <= ordinal < len(raw_messages) or not isinstance(raw_messages[ordinal],dict):
+                    continue
+                raw = raw_messages[ordinal]
+                if raw.get("role") != message["role"] or (source.get("id") and raw.get("id") and source["id"] != raw["id"]):
+                    continue
+                verified.append(message)
+                targets[message["id"]] = ordinal
+            normalized = verified
+            identifiers = [m["id"] for m in normalized]
+            refs = await attachment_refs_for_messages_on_connection(conn, identifiers)
+            # The host authorizer has checked this exact session. CAS parts
+            # inherit that message link; without a native AccessContext,
+            # custom views remain hidden rather than acquiring inferred ACLs.
+            ordered = await canonical_parts_for_messages_on_connection(conn, identifiers, access=None)
+            for message in normalized:
+                parts = ordered.get(message["id"])
+                if parts is None and message["id"] not in refs:
+                    continue
+                public = {"attachments": refs.get(message["id"], [])}
+                if parts is not None and message["role"] in {"user", "assistant"}:
+                    public = {"text": "".join(p["text"] for p in parts if p["kind"] == "text"),
+                              "parts": parts,
+                              "attachments": [p["attachment"] for p in parts if p["kind"] == "attachment"]}
+                messages[(run_id, targets[message["id"]], message["role"])] = public
+            # AgentExecutor's terminal parts live in the existing exact-run
+            # journal. Revalidate every CAS reference against current session
+            # links; a revoked/deleted artifact never returns through history.
+            terminal = await (await conn.execute(
+                "SELECT metadata_json FROM domain_events WHERE tenant_id=? AND session_id=? AND run_id=? "
+                "AND event_type='run.stream' AND json_extract(metadata_json,'$.kind')='done' "
+                "ORDER BY sequence DESC LIMIT 1",(context.tenant_id,session_id,run_id))).fetchone()
+            if terminal is not None:
+                frame = await self._public_output_frame(context,session_id,json.loads(terminal[0]))
+                if isinstance(frame.get("parts"),list):
+                    final = next((i for i in range(len(raw_messages)-1,-1,-1)
+                        if isinstance(raw_messages[i],dict) and raw_messages[i].get("role")=="assistant"
+                        and not raw_messages[i].get("from_history") and not raw_messages[i].get("tool_calls")),None)
+                    if final is not None:
+                        messages[(run_id,final,"assistant")] = {key:frame[key] for key in ("text","parts","attachments")}
+
+        return inputs, messages
 
     async def transcript(self,context,session_id,*,limit=20):
         await self.authorize(context,session_id)
@@ -175,8 +311,9 @@ class SessionInspection:
             for row in legacy_children:
                 if row["session_id"]==child["id"] and row.get("child_run_id"):child_by_run[row["child_run_id"]]=child["id"]
         from .session_transcript import expand_run_messages
+        originals, canonical = await self._public_transcript_sources(context, session_id, runs)
         messages=[];counter=[0]
-        for run in reversed(runs):messages.extend(expand_run_messages(run,timestamp=int(run.get("created_at",0) or 0),msg_counter=counter,parent_session_id=session_id,child_by_run_id=child_by_run,authorized_child_sessions=frozenset(allowed_children)))
+        for run in reversed(runs):messages.extend(expand_run_messages(run,timestamp=int(run.get("created_at",0) or 0),msg_counter=counter,parent_session_id=session_id,child_by_run_id=child_by_run,authorized_child_sessions=frozenset(allowed_children),canonical_inputs=originals,canonical_messages=canonical))
         await self.authorize(context,session_id)
         return {"session_id":session_id,"messages":messages}
 

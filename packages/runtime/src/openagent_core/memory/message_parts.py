@@ -459,6 +459,15 @@ async def canonical_parts_for_messages_on_connection(
     from openagent_core.memory.artifacts import public_attachment_ref, safe_attachment_filename
     from openagent_core.memory.operational.access import resource_is_visible
 
+    # Hosts with their own session authorizer can request file/text parts
+    # without installing the optional Custom Views schema. View ACLs are never
+    # inferred from that session authority.
+    view_columns = (
+        "v.owner_principal_id AS view_owner_principal_id, v.owner_handle_snapshot AS view_owner_handle_snapshot, "
+        "v.visibility AS view_visibility, v.acl_version AS view_acl_version, v.title AS view_title, "
+        "v.status AS view_status, v.frozen AS view_frozen, v.expires_at_ms AS view_expires_at "
+    ) if access is not None else "NULL AS view_title "
+    view_join = "LEFT JOIN ui_views v ON v.id=p.ui_view_id AND v.tenant_id=p.tenant_id " if access is not None else ""
     output: dict[str, list[dict[str, Any]]] = {}
     for start in range(0, len(identifiers), 300):
         chunk = identifiers[start : start + 300]
@@ -469,15 +478,11 @@ async def canonical_parts_for_messages_on_connection(
                 "a.id AS artifact_id, a.kind AS artifact_kind, a.mime, "
                 "a.original_filename, a.sha256, a.size_bytes, a.storage_state, "
                 "a.deleted_at_ms AS artifact_deleted_at, "
-                "v.owner_principal_id AS view_owner_principal_id, "
-                "v.owner_handle_snapshot AS view_owner_handle_snapshot, "
-                "v.visibility AS view_visibility, v.acl_version AS view_acl_version, "
-                "v.title AS view_title, v.status AS view_status, v.frozen AS view_frozen, "
-                "v.expires_at_ms AS view_expires_at "
+                f"{view_columns}"
                 "FROM session_message_parts p "
                 "LEFT JOIN artifact_links l ON l.id=p.artifact_link_id "
                 "LEFT JOIN artifacts a ON a.id=l.artifact_id AND a.tenant_id=l.tenant_id "
-                "LEFT JOIN ui_views v ON v.id=p.ui_view_id AND v.tenant_id=p.tenant_id "
+                f"{view_join}"
                 f"WHERE p.message_id IN ({placeholders}) "
                 "ORDER BY p.message_id, p.ordinal",
                 tuple(chunk),
@@ -525,7 +530,7 @@ async def canonical_parts_for_messages_on_connection(
                     {"kind": "attachment", "attachment": ref}
                 )
                 continue
-            if kind == "ui_view" and row["view_title"] is not None:
+            if kind == "ui_view" and row["view_title"] is not None and access is not None:
                 acl_row = {
                     "tenant_id": row["tenant_id"],
                     "owner_principal_id": row["view_owner_principal_id"],

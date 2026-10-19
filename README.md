@@ -10,10 +10,11 @@ Products supply authentication, system instructions, resources, tools, and polic
 embedding-host builds its own worker and sandbox from pinned core packages; the
 standalone app/CLI/server are maintained in the `openagent` product monorepo.
 
-The `1.1.0b23` kernel, SQLite adapter, gateway and SDK are the current modular
-release candidates. The b23 file-preview and bounded-delegation changes have
-deterministic source tests; live provider/product qualification is owned by the
-embedding host. The module compatibility and full-profile packages are
+The `1.1.0b24` kernel, SQLite adapter, gateway and SDK are the current modular
+release candidates. Beta24 adds canonical original-input history and explicit
+host-authorized output attachment delivery to the beta23 previews/delegation
+contract. Deterministic source tests are recorded separately from live
+provider/product qualification, which remains owned by the embedding host. The module compatibility and full-profile packages are
 `1.1.0b3`. See the
 [documentation](docs/README.md), [module contract](docs/modules-v1.1.md), and
 [acceptance ledger](docs/migration/implementation.md) for verified behavior and

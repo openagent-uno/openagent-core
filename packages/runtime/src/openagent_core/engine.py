@@ -66,6 +66,8 @@ class AgentExecutor:
                 raise ValueError("A model override requires a host-supplied ModelCatalog adapter")
             model = await models.resolve(request.model_ref, context)
         chunks = []
+        from .stream.content_parts import ContentMarkerStreamFilter
+        marker_filter = ContentMarkerStreamFilter()
         async def can_publish() -> None:
             await require_authorized(runtime.services.authorizer, context, "run.publish",
                 ResourceRef("session",context.tenant_id,context.session_id),audience=context.audience)
@@ -85,8 +87,47 @@ class AgentExecutor:
                 raise RuntimeError(event.get("error_public") or "Agent execution failed")
             if kind == "delta":
                 chunks.append(event.get("text") or "")
+                event = {**event, "text": marker_filter.feed(event.get("text") or "")}
             elif kind == "done":
                 final_text = event.get("text") or ""
+                from .stream.content_parts import parse_response_content
+                parsed = parse_response_content(final_text, allow_inline_ui=False)
+                if parsed.attachments:
+                    from .artifacts import session_output_reference
+                    db = getattr(self.agent, "memory_db", None)
+                    parts, attachments = [], []
+                    unavailable = False
+                    for part in parsed.parts:
+                        if part["kind"] != "attachment":
+                            parts.append(part)
+                            continue
+                        value = part["attachment"]
+                        ref = await session_output_reference(db, tenant_id=context.tenant_id,
+                            session_id=context.session_id, value=value, link=True) if db is not None else None
+                        publisher = runtime.service("attachments.publisher") if hasattr(runtime, "service") else None
+                        if ref is None and publisher is not None and db is not None:
+                            try:
+                                value = await publisher.publish(context, value["path"])
+                            except (FileNotFoundError, PermissionError, ValueError):
+                                # An unavailable file must not erase a valid
+                                # answer. Session revocation still fails closed
+                                # at the fresh publication check below.
+                                value = None
+                            await can_publish()
+                            ref = await session_output_reference(db, tenant_id=context.tenant_id,
+                                session_id=context.session_id, value=value, link=True)
+                        if ref is None:
+                            unavailable = True
+                        else:
+                            attachments.append(ref)
+                            parts.append({"kind": "attachment", "attachment": ref})
+                    final_text = parsed.text
+                    if unavailable:
+                        note = "An attachment is unavailable: no authorized file publisher could deliver it."
+                        final_text += ("\n\n" if final_text else "") + note
+                        parts.append({"kind": "text", "text": "\n\n" + note})
+                    await can_publish()
+                    event = {**event, "text": final_text, "parts": parts, "attachments": attachments}
             elif kind == "error":
                 raise RuntimeError("Agent stream failed")
             await runtime.services.store.append_event(request.run_id,"run.stream",event)

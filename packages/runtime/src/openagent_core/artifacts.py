@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 import stat
 import tempfile
-from typing import Any
+from typing import Any, Protocol
 
 from .contracts import ResourceRef, require_authorized
 
@@ -190,3 +190,66 @@ class ArtifactRepository:
                     raise
             return _attachment_ref(row,path=_cas_path(root,digest),filename=filename,
                 kind=attachment_kind(mime_type),link_id=link)
+
+
+class AttachmentPublisher(Protocol):
+    """Explicit host-selected reader/publisher; no implicit filesystem access.
+
+    Register under ``attachments.publisher`` in RuntimeServices. The host must
+    authorize this exact context, read through its selected sandbox capability,
+    and return an ArtifactRepository.upload reference linked to this session.
+    """
+    async def publish(self, context: Any, path: str) -> dict[str, Any]: ...
+
+
+async def session_output_reference(db, *, tenant_id, session_id, value, link=False):
+    """Resolve only already-published CAS bytes linked to the authorized session.
+
+    The caller checks session publication/read authorization before and after
+    use. This lookup never opens a model-supplied path or confers a new scope.
+    """
+    from .memory.artifacts import (artifact_store_root, _ensure_link,
+        _attachment_ref, public_attachment_ref, safe_attachment_filename, attachment_kind)
+    if not isinstance(value, dict):
+        return None
+    artifact_id = value.get("artifact_id")
+    storage_key = None
+    if not artifact_id:
+        path = value.get("path")
+        if not isinstance(path, str):
+            return None
+        try:
+            relative = Path(path).absolute().relative_to(artifact_store_root(db).absolute())
+        except ValueError:
+            return None
+        if len(relative.parts) != 3 or relative.parts[0] != "sha256":
+            return None
+        digest = relative.parts[2]
+        if not _DIGEST.fullmatch(digest) or relative.parts[1] != digest[:2]:
+            return None
+        storage_key = relative.as_posix()
+    elif not isinstance(artifact_id, str) or not re.fullmatch(r"art_[a-f0-9]{32}", artifact_id):
+        return None
+    conn = await db._ensure_connected()
+    row = await (await conn.execute(
+        "SELECT a.*,l.display_name,l.id AS link_id FROM artifacts a "
+        "JOIN artifact_links l ON l.tenant_id=a.tenant_id AND l.artifact_id=a.id "
+        "JOIN sessions_v2 s ON s.id=l.resource_id AND s.tenant_id=l.tenant_id "
+        "WHERE a.tenant_id=? AND l.resource_type='session' AND l.resource_id=? "
+        "AND s.deleted_at_ms IS NULL AND a.deleted_at_ms IS NULL AND a.storage_state='available' "
+        "AND a." + ("id" if artifact_id else "storage_key") + "=? ORDER BY CASE WHEN l.id=? THEN 0 ELSE 1 END,l.created_at_ms,l.id LIMIT 1",
+        (tenant_id, session_id, artifact_id or storage_key, value.get("artifact_link_id", "")))).fetchone()
+    if row is None:
+        return None
+    filename = safe_attachment_filename(row["display_name"] or row["id"])
+    link_id = row["link_id"]
+    if link:
+        existing = await (await conn.execute(
+            "SELECT id FROM artifact_links WHERE tenant_id=? AND artifact_id=? AND resource_type='session' "
+            "AND resource_id=? AND relation='output_attachment' LIMIT 1",
+            (tenant_id,row["id"],session_id))).fetchone()
+        link_id = await _ensure_link(conn,artifact=row,session_id=session_id,relation="output_attachment",
+            display_name=filename,existing_link_id=existing[0] if existing else None)
+        await conn.commit()
+    return public_attachment_ref(_attachment_ref(row,path=Path(),filename=filename,
+        kind=attachment_kind(row["mime"]),link_id=link_id))

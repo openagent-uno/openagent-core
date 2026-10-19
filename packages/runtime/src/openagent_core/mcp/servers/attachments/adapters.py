@@ -110,6 +110,24 @@ def build_runtime_toolkit() -> Any:
         """
         from openagent_core.memory.vault.privacy import require_unprotected_execution
         await require_unprotected_execution("Attachment delivery")
+        from openagent_core.runtime import current_runtime, current_execution_context
+        runtime, context = current_runtime(), current_execution_context()
+        publisher = runtime.service("attachments.publisher") if runtime is not None else None
+        if publisher is not None:
+            if context is None:
+                raise PermissionError("Attachment delivery requires an authenticated execution")
+            ref = await publisher.publish(context, path)
+            from openagent_core.artifacts import session_output_reference
+            db = getattr(getattr(runtime.services.executor, "agent", None), "memory_db", None)
+            verified = await session_output_reference(db, tenant_id=context.tenant_id,
+                session_id=context.session_id, value=ref) if db is not None else None
+            if verified is None or not isinstance(ref.get("path"), str):
+                raise ValueError("The host publisher did not return a session-linked artifact")
+            marker = f"[FILE:{ref['path']}]"
+            return {"ok": True, "marker": marker, "attachment": verified,
+                "instruction": "Include the marker verbatim in the final reply to deliver this attachment."}
+        if runtime is not None:
+            return {"ok": False, "error": "Attachment delivery capability is unavailable on this host."}
         return _send_file_impl(path)
 
     return Toolkit(
