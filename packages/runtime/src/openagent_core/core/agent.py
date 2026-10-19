@@ -289,23 +289,24 @@ def _build_runtime_media(
             content = None
 
         ext = (a_name.rsplit(".", 1)[-1].lower() if a_name and "." in a_name else None)
+        attachment_id = a.get("file_id") or a.get("id")
 
         try:
             if a_mime in _AGNO_IMAGE_MIMES:
                 if content is not None:
-                    images.append(Image(content=content, format=ext, mime_type=a_mime))
+                    images.append(Image(content=content, format=ext, mime_type=a_mime, id=attachment_id))
                 else:
-                    images.append(Image(filepath=a_path, format=ext, mime_type=a_mime))
+                    images.append(Image(filepath=a_path, format=ext, mime_type=a_mime, id=attachment_id))
             elif a_mime in _AGNO_AUDIO_MIMES:
                 if content is not None:
-                    audios.append(Audio(content=content, format=ext, mime_type=a_mime))
+                    audios.append(Audio(content=content, format=ext, mime_type=a_mime, id=attachment_id))
                 else:
-                    audios.append(Audio(filepath=a_path, format=ext, mime_type=a_mime))
+                    audios.append(Audio(filepath=a_path, format=ext, mime_type=a_mime, id=attachment_id))
             elif a_mime in _AGNO_VIDEO_MIMES:
                 if content is not None:
-                    videos.append(Video(content=content, format=ext, mime_type=a_mime))
+                    videos.append(Video(content=content, format=ext, mime_type=a_mime, id=attachment_id))
                 else:
-                    videos.append(Video(filepath=a_path, format=ext, mime_type=a_mime))
+                    videos.append(Video(filepath=a_path, format=ext, mime_type=a_mime, id=attachment_id))
             else:
                 # File path. The runtime's ``File`` accepts ``content``
                 # AND ``filepath`` together (unlike Image/Audio/Video,
@@ -317,14 +318,13 @@ def _build_runtime_media(
                     "filepath": a_path,
                     "filename": a_name,
                     "format": ext,
+                    "id": a.get("file_id") or a.get("id"),
+                    "size": a.get("size_bytes"),
                 }
                 if content is not None:
                     file_kwargs["content"] = content
-                try:
-                    if a_mime in _RuntimeFile.valid_mime_types():
-                        file_kwargs["mime_type"] = a_mime
-                except Exception:  # noqa: BLE001
-                    pass
+                if a_mime:
+                    file_kwargs["mime_type"] = a_mime
                 files.append(_RuntimeFile(**file_kwargs))
         except Exception as exc:  # noqa: BLE001
             elog("agent.media.build_skip", level="warning",
@@ -1730,8 +1730,9 @@ class Agent:
                     build_attachment_context(
                         files_info,
                         read_hint=(
-                            "Use the Read tool (or an MCP tool) with the local path to inspect each image. "
-                            "For images, Read returns the image content for you to see directly."
+                            "Inspect images only through readers actually available and authorized by the host. "
+                            "A supplied path is a reference, not a permission grant; if no reader is available, "
+                            "explain the limitation instead of claiming to have inspected the image."
                         ),
                     ),
                 )
@@ -2131,8 +2132,9 @@ class Agent:
                     build_attachment_context(
                         files_info,
                         read_hint=(
-                            "Use the Read tool (or an MCP tool) with the local path to inspect each image. "
-                            "For images, Read returns the image content for you to see directly."
+                            "Inspect images only through readers actually available and authorized by the host. "
+                            "A supplied path is a reference, not a permission grant; if no reader is available, "
+                            "explain the limitation instead of claiming to have inspected the image."
                         ),
                     ),
                 )

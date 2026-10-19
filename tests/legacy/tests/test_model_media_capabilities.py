@@ -185,7 +185,7 @@ async def t_stream_media_fallback(_ctx: TestContext) -> None:
     assert captures["beta:vision"].stream_calls[0]["images"] == [image]
 
 
-@test("model_media_capabilities", "incompatible binary modality returns an explicit error")
+@test("model_media_capabilities", "unsupported audio remains an original-file reference")
 async def t_explicit_incompatible_error(_ctx: TestContext) -> None:
     from openagent_core.core.agent import take_run_failure
     from openagent_core.stream.media import Audio
@@ -197,14 +197,14 @@ async def t_explicit_incompatible_error(_ctx: TestContext) -> None:
         session_id="media-no-compatible",
         audio=[audio],
     )
-    assert response.stop_reason == "error", response
-    assert "No enabled configured model" in response.content, response.content
-    assert "audio" in response.content, response.content
-    assert captures["alpha:text-only"].generate_calls == []
-    assert take_run_failure() == "router: media_incompatible"
+    assert response.content == "handled:alpha:text-only", response
+    call = captures["alpha:text-only"].generate_calls[0]
+    assert call["audio"] is None
+    assert "model_modality_unavailable" in str(call["messages"])
+    assert take_run_failure() is None
 
 
-@test("model_media_capabilities", "non-extractable Telegram-style PDF fails explicitly")
+@test("model_media_capabilities", "non-extractable PDF remains an original-file reference")
 async def t_explicit_incompatible_file_error(_ctx: TestContext) -> None:
     from openagent_core.core.agent import take_run_failure
     from openagent_core.stream.media import File
@@ -225,12 +225,11 @@ async def t_explicit_incompatible_file_error(_ctx: TestContext) -> None:
         session_id="media-file-no-compatible",
         files=[binary],
     )
-    assert response.stop_reason == "error", response
-    assert "Cannot process the attached media" in response.content, response.content
-    assert "No enabled configured model" in response.content, response.content
-    assert "scan.pdf" in response.content, response.content
-    assert captures["alpha:text-only"].generate_calls == []
-    assert take_run_failure() == "router: media_incompatible"
+    assert response.content == "handled:alpha:text-only", response
+    call = captures["alpha:text-only"].generate_calls[0]
+    assert call["files"] is None
+    assert "scan.pdf" in str(call["messages"]) and "unavailable" in str(call["messages"])
+    assert take_run_failure() is None
 
 
 @test("model_media_capabilities", "text file is bounded-extracted into text-only model input")

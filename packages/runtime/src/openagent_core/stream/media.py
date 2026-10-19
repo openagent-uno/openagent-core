@@ -1,4 +1,5 @@
 import asyncio
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from uuid import uuid4
@@ -414,13 +415,21 @@ class File(BaseModel):
     @field_validator("mime_type")
     @classmethod
     def validate_mime_type(cls, v):
-        """Validate that the mime_type is one of the allowed types."""
-        if v is not None and v not in cls.valid_mime_types():
-            raise ValueError(f"Invalid MIME type: {v}. Must be one of: {cls.valid_mime_types()}")
+        """Accept bounded MIME syntax, not a provider capability declaration.
+
+        Hosts may admit any file type, including application/octet-stream. The
+        model media preparer decides native support, preview, or reference-only.
+        """
+        if v is not None:
+            token = r"[A-Za-z0-9][A-Za-z0-9!#$%&'*+.^_`|~\-]*"
+            if len(v) > 127 or re.fullmatch(token + "/" + token, v) is None:
+                raise ValueError("Invalid MIME type syntax")
+            return v.lower()
         return v
 
     @classmethod
     def valid_mime_types(cls) -> List[str]:
+        """Common legacy examples, not an exhaustive admission allow-list."""
         return [
             "application/pdf",
             "application/json",

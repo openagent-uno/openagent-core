@@ -10,8 +10,10 @@ Products supply authentication, system instructions, resources, tools, and polic
 embedding-host builds its own worker and sandbox from pinned core packages; the
 standalone app/CLI/server are maintained in the `openagent` product monorepo.
 
-The `1.1.0b19` kernel, SQLite adapter, gateway and SDK are the current modular
-release candidates; the module compatibility and full-profile packages are
+The `1.1.0b23` kernel, SQLite adapter, gateway and SDK are the current modular
+release candidates. The b23 file-preview and bounded-delegation changes have
+deterministic source tests; live provider/product qualification is owned by the
+embedding host. The module compatibility and full-profile packages are
 `1.1.0b3`. See the
 [documentation](docs/README.md), [module contract](docs/modules-v1.1.md), and
 [acceptance ledger](docs/migration/implementation.md) for verified behavior and
@@ -20,14 +22,14 @@ the boundaries that still require product-specific qualification.
 Public architecture and product installation guides are published at
 [openagent.uno](https://openagent.uno/guide/architecture). Download the exact
 Core wheel set and manifest from
-[`v1.1.0-beta.19`](https://github.com/openagent-uno/openagent-core/releases/tag/v1.1.0-beta.19).
+[`v1.1.0-beta.23`](https://github.com/openagent-uno/openagent-core/releases/tag/v1.1.0-beta.23).
 
 ```sh
 pip install --find-links /path/to/verified-wheelhouse \
-  openagent-core==1.1.0b19 openagent-storage-sqlite==1.1.0b19
+  openagent-core==1.1.0b23 openagent-storage-sqlite==1.1.0b23
 # Hosts that need the full algorithm select the relevant extras:
 pip install --find-links /path/to/verified-wheelhouse \
-  'openagent-core[engine,providers,modules,retrieval]==1.1.0b19'
+  'openagent-core[engine,providers,modules,retrieval]==1.1.0b23'
 ```
 
 Packages shown above are independent distribution names. Hosts pin exact wheel

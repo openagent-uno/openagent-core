@@ -38,7 +38,9 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -126,8 +128,8 @@ class DelegationDepthExceeded(RuntimeError):
 # The delegation depth / chain root of the run currently executing on this
 # context. A chat turn (nobody's child) leaves the defaults: depth 0, no root.
 #
-# Threaded EXPLICITLY rather than parsed back out of the session id. Ids do
-# encode lineage (``{parent}::sub::{model}::{uuid8}``), but parsing them is not
+# Threaded EXPLICITLY rather than parsed back out of the session id. Ids retain a short
+# display root and an opaque model/parent digest, but parsing them is not
 # sound: ``mint_child_session_id`` is bypassed entirely whenever a caller
 # passes an explicit ``session_id`` (the event payload-binding path does, and
 # reuses a durable id with no lineage in it at all), a model_id is free-form
@@ -333,13 +335,21 @@ def mint_child_session_id(origin: str, origin_ref: dict[str, Any]) -> str:
 
     Always unique per spawn so siblings never collide and a re-fired
     schedule / re-run workflow / repeated delegation never resumes a prior
-    transcript. The id is also human-legible so logs and the sidebar reveal
-    lineage at a glance.
+    transcript. Delegation IDs retain a short root display prefix and are
+    bounded independently of model labels and nesting depth. Exact lineage lives
+    in durable metadata.
     """
     if origin == "delegation":
         parent = origin_ref.get("parent_session_id") or "root"
         model_id = origin_ref.get("model_id") or "model"
-        return f"{parent}::sub::{model_id}::{uuid.uuid4().hex[:8]}"
+        # Model labels and nested parent IDs are not bounded identifiers.
+        # Keep a short root display prefix; exact ancestry and routing stay in
+        # durable metadata, never inferred from this opaque digest.
+        root = str(parent).split("::sub::", 1)[0]
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,47}", root):
+            root = "childroot_" + hashlib.sha256(root.encode()).hexdigest()[:24]
+        label = hashlib.sha256((str(parent) + "\0" + str(model_id)).encode()).hexdigest()[:24]
+        return f"{root}::sub::{label}::{uuid.uuid4().hex}"
     if origin == "scheduler":
         task_id = origin_ref.get("task_id") or "task"
         run_id = origin_ref.get("run_id") or uuid.uuid4().hex[:8]
