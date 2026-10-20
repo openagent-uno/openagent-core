@@ -45,6 +45,15 @@ Only the two known canonical event/outbox `no_update` triggers are suspended ins
 
 The same plan is idempotent on an unchanged adopted candidate. Drift in the snapshot, candidate or receipt is rejected. After activation and legitimate new writes, re-running this offline migration is not a supported workflow; preserve its receipt as historical evidence.
 
+Check that idempotence before opening the candidate through a runtime adapter.
+Even passive adapter startup may advance the `search_outbox` AUTOINCREMENT
+counter while restoring already-present native search intents. That existing
+maintenance does not change history or replay work, but it makes the candidate
+logically different: a subsequent offline apply correctly rejects the drift.
+Qualify startup separately, comparing exact history/ACL/cohort rows and recording
+any precisely bounded maintenance counters rather than treating startup as a
+byte-preserving operation.
+
 ## Quarantine and reconciliation
 
 Quarantined sessions remain unreadable through `SessionInspection` and the SQLite public session/run readers even when a host authorizer would otherwise allow access. Session list/search and ancestry/child projections omit quarantined records. Run admission also rejects quarantined sessions before native metadata or messages can be written. Moving a tenant never invents an owner or broadens an ACL.
