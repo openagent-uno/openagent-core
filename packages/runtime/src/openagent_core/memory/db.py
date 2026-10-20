@@ -81,6 +81,21 @@ def delivery_lock_wait_ms() -> int:
     return max(250, min(value, 60_000))
 
 
+def shared_txn_max_seconds() -> float:
+    """How long a transaction may stay open on the shared connection.
+
+    Past this uninterrupted duration the transaction is treated as orphaned
+    and closed (see ``MemoryDB._heal_stale_shared_transaction``). Read at
+    runtime from ``OPENAGENT_SHARED_TXN_MAX_SECONDS`` (default 300, min 5).
+    """
+    raw = runtime_environment().get("OPENAGENT_SHARED_TXN_MAX_SECONDS", "").strip()
+    try:
+        value = float(raw) if raw else 300.0
+    except ValueError:
+        value = 300.0
+    return max(5.0, value)
+
+
 # Lease defaults. The lease is SHORT so a frozen turn is reclaimed in ~LEASE_TTL
 # rather than the coarse 30-min stale-sweep age; the heartbeat (a tiny single-row
 # write that survives writer contention) keeps a legitimately-running turn's
@@ -1089,6 +1104,9 @@ class MemoryDB:
         self._module_migrations = []
         self._conn: aiosqlite.Connection | None = None
         self._owns_connection = True
+        # Monotonic time at which the shared connection was first seen inside
+        # a transaction; reset whenever it is seen outside one.
+        self._shared_txn_seen_since: float | None = None
         # Populated only by the most recent startup orphan reap and consumed
         # by ``requeue_interrupted_task_runs``.  Keeping this boundary in
         # memory is deliberate: historical rows also carry the same durable
@@ -2459,9 +2477,75 @@ class MemoryDB:
             # WAL occupato o lockato: si riprova al prossimo intervallo.
             pass
 
+    async def _heal_stale_shared_transaction(self) -> None:
+        """Close a transaction left open for too long on the shared connection.
+
+        With the legacy ``isolation_level`` a DML statement opens an implicit
+        ``BEGIN`` that only ``commit()``/``rollback()`` close. If that DML
+        fails (another connection held the lock past the busy timeout) and
+        the caller swallows the error without rolling back, the connection
+        stays ``in_transaction``: the next SELECT pins a snapshot inside it,
+        the checkpoint stops at that frame, and every later write on the
+        shared connection is refused at once (stale snapshot, so the busy
+        handler never runs). Nobody reaches the ``commit()`` that would close
+        it. In production this lasted four hours (WAL 5MB -> 126MB) and only
+        a process restart ended it.
+
+        Every coroutine shares this connection, so a sibling's ``commit()``
+        already closes everyone's transaction; doing it ourselves after
+        ``OPENAGENT_SHARED_TXN_MAX_SECONDS`` of uninterrupted transaction
+        restores that semantics rather than changing it. A borrowed
+        connection (``from_connection``) belongs to a host transaction and is
+        never touched. Never raises.
+        """
+        conn = self._conn
+        if conn is None or not self._owns_connection:
+            return
+        now = time.monotonic()
+        try:
+            open_txn = bool(conn.in_transaction)
+        except Exception:  # noqa: BLE001 - connection is closing
+            return
+        if not open_txn:
+            self._shared_txn_seen_since = None
+            return
+        since = self._shared_txn_seen_since
+        if since is None:
+            self._shared_txn_seen_since = now
+            return
+        age = now - since
+        if age < shared_txn_max_seconds():
+            return
+        self._shared_txn_seen_since = None
+        try:
+            await conn.commit()
+            outcome = "commit"
+        except Exception as exc:  # noqa: BLE001
+            outcome = f"commit_failed: {str(exc)[:120]}"
+            try:
+                await conn.rollback()
+                outcome += "; rollback"
+            except Exception as exc2:  # noqa: BLE001
+                outcome += f"; rollback_failed: {str(exc2)[:120]}"
+        logger.warning(
+            "memorydb: closed shared transaction open for %.0fs (%s)", age, outcome,
+        )
+        try:
+            from openagent_core.core.logging import elog
+
+            elog(
+                "memorydb.stale_txn_closed",
+                level="warning",
+                age_seconds=round(age, 1),
+                outcome=outcome,
+            )
+        except Exception:  # noqa: BLE001 - logging must not fail the caller
+            pass
+
     async def _ensure_connected(self) -> aiosqlite.Connection:
         if self._conn is None:
             await self.connect()
+        await self._heal_stale_shared_transaction()
         await self._maybe_checkpoint_wal()
         return self._conn
 

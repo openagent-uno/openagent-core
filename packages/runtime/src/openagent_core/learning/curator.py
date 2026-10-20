@@ -96,6 +96,12 @@ async def run_once(db: Any) -> dict[str, int]:
 
         await conn.commit()
     except Exception as e:
+        # Shared connection: a failed DELETE without a rollback leaves it in a
+        # transaction and pins the WAL snapshot (see vault_reminder).
+        try:
+            await conn.rollback()
+        except Exception:  # noqa: BLE001 - already failing; the error is logged below
+            pass
         elog("curator.run_error", error=str(e)[:200])
         return counts
 
