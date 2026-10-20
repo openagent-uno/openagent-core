@@ -1045,6 +1045,12 @@ class TeamRouterProvider(ProviderResources, BaseModel):
             )
 
         members_catalog = [e for e in catalog if e.runtime_id != entry.runtime_id]
+        # Member labels normalize punctuation for the model tool schema. They
+        # are not reversible model references and must never alias one another.
+        from openagent_core.core._runner.utils.string import url_safe_string
+        member_ids = [url_safe_string(_member_identifier(e.runtime_id)) for e in catalog]
+        if len(member_ids) != len(set(member_ids)) or "leader" in member_ids:
+            raise ValueError("Configured models have ambiguous Team member identifiers")
         from openagent_core.core.execution_profile import lean_local_event_active
         force_solo = lean_local_event_active()
         # Budget gate for MEMBERS (C1). The leader is already gated upstream
@@ -1185,6 +1191,13 @@ class TeamRouterProvider(ProviderResources, BaseModel):
             enable_session_summaries=True,
             markdown=False,
         )
+        # Trusted construction-time binding, separate from legacy/model-visible
+        # member metadata. Hosted delegation resolves these exact refs through
+        # the public Runtime ModelCatalog instead of calling member.arun.
+        team._runtime_member_model_refs = {
+            id(leader_agent): entry.runtime_id,
+            **{id(member): e.runtime_id for member, e in zip(members, members_catalog)},
+        }
         self._session_runtime[session_id] = team
         self._session_system_key[session_id] = sys_key
         self._session_media_key[session_id] = required_modalities

@@ -26,13 +26,26 @@ def _team_member_sessions_enabled() -> bool:
 
 def _member_run_session_id(team_session_id, member_agent) -> str:
     """The session id a member delegation runs on: a unique per-delegation
-    child id (``{team}::member::{member}::{rand}``) when team-member sessions
+    bounded opaque child id when team-member sessions
     are enabled, else the shared team session id (legacy nested behavior).
     Unique per call so concurrent / repeated delegations never collide."""
     if not team_session_id or not _team_member_sessions_enabled():
         return team_session_id
     mid = getattr(member_agent, "id", None) or getattr(member_agent, "name", None) or "member"
-    return f"{team_session_id}::member::{mid}::{uuid.uuid4().hex[:8]}"
+    from openagent_core.core.child_session import mint_child_session_id
+    return mint_child_session_id("delegation", {"parent_session_id": team_session_id, "model_id": mid})
+
+
+def _public_delegation_context(session_id):
+    """A hosted Team may never fall back to the legacy provider/storage path."""
+    from openagent_core.runtime import current_runtime, current_execution_context, current_run_id
+    runtime, context = current_runtime(), current_execution_context()
+    if runtime is None and context is None:
+        return None
+    if (runtime is None or context is None or current_run_id() is None
+            or context.session_id != session_id or context.agent_id != runtime.settings.agent_id):
+        raise PermissionError("Team delegation requires its exact live Runtime execution")
+    return runtime, context
 
 
 def _child_session_meta(team_session, member_agent, *, child_run_id=None) -> dict:
@@ -163,9 +176,13 @@ async def _emit_member_card_link(run_response, team_session, member_id, member_s
         parent_sid = getattr(team_session, "session_id", None)
         if not member_session_id or member_session_id == parent_sid:
             return
+        from openagent_core.runtime import current_provider_tool_call_id
+        active_call = current_provider_tool_call_id()
         target = None
         for t in (getattr(run_response, "tools", None) or []):
             if (getattr(t, "tool_name", None) or "").lower() != "delegate_task_to_member":
+                continue
+            if active_call and getattr(t, "tool_call_id", None) != active_call:
                 continue
             if getattr(t, "child_session_id", None):
                 continue  # already linked (a sibling delegation)
@@ -687,6 +704,7 @@ def _get_delegate_task_function(
         member_agent: Union[Agent, "Team"],
         member_agent_task: Union[str, Message],
         member_session_state_copy: Dict[str, Any],
+        *, canonical: bool = False,
     ):
         # Add team run id to the member run
 
@@ -695,8 +713,18 @@ def _get_delegate_task_function(
 
         # Update the top-level team run_response tool call to have the run_id of the member run
         if run_response.tools is not None and member_agent_run_response is not None:
+            from openagent_core.runtime import current_provider_tool_call_id
+            active_call = current_provider_tool_call_id()
             for tool in run_response.tools:
                 if tool.tool_name and tool.tool_name.lower() == "delegate_task_to_member":
+                    if active_call and getattr(tool, "tool_call_id", None) != active_call:
+                        continue
+                    args = getattr(tool, "tool_args", None) or {}
+                    from openagent_core.core._runner.utils.team import get_member_id
+                    if args.get("member_id") and args["member_id"] != get_member_id(member_agent):
+                        continue
+                    if getattr(tool, "child_session_id", None) not in (None, member_agent_run_response.session_id):
+                        continue
                     tool.child_run_id = member_agent_run_response.run_id  # type: ignore
                     # When the member ran in its OWN session (id differs from
                     # the team session), record it so the leader transcript can
@@ -748,7 +776,7 @@ def _get_delegate_task_function(
             # the member_responses linkage used at rehydration).
             _member_sid = getattr(member_agent_run_response, "session_id", None)
             if not (_member_sid and _member_sid != session.session_id
-                    and _team_member_sessions_enabled()):
+                    and (canonical or _team_member_sessions_enabled())):
                 session.upsert_run(member_agent_run_response)
 
         # Update team session state
@@ -757,6 +785,45 @@ def _get_delegate_task_function(
         # Update the team media
         if member_agent_run_response is not None:
             _update_team_media(team, member_agent_run_response)  # type: ignore
+
+    async def _canonical_member(member_agent, member_id, task, public):
+        """Execute through admission, the host model catalog and canonical storage.
+
+        Member labels and legacy metadata are display data. Only the dispatcher
+        binds a selected member object to the original registered model ref.
+        The host's accepted parent attachments, authority and capability leases
+        cross the same Runtime boundary as every other child execution.
+        """
+        from openagent_core.contracts import RunRequest
+        from openagent_core.runtime import current_run_id
+        from openagent_core.core.child_session import mint_child_session_id
+
+        runtime, context = public
+        if getattr(run_response, "run_id", None) != current_run_id():
+            raise PermissionError("Team delegation belongs to another parent run")
+        refs = getattr(team, "_runtime_member_model_refs", {})
+        model_ref = refs.get(id(member_agent))
+        if not isinstance(model_ref, str) or not model_ref:
+            raise PermissionError("The selected Team member has no registered Runtime model binding")
+        parent = await runtime.accepted_request(current_run_id(), context)
+        if parent.request.session_id != session.session_id:
+            raise PermissionError("Team delegation belongs to another parent session")
+        prompt = input if team.determine_input_for_members is False else task
+        if not isinstance(prompt, str):
+            raise TypeError("A delegated task must be text")
+        child_id = mint_child_session_id("delegation", {
+            "parent_session_id": context.session_id, "model_id": model_ref,
+        })
+        request = RunRequest(uuid.uuid4().hex, child_id, uuid.uuid4().hex, prompt,
+                             attachments=parent.request.attachments, model_ref=model_ref)
+        record = await runtime.spawn(request, context)
+        if record.status != "success":
+            raise RuntimeError(f"Delegated child execution ended with status {record.status}")
+        response = RunOutput(run_id=record.run_id, session_id=record.session_id,
+                             agent_id=context.agent_id, model=model_ref, content=record.output)
+        await _emit_member_card_link(run_response, session, member_id, record.session_id)
+        _process_delegate_task_to_member(response, member_agent, prompt, {}, canonical=True)
+        return record.output if isinstance(record.output, str) else json.dumps(record.output)
 
     def delegate_task_to_member(member_id: str, task: str) -> Iterator[Union[RunOutputEvent, TeamRunOutputEvent, str]]:
         """Use this function to delegate a task to the selected team member.
@@ -769,6 +836,8 @@ def _get_delegate_task_function(
             str: The result of the delegated task.
         """
 
+        if _public_delegation_context(session.session_id) is not None:
+            raise PermissionError("Hosted Team delegation requires the asynchronous Runtime tool")
         # Find the member agent using the helper function
         result = _find_member_by_id(team, member_id, run_context=run_context)
         if result is None:
@@ -911,6 +980,7 @@ def _get_delegate_task_function(
             str: The result of the delegated task.
         """
 
+        public = _public_delegation_context(session.session_id)
         # Find the member agent using the helper function
         result = _find_member_by_id(team, member_id, run_context=run_context)
         if result is None:
@@ -918,6 +988,9 @@ def _get_delegate_task_function(
             return
 
         _, member_agent = result
+        if public is not None:
+            yield await _canonical_member(member_agent, member_id, task, public)
+            return
         member_agent_task, history = _setup_delegate_task_to_member(member_agent=member_agent, task=task)
 
         # Make sure for the member agent, we are using the agent logger
@@ -1118,6 +1191,9 @@ def _get_delegate_task_function(
         """
         from openagent_core.core._runner.utils.callables import get_resolved_members
 
+        if _public_delegation_context(session.session_id) is not None:
+            raise PermissionError("Hosted Team delegation requires the asynchronous Runtime tool")
+
         resolved_members = get_resolved_members(team, run_context) or []
 
         # Run all the members sequentially
@@ -1246,6 +1322,17 @@ def _get_delegate_task_function(
         from openagent_core.core._runner.utils.callables import get_resolved_members
 
         resolved_members = get_resolved_members(team, run_context) or []
+
+        public = _public_delegation_context(session.session_id)
+        if public is not None:
+            # Runtime owns child concurrency, cancellation and depth limits.
+            # Do not leave sibling tasks running if any delegation fails.
+            async with asyncio.TaskGroup() as group:
+                pending = [group.create_task(_canonical_member(
+                    member, member.id or member.name, task, public)) for member in resolved_members]
+            for member, result in zip(resolved_members, pending):
+                yield f"Agent {member.name or member.id}: {result.result()}"
+            return
 
         if stream:
             # Concurrent streaming: launch each member as a streaming worker and merge events

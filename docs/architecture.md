@@ -50,6 +50,22 @@ provenance, and child execution limits belong to the runtime instance. Host code
 converts environment configuration to explicit settings. Provider constructors
 receive their own credentials; they do not export keys into `os.environ`.
 
+Hosted Team delegation uses `Runtime.spawn`, including delegation to all members.
+The dispatcher binds each actual member object to the exact configured model
+reference; the host's `ModelCatalog` reauthorizes and resolves it. Display labels,
+legacy session metadata and provider arguments cannot select an identity or
+recover a model reference. Missing bindings or mismatched execution contexts fail
+before model I/O, with no legacy storage fallback. Child requests inherit the
+parent's accepted attachment references, authority, audience, scopes and temporary
+leases; the mission is authored by the host agent. The legacy member-session flag
+does not disable canonical child sessions in a hosted Runtime.
+
+`Runtime.spawn` derives depth and root from admitted run lineage and enforces
+instance-local depth, per-depth concurrency and per-chain concurrency limits.
+Separate depth tiers allow a parent to wait for its child without exhausting that
+child's slots. Authorization is rechecked after waiting for capacity, and parent
+cancellation cancels the exact admitted child. Child failures remain failures.
+
 ## Identities, audience, and ingress
 
 `PrincipalRef` contains `authority`, `tenant_id`, `subject_id`, and `kind`.

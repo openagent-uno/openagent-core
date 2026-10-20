@@ -138,7 +138,13 @@ class SqliteRuntimeStore:
                          metadata.get('request_digest',''), json.loads(row['output_json']) if row['output_json'] else None,
                          metadata.get('cancel_requested',False),row['delegated_parent_run_id'])
 
+    def _require_run_not_quarantined(self, run_id: str) -> None:
+        from openagent_core.workspace_administration import require_session_not_quarantined
+        row = self.connection.execute('SELECT s.visibility FROM session_runs r JOIN sessions_v2 s ON s.id=r.session_id WHERE r.id=?', (run_id,)).fetchone()
+        require_session_not_quarantined(row)
+
     def _get(self, run_id: str) -> RunRecord | None:
+        self._require_run_not_quarantined(run_id)
         row = self.connection.execute('SELECT * FROM session_runs WHERE id=?',(run_id,)).fetchone()
         if row:
             return self._record(row)
@@ -164,6 +170,8 @@ class SqliteRuntimeStore:
     def _accept(self, request: RunRequest, context: ExecutionContext) -> tuple[RunRecord,bool]:
         digest=request.fingerprint(context)
         with self._transaction() as db:
+            from openagent_core.workspace_administration import require_session_not_quarantined
+            require_session_not_quarantined(db.execute('SELECT visibility FROM sessions_v2 WHERE id=?', (request.session_id,)).fetchone())
             rows=db.execute('SELECT * FROM session_runs WHERE id=? OR (session_id=? AND idempotency_key=?)',
                             (request.run_id,request.session_id,request.idempotency_key)).fetchall()
             if rows:
@@ -253,6 +261,7 @@ class SqliteRuntimeStore:
 
     def _transition(self, run_id: str, status: str, *, output: Any = None) -> RunRecord:
         with self._transaction() as db:
+            self._require_run_not_quarantined(run_id)
             row=db.execute('SELECT * FROM session_runs WHERE id=?',(run_id,)).fetchone()
             if row is None:
                 raise LookupError(run_id)
@@ -279,6 +288,7 @@ class SqliteRuntimeStore:
 
     def _request_cancel(self, run_id: str) -> RunRecord:
         with self._transaction() as db:
+            self._require_run_not_quarantined(run_id)
             row=db.execute('SELECT * FROM session_runs WHERE id=?',(run_id,)).fetchone()
             if row is None:
                 raise LookupError(run_id)
@@ -298,6 +308,9 @@ class SqliteRuntimeStore:
         terminal cancelled state in the same transaction.
         """
         with self._transaction() as db:
+            from openagent_core.workspace_administration import require_session_not_quarantined
+            require_session_not_quarantined(db.execute('SELECT visibility FROM sessions_v2 WHERE id=?', (context.session_id,)).fetchone())
+            self._require_run_not_quarantined(run_id)
             existing=db.execute('SELECT * FROM session_runs WHERE id=?',(run_id,)).fetchone()
             if existing:
                 if existing['tenant_id']!=context.tenant_id or existing['session_id']!=context.session_id:
@@ -317,11 +330,13 @@ class SqliteRuntimeStore:
 
     def _append_event(self,run_id: str,kind: str,payload: Mapping[str,Any]) -> RunEvent:
         with self._transaction() as db:
+            self._require_run_not_quarantined(run_id)
             return self._event(db,run_id,kind,payload)
 
     def _begin_tool(self, run_id: str, call_id: str, binding: Mapping[str, Any], arguments: Mapping[str, Any], *, _privacy_intent=None) -> None:
         """Commit the invocation intent before allowing an external effect."""
         with self._transaction() as db:
+            self._require_run_not_quarantined(run_id)
             run = db.execute('SELECT * FROM session_runs WHERE id=?', (run_id,)).fetchone()
             if run is None or run['status'] != 'running':
                 raise RuntimeError('A tool invocation requires an active run')
@@ -356,6 +371,7 @@ class SqliteRuntimeStore:
     def _finish_tool(self, run_id: str, call_id: str, *, result: Any = None, error: Mapping[str, Any] | None = None,
                      _privacy_provenance=None) -> None:
         with self._transaction() as db:
+            self._require_run_not_quarantined(run_id)
             row = db.execute('SELECT * FROM tool_invocations WHERE session_run_id=? AND tool_call_id=?',(run_id,call_id)).fetchone()
             if row is None:
                 raise LookupError('No durable invocation intent')
@@ -396,6 +412,7 @@ class SqliteRuntimeStore:
                     publisher.record_completed_tool(db,run_id,call_id,())
 
     def _events(self,run_id: str,after: int=0) -> tuple[RunEvent,...]:
+        self._require_run_not_quarantined(run_id)
         rows=self.connection.execute('SELECT sequence,event_type,metadata_json FROM domain_events WHERE run_id=? AND sequence>? ORDER BY sequence',(run_id,after))
         return tuple(RunEvent(r[0],run_id,r[1],json.loads(r[2])) for r in rows)
 
@@ -408,7 +425,8 @@ class SqliteRuntimeStore:
             self._transition(row[0],'interrupted',output={'reason':'runtime_restarted','effects':'unknown','retry_allowed':False})
 
     def _children(self,run_id: str) -> tuple[RunRecord,...]:
-        rows=self.connection.execute("SELECT * FROM session_runs WHERE delegated_parent_run_id=? ORDER BY created_at_ms,id",(run_id,))
+        self._require_run_not_quarantined(run_id)
+        rows=self.connection.execute("SELECT r.* FROM session_runs r JOIN sessions_v2 s ON s.id=r.session_id WHERE r.delegated_parent_run_id=? AND s.visibility<>'quarantined' ORDER BY r.created_at_ms,r.id",(run_id,))
         return tuple(self._record(row) for row in rows)
 
     @staticmethod
@@ -451,7 +469,7 @@ class SqliteRuntimeStore:
         if agent_id is not None and agent_id != context.agent_id:
             raise PermissionError('This session store is local to one agent')
         limit=self._bounded_session_limit(limit);after=self._parse_session_cursor(cursor,length=2)
-        clauses=['tenant_id=?','agent_id=?'];params:list[Any]=[context.tenant_id,context.agent_id]
+        clauses=['tenant_id=?','agent_id=?',"visibility<>'quarantined'"];params:list[Any]=[context.tenant_id,context.agent_id]
         if not include_archived:clauses.append('deleted_at_ms IS NULL')
         if after is not None:
             clauses.append('(last_activity_at_ms < ? OR (last_activity_at_ms = ? AND id < ?))')
@@ -472,7 +490,7 @@ class SqliteRuntimeStore:
         if not query:raise ValueError('Session search query is required')
         if len(query)>512:raise ValueError('Session search query is too long')
         limit=self._bounded_session_limit(limit);after=self._parse_session_cursor(cursor,length=2)
-        clauses=['s.tenant_id=?','s.agent_id=?','s.deleted_at_ms IS NULL',
+        clauses=['s.tenant_id=?','s.agent_id=?','s.deleted_at_ms IS NULL',"s.visibility<>'quarantined'",
             "(coalesce(s.title,'') LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM session_messages m WHERE m.session_id=s.id AND m.visibility='user_visible' AND coalesce(m.text,'') LIKE ? ESCAPE '\\'))"]
         escaped=query.replace('\\','\\\\').replace('%','\\%').replace('_','\\_')
         params:list[Any]=[context.tenant_id,context.agent_id,'%'+escaped+'%','%'+escaped+'%']
@@ -498,6 +516,8 @@ class SqliteRuntimeStore:
         row=self.connection.execute('SELECT * FROM sessions_v2 WHERE id=? AND tenant_id=? AND agent_id=?',
             (reference.session_id,reference.tenant_id,reference.agent_id)).fetchone()
         if row is None:raise LookupError(reference.session_id)
+        from openagent_core.workspace_administration import require_session_not_quarantined
+        require_session_not_quarantined(row)
         return row
 
     def _read_session(self,reference:SessionRef,context:ExecutionContext,*,limit:int,cursor:str|None=None):
@@ -611,3 +631,8 @@ class SqliteRuntimeStore:
     archive_session = _serialized(_archive_session)
     restore_session = _serialized(_restore_session)
     purge_session = _serialized(_purge_session)
+
+
+from .legacy_child_adoption import (HostAttestation, ExactRow, ParentToolLink,
+    LegacyChildAdoptionPlan, legacy_row_sha256, plan_legacy_child_adoption,
+    apply_legacy_child_adoption)

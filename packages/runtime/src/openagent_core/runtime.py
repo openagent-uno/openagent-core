@@ -245,6 +245,8 @@ class Runtime:
         self._closing = False
         self._started_modules: list[RuntimeModule] = []
         self._tasks: dict[str, asyncio.Task] = {}
+        self._child_slots: dict[int, asyncio.Semaphore] = {}
+        self._child_chain_slots: dict[tuple[str, int], tuple[asyncio.Semaphore, int]] = {}
         self._sessions: dict[tuple[str,str], asyncio.Lock] = {}
         self._lifecycle = asyncio.Lock()
 
@@ -831,9 +833,54 @@ class Runtime:
 
     async def spawn(self, request: RunRequest, context: ExecutionContext, *, deferred: bool = False) -> RunRecord:
         parent_id=current_run_id()
-        if parent_id is None:
+        if parent_id is None or current_runtime() is not self or current_execution_context() != context:
             raise PermissionError("A child execution requires a live authorized parent run")
         await self._authorize(context,"run.delegate",context.session_id,context.tenant_id)
+        parent = await self.get_run(parent_id, context)
+        if parent.session_id != context.session_id or parent.status != "running":
+            raise PermissionError("A child execution requires its exact running parent")
+        # Derive depth/root from admitted lineage, never from model metadata or
+        # an opaque session-ID prefix. Separate depth tiers avoid a waiting
+        # parent consuming the very slot its child needs (fan-out deadlock).
+        depth, root, ancestor = 1, parent.run_id, parent
+        visited = {root}
+        while ancestor.parent_run_id is not None:
+            ancestor = await self.services.store.get(ancestor.parent_run_id)
+            if ancestor is None or ancestor.tenant_id != context.tenant_id or ancestor.run_id in visited:
+                raise PermissionError("The admitted child lineage is unavailable or invalid")
+            visited.add(ancestor.run_id)
+            root, depth = ancestor.run_id, depth + 1
+        if depth > self.settings.child_max_depth:
+            raise PermissionError("The Runtime child depth limit was reached")
+        capacity = max(1, self.settings.child_concurrency >> (depth - 1))
+        slots = self._child_slots.setdefault(depth, asyncio.Semaphore(capacity))
+        key = (root, depth)
+        chain = None
+        if self.settings.child_chain_concurrency:
+            chain, users = self._child_chain_slots.get(key, (
+                asyncio.Semaphore(self.settings.child_chain_concurrency), 0))
+            self._child_chain_slots[key] = (chain, users + 1)
+        try:
+            async with slots:
+                if chain is None:
+                    return await self._spawn_admitted(request, context, parent_id, deferred)
+                async with chain:
+                    return await self._spawn_admitted(request, context, parent_id, deferred)
+        finally:
+            if chain is not None:
+                sem, users = self._child_chain_slots[key]
+                if users == 1:
+                    del self._child_chain_slots[key]
+                else:
+                    self._child_chain_slots[key] = (sem, users - 1)
+
+    async def _spawn_admitted(self, request: RunRequest, context: ExecutionContext,
+                              parent_id: str, deferred: bool) -> RunRecord:
+        # Authorization/parent liveness may change while awaiting capacity.
+        await self._authorize(context,"run.delegate",context.session_id,context.tenant_id)
+        parent = await self.get_run(parent_id, context)
+        if parent.status != "running":
+            raise PermissionError("The parent execution is no longer running")
         author=PrincipalRef(context.authority.authority,context.tenant_id,self.settings.agent_id,"agent")
         child=context.child(session_id=request.session_id,run_id=parent_id,agent=author,deferred=deferred)
         record=await self.submit(request,child)

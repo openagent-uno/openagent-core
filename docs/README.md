@@ -1,6 +1,6 @@
 # OpenAgent core documentation
 
-The embedding API is prepared as the `1.1.0b24` modular candidate. Its SQLite
+The embedding API is prepared as the `1.1.0b25` modular candidate. Its SQLite
 adapter, gateway and Python SDK share that version and pin the same Core wheel.
 The Replio example is `1.1.0b2` and
 uses the new Sessions module. Product
@@ -35,6 +35,7 @@ repository remains the canonical source for Core contracts and evidence.
 - [Core b23 deterministic attachment/delegation evidence](evidence/attachments-b23-2026-10-19.md)
 - [Image model and attachment contract](image-generation.md)
 - [Audio host and transcribed attachment contract](audio-host-contract.md)
+- [Selective quarantined legacy-child adoption](legacy-child-adoption.md)
 - [Sessions and exact run controls](../packages/module-sessions/README.md)
 - [Memory visibility and durable indexing](memory-access.md)
 - [Derived content privacy contracts and current coverage](content-privacy.md)

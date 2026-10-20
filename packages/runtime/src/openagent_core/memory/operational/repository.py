@@ -709,6 +709,67 @@ def _old_resource_ids(conn: Any, session_id: str) -> tuple[set[str], set[str]]:
     return messages, tools
 
 
+def _adopted_legacy_projection(conn, session_id, projection, existing, now_ms):
+    """Honor one offline, audited projection adoption without native admission.
+
+    A changed compatibility source or adopted row requires a new host review;
+    it must not be projected back into the old installation namespace.
+    """
+    if not _table_exists(conn, "legacy_child_adoption_receipts"):
+        return None
+    receipts = conn.execute(
+        "SELECT plan_sha256,receipt_json FROM legacy_child_adoption_receipts "
+        "WHERE json_extract(receipt_json,'$.parent_link.child_session_id')=?", (session_id,),
+    ).fetchall()
+    if not receipts:
+        return None
+    if len(receipts) != 1 or existing is None:
+        raise RuntimeError("Historical adoption evidence is ambiguous or missing")
+    receipt = json.loads(receipts[0][1]); attestation = receipt.get("host_attestation", {})
+    current_cursor = conn.execute("SELECT * FROM sessions_v2 WHERE id=?", (session_id,))
+    current = _row_dict(current_cursor, current_cursor.fetchone())
+    if (receipt.get("format") != 1 or receipt.get("plan_sha256") != receipts[0][0]
+            or receipt.get("activated") is not False or receipt.get("quarantined") is not True
+            or receipt.get("external_effects_replay") is not False
+            or current["tenant_id"] != attestation.get("target_tenant")
+            or current["visibility"] != "quarantined" or current["owner_principal_id"] is not None
+            or json.loads(current["metadata_json"]).get("runtime_contract") == 1
+            or current["parent_session_id"] != receipt.get("parent_link", {}).get("parent_session_id")
+            or current["root_session_id"] != receipt.get("root_session_id")
+            or current["legacy_source_hash"] != receipt.get("legacy_projection_source_hash")
+            or projection.source_hash != receipt.get("legacy_projection_source_hash")):
+        raise RuntimeError("Historical adoption source or binding changed; host review is required")
+    import base64
+    def row_digest(row):
+        def typed(value):
+            if isinstance(value, bytes): return ["blob", base64.b64encode(value).decode()]
+            if value is None: return ["null", None]
+            if isinstance(value, int): return ["integer", value]
+            if isinstance(value, float): return ["real", value]
+            if isinstance(value, str): return ["text", value]
+            raise RuntimeError("Unsupported historical adoption value")
+        encoded = json.dumps({k: typed(v) for k,v in dict(row).items()}, sort_keys=True,
+                             separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+        return hashlib.sha256(encoded.encode()).hexdigest()
+    layout = {"sessions_v2": ("id",1), "session_runs": ("id",1), "session_messages": ("id",3),
+              "domain_events": ("sequence",2), "activity_items": ("activity_id",1), "search_outbox": ("seq",5)}
+    rows = receipt.get("rows", ())
+    if not isinstance(rows, list) or len(rows) != 13:
+        raise RuntimeError("Historical adoption row evidence is incomplete")
+    for table, (pk, count) in layout.items():
+        selections = [r for r in rows if isinstance(r,dict) and r.get("table") == table]
+        if len(selections) != count or len({r.get("key") for r in selections}) != count:
+            raise RuntimeError("Historical adoption row evidence is not exact")
+        for selected in selections:
+            cursor = conn.execute('SELECT * FROM "'+table+'" WHERE "'+pk+'"=?', (selected["key"],))
+            value = cursor.fetchone()
+            if value is None or row_digest(_row_dict(cursor, value)) != selected.get("after_sha256"):
+                raise RuntimeError("Historical adopted rows changed; host review is required")
+    _mark_legacy_changes(conn, session_id, now_ms=now_ms, source_hash=projection.source_hash)
+    return ProjectionWrite(session_id, False, False, int(existing["source_version"]),
+                           str(projection.session["completeness"]), None)
+
+
 def project_legacy_session(
     conn: Any,
     session_id: str,
@@ -784,6 +845,9 @@ def project_legacy_session(
     )
     existing_row = existing_cursor.fetchone()
     existing = _row_dict(existing_cursor, existing_row) if existing_row else None
+    adopted = _adopted_legacy_projection(conn, session_id, projection, existing, effective_now)
+    if adopted is not None:
+        return adopted
     if existing is not None and str(existing["tenant_id"]) != tenant_id:
         raise RuntimeError("refusing to move an operational session across tenants")
     if (

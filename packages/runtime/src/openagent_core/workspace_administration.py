@@ -9,6 +9,16 @@ from .contracts import ResourceRef, require_authorized
 from .runtime import runtime_scope
 
 
+def require_session_not_quarantined(row):
+    """Quarantine is a hard read boundary, even for a permissive host policy.
+
+    Historical identity repair never grants an owner or an audience. A later,
+    independently authorized resolution is required before normal inspection.
+    """
+    if row is not None and row['visibility'] == 'quarantined':
+        raise PermissionError('Quarantined historical session is not readable')
+
+
 class SkillsLibrary:
     """One explicitly configured, host-managed corpus; no private note claims."""
     def __init__(self, runtime, authorizer):
@@ -112,6 +122,7 @@ class SessionInspection:
         conn=await self.db._ensure_connected()
         row=await (await conn.execute("SELECT * FROM sessions_v2 WHERE id=? AND deleted_at_ms IS NULL",(session_id,))).fetchone()
         if row is not None and row["tenant_id"] != context.tenant_id:raise PermissionError("Session tenant does not match host provenance")
+        require_session_not_quarantined(row)
         return dict(row) if row is not None else None
 
     async def list(self,context,*,parent=None,limit=50):
@@ -345,7 +356,7 @@ class SessionInspection:
         if len(session_ids)>64 or len(set(session_ids))!=len(session_ids):raise ValueError("Invalid ancestry batch")
         conn=await self.db._ensure_connected();result={}
         async def row(sid):
-            value=await (await conn.execute("SELECT id,tenant_id,parent_session_id,origin FROM sessions_v2 WHERE id=? AND deleted_at_ms IS NULL",(sid,))).fetchone()
+            value=await (await conn.execute("SELECT id,tenant_id,parent_session_id,origin FROM sessions_v2 WHERE id=? AND visibility<>'quarantined' AND deleted_at_ms IS NULL",(sid,))).fetchone()
             return value if value is not None and value["tenant_id"] == tenant_id else None
         for sid in session_ids:
             current=await row(sid)
