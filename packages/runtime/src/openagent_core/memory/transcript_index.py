@@ -342,7 +342,7 @@ class TranscriptIndex:
                 return stats
             try:
                 try:
-                    cur = openagent_core.execute(
+                    cur = src.execute(
                         "SELECT session_id, updated_at, "
                         "       COALESCE(length(runs), 0) AS runs_len "
                         "FROM sessions"
@@ -397,7 +397,7 @@ class TranscriptIndex:
                 self._conn.commit()
             finally:
                 try:
-                    openagent_core.close()
+                    src.close()
                 except Exception:
                     pass
         stats.elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -412,7 +412,7 @@ class TranscriptIndex:
         """(Re)index one session. Returns the message count, or None if the
         row vanished mid-sync (a purge racing us — the next sync reconciles)."""
         try:
-            row = openagent_core.execute(
+            row = src.execute(
                 "SELECT runs, metadata FROM sessions WHERE session_id = ?", (sid,)
             ).fetchone()
         except sqlite3.Error:
