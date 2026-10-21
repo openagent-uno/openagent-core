@@ -10,7 +10,7 @@ Products supply authentication, system instructions, resources, tools, and polic
 embedding-host builds its own worker and sandbox from pinned core packages; the
 standalone app/CLI/server are maintained in the `openagent` product monorepo.
 
-The `1.1.0b25` kernel, SQLite adapter, gateway and SDK are the current modular
+The `1.1.0b26` kernel, SQLite adapter, gateway and SDK are the current modular
 release candidates. Beta24 adds canonical original-input history and explicit
 host-authorized output attachment delivery to the beta23 previews/delegation
 contract. Deterministic source tests are recorded separately from live

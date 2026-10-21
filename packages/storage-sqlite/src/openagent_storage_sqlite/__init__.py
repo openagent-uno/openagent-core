@@ -636,3 +636,6 @@ class SqliteRuntimeStore:
 from .legacy_child_adoption import (HostAttestation, ExactRow, ParentToolLink,
     LegacyChildAdoptionPlan, legacy_row_sha256, plan_legacy_child_adoption,
     apply_legacy_child_adoption)
+
+from .legacy_empty_child_adoption import (EmptyChildHostAttestation, EmptyChildAdoptionPlan,
+    plan_legacy_empty_child_adoption, apply_legacy_empty_child_adoption)

@@ -751,10 +751,37 @@ def _adopted_legacy_projection(conn, session_id, projection, existing, now_ms):
         encoded = json.dumps({k: typed(v) for k,v in dict(row).items()}, sort_keys=True,
                              separators=(",", ":"), ensure_ascii=False, allow_nan=False)
         return hashlib.sha256(encoded.encode()).hexdigest()
-    layout = {"sessions_v2": ("id",1), "session_runs": ("id",1), "session_messages": ("id",3),
-              "domain_events": ("sequence",2), "activity_items": ("activity_id",1), "search_outbox": ("seq",5)}
+    mode = receipt.get("mode")
+    if mode == "empty_placeholder":
+        # This receipt proves namespace repair only, never delegation lineage.
+        if (receipt.get("parent_link_verified") is not False
+                or receipt.get("parent_link", {}).get("parent_session_id") is not None
+                or receipt.get("root_session_id") != session_id
+                or projection.runs or projection.messages or projection.tools or projection.malformed_error
+                or json.loads(projection.session["metadata_json"]).get("legacy", {}).get("parent_session_id")
+                   != receipt.get("claimed_parent_session_id")):
+            raise RuntimeError("Empty placeholder adoption is not unchanged and unresolved")
+        for table in ("session_runs", "session_messages", "tool_invocations", "context_snapshots"):
+            if conn.execute('SELECT 1 FROM "'+table+'" WHERE session_id=? LIMIT 1',(session_id,)).fetchone():
+                raise RuntimeError("Empty placeholder acquired canonical content")
+        if conn.execute("SELECT 1 FROM tool_invocations WHERE child_session_id=? LIMIT 1",(session_id,)).fetchone():
+            raise RuntimeError("Empty placeholder acquired an incoming tool link")
+        for table in ("resource_acl", "artifact_links", "operational_resource_owners"):
+            if conn.execute("SELECT 1 FROM \""+table+"\" WHERE resource_type='session' AND resource_id=? LIMIT 1",(session_id,)).fetchone():
+                raise RuntimeError("Empty placeholder acquired access or artifact bindings")
+        if conn.execute("SELECT 1 FROM sessions_v2 WHERE id<>? AND (parent_session_id=? OR root_session_id=?) LIMIT 1",
+                        (session_id,session_id,session_id)).fetchone():
+            raise RuntimeError("Empty placeholder acquired incoming session lineage")
+        layout = {"sessions_v2": ("id",1), "activity_items": ("activity_id",1),
+                  "domain_events": ("sequence",1), "search_outbox": ("seq",1)}
+    elif mode is None:
+        # Keep the original verified thirteen-row contract unchanged.
+        layout = {"sessions_v2": ("id",1), "session_runs": ("id",1), "session_messages": ("id",3),
+                  "domain_events": ("sequence",2), "activity_items": ("activity_id",1), "search_outbox": ("seq",5)}
+    else:
+        raise RuntimeError("Unknown historical adoption receipt mode")
     rows = receipt.get("rows", ())
-    if not isinstance(rows, list) or len(rows) != 13:
+    if not isinstance(rows, list) or len(rows) != sum(count for _,count in layout.values()):
         raise RuntimeError("Historical adoption row evidence is incomplete")
     for table, (pk, count) in layout.items():
         selections = [r for r in rows if isinstance(r,dict) and r.get("table") == table]
