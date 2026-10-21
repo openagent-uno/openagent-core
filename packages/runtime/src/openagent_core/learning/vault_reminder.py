@@ -128,6 +128,13 @@ async def _bump_turn_count(db: Any, session_id: str) -> int:
         )
         await conn.commit()
     except Exception as e:
+        # Without a rollback the failed DML leaves the SHARED connection inside
+        # an implicit BEGIN: the next read pins a snapshot there, the WAL stops
+        # draining and every later write on that connection is refused.
+        try:
+            await conn.rollback()
+        except Exception:  # noqa: BLE001 - already failing; the error is logged below
+            pass
         elog("vault_reminder.persist_error", session_id=session_id, error=str(e)[:200])
         return 0
     return new_count

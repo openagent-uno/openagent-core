@@ -944,11 +944,12 @@ async def _sync_operational_search_unlocked(
             ).fetchone()
         generation = str(state["index_generation"])
         last_seq = int(state["last_indexed_seq"])
+        batch = max(1, min(int(limit), 50_000))
         outbox = await (
             await source.execute(
                 "SELECT seq, source_kind, source_id, operation, committed_at_ms FROM search_outbox "
                 "WHERE seq>? ORDER BY seq LIMIT ?",
-                (last_seq, max(1, min(int(limit), 50_000))),
+                (last_seq, batch),
             )
         ).fetchall()
         now_ms = int(time.time() * 1000)
@@ -1050,6 +1051,28 @@ async def _sync_operational_search_unlocked(
                 "AND newer.source_id=old.source_id AND newer.seq>old.seq AND newer.seq<=?"
                 "))",
                 (through, through),
+            )
+            # A source whose latest row is a consumed delete needs no replay:
+            # a delete applied to a brand-new generation is a no-op. Without
+            # this every tombstoned message/tool/session kept its delete row
+            # forever (~90% of the outbox on long-lived agents). Whole sources
+            # only, at most one batch of them per sync, and never the MAX(seq)
+            # head: _index_is_incompatible treats last_indexed_seq > MAX(seq)
+            # as a rewound database and rebuilds the generation.
+            await source.execute(
+                "DELETE FROM search_outbox WHERE seq IN ("
+                "SELECT r.seq FROM ("
+                "SELECT d.tenant_id, d.source_kind, d.source_id, d.seq FROM search_outbox AS d "
+                "WHERE d.operation='delete' AND d.seq<=? "
+                "AND d.seq<(SELECT MAX(seq) FROM search_outbox) "
+                "AND NOT EXISTS (SELECT 1 FROM search_outbox AS newer WHERE "
+                "newer.tenant_id=d.tenant_id AND newer.source_kind=d.source_kind "
+                "AND newer.source_id=d.source_id AND newer.seq>d.seq) "
+                "LIMIT ?) AS latest "
+                "JOIN search_outbox AS r ON r.tenant_id=latest.tenant_id "
+                "AND r.source_kind=latest.source_kind AND r.source_id=latest.source_id "
+                "AND r.seq<=latest.seq)",
+                (through, batch),
             )
         await source.commit()
         return _status_from_conn(index, target)
