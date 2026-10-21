@@ -830,7 +830,7 @@ class SemanticIndex:
                 try:
                     live = {
                         r["session_id"]: (int(r["updated_at"] or 0), int(r["runs_len"]))
-                        for r in openagent_core.execute(
+                        for r in src.execute(
                             "SELECT session_id, updated_at, "
                             "COALESCE(length(runs),0) AS runs_len FROM sessions")
                     }
@@ -863,7 +863,7 @@ class SemanticIndex:
                 texts: list[str] = []
                 metas: list[tuple[str, int, int, str, str]] = []
                 for sid in stale:
-                    row = openagent_core.execute(
+                    row = src.execute(
                         "SELECT runs, metadata FROM sessions WHERE session_id = ?",
                         (sid,)).fetchone()
                     if row is None:
@@ -890,7 +890,7 @@ class SemanticIndex:
                 self._commit()
             finally:
                 try:
-                    openagent_core.close()
+                    src.close()
                 except Exception:
                     pass
 
@@ -975,7 +975,7 @@ class SemanticIndex:
                                   int(r["plen"] or 0),
                                   str(r["name"] or ""),
                                   int(r["enabled"] or 0))
-                        for r in openagent_core.execute(
+                        for r in src.execute(
                             "SELECT id, name, enabled, updated_at, "
                             "COALESCE(length(prompt),0) AS plen FROM scheduled_tasks")
                     }
@@ -1012,7 +1012,7 @@ class SemanticIndex:
                 texts: list[str] = []
                 metas: list[tuple[str, float, int, str, int]] = []
                 for tid in stale:
-                    row = openagent_core.execute(
+                    row = src.execute(
                         "SELECT prompt FROM scheduled_tasks WHERE id = ?",
                         (tid,)).fetchone()
                     if row is None:
@@ -1027,7 +1027,7 @@ class SemanticIndex:
                 self._commit()
             finally:
                 try:
-                    openagent_core.close()
+                    src.close()
                 except Exception:  # noqa: BLE001
                     pass
 
