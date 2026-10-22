@@ -2,7 +2,6 @@
 from __future__ import annotations
 import asyncio
 import base64
-import contextlib
 import json
 import os
 import sys
@@ -31,16 +30,30 @@ async def execute(request):
 
 
 def main():
-    # Vendor logs can include request configuration. The protocol's stdout is
-    # solely a bounded result/error object; the parent also discards stderr.
-    output=sys.stdout
-    try:
-        raw=sys.stdin.buffer.read(262145)
-        if len(raw)>262144:raise ValueError("Request too large")
-        with open(os.devnull,"w") as sink,contextlib.redirect_stdout(sink),contextlib.redirect_stderr(sink):
+    # This entrypoint runs only in the owned audio child. Keep its one protocol
+    # pipe separate from fd1/fd2 for the entire process lifetime: vendor threads,
+    # cached logging handlers and atexit hooks can outlive asyncio.run(). A
+    # temporary Python redirect cannot isolate those writers. The private
+    # duplicate is non-inheritable and closes before interpreter shutdown.
+    protocol_fd=os.dup(1)
+    os.set_inheritable(protocol_fd,False)
+    with os.fdopen(protocol_fd,"w",encoding="utf-8") as output:
+        sink=os.open(os.devnull,os.O_WRONLY)
+        try:
+            os.dup2(sink,1)
+            os.dup2(sink,2)
+        finally:os.close(sink)
+        # Discard preexisting Python buffers only after their OS descriptors
+        # point at the sink. Never restore the vendor stdout/stderr descriptors.
+        for stream in (sys.stdout,sys.stderr):
+            try:stream.flush()
+            except (OSError,ValueError):pass
+        try:
+            raw=sys.stdin.buffer.read(262145)
+            if len(raw)>262144:raise ValueError("Request too large")
             result=asyncio.run(execute(json.loads(raw)))
-    except BaseException:result={"error":"audio_provider_unavailable"}
-    output.write(json.dumps(result));output.flush()
+        except BaseException:result={"error":"audio_provider_unavailable"}
+        output.write(json.dumps(result));output.flush()
 
 
 if __name__=="__main__":main()

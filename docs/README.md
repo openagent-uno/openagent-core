@@ -1,11 +1,13 @@
 # OpenAgent core documentation
 
-The embedding API is prepared as the `1.1.0b27` modular candidate. Its SQLite
+The embedding API is prepared as the `1.1.0b28` modular candidate. Its SQLite
 adapter, gateway and Python SDK share that version and pin the same Core wheel.
 Beta27 adds an optional authoritative `final_answer` envelope while preserving
 the complete transcript. Concurrent upstream canonical-session indexing and
 retention fixes are included; host, provider and live-channel acceptance remain
 separate from deterministic package qualification.
+Beta28 fixes the isolated audio worker stdout contract. It keeps vendor asynchronous and interpreter-shutdown
+logs off its single-result JSON pipe; see the audio host contract.
 The Replio example is `1.1.0b2` and
 uses the new Sessions module. Product
 qualification and production cutover remain owned by each host because the core
