@@ -287,6 +287,7 @@ class RunCompletedEvent(BaseTeamRunEvent):
     metadata: Optional[Dict[str, Any]] = None
     metrics: Optional[RunMetrics] = None
     session_state: Optional[Dict[str, Any]] = None
+    final_answer: Optional[Dict[str, Any]] = None
 
 
 @dataclass

@@ -96,6 +96,7 @@ class StreamCollector(BatchedReply):
             "model": self.model,
             "attachments": self.attachments,
             "target": self.latest_target,
+            "final_answer": None if self.errored else self.final_answer,
             # Raw accumulated delta stream for live-mode bridges that
             # posted text incrementally during the turn and only need the
             # still-unposted tail at the end. ``None`` would be wrong here
@@ -145,6 +146,8 @@ def fold_outbound_event(reply: BatchedReply, evt: Event) -> bool:
     if isinstance(evt, OutTextFinal):
         reply.text = evt.text
         reply.attachments = list(evt.attachments)
+        reply.parts = list(evt.parts)
+        reply.final_answer = evt.final_answer
         reply.model = evt.model
         return False
     if isinstance(evt, OutAudioStart):
@@ -162,9 +165,12 @@ def fold_outbound_event(reply: BatchedReply, evt: Event) -> bool:
         # gateway typically emits OutError when a turn dies before it
         # can publish TurnComplete.
         reply.errored = True
+        reply.final_answer = None
         reply.error_text = evt.text
         return True
     if isinstance(evt, TurnComplete):
+        if evt.reason != "completed":
+            reply.final_answer = None
         return True
     return False
 

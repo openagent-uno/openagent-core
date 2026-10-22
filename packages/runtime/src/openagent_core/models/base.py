@@ -28,6 +28,8 @@ class ModelResponse:
     cache_read_tokens: int = 0
     stop_reason: str | None = None
     model: str | None = None
+    # Separate from content, which may include the complete tool-loop prose.
+    final_answer: dict[str, str] | None = None
 
 
 class BaseModel(ABC):
@@ -89,6 +91,7 @@ class BaseModel(ABC):
         images: list[Any] | None = None,
         audio: list[Any] | None = None,
         videos: list[Any] | None = None,
+        on_final_answer: Callable[[dict[str, str] | None], Awaitable[None]] | None = None,
     ) -> AsyncIterator[str]:
         """Stream response text chunks. Default: falls back to generate()."""
         response = await self.generate(
@@ -96,6 +99,8 @@ class BaseModel(ABC):
             files=files, images=images, audio=audio, videos=videos,
         )
         yield response.content
+        if on_final_answer is not None:
+            await on_final_answer(getattr(response, "final_answer", None))
 
     def effective_model_id(self, session_id: str | None = None) -> str | None:
         """Return the model id that *actually* produced the last response.

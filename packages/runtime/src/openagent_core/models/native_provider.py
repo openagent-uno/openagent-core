@@ -40,6 +40,7 @@ from openagent_core.core import tool_trace, vault_recall
 from openagent_core.core.logging import elog
 from openagent_core.core.tool_scope import current_tool_allowlist, normalize_family
 from openagent_core.models.base import BaseModel, ModelResponse
+from openagent_core.models.final_answer import completed_final_answer, is_parent_run_event
 from openagent_core.models.resource_lifecycle import ProviderResources, _provider_call
 from openagent_core.models.catalog import (
     DEFAULT_CEREBRAS_BASE_URL,
@@ -293,6 +294,8 @@ def _agno_event_types() -> dict[str, tuple]:
     """
     from openagent_core.core._run_state.agent import (
         RunCompletedEvent as AgentRunCompletedEvent,
+        RunErrorEvent as AgentRunErrorEvent,
+        RunCancelledEvent as AgentRunCancelledEvent,
         RunContentEvent as AgentRunContentEvent,
         ToolCallStartedEvent as AgentToolCallStartedEvent,
         ToolCallCompletedEvent as AgentToolCallCompletedEvent,
@@ -303,9 +306,12 @@ def _agno_event_types() -> dict[str, tuple]:
     tool_completed: tuple = (AgentToolCallCompletedEvent,)
     tool_error: tuple = (AgentToolCallErrorEvent,)
     run_completed: tuple = (AgentRunCompletedEvent,)
+    run_failed: tuple = (AgentRunErrorEvent, AgentRunCancelledEvent)
     try:
         from openagent_core.core._run_state.team import (
             RunCompletedEvent as TeamRunCompletedEvent,
+            RunErrorEvent as TeamRunErrorEvent,
+            RunCancelledEvent as TeamRunCancelledEvent,
             RunContentEvent as TeamRunContentEvent,
             ToolCallStartedEvent as TeamToolCallStartedEvent,
             ToolCallCompletedEvent as TeamToolCallCompletedEvent,
@@ -319,12 +325,14 @@ def _agno_event_types() -> dict[str, tuple]:
         tool_completed = (AgentToolCallCompletedEvent, TeamToolCallCompletedEvent)
         tool_error = (AgentToolCallErrorEvent, TeamToolCallErrorEvent)
         run_completed = (AgentRunCompletedEvent, TeamRunCompletedEvent)
+        run_failed += (TeamRunErrorEvent, TeamRunCancelledEvent)
     return {
         "content": content,
         "tool_started": tool_started,
         "tool_completed": tool_completed,
         "tool_error": tool_error,
         "run_completed": run_completed,
+        "run_failed": run_failed,
     }
 
 
@@ -2072,6 +2080,7 @@ class NativeProvider(ProviderResources, BaseModel):
             cache_read_tokens=cache_read_tokens,
             stop_reason=stop_reason or "stop",
             model=self.model,
+            final_answer=completed_final_answer(response),
         )
 
     async def _emit_agno_tool_status(
@@ -2108,6 +2117,7 @@ class NativeProvider(ProviderResources, BaseModel):
         audio: list[Any] | None = None,
         videos: list[Any] | None = None,
         model_override: str | None = None,
+        on_final_answer: Callable[[dict[str, str] | None], Awaitable[None]] | None = None,
     ) -> AsyncIterator[str]:
         """Stream content deltas via the runtime's native ``stream=True`` path.
 
@@ -2145,6 +2155,8 @@ class NativeProvider(ProviderResources, BaseModel):
         tool_error_types = event_types["tool_error"]
         run_completed_types = event_types["run_completed"]
         emitted_media: set[tuple[str, str]] = set()
+        final_answer = None
+        terminal_failed = False
 
         try:
             stream_kwargs: dict[str, Any] = {
@@ -2163,6 +2175,7 @@ class NativeProvider(ProviderResources, BaseModel):
                 stream_kwargs["audio"] = audio
             if videos:
                 stream_kwargs["videos"] = videos
+            parent_run_id = stream_kwargs.get("run_id")
             stream = runner.arun(prompt, **stream_kwargs)
             try:
                 emitted = 0
@@ -2170,6 +2183,11 @@ class NativeProvider(ProviderResources, BaseModel):
                     # Capture the agno run_id (first event wins) so a barge-in
                     # can cooperatively cancel THIS run and let agno persist it.
                     self._track_run_id(sid, getattr(event, "run_id", None))
+                    parent_event = is_parent_run_event(event, runner, sid)
+                    if parent_event and parent_run_id is None:
+                        parent_run_id = getattr(event, "run_id", None)
+                    if parent_event and isinstance(event, event_types["run_failed"]):
+                        terminal_failed = True
                     if isinstance(event, content_types):
                         text = getattr(event, "content", None) or ""
                         if text:
@@ -2229,6 +2247,8 @@ class NativeProvider(ProviderResources, BaseModel):
                                 error_text=getattr(event, "error", None),
                             )
                     elif isinstance(event, run_completed_types):
+                        if parent_event and parent_run_id and getattr(event, "run_id", None) == parent_run_id:
+                            final_answer = getattr(event, "final_answer", None)
                         # The streamed run's tokens. Without this the whole
                         # streaming path is invisible to usage_log — see
                         # src/models/stream_usage.py.
@@ -2272,6 +2292,7 @@ class NativeProvider(ProviderResources, BaseModel):
                     session_id=session_id,
                     files=files, images=images, audio=audio, videos=videos,
                 )
+                final_answer = getattr(response, "final_answer", None)
                 if response.content:
                     yield response.content
         except Exception as e:
@@ -2299,8 +2320,13 @@ class NativeProvider(ProviderResources, BaseModel):
                 on_status=on_status,
                 session_id=session_id,
             )
+            final_answer = getattr(response, "final_answer", None)
             if response.content:
                 yield response.content
+        # Callback failures must not trigger another provider call. Cancellation
+        # and failed fallback never reach this successful completion boundary.
+        if on_final_answer is not None:
+            await on_final_answer(None if terminal_failed else final_answer)
 
     def _compute_and_mirror_cost(
         self,

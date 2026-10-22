@@ -832,7 +832,9 @@ class StreamSession:
                                         TurnComplete, SessionCompacted, OutReasoning, ContextReport)):
                     raise PrivacyFence('Protected media output requires an attested managed sink')
                 if isinstance(evt, OutTextFinal) and (evt.attachments or any(
-                        part.get('kind') != 'text' for part in evt.parts)):
+                        part.get('kind') != 'text' for part in evt.parts) or
+                        (evt.final_answer and (evt.final_answer.get('attachments') or any(
+                            part.get('kind') != 'text' for part in evt.final_answer.get('parts', ()))))):
                     raise PrivacyFence('Protected rich output requires an attested managed sink')
                 self._privacy_frames = {identity: entry for identity, entry in self._privacy_frames.items()
                                         if entry[0]() is not None}
@@ -881,6 +883,7 @@ class StreamSession:
                     )
                     for part in (evt.parts or ())
                 ][:100],
+                "final_answer": evt.final_answer,
             })
         elif isinstance(evt, TurnComplete):
             await self._journal("turn/end", {
@@ -1717,6 +1720,7 @@ class StreamTurnRunner:
                 return
             await sess._publish(evt, ingress_identity=ingress_identity)
         accumulated: list[str] = []
+        final_answer = None
         from openagent_core.stream.content_parts import ContentMarkerStreamFilter
         content_stream_filter = ContentMarkerStreamFilter()
         audio_started = False
@@ -1961,6 +1965,7 @@ class StreamTurnRunner:
                             )
                             break
                         terminal_text = event.get("text")
+                        final_answer = event.get("final_answer")
                         if terminal_text is not None:
                             streamed_text = "".join(accumulated)
                             if streamed_text:
@@ -2227,6 +2232,7 @@ class StreamTurnRunner:
             # gap, exactly like the suppressed OutTextFinal/TurnComplete.
             if not sess._suppress_runner_completion:
                 await _end_reasoning()
+            from openagent_core.stream.final_answer import project_final_answer
             await publish(OutTextFinal(
                 session_id=session_id,
                 seq=sess.next_seq(),
@@ -2235,6 +2241,8 @@ class StreamTurnRunner:
                 attachments=tuple(att_list),
                 parts=tuple(content_parts),
                 model=meta.get("model"),
+                final_answer=(project_final_answer(final_answer, parts=content_parts, attachments=att_list)
+                              if stream_error is None and not cancelled else None),
             ))
             # One ``OutError`` per failed turn, wherever the failure came
             # from: a generator that raised sets ``stream_error`` directly,

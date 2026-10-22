@@ -45,6 +45,7 @@ from openagent_core.core.budget_guard import BudgetGuard
 from openagent_core.core.logging import elog
 from openagent_core.models import stream_usage
 from openagent_core.models.base import BaseModel, ModelResponse
+from openagent_core.models.final_answer import completed_final_answer, is_parent_run_event
 from openagent_core.models.budget import BudgetTracker
 from openagent_core.models.local_fallback import LocalFallbackPolicy
 from openagent_core.models.catalog import (
@@ -383,6 +384,7 @@ async def _arun_runtime_collect(
         output_tokens=output_tokens,
         cache_read_tokens=cache_read_tokens,
         model=entry_runtime_id,
+        final_answer=completed_final_answer(run_output),
     )
 
 
@@ -400,6 +402,7 @@ async def _arun_runtime_stream(
     images: list[Any] | None = None,
     audio: list[Any] | None = None,
     videos: list[Any] | None = None,
+    on_final_answer: Callable[[dict[str, str] | None], Awaitable[None]] | None = None,
 ) -> AsyncIterator[str]:
     """Drive a runtime ``Team`` / ``Agent``-shaped runtime in stream mode
     and yield string deltas, optionally surfacing tool-call status
@@ -534,6 +537,8 @@ async def _arun_runtime_stream(
         # the completed run always carries the text it produced. See the net at the
         # bottom of this function for why that matters.
         completed_content: str | None = None
+        completed_answer = None
+        parent_run_id = stream_kwargs.get("run_id")
         # Runtime Agent/Team streams report provider failures as terminal
         # events and then end normally.  If those frames are ignored, the
         # caller sees an empty stream and Agent.run_stream's safety net runs
@@ -559,6 +564,9 @@ async def _arun_runtime_stream(
             # usage_log. Take the metrics off the PARENT run's completion event
             # only: a delegated member's run belongs to its own child session
             # and reports there. (src/models/stream_usage.py)
+            parent_event = is_parent_run_event(event, runtime, session_id)
+            if parent_event and parent_run_id is None:
+                parent_run_id = getattr(event, "run_id", None)
             if isinstance(event, run_completed_event_types):
                 ev_sid = getattr(event, "session_id", None)
                 if ev_sid is None or ev_sid == session_id:
@@ -567,6 +575,8 @@ async def _arun_runtime_stream(
                     cr = stream_usage.metrics_to_cache_read(_ev_metrics)
                     stream_usage.record(
                         input_tokens=inp, output_tokens=out, cache_read_tokens=cr)
+                    if parent_event and parent_run_id and getattr(event, "run_id", None) == parent_run_id:
+                        completed_answer = getattr(event, "final_answer", None)
                     # Same parent-only guard, same event: keep the final text too.
                     _ev_content = getattr(event, "content", None)
                     if isinstance(_ev_content, str) and _ev_content.strip():
@@ -737,6 +747,8 @@ async def _arun_runtime_stream(
                     await aclose()
                 except Exception:  # noqa: BLE001
                     pass
+    if on_final_answer is not None:
+        await on_final_answer(completed_answer)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1657,6 +1669,7 @@ class TeamRouterProvider(ProviderResources, BaseModel):
         images: list[Any] | None = None,
         audio: list[Any] | None = None,
         videos: list[Any] | None = None,
+        on_final_answer: Callable[[dict[str, str] | None], Awaitable[None]] | None = None,
     ) -> AsyncIterator[str]:
         sid = session_id or "default"
         runtime = None
@@ -1706,6 +1719,13 @@ class TeamRouterProvider(ProviderResources, BaseModel):
         outcome = vault_recall.OUTCOME_OK
         try:
             if isinstance(runtime, BaseModel):
+                import inspect
+                try:
+                    parameters = inspect.signature(runtime.stream).parameters
+                except (TypeError, ValueError):
+                    parameters = {}
+                final_kwargs = ({"on_final_answer": on_final_answer}
+                                if "on_final_answer" in parameters else {})
                 async for delta in runtime.stream(
                     messages,
                     system=system,
@@ -1714,6 +1734,7 @@ class TeamRouterProvider(ProviderResources, BaseModel):
                     session_id=sid,
                     model_override=model_override,
                     files=files, images=images, audio=audio, videos=videos,
+                    **final_kwargs,
                 ):
                     yield delta
                 return
@@ -1735,6 +1756,7 @@ class TeamRouterProvider(ProviderResources, BaseModel):
                     user_id=user_id,
                     on_status=on_status,
                     error_event="team_router.stream_error",
+                    on_final_answer=on_final_answer,
                     on_delegate=lambda mid: self._record_delegation(sid, mid),
                     on_run_id=lambda rid: self._track_run_id(sid, rid),
                     files=files, images=images, audio=audio, videos=videos,
@@ -2479,6 +2501,7 @@ class ModelDispatcher(BaseModel):
         images: list[Any] | None = None,
         audio: list[Any] | None = None,
         videos: list[Any] | None = None,
+        on_final_answer: Callable[[dict[str, str] | None], Awaitable[None]] | None = None,
     ) -> AsyncIterator[str]:
         decision = await self._resolve_entry_model(session_id)
         if not decision.primary_model:
@@ -2535,5 +2558,6 @@ class ModelDispatcher(BaseModel):
             messages, system=system, tools=tools,
             on_status=on_status, session_id=session_id,
             files=files, images=images, audio=audio, videos=videos,
+            on_final_answer=on_final_answer,
         ):
             yield chunk

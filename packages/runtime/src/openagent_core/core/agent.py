@@ -2014,6 +2014,9 @@ class Agent:
                     if event["kind"] == "delta" and not visible:
                         continue
                     event = {**event, "text": visible}
+                    answer = event.get("final_answer")
+                    if isinstance(answer, dict) and isinstance(answer.get("text"), str):
+                        event = {**event, "final_answer": {"text": assistant_text(answer["text"])}}
                 if event.get("kind") == "done":
                     # Streaming turns need the same pre-send integrity guard as
                     # run().  The terminal text is authoritative for persistence
@@ -2026,6 +2029,8 @@ class Agent:
                                 self, session_id, message, event.get("text", ""),
                                 model_override=model_override,
                             )
+                            if guarded != event.get("text", ""):
+                                event = {**event, "final_answer": None}
                             event = {**event, "text": guarded}
                         except Exception:  # noqa: BLE001 — guard never breaks a turn
                             pass
@@ -2165,6 +2170,13 @@ class Agent:
         )
         current_input = await _with_recall(self, session_id, message, current_input)
         accumulated: list[str] = []
+        final_answer: dict[str, str] | None = None
+
+        async def capture_final(value):
+            nonlocal final_answer
+            final_answer = ({"text": value["text"]} if isinstance(value, dict)
+                            and isinstance(value.get("text"), str) else None)
+
         iter_count = 0
         # Streaming twin of ``_run_inner``'s ``turn_registered`` — see there.
         turn_registered = False
@@ -2182,6 +2194,7 @@ class Agent:
         fallback_response: ModelResponse | None = None
         try:
             while True:
+                final_answer = None  # Never reuse a prior autoloop iteration.
                 iter_count += 1
                 if iter_count > cap:
                     elog("agent.run_stream.autoloop_cap_hit",
@@ -2264,6 +2277,8 @@ class Agent:
                         stream_kwargs["session_id"] = session_id
                     if "on_status" in sig_params:
                         stream_kwargs["on_status"] = _status
+                    if "on_final_answer" in sig_params:
+                        stream_kwargs["on_final_answer"] = capture_final
                     # Only attach media on iteration 1: shell-reminder
                     # re-entries reuse the same the runtime session, which
                     # already has the prior files in its run history.
@@ -2397,6 +2412,7 @@ class Agent:
                         session_id=session_id,
                         iter_count=iter_count,
                     )
+                    await capture_final(getattr(fallback_response, "final_answer", None))
                     fallback_text = (fallback_response.content or "").strip()
                     if fallback_text:
                         accumulated.append(fallback_text)
@@ -2471,7 +2487,7 @@ class Agent:
             response_len=len(full_text),
             used_fallback=fallback_response is not None,
         )
-        yield {"kind": "done", "text": full_text}
+        yield {"kind": "done", "text": full_text, "final_answer": final_answer}
 
     def _resolve_vault_path(self) -> str:
         """Return the on-disk path the vault MCP is actually using.

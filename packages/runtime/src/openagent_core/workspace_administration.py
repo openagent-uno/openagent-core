@@ -160,7 +160,7 @@ class SessionInspection:
                 result.extend(public_transcript_attachments([value]))
         return result
 
-    async def _public_output_frame(self, context, session_id, frame):
+    async def _public_output_frame(self, context, session_id, frame, *, run_status=None):
         if not isinstance(frame,dict) or frame.get("kind") != "done":
             return frame
         from .artifacts import session_output_reference
@@ -168,8 +168,6 @@ class SessionInspection:
         parts = frame.get("parts")
         if not isinstance(parts,list):
             parsed = parse_response_content(frame.get("text", ""),allow_inline_ui=False)
-            if not parsed.attachments:
-                return frame
             parts = list(parsed.parts)
         public = []
         for part in parts[:512]:
@@ -181,8 +179,12 @@ class SessionInspection:
                 ref=await session_output_reference(self.db,tenant_id=context.tenant_id,session_id=session_id,value=part.get("attachment"))
                 if ref is not None:
                     public.append({"kind":"attachment","attachment":ref})
+        from .stream.final_answer import project_final_answer
+        from .contracts import TERMINAL_STATUSES
+        failed = frame.get("errored") or (run_status in TERMINAL_STATUSES and run_status != "success")
         return {**frame,"text":"".join(p["text"] for p in public if p["kind"]=="text").strip(),
-            "parts":public,"attachments":[p["attachment"] for p in public if p["kind"]=="attachment"]}
+            "parts":public,"attachments":[p["attachment"] for p in public if p["kind"]=="attachment"],
+            "final_answer":project_final_answer(None if failed else frame.get("final_answer"),parts=public)}
 
     async def live_runs(self,context,session_id,*,limit=8):
         """Bounded canonical stream snapshots, without authority/credential data.
@@ -217,7 +219,7 @@ class SessionInspection:
                 "output":json.loads(row["output_json"]) if row["output_json"] else None,
                 "created_at_ms":row["created_at_ms"],"finished_at_ms":row["finished_at_ms"],
                 "author":{key:author[key] for key in ("authority","tenant_id","subject_id","kind") if isinstance(author.get(key),str)},
-                "events":[{"cursor":e["sequence"],"kind":e["event_type"],"payload":await self._public_output_frame(context,session_id,json.loads(e["metadata_json"])),"timestamp_ms":e["occurred_at_ms"]} for e in events[:2000] if e["event_type"] in {"run.stream","run.status","run.delta"}],"truncated":truncated})
+                "events":[{"cursor":e["sequence"],"kind":e["event_type"],"payload":await self._public_output_frame(context,session_id,json.loads(e["metadata_json"]),run_status=row["status"]),"timestamp_ms":e["occurred_at_ms"]} for e in events[:2000] if e["event_type"] in {"run.stream","run.status","run.delta"}],"truncated":truncated})
         await self.authorize(context,session_id)
         return {"session_id":session_id,"revision":revision,"runs":result}
 

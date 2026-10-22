@@ -128,6 +128,11 @@ class AgentExecutor:
                         parts.append({"kind": "text", "text": "\n\n" + note})
                     await can_publish()
                     event = {**event, "text": final_text, "parts": parts, "attachments": attachments}
+                from .stream.final_answer import project_final_answer
+                event = {**event, "final_answer": project_final_answer(
+                    event.get("final_answer"), parts=event.get("parts", ()),
+                    attachments=event.get("attachments", ()),
+                )}
             elif kind == "error":
                 raise RuntimeError("Agent stream failed")
             await runtime.services.store.append_event(request.run_id,"run.stream",event)

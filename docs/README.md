@@ -35,6 +35,7 @@ repository remains the canonical source for Core contracts and evidence.
 - [Core b23 deterministic attachment/delegation evidence](evidence/attachments-b23-2026-10-19.md)
 - [Image model and attachment contract](image-generation.md)
 - [Audio host and transcribed attachment contract](audio-host-contract.md)
+- [Authoritative final answers and the complete stream](final-answer.md)
 - [Selective quarantined legacy-child adoption](legacy-child-adoption.md)
 - [Empty legacy-placeholder namespace adoption](legacy-empty-child-adoption.md)
 - [Sessions and exact run controls](../packages/module-sessions/README.md)

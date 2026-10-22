@@ -19,6 +19,7 @@ class BatchedReply:
     model: str | None = None
     errored: bool = False
     error_text: str | None = None
+    final_answer: dict | None = None
 
     @property
     def audio_bytes(self) -> bytes | None:

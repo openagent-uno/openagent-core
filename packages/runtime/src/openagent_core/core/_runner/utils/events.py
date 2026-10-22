@@ -110,7 +110,9 @@ def create_run_started_event(from_run_response: RunOutput) -> RunStartedEvent:
 
 
 def create_team_run_completed_event(from_run_response: TeamRunOutput) -> TeamRunCompletedEvent:
+    from openagent_core.models.final_answer import completed_final_answer
     return TeamRunCompletedEvent(
+        final_answer=completed_final_answer(from_run_response),
         session_id=from_run_response.session_id,
         team_id=from_run_response.team_id,  # type: ignore
         team_name=from_run_response.team_name,  # type: ignore
@@ -137,7 +139,9 @@ def create_team_run_completed_event(from_run_response: TeamRunOutput) -> TeamRun
 
 
 def create_run_completed_event(from_run_response: RunOutput) -> RunCompletedEvent:
+    from openagent_core.models.final_answer import completed_final_answer
     return RunCompletedEvent(
+        final_answer=completed_final_answer(from_run_response),
         session_id=from_run_response.session_id,
         agent_id=from_run_response.agent_id,  # type: ignore
         agent_name=from_run_response.agent_name,  # type: ignore

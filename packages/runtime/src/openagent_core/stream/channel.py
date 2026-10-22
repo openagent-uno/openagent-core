@@ -289,6 +289,7 @@ class BatchedChannel:
                     reply.text = evt.text
                     reply.attachments = list(evt.attachments)
                     reply.parts = list(evt.parts)
+                    reply.final_answer = evt.final_answer
                     reply.model = evt.model
                 elif isinstance(evt, OutAudioStart):
                     audio_started = True
@@ -305,8 +306,11 @@ class BatchedChannel:
                     pass
                 elif isinstance(evt, OutError):
                     reply.errored = True
+                    reply.final_answer = None
                     reply.error_text = evt.text
                 elif isinstance(evt, TurnComplete):
+                    if evt.reason != "completed":
+                        reply.final_answer = None
                     break
 
             # Prefer the canonical OutTextFinal text when present; fall back

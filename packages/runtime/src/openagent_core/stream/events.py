@@ -226,6 +226,8 @@ class OutTextFinal(Event):
     # ``attachments``; v1 parts are ``text``, ``attachment`` and ``ui_view``.
     parts: tuple[dict[str, Any], ...] = ()
     model: str | None = None
+    # Optional authoritative completed-run answer, separate from full text.
+    final_answer: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
