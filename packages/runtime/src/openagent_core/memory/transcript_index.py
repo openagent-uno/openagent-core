@@ -7,8 +7,10 @@ is a different question from the one the vault answers. The vault (§5) is
 neither substitutes for the other, and until this module the second one had
 no reader at all.
 
-``sessions.runs`` is already the source of truth and already holds every
-message of every session. This SQLite file is a *rebuildable cache* over it,
+The canonical store (``sessions_v2`` + ``session_messages``) and, for
+sessions it has never seen, the legacy ``sessions.runs`` blob are the source
+of truth — see ``live_sessions`` for how the two are merged. This SQLite file
+is a *rebuildable cache* over them,
 in the exact shape of :mod:`openagent_core.memory.vault.index` — delete it and the next
 ``sync`` reconstructs it. Nothing here is a second store of record: every row
 is derived, and the derivation is one function away from the raw text.
@@ -233,6 +235,183 @@ def _iter_run_messages(runs: Any) -> Iterator[tuple[str, str, Optional[int]]]:
             yield "assistant", content, ts
 
 
+# ── session sources: canonical ``sessions_v2`` + legacy ``sessions`` ──────
+#
+# Since the operational storage v2 migration the canonical conversation store
+# is ``sessions_v2`` + ``session_messages``; the legacy ``sessions.runs`` blob
+# is only still written by a few paths (scheduler runs) and by pre-v2 installs.
+# Reading only the legacy table left every chat/event/webhook conversation of a
+# migrated agent invisible to both recall indexes, so each sync reads BOTH and
+# merges them per session id.
+
+SOURCE_LEGACY = "legacy"
+SOURCE_CANONICAL = "canonical"
+
+# The gate aggregate deliberately counts only the messages we index: a tool
+# result appended mid-run must not re-embed the session (the embedding round
+# trip is the expensive part), while a new, removed or hidden user/assistant
+# message changes the count and a redaction stamps ``updated_at_ms``. The
+# message-level MAX is required because privacy redaction bumps the MESSAGE row
+# only, never ``sessions_v2.updated_at_ms`` — gating on the session row alone
+# would keep serving redacted text from the cache.
+_CANONICAL_GATE_SQL = (
+    "SELECT s.id, s.title, s.origin, s.visibility, s.deleted_at_ms, "
+    "       s.updated_at_ms, COALESCE(m.n, 0) AS n, COALESCE(m.mx, 0) AS mx "
+    "FROM sessions_v2 s LEFT JOIN ("
+    "    SELECT session_id, COUNT(*) AS n, MAX(updated_at_ms) AS mx "
+    "    FROM session_messages "
+    "    WHERE role IN ('user', 'assistant') AND visibility = 'user_visible' "
+    "    GROUP BY session_id"
+    ") m ON m.session_id = s.id"
+)
+
+
+@dataclass(frozen=True)
+class LiveSession:
+    """One indexable session as seen by the cheap gating query.
+
+    ``(source, updated, size)`` is the invalidation key stored beside the
+    index row. ``source`` is part of it so a session first indexed from its
+    legacy blob is re-read once its canonical copy appears. ``recency`` is
+    seconds for both sources (canonical stores milliseconds), so the bounded
+    "newest first" budget orders the two kinds of rows on one clock.
+    """
+
+    source: str
+    updated: int
+    size: int
+    recency: float
+    title: str = ""
+    origin: str = ""
+
+    @property
+    def gate(self) -> tuple[str, int, int]:
+        return (self.source, self.updated, self.size)
+
+
+def live_sessions(src: sqlite3.Connection) -> Optional[dict[str, LiveSession]]:
+    """Every session an index should hold, keyed by id. ``None`` when the DB
+    has neither session table yet (brand-new agent DB).
+
+    Canonical wins whenever a ``sessions_v2`` row exists for an id, including
+    tombstoned and quarantined ones: the legacy blob of such a session is a
+    pre-migration copy, and indexing it would resurrect a conversation the
+    canonical store deleted or fenced off. Legacy rows are kept only for ids
+    the canonical store has never seen (pre-migration installs and paths that
+    still write only the legacy table).
+    """
+    out: dict[str, LiveSession] = {}
+    canonical_ids: set[str] = set()
+    have_any = False
+    try:
+        rows = src.execute(_CANONICAL_GATE_SQL).fetchall()
+        have_any = True
+    except sqlite3.Error:
+        rows = []  # pre-v2 agent DB: no canonical tables yet
+    for r in rows:
+        sid = str(r["id"])
+        canonical_ids.add(sid)
+        # Deleted (archived or tombstoned) and quarantined sessions are not
+        # readable through the canonical readers, so recall must not surface
+        # them either. Dropping them from ``live`` makes the reconcile remove
+        # any vector/FTS rows they already had.
+        if r["deleted_at_ms"] is not None or r["visibility"] == "quarantined":
+            continue
+        updated = max(int(r["updated_at_ms"] or 0), int(r["mx"] or 0))
+        out[sid] = LiveSession(
+            SOURCE_CANONICAL, updated, int(r["n"] or 0), updated / 1000.0,
+            str(r["title"] or ""), str(r["origin"] or ""),
+        )
+    try:
+        legacy = src.execute(
+            "SELECT session_id, updated_at, "
+            "       COALESCE(length(runs), 0) AS runs_len "
+            "FROM sessions"
+        ).fetchall()
+        have_any = True
+    except sqlite3.Error:
+        legacy = []
+    for r in legacy:
+        sid = str(r["session_id"])
+        if sid in canonical_ids:
+            continue
+        updated = int(r["updated_at"] or 0)
+        out[sid] = LiveSession(SOURCE_LEGACY, updated, int(r["runs_len"]), float(updated))
+    return out if have_any else None
+
+
+def canonical_messages(src: sqlite3.Connection,
+                       sid: str) -> Optional[list[tuple[str, str, Optional[int]]]]:
+    """``(role, text, ts_seconds)`` of a canonical session's indexable messages
+    in conversation order, or ``None`` when the session vanished or became
+    unreadable since the gating query (the next sync reconciles it).
+
+    Reads the same projection the canonical session readers expose: the
+    normalized ``text`` of ``user_visible`` user/assistant rows. Internal,
+    hidden and provider-private rows (system scaffolding, reasoning) are never
+    indexed, and tool payloads are left to the purpose-built log readers
+    exactly as the legacy path does.
+    """
+    try:
+        head = src.execute(
+            "SELECT deleted_at_ms, visibility FROM sessions_v2 WHERE id = ?", (sid,)
+        ).fetchone()
+        if head is None or head["deleted_at_ms"] is not None \
+                or head["visibility"] == "quarantined":
+            return None
+        rows = src.execute(
+            "SELECT role, text, created_at_ms FROM session_messages "
+            "WHERE session_id = ? AND role IN ('user', 'assistant') "
+            "  AND visibility = 'user_visible' "
+            "ORDER BY sequence",
+            (sid,),
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    out: list[tuple[str, str, Optional[int]]] = []
+    for r in rows:
+        text = r["text"]
+        if not isinstance(text, str) or not text:
+            continue
+        ts = r["created_at_ms"]
+        out.append((str(r["role"]), text, int(ts) // 1000 if ts is not None else None))
+    return out
+
+
+def legacy_session(src: sqlite3.Connection,
+                   sid: str) -> Optional[tuple[list[tuple[str, str, Optional[int]]], dict]]:
+    """``(messages, metadata)`` of a legacy ``sessions`` row, or ``None`` when
+    the row vanished mid-sync (a purge racing us)."""
+    try:
+        row = src.execute(
+            "SELECT runs, metadata FROM sessions WHERE session_id = ?", (sid,)
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None:
+        return None
+    meta = _loads_maybe_double(row["metadata"])
+    meta = meta if isinstance(meta, dict) else {}
+    return list(_iter_run_messages(_loads_maybe_double(row["runs"]))), meta
+
+
+def ensure_source_column(conn: sqlite3.Connection, table: str) -> None:
+    """Add the ``source`` gate column to an index table built before canonical
+    sessions were indexed.
+
+    Additive on purpose: every row such a cache holds came from the legacy
+    table, which is exactly the default, so no existing vector is thrown away.
+    Bumping the schema version instead would wipe the semantic cache's vault
+    vectors too and re-embed thousands of unchanged notes.
+    """
+    cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if "source" not in cols:
+        conn.execute(
+            f"ALTER TABLE {table} ADD COLUMN source TEXT NOT NULL DEFAULT '{SOURCE_LEGACY}'"
+        )
+        conn.commit()
+
+
 class TranscriptIndex:
     """A rebuildable FTS5 cache over one agent DB's ``sessions.runs``.
 
@@ -250,6 +429,7 @@ class TranscriptIndex:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(_SCHEMA)
+        ensure_source_column(self._conn, "indexed_sessions")
         self._ensure_source_meta()
 
     # ── lifecycle ─────────────────────────────────────────────────────
@@ -305,7 +485,12 @@ class TranscriptIndex:
 
     def sync(self, *, force: bool = False,
              max_sessions: int = _MAX_SESSIONS_PER_SYNC) -> SyncStats:
-        """Reconcile the cache with ``sessions``. Cheap when nothing changed.
+        """Reconcile the cache with the agent's sessions. Cheap when nothing
+        changed.
+
+        Canonical sessions are gated on ``(updated_at_ms, indexable message
+        count)`` and legacy ones on ``(updated_at, runs_len)``; a canonical
+        tombstone or quarantine counts as a purge (see ``live_sessions``).
 
         Three cases, all of which the invalidation pair handles uniformly:
 
@@ -341,26 +526,17 @@ class TranscriptIndex:
                 stats.elapsed_ms = int((time.monotonic() - t0) * 1000)
                 return stats
             try:
-                try:
-                    cur = openagent_core.execute(
-                        "SELECT session_id, updated_at, "
-                        "       COALESCE(length(runs), 0) AS runs_len "
-                        "FROM sessions"
-                    )
-                    live = {
-                        r["session_id"]: (int(r["updated_at"] or 0), int(r["runs_len"]))
-                        for r in cur.fetchall()
-                    }
-                except sqlite3.Error:
-                    # No ``sessions`` table yet (brand-new agent DB).
+                live = live_sessions(src)
+                if live is None:
+                    # No session table yet (brand-new agent DB).
                     stats.elapsed_ms = int((time.monotonic() - t0) * 1000)
                     return stats
 
                 cur = self._conn.execute(
-                    "SELECT session_id, updated_at, runs_len FROM indexed_sessions"
+                    "SELECT session_id, source, updated_at, runs_len FROM indexed_sessions"
                 )
                 existing = {
-                    r["session_id"]: (int(r["updated_at"]), int(r["runs_len"]))
+                    r["session_id"]: (str(r["source"]), int(r["updated_at"]), int(r["runs_len"]))
                     for r in cur.fetchall()
                 }
 
@@ -371,8 +547,8 @@ class TranscriptIndex:
                     stats.deleted += 1
 
                 stale: list[str] = []
-                for sid, pair in live.items():
-                    if not force and existing.get(sid) == pair:
+                for sid, session in live.items():
+                    if not force and existing.get(sid) == session.gate:
                         stats.unchanged += 1
                     else:
                         stale.append(sid)
@@ -380,7 +556,7 @@ class TranscriptIndex:
                 # Newest first: recency is what "remember when we discussed X"
                 # is usually reaching for, so a warming index is useful long
                 # before it is complete.
-                stale.sort(key=lambda s: live[s][0], reverse=True)
+                stale.sort(key=lambda s: live[s].recency, reverse=True)
                 if len(stale) > max_sessions:
                     stats.pending = len(stale) - max_sessions
                     stale = stale[:max_sessions]
@@ -397,7 +573,7 @@ class TranscriptIndex:
                 self._conn.commit()
             finally:
                 try:
-                    openagent_core.close()
+                    src.close()
                 except Exception:
                     pass
         stats.elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -408,21 +584,20 @@ class TranscriptIndex:
         self._conn.execute("DELETE FROM messages_fts WHERE session_id = ?", (sid,))
 
     def _index_session(self, src: sqlite3.Connection, sid: str,
-                       pair: tuple[int, int]) -> Optional[int]:
+                       session: LiveSession) -> Optional[int]:
         """(Re)index one session. Returns the message count, or None if the
         row vanished mid-sync (a purge racing us — the next sync reconciles)."""
-        try:
-            row = openagent_core.execute(
-                "SELECT runs, metadata FROM sessions WHERE session_id = ?", (sid,)
-            ).fetchone()
-        except sqlite3.Error:
-            return None
-        if row is None:
-            return None
-
-        runs = _loads_maybe_double(row["runs"])
-        meta = _loads_maybe_double(row["metadata"])
-        meta = meta if isinstance(meta, dict) else {}
+        if session.source == SOURCE_CANONICAL:
+            messages = canonical_messages(src, sid)
+            if messages is None:
+                return None
+            title, origin = session.title, session.origin
+        else:
+            loaded = legacy_session(src, sid)
+            if loaded is None:
+                return None
+            messages, meta = loaded
+            title, origin = str(meta.get("title") or ""), str(meta.get("origin") or "")
 
         # Delete-then-insert rather than a diff: a rewritten session must not
         # retain a single row of its previous text (see ``sync``).
@@ -430,7 +605,7 @@ class TranscriptIndex:
 
         seen: set[tuple[str, str]] = set()
         rows: list[tuple] = []
-        for role, text, ts in _iter_run_messages(runs):
+        for role, text, ts in messages:
             text = text.strip()
             if len(text) < _MIN_MESSAGE_CHARS:
                 continue
@@ -441,7 +616,8 @@ class TranscriptIndex:
                 # message; dedup so one reply is one hit, not two.
                 continue
             seen.add(key)
-            rows.append((sid, role, ts if ts is not None else pair[0], len(rows), text))
+            rows.append((sid, role, ts if ts is not None else int(session.recency),
+                         len(rows), text))
 
         if rows:
             self._conn.executemany(
@@ -451,16 +627,16 @@ class TranscriptIndex:
             )
         self._conn.execute(
             "INSERT INTO indexed_sessions "
-            "(session_id, updated_at, runs_len, title, origin, msg_count, indexed_at) "
-            "VALUES (?,?,?,?,?,?,?) "
+            "(session_id, source, updated_at, runs_len, title, origin, msg_count, indexed_at) "
+            "VALUES (?,?,?,?,?,?,?,?) "
             "ON CONFLICT(session_id) DO UPDATE SET "
+            "  source=excluded.source, "
             "  updated_at=excluded.updated_at, runs_len=excluded.runs_len, "
             "  title=excluded.title, origin=excluded.origin, "
             "  msg_count=excluded.msg_count, indexed_at=excluded.indexed_at",
             (
-                sid, pair[0], pair[1],
-                str(meta.get("title") or "")[:200],
-                str(meta.get("origin") or "")[:40],
+                sid, session.source, session.updated, session.size,
+                title[:200], origin[:40],
                 len(rows), time.time(),
             ),
         )

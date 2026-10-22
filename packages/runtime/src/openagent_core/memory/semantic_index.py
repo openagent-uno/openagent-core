@@ -359,6 +359,10 @@ CREATE TABLE IF NOT EXISTS vault_vectors (
 -- pair, identical to the transcript index's gate. One vector per session (a
 -- capped digest of its user/assistant text), not per message: session count is
 -- bounded and this keeps the cold build's embedding-call count bounded with it.
+-- A ``source`` column ('legacy' | 'canonical') is added by
+-- ``transcript_index.ensure_source_column`` so caches built before canonical
+-- sessions were indexed keep their vectors; for canonical rows the pair holds
+-- ``(updated_at_ms, indexable message count)``.
 CREATE TABLE IF NOT EXISTS session_vectors (
     session_id  TEXT PRIMARY KEY,
     updated_at  INTEGER,
@@ -492,6 +496,8 @@ class SemanticIndex:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(_SCHEMA)
+        from openagent_core.memory.transcript_index import ensure_source_column
+        ensure_source_column(self._conn, "session_vectors")
         self._ensure_meta()
 
     # ── lifecycle ─────────────────────────────────────────────────────
@@ -789,13 +795,16 @@ class SemanticIndex:
 
     def sync_sessions(self, *, force: bool = False,
                       max_items: int = _MAX_ITEMS_PER_SYNC) -> SyncStats:
-        """Reconcile the session vectors with ``sessions.runs``.
+        """Reconcile the session vectors with the agent's sessions.
 
-        Same three cases the transcript index handles, same ``(updated_at,
-        runs_len)`` gate: new -> embedded, rewritten (compaction) -> re-embedded
-        from scratch, purged -> dropped. The purge case is a PULL (the id stops
-        appearing in the gating query), so ``db.py`` needs to know nothing about
-        this cache — the invariant that keeps a deleted conversation unfindable.
+        Reads canonical ``sessions_v2``/``session_messages`` plus legacy
+        ``sessions.runs`` rows the canonical store has never seen, through the
+        same ``transcript_index.live_sessions`` gate the FTS cache uses: new ->
+        embedded, rewritten (compaction, new message, redaction) -> re-embedded
+        from scratch, purged or tombstoned -> dropped. The purge case is a PULL
+        (the id stops appearing in the gating query), so the stores need to
+        know nothing about this cache — the invariant that keeps a deleted
+        conversation unfindable.
         """
         t0 = time.monotonic()
         stats = SyncStats()
@@ -819,7 +828,12 @@ class SemanticIndex:
             stats.elapsed_ms = int((time.monotonic() - t0) * 1000)
             return stats
 
-        from openagent_core.memory.transcript_index import _iter_run_messages, _loads_maybe_double
+        from openagent_core.memory.transcript_index import (
+            SOURCE_CANONICAL,
+            canonical_messages,
+            legacy_session,
+            live_sessions,
+        )
 
         with self._lock:
             src = self._open_source()
@@ -827,21 +841,28 @@ class SemanticIndex:
                 stats.elapsed_ms = int((time.monotonic() - t0) * 1000)
                 return stats
             try:
-                try:
-                    live = {
-                        r["session_id"]: (int(r["updated_at"] or 0), int(r["runs_len"]))
-                        for r in openagent_core.execute(
-                            "SELECT session_id, updated_at, "
-                            "COALESCE(length(runs),0) AS runs_len FROM sessions")
-                    }
-                except sqlite3.Error:
+                live = live_sessions(src)
+                if live is None:
                     stats.elapsed_ms = int((time.monotonic() - t0) * 1000)
                     return stats
+                # A canonical session with no indexable message and no title
+                # has nothing to embed. Left in ``live`` it would be re-read on
+                # every sync without ever being written, and enough of them
+                # (event sessions are created before their first message)
+                # would occupy the whole newest-first budget and starve the
+                # sessions that do have text. Dropping it also removes a vector
+                # it may have held while it still had messages.
+                live = {
+                    sid: s for sid, s in live.items()
+                    if s.source != SOURCE_CANONICAL or s.size or s.title
+                }
 
                 existing = {
-                    r["session_id"]: (int(r["updated_at"] or 0), int(r["runs_len"] or 0))
+                    r["session_id"]: (str(r["source"]), int(r["updated_at"] or 0),
+                                      int(r["runs_len"] or 0))
                     for r in self._conn.execute(
-                        "SELECT session_id, updated_at, runs_len FROM session_vectors")
+                        "SELECT session_id, source, updated_at, runs_len "
+                        "FROM session_vectors")
                 }
 
                 for sid in existing.keys() - live.keys():
@@ -850,31 +871,35 @@ class SemanticIndex:
                     stats.deleted += 1
 
                 stale: list[str] = []
-                for sid, pair in live.items():
-                    if not force and existing.get(sid) == pair:
+                for sid, session in live.items():
+                    if not force and existing.get(sid) == session.gate:
                         stats.unchanged += 1
                     else:
                         stale.append(sid)
-                stale.sort(key=lambda s: live[s][0], reverse=True)  # newest first
+                stale.sort(key=lambda s: live[s].recency, reverse=True)  # newest first
                 if len(stale) > max_items:
                     stats.pending = len(stale) - max_items
                     stale = stale[:max_items]
 
                 texts: list[str] = []
-                metas: list[tuple[str, int, int, str, str]] = []
+                metas: list[tuple[str, str, int, int, str, str]] = []
                 for sid in stale:
-                    row = openagent_core.execute(
-                        "SELECT runs, metadata FROM sessions WHERE session_id = ?",
-                        (sid,)).fetchone()
-                    if row is None:
-                        continue
-                    runs = _loads_maybe_double(row["runs"])
-                    meta = _loads_maybe_double(row["metadata"])
-                    meta = meta if isinstance(meta, dict) else {}
-                    title = str(meta.get("title") or "")
+                    session = live[sid]
+                    if session.source == SOURCE_CANONICAL:
+                        messages = canonical_messages(src, sid)
+                        if messages is None:
+                            continue
+                        title, origin = session.title, session.origin
+                    else:
+                        loaded = legacy_session(src, sid)
+                        if loaded is None:
+                            continue
+                        messages, meta = loaded
+                        title = str(meta.get("title") or "")
+                        origin = str(meta.get("origin") or "")
                     seen_txt: set[str] = set()
                     parts: list[str] = [title] if title else []
-                    for _role, text, _ts in _iter_run_messages(runs):
+                    for _role, text, _ts in messages:
                         text = text.strip()
                         if len(text) < 8 or text in seen_txt:
                             continue
@@ -884,13 +909,13 @@ class SemanticIndex:
                     if not digest:
                         continue
                     texts.append(digest)
-                    metas.append((sid, live[sid][0], live[sid][1], title[:200],
-                                  str(meta.get("origin") or "")[:40]))
+                    metas.append((sid, session.source, session.updated, session.size,
+                                  title[:200], origin[:40]))
 
                 self._commit()
             finally:
                 try:
-                    openagent_core.close()
+                    src.close()
                 except Exception:
                     pass
 
@@ -916,17 +941,18 @@ class SemanticIndex:
 
         with self._lock:
             if blobs:
-                for (sid, upd, rlen, title, origin), (blob, dim) in zip(metas, blobs):
+                for (sid, source, upd, rlen, title, origin), (blob, dim) in zip(metas, blobs):
                     self._conn.execute(
                         "INSERT INTO session_vectors "
-                        "(session_id, updated_at, runs_len, title, origin, dim, "
-                        " vec, embedded_at) VALUES (?,?,?,?,?,?,?,?) "
+                        "(session_id, source, updated_at, runs_len, title, origin, dim, "
+                        " vec, embedded_at) VALUES (?,?,?,?,?,?,?,?,?) "
                         "ON CONFLICT(session_id) DO UPDATE SET "
+                        "  source=excluded.source, "
                         "  updated_at=excluded.updated_at, runs_len=excluded.runs_len, "
                         "  title=excluded.title, origin=excluded.origin, "
                         "  dim=excluded.dim, vec=excluded.vec, "
                         "  embedded_at=excluded.embedded_at",
-                        (sid, upd, rlen, title, origin, dim, blob, time.time()),
+                        (sid, source, upd, rlen, title, origin, dim, blob, time.time()),
                     )
                     stats.embedded += 1
                     stats.added += 1 if sid not in existing else 0
@@ -975,7 +1001,7 @@ class SemanticIndex:
                                   int(r["plen"] or 0),
                                   str(r["name"] or ""),
                                   int(r["enabled"] or 0))
-                        for r in openagent_core.execute(
+                        for r in src.execute(
                             "SELECT id, name, enabled, updated_at, "
                             "COALESCE(length(prompt),0) AS plen FROM scheduled_tasks")
                     }
@@ -1012,7 +1038,7 @@ class SemanticIndex:
                 texts: list[str] = []
                 metas: list[tuple[str, float, int, str, int]] = []
                 for tid in stale:
-                    row = openagent_core.execute(
+                    row = src.execute(
                         "SELECT prompt FROM scheduled_tasks WHERE id = ?",
                         (tid,)).fetchone()
                     if row is None:
@@ -1027,7 +1053,7 @@ class SemanticIndex:
                 self._commit()
             finally:
                 try:
-                    openagent_core.close()
+                    src.close()
                 except Exception:  # noqa: BLE001
                     pass
 
