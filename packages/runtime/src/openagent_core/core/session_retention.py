@@ -20,17 +20,34 @@ Tombstoned v2 sessions lose their message/tool rows and their runs' JSON
 payloads (the run rows stay for lineage), and the search outbox drops the
 history of sources whose latest row is a delete every consumer has applied.
 
+Native OpenAgent 1.1 sessions have no legacy row, so nothing above ever
+tombstones them: support webhook turns (``automation:event:*``), scheduler
+runs (``scheduler:*``) and delegated children (``childroot_*``) lived forever
+and grew production DBs by ~1 GB/day (2026-10-22). Step 0 tombstones those
+once idle for ``automation_days`` through the 1.1 repository API
+(``tombstone_session``, so the search outbox gets its delete rows and the
+operational index stays consistent); the payload steps below then reclaim
+them. Domain events of
+long-tombstoned sessions lose their bulky run/tool telemetry (session.* and
+run outcome/cancel lineage stay). Freed pages are returned to the filesystem
+with a bounded ``incremental_vacuum`` when the DB uses auto_vacuum=INCREMENTAL.
+Step 0 needs ``openagent_core`` importable (run with the 1.1 venv python);
+under a bare ``python3`` it is skipped and logged.
+
 Every write is BATCHED: a single 1.8GB UPDATE OOM-killed the process; 200-row
 batches with per-batch commits stay flat in memory. Safe to run against the
-live DB (WAL, one writer at a time). The recurring job never runs an online
-VACUUM: rewriting every live page needs up to twice the content in free disk
-and holds the only writer for the whole rewrite, which filled volumes and
-starved inbound writes. Freed pages are reused in place; full compaction is
-the explicit, maintenance-only ``--vacuum`` mode.
+live DB (WAL, one writer at a time; busy_timeout 2 s, a locked session is
+skipped and retried next cycle rather than blocking the agent writer). The
+recurring job never runs an online VACUUM: rewriting every live page needs up
+to twice the content in free disk and holds the only writer for the whole
+rewrite, which filled volumes and starved inbound writes. Freed pages are
+reused in place (or released in bounded incremental steps); full compaction
+is the explicit, maintenance-only ``--vacuum`` mode.
 
-The module is deliberately stdlib-only (PyYAML is used only when present) so
-the same file runs both imported as ``openagent_core.core.session_retention``
-and as a standalone script under a bare system ``python3``.
+The module is deliberately stdlib-only (PyYAML is used only when present; the
+1.1 repository writer is imported lazily for step 0) so the same file runs
+both imported as ``openagent_core.core.session_retention`` and as a
+standalone script under a bare system ``python3``.
 
 Usage:
   session_retention.py                 # one-shot prune, then exit
@@ -51,10 +68,30 @@ DEFAULTS = {"days": 3, "max_runs": 5, "interval_hours": 6, "trim_threshold_bytes
             # roughly 100k tokens at the runtime's 4-chars-per-token estimate —
             # under the fold threshold, so a session this size can still compact
             # its way back down instead of being stuck above the model's window.
-            "max_bytes": 400_000}
+            "max_bytes": 400_000,
+            # Native 1.1 automation sessions are tombstoned after this many
+            # days idle; their bulky domain events go this many days after
+            # the tombstone.
+            "automation_days": 1,
+            # Sessions tombstoned per batch (one transaction each) and the
+            # per-cycle ceiling, so a backlog drains over a few cycles.
+            "automation_batch": 50,
+            "automation_max_per_cycle": 2000,
+            # Bounded incremental_vacuum: pages per step and per cycle, and
+            # the WAL size at which a cycle stops relocating pages.
+            "vacuum_step_pages": 1024,
+            "vacuum_max_pages_per_cycle": 131072,
+            "vacuum_max_wal_bytes": 256 * 1024 * 1024}
 # sessions whose id starts with one of these are conversational (Telegram, peer
 # network, agent bridges) — keep them regardless of age.
 EXEMPT_PREFIXES = ("tg:", "peer:", "agent-brid")
+# Native 1.1 sessions owned by automation, never by a person (GLOB patterns:
+# '_' is literal). Conversational ids (peer:/tg:/chat) never match.
+AUTOMATION_GLOBS = ("automation:event:*", "scheduler:*", "childroot_*")
+# Bulky per-run telemetry. session.*, run.accepted/success/failed and
+# run.cancel_* stay: they are the lineage of a deleted session.
+PRUNABLE_EVENT_TYPES = ("run.stream", "tool.completed", "tool.invoking",
+                        "run.status", "run.profile", "run.prompt")
 
 
 def _parse_retention_block(text: str) -> dict:
@@ -132,6 +169,8 @@ def prune_deleted_payloads(conn: sqlite3.Connection, *, batch_size: int = 200) -
                 count += cur.rowcount
                 if cur.rowcount < batch_size:
                     break
+                # Hand the single WAL writer back to the agent between batches.
+                time.sleep(0.05)
         counts[table] = count
     return counts
 
@@ -234,13 +273,213 @@ def inactive_session_predicate(conn: sqlite3.Connection, session_column: str = "
     return " AND ".join(predicates) or "1=1"
 
 
+def _load_tombstone_api():
+    """The 1.1 repository writer, or None under a python without the venv."""
+    try:
+        from openagent_core.memory.operational.repository import tombstone_session
+    except ImportError:
+        return None
+    return tombstone_session
+
+
+def _idle_automation_predicate(conn: sqlite3.Connection, cutoff_ms: int) -> tuple[str, tuple]:
+    """Eligibility of a native 1.1 automation session for a tombstone.
+
+    Idle since ``cutoff_ms`` (session row and every run), no legacy row (the
+    legacy path above owns those), no in-flight durable work, and no live
+    child: a parent is tombstoned only after all its children, so delegation
+    lineage never points at a live child under a dead parent. Bare
+    ``scheduler:<task>`` ids are synthetic per-task roots that later firings
+    hang new children on, so they are never tombstoned here.
+    """
+    globs = " OR ".join("s.id GLOB ?" for _ in AUTOMATION_GLOBS)
+    sql = (
+        f"s.deleted_at_ms IS NULL AND ({globs}) "
+        "AND NOT (s.id GLOB 'scheduler:*' AND instr(substr(s.id, 11), ':') = 0) "
+        "AND s.last_activity_at_ms < ? AND s.updated_at_ms < ? "
+        "AND NOT EXISTS (SELECT 1 FROM sessions l WHERE l.session_id=s.id) "
+        "AND NOT EXISTS (SELECT 1 FROM session_runs r WHERE r.session_id=s.id "
+        "AND (r.finished_at_ms IS NULL OR r.finished_at_ms >= ? OR r.created_at_ms >= ?)) "
+        "AND NOT EXISTS (SELECT 1 FROM sessions_v2 c WHERE c.deleted_at_ms IS NULL AND c.id<>s.id "
+        "AND (c.parent_session_id=s.id OR c.root_session_id=s.id)) "
+        f"AND {inactive_session_predicate(conn, 's.id')}"
+    )
+    return sql, (*AUTOMATION_GLOBS, cutoff_ms, cutoff_ms, cutoff_ms, cutoff_ms)
+
+
+def tombstone_idle_automation_sessions(conn: sqlite3.Connection, *, days: int, batch_size: int = 50,
+                                       max_per_cycle: int = 2000, pause: float = 0.05,
+                                       max_lock_skips: int = 5, tombstone=None,
+                                       now_ms: int | None = None) -> dict[str, int]:
+    """Step 0: tombstone idle native 1.1 automation sessions.
+
+    One BEGIN IMMEDIATE transaction per session through the 1.1 repository
+    API, which also journals the search-outbox deletes for the session, its
+    messages and tool calls plus a ``session.deleted`` event. Eligibility is
+    re-checked inside the write transaction. A busy writer (busy_timeout)
+    means the session is skipped this cycle: the agent always wins the lock,
+    and after ``max_lock_skips`` busy waits the step yields until next cycle.
+    """
+    counts = {"tombstoned": 0, "skipped_locked": 0, "failed": 0}
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not {"sessions_v2", "sessions", "session_runs", "legacy_session_changes"} <= tables:
+        return counts
+    tombstone = tombstone or _load_tombstone_api()
+    if tombstone is None:
+        counts["unavailable"] = 1
+        return counts
+    now = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    cutoff_ms = now - int(days) * 86_400_000
+    where, params = _idle_automation_predicate(conn, cutoff_ms)
+    if conn.in_transaction:
+        conn.commit()
+    seen: set[str] = set()
+    while (counts["tombstoned"] + counts["skipped_locked"] + counts["failed"] < max_per_cycle
+           and counts["skipped_locked"] < max_lock_skips):
+        ids = [r[0] for r in conn.execute(
+            f"SELECT s.id FROM sessions_v2 s WHERE {where} ORDER BY s.last_activity_at_ms LIMIT ?",
+            (*params, max(1, batch_size) + len(seen)),
+        ) if r[0] not in seen][:max(1, batch_size)]
+        if not ids:
+            break
+        for sid in ids:
+            if counts["skipped_locked"] >= max_lock_skips:
+                break
+            seen.add(sid)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError:
+                counts["skipped_locked"] += 1
+                continue
+            try:
+                still = conn.execute(
+                    f"SELECT 1 FROM sessions_v2 s WHERE s.id=? AND {where}", (sid, *params)
+                ).fetchone()
+                if still is not None:
+                    tombstone(conn, sid)
+                    counts["tombstoned"] += 1
+                conn.commit()
+            except sqlite3.OperationalError as exc:
+                conn.rollback()
+                if "locked" in str(exc) or "busy" in str(exc):
+                    counts["skipped_locked"] += 1
+                else:
+                    counts["failed"] += 1
+                    print(f"[retention] tombstone failed {sid[:40]}: {type(exc).__name__}: {exc}", flush=True)
+            except Exception as exc:  # one bad session must not stop the cycle
+                conn.rollback()
+                counts["failed"] += 1
+                print(f"[retention] tombstone failed {sid[:40]}: {type(exc).__name__}: {exc}", flush=True)
+            # Back-to-back write transactions starve a busy-handler writer
+            # (measured: an agent-like writer waited 8.8 s); leave it a gap.
+            time.sleep(pause)
+    return counts
+
+
+def prune_deleted_domain_events(conn: sqlite3.Connection, *, days: int, batch_size: int = 500,
+                                pause: float = 0.05, now_ms: int | None = None) -> int:
+    """Drop the bulky run/tool telemetry of sessions tombstoned > ``days`` ago.
+
+    ``tool.completed`` repeats the full tool result in its metadata, so it is
+    the fourth copy of every payload. Lineage events (session.*,
+    run.accepted/success/failed, run.cancel_*) are kept. Restored sessions
+    (legacy row back) and sessions with in-flight work are left alone.
+    """
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not {"sessions_v2", "sessions", "domain_events"} <= tables:
+        return 0
+    now = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    cutoff_ms = now - int(days) * 86_400_000
+    types = ",".join("?" for _ in PRUNABLE_EVENT_TYPES)
+    inactive = inactive_session_predicate(conn, "s.id")
+    count = 0
+    while True:
+        with conn:
+            cur = conn.execute(
+                "DELETE FROM domain_events WHERE sequence IN ("
+                "SELECT e.sequence FROM sessions_v2 s JOIN domain_events e "
+                "ON e.tenant_id=s.tenant_id AND e.session_id=s.id "
+                "WHERE s.deleted_at_ms IS NOT NULL AND s.deleted_at_ms < ? "
+                "AND NOT EXISTS (SELECT 1 FROM sessions l WHERE l.session_id=s.id) "
+                f"AND {inactive} AND e.event_type IN ({types}) LIMIT ?)",
+                (cutoff_ms, *PRUNABLE_EVENT_TYPES, max(1, batch_size)),
+            )
+        count += cur.rowcount
+        if cur.rowcount < batch_size:
+            return count
+        time.sleep(pause)
+
+
+def reclaim_free_pages(conn: sqlite3.Connection, db_path: str, *, step_pages: int = 1024,
+                       max_pages: int = 131072, max_wal_bytes: int = 256 * 1024 * 1024,
+                       pause: float = 0.05) -> dict[str, int]:
+    """Return free pages to the filesystem with a bounded incremental_vacuum.
+
+    Only with auto_vacuum=INCREMENTAL (2); otherwise free pages are simply
+    reused. Small steps, each its own short write transaction, a PASSIVE
+    checkpoint between steps so relocated pages leave the WAL, and a stop as
+    soon as the writer is busy or the WAL outgrows ``max_wal_bytes``.
+    """
+    if conn.in_transaction:
+        conn.commit()
+    mode = conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+    free_before = conn.execute("PRAGMA freelist_count").fetchone()[0]
+    out = {"auto_vacuum": int(mode), "free_before": int(free_before), "released": 0}
+    if mode != 2:
+        out["free_after"] = int(free_before)
+        return out
+    wal = db_path + "-wal"
+    released = 0
+    while released < max_pages:
+        free = conn.execute("PRAGMA freelist_count").fetchone()[0]
+        if free <= 0:
+            break
+        step = min(step_pages, free, max_pages - released)
+        try:
+            conn.execute(f"PRAGMA incremental_vacuum({int(step)})").fetchall()
+            if conn.in_transaction:
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            if conn.in_transaction:
+                conn.rollback()
+            out["stopped"] = f"{type(exc).__name__}: {exc}"[:80]
+            break
+        released += free - conn.execute("PRAGMA freelist_count").fetchone()[0]
+        conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        try:
+            if os.path.getsize(wal) > max_wal_bytes:
+                out["stopped"] = "wal_limit"
+                break
+        except OSError:
+            pass
+        time.sleep(pause)
+    out["released"] = int(released)
+    out["free_after"] = int(conn.execute("PRAGMA freelist_count").fetchone()[0])
+    return out
+
+
 def prune(db_path: str, days: int, max_runs: int, trim_threshold: int,
-          max_bytes: int = DEFAULTS["max_bytes"], *, vacuum: bool = False) -> tuple[int, int]:
+          max_bytes: int = DEFAULTS["max_bytes"], *, vacuum: bool = False,
+          settings: dict | None = None) -> tuple[int, int]:
+    opts = dict(DEFAULTS, **(settings or {}))
     conn = sqlite3.connect(db_path, timeout=2)
     try:
         conn.execute("PRAGMA foreign_keys=ON")
         cur = conn.cursor()
         cur.execute("PRAGMA busy_timeout=2000")
+
+        # 0) native 1.1 automation sessions: tombstone once idle (see module doc).
+        auto = tombstone_idle_automation_sessions(
+            conn, days=opts["automation_days"], batch_size=opts["automation_batch"],
+            max_per_cycle=opts["automation_max_per_cycle"],
+        )
+        if auto.get("unavailable"):
+            print("[retention] automation_tombstones skipped: openagent_core not importable "
+                  "(run with the OpenAgent 1.1 environment python)", flush=True)
+        else:
+            print(f"[retention] automation_tombstones={auto['tombstoned']} "
+                  f"skipped_locked={auto['skipped_locked']} failed={auto['failed']} "
+                  f"automation_days={opts['automation_days']}", flush=True)
         cutoff = f"strftime('%s','now','-{int(days)} days')"
         exempt = " AND ".join(f"session_id NOT LIKE '{p}%'" for p in EXEMPT_PREFIXES)
 
@@ -325,11 +564,24 @@ def prune(db_path: str, days: int, max_runs: int, trim_threshold: int,
         reclaimed = prune_deleted_payloads(conn)
         stripped = prune_deleted_run_payloads(conn)
         outbox = prune_consumed_outbox_deletes(conn)
+        events = prune_deleted_domain_events(conn, days=opts["automation_days"])
         print(f"[retention] deleted_payloads={reclaimed} stripped_run_payloads={stripped} "
-              f"outbox_deleted={outbox}", flush=True)
+              f"outbox_deleted={outbox} domain_events_deleted={events}", flush=True)
         # PASSIVE does not wait for readers while holding the writer lock. File
-        # size is a high-water mark; free pages remain available for reuse.
+        # size is a high-water mark; free pages remain available for reuse...
         cur.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        # ...unless the DB is auto_vacuum=INCREMENTAL: then hand a bounded
+        # number of them back to the filesystem.
+        if not vacuum:
+            pages = reclaim_free_pages(
+                conn, db_path, step_pages=opts["vacuum_step_pages"],
+                max_pages=opts["vacuum_max_pages_per_cycle"],
+                max_wal_bytes=opts["vacuum_max_wal_bytes"],
+            )
+            print(f"[retention] incremental_vacuum auto_vacuum={pages['auto_vacuum']} "
+                  f"free_before={pages['free_before']} released={pages['released']} "
+                  f"free_after={pages['free_after']}"
+                  + (f" stopped={pages['stopped']}" if pages.get("stopped") else ""), flush=True)
         # Full compaction is explicit maintenance, never a recurring online job:
         # rewriting every live page can fill the PVC or starve inbound writers.
         if vacuum:
@@ -351,6 +603,7 @@ def run_once(db_path: str, yaml_path: str, *, vacuum: bool = False) -> dict:
     deleted, trimmed = prune(
         db_path, settings["days"], settings["max_runs"],
         settings["trim_threshold_bytes"], settings["max_bytes"], vacuum=vacuum,
+        settings=settings,
     )
     print(
         f"[retention] deleted={deleted} trimmed={trimmed} "
