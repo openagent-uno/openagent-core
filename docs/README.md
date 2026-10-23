@@ -1,11 +1,15 @@
 # OpenAgent core documentation
 
-The embedding API is released as the `1.1.0b30` modular family. Its SQLite
+The embedding API is released as the `1.1.0b31` modular family. Its SQLite
 adapter, gateway and Python SDK share that version and pin the same Core wheel.
 Beta27 adds an optional authoritative `final_answer` envelope while preserving
 the complete transcript. Concurrent upstream canonical-session indexing and
 retention fixes are included; host, provider and live-channel acceptance remain
 separate from deterministic package qualification.
+Beta31 recognizes exactly verified legacy projection domains beside canonical
+runtime rows, including normal retained deletion tombstones, without granting
+the legacy namespace runtime authority or rewriting storage identity. Foreign
+canonical rows and unbacked projections remain denied.
 Beta30 restores exact admitted inputs and partial tools to public history after
 an interrupted provider write, preserves cancelled turns and attests canonical
 child ancestry independently of display origin. Both embedded hosts and the
