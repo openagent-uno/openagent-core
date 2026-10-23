@@ -163,13 +163,82 @@ def check_storage_tenant(database: str|Path, expected_tenant: str) -> None:
     if not isinstance(expected_tenant,str) or not expected_tenant.strip():raise ValueError('Expected tenant is required')
     if not path.exists():return
     with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as db:
+        db.execute('BEGIN')
         tables=[row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        foreign=False
         for table in tables:
             quoted='"'+table.replace('"','""')+'"'
             if 'tenant_id' not in {row[1] for row in db.execute('PRAGMA table_info('+quoted+')')}:continue
             tenants={str(row[0]) for row in db.execute('SELECT DISTINCT tenant_id FROM '+quoted+' WHERE tenant_id IS NOT NULL') if row[0]}
             if tenants-{expected_tenant}:
-                raise PermissionError('Canonical storage tenant requires an attested host identity mapping')
+                foreign=True
+        if foreign and not _verified_legacy_projection_domain(db, tables, expected_tenant):
+            raise PermissionError('Canonical storage tenant requires an attested host identity mapping')
+
+
+def _verified_legacy_projection_domain(db, tables, expected_tenant):
+    """Recognize exact compatibility projections beside an admitted runtime.
+
+    A local installation namespace is not an additional runtime tenant grant.
+    Its session, run, message and tool rows must still match their retained
+    legacy source byte-for-byte, and its derived rows must reference those
+    verified resources. Unknown tables and unrelated rows remain fail closed.
+    """
+    from openagent_core.memory.operational.repository import verify_session_projection
+
+    required={'sessions','sessions_v2','session_runs','session_messages',
+              'tool_invocations','operational_storage_state'}
+    if not required.issubset(tables):return False
+    row=db.execute('SELECT db_instance_id FROM operational_storage_state WHERE singleton_id=1').fetchone()
+    if row is None or not isinstance(row[0],str) or not row[0]:return False
+    legacy='installation:'+row[0]
+    if 'network' in tables:
+        network=db.execute('SELECT network_id FROM network LIMIT 1').fetchone()
+        if network and isinstance(network[0],str) and network[0].strip():legacy=network[0].strip()
+    if legacy==expected_tenant:return False
+    # An existing legacy-only store still requires its normal host attestation.
+    # A row in an arbitrary auxiliary table cannot establish a runtime tenant.
+    if not db.execute("SELECT 1 FROM session_runs WHERE tenant_id=? "
+        "AND json_extract(metadata_json,'$.runtime_contract')=1 "
+        "AND json_extract(metadata_json,'$.execution_context.authority.tenant_id')=? LIMIT 1",
+        (expected_tenant,expected_tenant)).fetchone():return False
+    sessions=set()
+    for identity,metadata in db.execute('SELECT id,metadata_json FROM sessions_v2 WHERE tenant_id=?',(legacy,)):
+        if json.loads(metadata).get('runtime_contract')==1:return False
+        verified=verify_session_projection(db,identity,include_deleted=True)
+        if not verified.matches:return False
+        sessions.add(identity)
+    if not sessions:return False
+    resources={'session':sessions,'message':set(),'tool_invocation':set(),'run':set()}
+    for table,kind in [('session_runs','run'),('session_messages','message'),('tool_invocations','tool_invocation')]:
+        for identity,session in db.execute('SELECT id,session_id FROM '+table+' WHERE tenant_id=?',(legacy,)):
+            if session not in sessions:return False
+            resources[kind].add(identity)
+    # Verification above compares the complete nested row sets, including
+    # canonical metadata and contents. No unbacked contract=0 row is admitted.
+    rules={
+        'sessions_v2':('id',lambda row:row[0] in sessions),
+        'session_runs':('id',lambda row:row[0] in resources['run']),
+        'session_messages':('id',lambda row:row[0] in resources['message']),
+        'tool_invocations':('id',lambda row:row[0] in resources['tool_invocation']),
+        'domain_events':('resource_type,resource_id,session_id,event_type',
+            lambda row:row[0]=='session' and row[1] in sessions and row[2]==row[1]
+                and row[3] in {'session.projected','session.deleted'}),
+        'activity_items':('kind,resource_type,resource_id,session_id',
+            lambda row:row[0] in {'chat','delegated_session'} and row[1]=='session'
+                and row[2] in sessions and row[3]==row[2]),
+        'search_outbox':('source_kind,source_id',
+            lambda row:row[0] in resources and row[0]!='run' and row[1] in resources[row[0]]),
+    }
+    for table in tables:
+        quoted='"'+table.replace('"','""')+'"'
+        if 'tenant_id' not in {row[1] for row in db.execute('PRAGMA table_info('+quoted+')')}:continue
+        tenants={str(row[0]) for row in db.execute('SELECT DISTINCT tenant_id FROM '+quoted+' WHERE tenant_id IS NOT NULL') if row[0]}
+        if not tenants-{expected_tenant}:continue
+        if tenants-{expected_tenant,legacy} or table not in rules:return False
+        columns,valid=rules[table]
+        if any(not valid(row) for row in db.execute('SELECT '+columns+' FROM '+quoted+' WHERE tenant_id=?',(legacy,))):return False
+    return True
 
 
 async def prepare_migration(source: str|Path,backup: str|Path,candidate: str|Path,*,databases: tuple[str,...],quiesce,migrate):

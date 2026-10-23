@@ -1473,6 +1473,7 @@ def verify_session_projection(
     session_id: str,
     *,
     now_ms: int | None = None,
+    include_deleted: bool = False,
 ) -> ProjectionVerification:
     """Compare one normalized session byte-for-byte with its legacy source.
 
@@ -1484,6 +1485,10 @@ def verify_session_projection(
 
     effective_now = int(time.time() * 1000) if now_ms is None else int(now_ms)
     legacy = _fetch_legacy(conn, session_id)
+    retained_deleted = False
+    if legacy is None and include_deleted:
+        legacy = _verified_deleted_legacy_source(conn, session_id)
+        retained_deleted = legacy is not None
     if legacy is None:
         return ProjectionVerification(
             session_id, False, False, None, None, "legacy_source_missing"
@@ -1511,8 +1516,8 @@ def verify_session_projection(
     _assert_unique_projection_ids(projection.tools, resource="tool")
     session_cursor = conn.execute(
         f"SELECT {','.join(_SESSION_COLUMNS)} FROM sessions_v2 "
-        "WHERE id=? AND deleted_at_ms IS NULL",
-        (session_id,),
+        "WHERE id=? AND (deleted_at_ms IS NULL OR ?)",
+        (session_id, retained_deleted),
     )
     raw_session = session_cursor.fetchone()
     if raw_session is None:
@@ -1534,6 +1539,11 @@ def verify_session_projection(
         source_version=source_version,
         deleted_at_ms=None,
     )
+    if retained_deleted:
+        deleted_at = int(stored_session['deleted_at_ms'])
+        expected_session.update(status='deleted', deleted_at_ms=deleted_at,
+            updated_at_ms=max(expected_session['updated_at_ms'], deleted_at),
+            last_activity_at_ms=max(expected_session['last_activity_at_ms'], deleted_at))
     session_mismatches = _changed_columns(
         stored_session, expected_session, _SESSION_COLUMNS
     )
@@ -1622,6 +1632,9 @@ def verify_session_projection(
             tuple(sorted(mismatch_fields)),
         )
 
+    if retained_deleted:
+        return ProjectionVerification(session_id, True, False, projection.source_hash,
+                                      source_version, 'verified_deleted_projection')
     complete = str(expected_session.get("completeness")) == "complete"
     header_ready = _projection_schema(expected_session.get("metadata_json")) >= 3
     return ProjectionVerification(
@@ -1705,7 +1718,45 @@ def session_v2_is_verified(conn: Any, session_id: str) -> bool:
     return verified is not None
 
 
-def load_v2_legacy_session(conn: Any, session_id: str) -> dict[str, Any] | None:
+def _verified_deleted_legacy_source(conn: Any, session_id: str) -> dict[str, Any] | None:
+    """Read a retained legacy tombstone only after its normal delete proof.
+
+    The caller still performs the exact projection/content/hash comparison.
+    This never repairs, undeletes, or changes a source row.
+    """
+    row=conn.execute('SELECT tenant_id,status,deleted_at_ms,source_version,metadata_json '
+                     'FROM sessions_v2 WHERE id=?',(session_id,)).fetchone()
+    if row is None or row[1]!='deleted' or row[2] is None or int(row[3])<2:return None
+    tenant,status,deleted_at,version,metadata=row
+    if json.loads(metadata).get('runtime_contract')==1 or _projection_schema(metadata)<3:return None
+    if conn.execute('SELECT 1 FROM legacy_session_changes WHERE session_id=? '
+                    'AND processed_at_ms IS NULL LIMIT 1',(session_id,)).fetchone():return None
+    if not conn.execute("SELECT 1 FROM legacy_session_changes WHERE session_id=? AND operation='delete' "
+        'AND processed_at_ms IS NOT NULL AND source_hash IS NULL AND last_error_class IS NULL LIMIT 1',
+        (session_id,)).fetchone():return None
+    event=conn.execute('SELECT occurred_at_ms,metadata_json FROM domain_events WHERE event_id=? '
+        "AND tenant_id=? AND resource_type='session' AND resource_id=? AND session_id=? "
+        "AND event_type='session.deleted' AND schema_version=1",
+        (_event_id(session_id,'session.deleted',version),tenant,session_id,session_id)).fetchone()
+    if event is None or event[0]!=deleted_at or json.loads(event[1]).get('source_version')!=version:return None
+    if not conn.execute("SELECT 1 FROM activity_items WHERE tenant_id=? AND resource_type='session' "
+        'AND resource_id=? AND session_id=? AND source_version=? AND deleted_at_ms=? '
+        'AND deleted_revision IS NOT NULL LIMIT 1',
+        (tenant,session_id,session_id,version,deleted_at)).fetchone():return None
+    legacy=load_v2_legacy_session(conn,session_id,include_deleted=True)
+    if legacy is None:return None
+    # Deletion retains every normalized envelope; each corresponding search
+    # resource also receives its normal, version-bound delete intent.
+    resources=[('session',session_id)]
+    for table,kind in [('session_messages','message'),('tool_invocations','tool_invocation')]:
+        resources.extend((kind,r[0]) for r in conn.execute('SELECT id FROM '+table+' WHERE session_id=?',(session_id,)))
+    for kind,identity in resources:
+        if not conn.execute("SELECT 1 FROM search_outbox WHERE tenant_id=? AND source_kind=? AND source_id=? "
+            "AND operation='delete' AND source_version=? LIMIT 1",(tenant,kind,identity,version)).fetchone():return None
+    return legacy
+
+
+def load_v2_legacy_session(conn: Any, session_id: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
     """Rehydrate the runtime Session wire shape without reading ``sessions.runs``.
 
     Bounded provider run headers plus raw per-message/tool envelopes are the
@@ -1715,8 +1766,8 @@ def load_v2_legacy_session(conn: Any, session_id: str) -> dict[str, Any] | None:
 
     cursor = conn.execute(
         "SELECT id, metadata_json FROM sessions_v2 "
-        "WHERE id=? AND deleted_at_ms IS NULL",
-        (session_id,),
+        "WHERE id=? AND (deleted_at_ms IS NULL OR ?)",
+        (session_id, include_deleted),
     )
     raw = cursor.fetchone()
     if raw is None:
