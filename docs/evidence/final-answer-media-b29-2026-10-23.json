@@ -16,11 +16,13 @@
     "redOnOriginalCore": true,
     "focusedPassed": 28,
     "focusedSubtestsPassed": 21,
-    "expandedPassed": 151,
+    "expandedPassed": 152,
     "expandedSubtestsPassed": 23,
     "skipped": 0,
     "engineAndStreamSessionUseActualSQLiteAndCAS": true,
-    "scriptedProviderIO": true
+    "scriptedProviderIO": true,
+    "versionGuardREDOnMissedConstant": true,
+    "versionGuardPassed": true
   },
   "preserved": [
     "Complete text and mixed-content transcript",
@@ -41,6 +43,7 @@
   "testSources": {
     "tests/public/test_final_answer_media_scope.py": "2ec8cf85c35b3142cc09490811ffdaadba2214151f4ce562b4b954e2e441c326",
     "tests/public/test_final_answer.py": "3006842dd504fbb9b4a95b3d1acee3f6e5805a5b9e505875aa30e1503208243c",
-    "tests/public/test_engine_executor.py": "28a4bedf3d575d7138a783f8ac602cd3a491975cc2c3de5dfd27b437fbcad2db"
+    "tests/public/test_engine_executor.py": "28a4bedf3d575d7138a783f8ac602cd3a491975cc2c3de5dfd27b437fbcad2db",
+    "tests/public/test_version_metadata.py": "ea97a540a16647d6b5b81d7b3bfb61b29a912ebab2791bb56ef022725e5e8fda"
   }
 }
