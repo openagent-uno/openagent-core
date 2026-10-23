@@ -90,6 +90,14 @@ class InteractiveCapabilitySource:
                                                     arguments, session_id=context.session_id,
                                                     execution_context=context, source_id=self.source_id)
 
+    async def observe_published_result(self, name: str, arguments: dict, result: Any,
+                                       context: ExecutionContext) -> None:
+        self._check(context)
+        observe = getattr(self.origin.registry, "observe_published_result", None)
+        if callable(observe):
+            observe(self.origin, self.server_name, name, arguments, result,
+                    context=context, source_id=self.source_id)
+
 
 def register_interactive_capabilities(catalog: CapabilityCatalog, origin: TurnExecutionOrigin,
                                      *, source_namespace: str) -> tuple[CapabilityLease, ...]:

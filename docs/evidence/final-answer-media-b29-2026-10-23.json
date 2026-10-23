@@ -10,14 +10,16 @@
     "incorrectFinalAttachments": 8,
     "currentInputMatchesByArtifactIDAndSHA256": 6,
     "otherAggregateMedia": 2,
-    "realProviderRunNotRepeated": true
+    "realProviderRunNotRepeated": true,
+    "internalAutoloopIterations": 2,
+    "explicitTerminalReadWasRenotified": true
   },
   "sourceRegression": {
     "redOnOriginalCore": true,
     "focusedPassed": 28,
     "focusedSubtestsPassed": 21,
-    "expandedPassed": 152,
-    "expandedSubtestsPassed": 23,
+    "expandedPassed": 173,
+    "expandedSubtestsPassed": 30,
     "skipped": 0,
     "engineAndStreamSessionUseActualSQLiteAndCAS": true,
     "scriptedProviderIO": true,
@@ -29,11 +31,15 @@
     "Fresh authorization and artifact revocation checks",
     "Explicit final generated/forward/media-only output",
     "Path-free canonical references",
-    "Existing wire field names"
+    "Existing wire field names",
+    "Unobserved background job continuation",
+    "Complete normal tool transcript"
   ],
   "changed": [
     "Exact final marker-to-authorized-ref selection",
-    "Snapshot reauthorization of selected final refs only"
+    "Snapshot reauthorization of selected final refs only",
+    "Trusted post-publication terminal-result acknowledgement",
+    "Self-contained final-answer contract for unobserved internal continuations"
   ],
   "notClaimed": [
     "Live Slack acceptance of the new component",
@@ -44,6 +50,8 @@
     "tests/public/test_final_answer_media_scope.py": "2ec8cf85c35b3142cc09490811ffdaadba2214151f4ce562b4b954e2e441c326",
     "tests/public/test_final_answer.py": "3006842dd504fbb9b4a95b3d1acee3f6e5805a5b9e505875aa30e1503208243c",
     "tests/public/test_engine_executor.py": "28a4bedf3d575d7138a783f8ac602cd3a491975cc2c3de5dfd27b437fbcad2db",
-    "tests/public/test_version_metadata.py": "ea97a540a16647d6b5b81d7b3bfb61b29a912ebab2791bb56ef022725e5e8fda"
+    "tests/public/test_version_metadata.py": "ea97a540a16647d6b5b81d7b3bfb61b29a912ebab2791bb56ef022725e5e8fda",
+    "tests/public/test_background_job_observation.py": "69535c63e6561b97287dae99c244cba9381468e30f6f82db215df85b42c2fd1d",
+    "tests/public/test_mcp_catalog.py": "a6703641154d3df40a2d2a8be6de3e5dd0e2743f28d4f983788ce612165054cb"
   }
 }

@@ -45,6 +45,31 @@ class BackgroundJobs:
     def has_running(self, session_id, *, context_key: str) -> bool:
         return bool(self._running.get((session_id,context_key)))
 
+    def observe_terminal(self, job_id: str, session_id: str, context_key: str) -> bool:
+        """Acknowledge a terminal result already delivered by its trusted host.
+
+        Call on the owning event loop only after normal tool authorization and
+        exact job correlation prove a terminal result. This is not a tool or a
+        grant. Both orderings of a result-read/completion-notification race are
+        safe: removing the registered job also fences a late notification.
+        """
+        key = (session_id, context_key)
+        running = self._running.get(key)
+        found = bool(running is not None and job_id in running)
+        if found:
+            running.remove(job_id)
+        queue = self._queues.get(key)
+        if queue is not None:
+            retained = deque((event for event in queue if event.job_id != job_id), maxlen=queue.maxlen)
+            found = found or len(retained) != len(queue)
+            queue.clear()
+            queue.extend(retained)
+        if found and not self._queues.get(key) and not self._running.get(key):
+            # An explicit join settled this job; wake any waiter so it can
+            # see that no unobserved event remains instead of waiting 30s.
+            self._signals.setdefault(key, asyncio.Event()).set()
+        return found
+
     def drain(self, session_id, *, context_key: str) -> list[JobEvent]:
         key=(session_id,context_key)
         queue=self._queues.get(key)

@@ -10,6 +10,9 @@ Beta29 prevents full-transcript input/tool preview media from being echoed as
 final-answer attachments. Both Engine and StreamSession bind exact authored
 final markers to normally authorized canonical refs; live snapshots recheck
 only those selected final refs. The complete transcript remains unchanged.
+An optional trusted post-publication executor hook acknowledges terminal jobs
+already read through tools; unobserved internal reminders request a complete
+final answer rather than assuming earlier narration was delivered.
 Beta28 fixes the isolated audio worker stdout contract. It keeps vendor asynchronous and interpreter-shutdown
 logs off its single-result JSON pipe; see the audio host contract.
 The Replio example is `1.1.0b2` and

@@ -13,7 +13,9 @@ standalone app/CLI/server are maintained in the `openagent` product monorepo.
 The `1.1.0b29` kernel, SQLite adapter, gateway and SDK are the current modular
 release candidates. Beta29 confines final-answer media to exact markers authored
 in the attested final message, preserving input/tool previews only in the full
-transcript. Beta28 isolates the audio worker protocol from vendor
+transcript. Observed terminal background results no longer reopen the model
+loop; unobserved reminders request a complete answer to the original task.
+Beta28 isolates the audio worker protocol from vendor
 asynchronous/shutdown logging. Beta27 adds authoritative completed-run final answers alongside
 the unchanged full transcript; see [the contract](docs/final-answer.md).
 Beta24 added canonical original-input history and explicit

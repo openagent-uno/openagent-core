@@ -177,13 +177,15 @@ def _preload_frozen_runtime_modules() -> None:
 def _format_shell_reminder(events) -> str:
     """Keep long-job continuation rules using the uniform catalog contract."""
     import json
-    lines = ["Background task status update since your last message:"]
+    lines = ["Internal background task status update (not a new human message):"]
     for event in events:
         lines.append(f"- job_id={event.job_id}: {event.summary}. "
             f"Discover {event.tool_name!r} on the exact source {event.source_id!r}; "
             "use its current opaque tool_ref with arguments " + json.dumps(dict(event.arguments)) + ".")
-    lines.append("The user has not sent a new message; continue the task from where "
-        "you left off, or summarise and stop if the work is complete.")
+    lines.append("Earlier assistant output from this turn may not have been delivered to the user. "
+        "Continue the original user request from where you left off. Before stopping, provide one "
+        "self-contained final answer covering the original task and its outcome in the original user's language. "
+        "Do not claim an earlier answer was sent, posted or seen unless a tool confirmed actual delivery.")
     return "<system-reminder>\n" + "\n".join(lines) + "\n</system-reminder>"
 
 

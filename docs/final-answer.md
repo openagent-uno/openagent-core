@@ -68,6 +68,16 @@ rehydration never repopulates a final answer from full-transcript media.
 Product-owned wire encoders must
 forward the additive field; this library does not import a product transport.
 
+An internal background completion is not a new human message or proof that
+earlier assistant output was delivered. Terminal results already read through
+an authorized tool are acknowledged at the catalog's post-publication boundary,
+so a later notification does not spuriously reopen the model loop. Unobserved
+completions still continue normally. Their internal reminder requires a
+self-contained answer to the original task, in the original user's language,
+without claiming previous narration was posted unless delivery was actually
+confirmed. The final boundary remains the model's actual terminal message;
+Core never selects an earlier paragraph by language or prose heuristics.
+
 Deterministic regressions in `tests/public/test_final_answer.py` and
 `tests/public/test_final_answer_media_scope.py` cover the real
 NativeProvider/runtime tool loop with scripted provider IO, separate parent and
@@ -76,3 +86,6 @@ Engine and StreamSession delivery, collector failure, and durable SQLite
 snapshot/media revocation. These checks do not qualify a real provider or a live
 Slack/Discord installation. No package release or host upgrade is implied by
 the source change.
+`tests/public/test_background_job_observation.py` additionally exercises real
+Agent/Executor one- and two-iteration paths, completion/join ordering, scoped
+acknowledgement, unrelated jobs and publication revocation.

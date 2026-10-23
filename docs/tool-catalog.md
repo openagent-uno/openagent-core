@@ -44,6 +44,25 @@ or a tool named `write_note` cannot acquire the privileged write effect. The
 runtime observer interprets full success/error envelopes before satisfying a
 vault-save reminder.
 
+## Observing published terminal results
+
+A trusted executor may implement the optional asynchronous hook
+`observe_published_result(name, arguments, result, context) -> None`.
+The catalog awaits it only after normal `tool.publish` authorization, current
+source/lease checks, durable result publication and the existing observers.
+It cannot replace the result or grant a capability. Denied, revoked or failed
+publication never invokes the hook.
+
+Hosts that track background jobs use this boundary to acknowledge an explicit,
+successful terminal output read. `BackgroundJobs.observe_terminal(job_id,
+session_id, context_key) -> bool` runs synchronously on its owning event loop.
+The host must verify the normal result's authoritative terminal state and its
+registered job, session and current execution context first; a guessed ID or a
+model claim is insufficient. The method removes only that scoped running/queued
+notification, preserving other jobs. A completion racing after acknowledgement
+cannot recreate an unregistered job. Unknown or revoked contexts consume
+nothing. Input/output tool history remains intact.
+
 ## Connected clients
 
 Authenticated ingress calls `register_interactive_capabilities(catalog, origin,

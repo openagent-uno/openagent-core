@@ -41,6 +41,7 @@ class Registry:
     def __init__(self):
         self.revoked = False
         self.calls = []
+        self.observed = []
 
     def list_servers(self, origin):
         if self.revoked:
@@ -62,6 +63,10 @@ class Registry:
         self.calls.append((origin, session_id, arguments))
         return {"content": [{"type": "text", "text": "device"}], "structuredContent": {"device": origin.device_id},
                 "_meta": {"complete": True}, "child_session_id": "child"}
+
+    def observe_published_result(self, origin, server, tool, arguments, result, *, context, source_id):
+        self.list_servers(origin)
+        self.observed.append((origin, server, tool, arguments, result, context, source_id))
 
 
 class RecordingRuntime(SimpleNamespace):
@@ -247,6 +252,9 @@ class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
                 await _call_scoped_tool_impl(self.pool, device.tool_ref, {})
             revoke_interactive_capabilities(self.catalog, leases)
         self.assertEqual(len(registry.calls), 1)
+        self.assertEqual(len(registry.observed), 1)
+        self.assertEqual(registry.observed[0][5], interactive)
+        self.assertEqual(registry.observed[0][6], leases[0].source_id)
 
     async def test_ptc_socket_reuses_captured_context_and_checks_current_revocations(self):
         from openagent_core.mcp.servers.ptc.handlers import start_rpc_server

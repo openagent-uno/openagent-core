@@ -400,6 +400,12 @@ class CapabilityCatalog:
                 await runtime.services.store.finish_tool(run_id,call_id,result=envelope)
         for observer in self.observers:
             await observer(descriptor, arguments, result, context, call_id)
+        # Optional trusted executor acknowledgement, after the normal result
+        # has passed publication authorization, persistence and observers.
+        # It cannot replace a result or grant authority to a later event.
+        observe_published = getattr(registration.executor, "observe_published_result", None)
+        if callable(observe_published):
+            await observe_published(definition.name, copy.deepcopy(dict(arguments)), result, context)
         return result
 
 
