@@ -1,0 +1,62 @@
+{
+  "status": "official-public-Core-beta31-download-and-normal-installed-qualified",
+  "sourceCommit": "c375989ed94c32f2f8c2a42db04d7d06a5702278",
+  "version": "1.1.0b31",
+  "tag": "v1.1.0-beta.31",
+  "releaseURL": "https://github.com/openagent-uno/openagent-core/releases/tag/v1.1.0-beta.31",
+  "manifestURL": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.31/manifest.json",
+  "manifestSHA256": "acc3dacd0801637f04093a301c12c8230908ef433a0be3dfffd30386e4b587c9",
+  "checksumURL": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.31/SHA256SUMS",
+  "checksumSHA256": "056c240f5da4c29d90b5cf2b5c4356d4f965fbc8290f8521b96573add3ee1c40",
+  "assetsFullHTTPSHashVerified": 26,
+  "wheelCount": 23,
+  "familyVersions": {
+    "openagent-core": "1.1.0b31",
+    "openagent-gateway": "1.1.0b31",
+    "openagent-sdk": "1.1.0b31",
+    "openagent-storage-sqlite": "1.1.0b31"
+  },
+  "schemaVersion": 1,
+  "sourceFilesSHA256": "7b3cf0049b50990d8b9d145e8e69121a96b28a746564c96bf31d1cc1ec3e4c60",
+  "normalPublicInstallation": {
+    "pytestCasesPassed": 250,
+    "subtestsPassed": 51,
+    "skipped": 0,
+    "pipCheckPassed": true,
+    "prefixAndInstalledRECORDVerified": true,
+    "sourceOverlay": false
+  },
+  "requiredNewRegression": {
+    "path": "tests/public/test_storage_tenant_domains.py",
+    "sha256": "b0db5cdd4a5a2bd693cb145f289f9fdd812dc9d50f4558b9ec63ed3b4c05e6dd",
+    "testCases": 12,
+    "subtests": 6,
+    "includedInLocalAndPublicInstalledQualification": true,
+    "fixtures": "public empty-startup/normal-writers/restart and normal-delete lifecycle; foreign canonical/unknown-table/unbacked-projection/forged-delete denials"
+  },
+  "receipts": {
+    "publicQualificationReceiptSHA256": "fb971ecb18209b6afb65e2388d1c0885f6319ec351c5701999d36472951f1c9e",
+    "publicationReceiptSHA256": "ddb6e98cd06e4d9b2a7551ef32b911e1f89eede4fe295e217388566cd0c946e4",
+    "publicDownloadReceiptSHA256": "a1bca1e46ee4f397569e4e56cc5df96aa3b9857bc5b00487408d78f32d3e50dc"
+  },
+  "scope": {
+    "realAIOrNativeUIAcceptance": false,
+    "liveSlackDiscordQualified": false,
+    "productionMigrationQualified": false,
+    "customerDataLossInferred": false,
+    "GitHubActionsInvoked": false
+  },
+  "isolatedCopiedStoreStartup": {
+    "status": "passed",
+    "publicWheelPrefixOnly": true,
+    "normalEngineDependenciesOnly": true,
+    "hostAdapterImported": false,
+    "sourceOverlay": false,
+    "unchangedPublicStartupSequence": "check_storage_tenant -> MemoryDB.connect -> check_storage_tenant",
+    "canonicalHistoryAndACLsRetained": true,
+    "foreignTenantDenied": true,
+    "originalSnapshotUnchanged": true,
+    "receiptSHA256": "aed1a0a160cab6ec349532f87737cc4051294ad87a87b1dc00755ca9134cca08",
+    "liveStoreActivated": false
+  }
+}

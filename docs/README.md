@@ -60,6 +60,7 @@ repository remains the canonical source for Core contracts and evidence.
 - [Core b29 final media boundary source evidence](evidence/final-answer-media-b29-2026-10-23.json)
 - [Core b29 official public package qualification](evidence/core-b29-public-2026-10-23.json)
 - [Core b30 official public package qualification](evidence/core-b30-public-2026-10-23.json)
+- [Core b31 official public package and isolated restart qualification](evidence/core-b31-public-2026-10-23.json)
 - [Selective quarantined legacy-child adoption](legacy-child-adoption.md)
 - [Empty legacy-placeholder namespace adoption](legacy-empty-child-adoption.md)
 - [Sessions and exact run controls](../packages/module-sessions/README.md)

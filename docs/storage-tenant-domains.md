@@ -48,3 +48,11 @@ version, absent journal/activity/search proof, and altered retained content.
 
 The Core wheel declares `setuptools>=77.0.3` for its existing PEP 639 SPDX
 license metadata. This is a build-backend requirement, not a runtime dependency.
+
+The [beta31 public qualification receipt](evidence/core-b31-public-2026-10-23.json)
+records all 26 anonymous full-byte asset checks and 250 tests plus 51 subtests
+from a fresh public installation, with no skips. A separate clean engine-only
+public-wheel prefix also completed a real embedding startup callback against
+an isolated coherent copied store while preserving its canonical history and
+access metadata. Neither check activates a live store or qualifies a native
+product or provider.
