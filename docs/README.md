@@ -50,6 +50,7 @@ repository remains the canonical source for Core contracts and evidence.
 - [Audio host and transcribed attachment contract](audio-host-contract.md)
 - [Authoritative final answers and the complete stream](final-answer.md)
 - [Core b29 final media boundary source evidence](evidence/final-answer-media-b29-2026-10-23.json)
+- [Core b29 official public package qualification](evidence/core-b29-public-2026-10-23.json)
 - [Selective quarantined legacy-child adoption](legacy-child-adoption.md)
 - [Empty legacy-placeholder namespace adoption](legacy-empty-child-adoption.md)
 - [Sessions and exact run controls](../packages/module-sessions/README.md)

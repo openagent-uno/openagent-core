@@ -1,0 +1,220 @@
+{
+  "status": "official-public-Core-beta29-download-and-normal-installed-qualified",
+  "sourceCommit": "4e9b5e27e785a4091b70d6851b47085dcf0717e7",
+  "repository": "openagent-uno/openagent-core",
+  "tag": "v1.1.0-beta.29",
+  "version": "1.1.0b29",
+  "releaseURL": "https://github.com/openagent-uno/openagent-core/releases/tag/v1.1.0-beta.29",
+  "manifestURL": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/manifest.json",
+  "manifestSHA256": "4563114ac1dc29c18857b37e11e760ecf77d12351e043fe88876e90206511835",
+  "checksumURL": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/SHA256SUMS",
+  "checksumSHA256": "8bd2a8bc1d6e856473ae1ba438e839ad15e70285f7463836424bf8b591489e31",
+  "assetsFullHTTPSHashVerified": 26,
+  "wheelCount": 23,
+  "familyVersions": {
+    "openagent-core": "1.1.0b29",
+    "openagent-gateway": "1.1.0b29",
+    "openagent-sdk": "1.1.0b29",
+    "openagent-storage-sqlite": "1.1.0b29"
+  },
+  "wheels": [
+    {
+      "bytes": 26228,
+      "file": "openagent_capability_host-1.0.0b1-py3-none-any.whl",
+      "name": "openagent-capability-host",
+      "sha256": "227d2a50962241d69c8d816efc60621ca2c8062351a9d8609d2d9b951d7c1342",
+      "version": "1.0.0b1",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_capability_host-1.0.0b1-py3-none-any.whl"
+    },
+    {
+      "bytes": 1737706,
+      "file": "openagent_core-1.1.0b29-py3-none-any.whl",
+      "name": "openagent-core",
+      "sha256": "0ef05c3d973a357e4c2f700584975f5e5e031787cc6f13c6b155a5e2a099e4cf",
+      "version": "1.1.0b29",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_core-1.1.0b29-py3-none-any.whl"
+    },
+    {
+      "bytes": 2972,
+      "file": "openagent_gateway-1.1.0b29-py3-none-any.whl",
+      "name": "openagent-gateway",
+      "sha256": "1c5d3be6c17b5a71e95795274c76f682111f04143ac8b98126826482d380dde0",
+      "version": "1.1.0b29",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_gateway-1.1.0b29-py3-none-any.whl"
+    },
+    {
+      "bytes": 1679,
+      "file": "openagent_module_attachments-1.1.0b1-py3-none-any.whl",
+      "name": "openagent-module-attachments",
+      "sha256": "878df5dc1e0e017db647e295e216ecbe734adb5f8e2ea609ba845c7f42ccf5ba",
+      "version": "1.1.0b1",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_module_attachments-1.1.0b1-py3-none-any.whl"
+    },
+    {
+      "bytes": 1616,
+      "file": "openagent_module_budget-1.1.0b1-py3-none-any.whl",
+      "name": "openagent-module-budget",
+      "sha256": "3971b5d77d5891b47b81ce3e299e357261ad4e4a7af287d286693aced9816b3f",
+      "version": "1.1.0b1",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_module_budget-1.1.0b1-py3-none-any.whl"
+    },
+    {
+      "bytes": 1707,
+      "file": "openagent_module_delegation-1.1.0b1-py3-none-any.whl",
+      "name": "openagent-module-delegation",
+      "sha256": "1ae8ab9d851aaa5a690b405f94fab104e6e47acc582d960a79c9f90d38311885",
+      "version": "1.1.0b1",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_module_delegation-1.1.0b1-py3-none-any.whl"
+    },
+    {
+      "bytes": 1975,
+      "file": "openagent_module_events-1.1.0b1-py3-none-any.whl",
+      "name": "openagent-module-events",
+      "sha256": "62005856b891f891e34335d2ff1e272d2f5512e9e0ea475c3fc7d07639fd9885",
+      "version": "1.1.0b1",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_module_events-1.1.0b1-py3-none-any.whl"
+    },
+    {
+      "bytes": 1585,
+      "file": "openagent_module_logs-1.1.0b1-py3-none-any.whl",
+      "name": "openagent-module-logs",
+      "sha256": "4d55f0862807f8c71979b1465daaccd9293aef6b6707c1af46487e8030d32df7",
+      "version": "1.1.0b1",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_module_logs-1.1.0b1-py3-none-any.whl"
+    },
+    {
+      "bytes": 3974,
+      "file": "openagent_module_mcp-1.1.0b1-py3-none-any.whl",
+      "name": "openagent-module-mcp",
+      "sha256": "e4335aaa004b13e5cb9654468f9b1a6d3dc169727bb462ee6c49e7720bea0190",
+      "version": "1.1.0b1",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_module_mcp-1.1.0b1-py3-none-any.whl"
+    },
+    {
+      "bytes": 1666,
+      "file": "openagent_module_models-1.1.0b1-py3-none-any.whl",
+      "name": "openagent-module-models",
+      "sha256": "28ffa7bddf767b9f71c4ab8171ea878f0e45906bf665eaa84c3579acd1f57056",
+      "version": "1.1.0b1",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_module_models-1.1.0b1-py3-none-any.whl"
+    },
+    {
+      "bytes": 1619,
+      "file": "openagent_module_ptc-1.1.0b1-py3-none-any.whl",
+      "name": "openagent-module-ptc",
+      "sha256": "63969b07cba8769ada4b8a0e9f30aeac45360d1331406bcd7ae5736ee26d5b13",
+      "version": "1.1.0b1",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_module_ptc-1.1.0b1-py3-none-any.whl"
+    },
+    {
+      "bytes": 2046,
+      "file": "openagent_module_scheduler-1.1.0b1-py3-none-any.whl",
+      "name": "openagent-module-scheduler",
+      "sha256": "102e7f649f10cf005e157c4cf2447ed9f8ff173855126d3a78ee4e42dbbf5b7b",
+      "version": "1.1.0b1",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_module_scheduler-1.1.0b1-py3-none-any.whl"
+    },
+    {
+      "bytes": 3585,
+      "file": "openagent_module_search-1.1.0b2-py3-none-any.whl",
+      "name": "openagent-module-search",
+      "sha256": "8ef7aba3c3c1e233376fbef6ad53c3723efa7def4e314a127fe57decdb3a6f99",
+      "version": "1.1.0b2",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_module_search-1.1.0b2-py3-none-any.whl"
+    },
+    {
+      "bytes": 5801,
+      "file": "openagent_module_sessions-1.1.0b2-py3-none-any.whl",
+      "name": "openagent-module-sessions",
+      "sha256": "dc56896861911b84a77f8dae46d16b6ea1acf256e2df85b94f88b065b33447b0",
+      "version": "1.1.0b2",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_module_sessions-1.1.0b2-py3-none-any.whl"
+    },
+    {
+      "bytes": 1622,
+      "file": "openagent_module_skills-1.1.0b1-py3-none-any.whl",
+      "name": "openagent-module-skills",
+      "sha256": "8bb7e1e34221faa1632a972eb5af3c25d7e0fe4ad4fd3e6e7a4c02bc77e4cd0f",
+      "version": "1.1.0b1",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_module_skills-1.1.0b1-py3-none-any.whl"
+    },
+    {
+      "bytes": 2298,
+      "file": "openagent_module_tool_discovery-1.1.0b1-py3-none-any.whl",
+      "name": "openagent-module-tool-discovery",
+      "sha256": "9319b4776220dbff682c7dd8111ca5f2ea7ceb696a763790a16fd17a4a26cb1b",
+      "version": "1.1.0b1",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_module_tool_discovery-1.1.0b1-py3-none-any.whl"
+    },
+    {
+      "bytes": 581820,
+      "file": "openagent_module_vault-1.1.0b1-py3-none-any.whl",
+      "name": "openagent-module-vault",
+      "sha256": "c6960d70083da6c74bceb4b1bdcb64911e09b0f272dd9a3a47bc55d794eb7043",
+      "version": "1.1.0b1",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_module_vault-1.1.0b1-py3-none-any.whl"
+    },
+    {
+      "bytes": 1998,
+      "file": "openagent_module_workflows-1.1.0b1-py3-none-any.whl",
+      "name": "openagent-module-workflows",
+      "sha256": "a1ce9f25f0feea0764b748c2c9251fac36d3f82e84cb8d21344375a0acc00f9b",
+      "version": "1.1.0b1",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_module_workflows-1.1.0b1-py3-none-any.whl"
+    },
+    {
+      "bytes": 2831,
+      "file": "openagent_modules-1.1.0b3-py3-none-any.whl",
+      "name": "openagent-modules",
+      "sha256": "1554a9982fbb27e14b8e93f99ce740b0758bcef66959cd3d7750d6030f0b96aa",
+      "version": "1.1.0b3",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_modules-1.1.0b3-py3-none-any.whl"
+    },
+    {
+      "bytes": 1325,
+      "file": "openagent_modules_full-1.1.0b3-py3-none-any.whl",
+      "name": "openagent-modules-full",
+      "sha256": "4ab7820df844043db4ded19800317aafbb3a4af5cb7423a425f9fbb03d8e4ced",
+      "version": "1.1.0b3",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_modules_full-1.1.0b3-py3-none-any.whl"
+    },
+    {
+      "bytes": 2818,
+      "file": "openagent_sdk-1.1.0b29-py3-none-any.whl",
+      "name": "openagent-sdk",
+      "sha256": "78507cec8d04613c2bc9321618f5fece2fe867c7550851936a63cbba10c30138",
+      "version": "1.1.0b29",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_sdk-1.1.0b29-py3-none-any.whl"
+    },
+    {
+      "bytes": 58693,
+      "file": "openagent_storage_sqlite-1.1.0b29-py3-none-any.whl",
+      "name": "openagent-storage-sqlite",
+      "sha256": "f1badbdc5a236a7c86b337bcc5852e1fbc62f3bc24197b519e1887012a0a047e",
+      "version": "1.1.0b29",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_storage_sqlite-1.1.0b29-py3-none-any.whl"
+    },
+    {
+      "bytes": 5085,
+      "file": "replio_agent_example-1.1.0b2-py3-none-any.whl",
+      "name": "replio-agent-example",
+      "sha256": "eee3e59b0230f48aca30355a9d5290101e7ecc7dbcfe9d94145c9922249e7746",
+      "version": "1.1.0b2",
+      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/replio_agent_example-1.1.0b2-py3-none-any.whl"
+    }
+  ],
+  "allWheelsCanonicalFreshSource": true,
+  "installedFocusedTestsPassed": 204,
+  "installedPytestCasesPassed": 174,
+  "installedSubtestsPassed": 30,
+  "installedFocusedTestsSkipped": 0,
+  "pipCheckPassed": true,
+  "importPrefixAndInstalledRECORDVerified": true,
+  "GitHubActionsInvoked": false,
+  "schemaVersion": 1,
+  "handoffSHA256": "41ac7564055bca191bf56c5f243d9421cf61e1b74abb2873b7b2a7a9dfd47e15",
+  "liveProviderQualified": false,
+  "nativePackageQualified": false,
+  "embeddingHostChanged": false,
+  "paidCI": false
+}

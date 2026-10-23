@@ -89,3 +89,12 @@ the source change.
 `tests/public/test_background_job_observation.py` additionally exercises real
 Agent/Executor one- and two-iteration paths, completion/join ordering, scoped
 acknowledgement, unrelated jobs and publication revocation.
+
+
+Core29 public package qualification is recorded in
+[the immutable-source public receipt](evidence/core-b29-public-2026-10-23.json):
+all 26 anonymous release assets passed full-byte SHA256 verification; a fresh
+normal public-wheel installation passed pip check, installed version/prefix and
+RECORD checks plus 174 tests and 30 subtests, zero skips. This qualifies the
+component boundary, separately from native host adoption or live channel
+acceptance.
