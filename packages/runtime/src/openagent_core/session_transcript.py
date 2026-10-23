@@ -1,6 +1,75 @@
 """Stable transcript expansion shared by embedded hosts and product clients."""
 from __future__ import annotations
 
+
+async def runtime_journal_run(row, events, canonical_messages):
+    """Rehydrate an admitted turn when its provider mirror was never saved.
+
+    The caller verifies tenant/session/agent provenance. Only authored stream
+    text and durable tool events become messages; terminal error/output objects
+    are not invented assistant answers. A completed tool updates its original
+    slot instead of appearing twice.
+    """
+    import json
+    metadata = json.loads(row['metadata_json'])
+    author = metadata['execution_context']['author']
+    messages = [{'role': 'user', 'content': json.loads(row['input_json']),
+                 'author': {'kind': author['kind'], 'handle': json.dumps(author, sort_keys=True, separators=(',', ':'))}}]
+    tools, slots, completed = {}, {}, set()
+    had_deltas = False
+    async for event in events:
+        payload = json.loads(event['metadata_json'])
+        kind = event['event_type']
+        info = None
+        if kind == 'run.status':
+            try:
+                info = json.loads(payload.get('text', ''))
+            except (ValueError, TypeError):
+                continue
+        elif kind in {'tool.invoking', 'tool.completed'}:
+            binding = payload.get('binding', {})
+            provider_call = binding.get('provider_call_id')
+            call = provider_call if isinstance(provider_call, str) and provider_call else payload.get('call_id')
+            info = {'tool_name': binding.get('name'), 'tool_call_id': call,
+                    'tool_args': payload.get('arguments', {}),
+                    'tool_call_error': payload.get('status') == 'error' or bool(payload.get('error'))}
+            if kind == 'tool.completed':
+                info['result'] = payload.get('error', payload.get('result'))
+        elif kind == 'run.stream':
+            if payload.get('kind') == 'delta' and isinstance(payload.get('text'), str) and payload['text']:
+                had_deltas = True
+                if messages[-1]['role'] == 'assistant':
+                    messages[-1]['content'] += payload['text']
+                else:
+                    messages.append({'role': 'assistant', 'content': payload['text']})
+            elif payload.get('kind') == 'done' and not had_deltas and isinstance(payload.get('text'), str) and payload['text']:
+                messages.append({'role': 'assistant', 'content': payload['text']})
+        if not isinstance(info, dict) or not info.get('tool_name') or not info.get('tool_call_id'):
+            continue
+        call = str(info['tool_call_id'])
+        if kind == 'tool.completed':
+            completed.add(call)
+        elif call in completed:
+            # The canonical outcome wins over delayed provider status frames,
+            # including a repr-form result or a late started/result=None frame.
+            info = {key:value for key,value in info.items() if key not in {'result', 'tool_call_error'}}
+        tools[call] = {**tools.get(call, {}), **info}
+        result = tools[call].get('result')
+        content = result if isinstance(result, str) else json.dumps(result) if result is not None else ''
+        if call not in slots:
+            slots[call] = len(messages)
+            messages.append({'role': 'tool', 'content': content, 'tool_call_id': call, 'name': info['tool_name']})
+        else:
+            messages[slots[call]]['content'] = content
+    # Non-stream executors persist their successful answer as a canonical
+    # message. Do not stringify an interrupted run's diagnostic output.
+    if not any(m['role'] == 'assistant' for m in messages):
+        messages.extend({'role': 'assistant', 'content': m['text']}
+                        for m in canonical_messages if m['role'] == 'assistant')
+    return {'run_id': row['id'], 'status': row['status'], 'created_at': row['created_at_ms'] / 1000,
+            'messages': messages, 'tools': list(tools.values()), '_journal_streamed': had_deltas}
+
+
 def _build_run_tool_index(
     run_tools: list[dict],
 ) -> tuple[dict[str, dict], dict[str, dict]]:
@@ -78,10 +147,6 @@ def expand_run_messages(
     live in its own ``runs[]``-equivalent ``tools`` list.
     """
     out: list[dict] = []
-    run_status = str(run.get("status", "")).lower()
-    if run_status in ("cancelled", "canceled"):
-        return out
-
     # In-session compaction recap (vision §2). ``src.core.compaction``
     # folds the oldest runs into a single recap run tagged
     # ``metadata.compaction``. Surface it as a ``compaction`` message —
@@ -260,6 +325,8 @@ def expand_run_messages(
                 if tool_info.get("child_session_id") not in authorized_child_sessions:
                     tool_info={k:v for k,v in tool_info.items() if k!="child_session_id"}
                 entry["toolInfo"] = tool_info
+            if not is_member_run and (canonical_inputs or {}).get(str(run.get('run_id') or '')):
+                entry['runId'] = canonical_inputs[str(run['run_id'])]['runId']
             out.append(entry)
 
             if is_delegate and member_idx is not None:
@@ -299,6 +366,8 @@ def expand_run_messages(
             "text": content,
             "timestamp": timestamp,
         }
+        if not is_member_run and (canonical_inputs or {}).get(str(run.get('run_id') or '')):
+            entry['runId'] = canonical_inputs[str(run['run_id'])]['runId']
         # Per-message authorship: a human handle/display (so the app shows the
         # real sender instead of a generic "You", and multi-human sessions
         # attribute correctly) or an agent-self seed (the delegated task /

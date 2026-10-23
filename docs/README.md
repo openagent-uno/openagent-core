@@ -54,6 +54,7 @@ repository remains the canonical source for Core contracts and evidence.
 - [Selective quarantined legacy-child adoption](legacy-child-adoption.md)
 - [Empty legacy-placeholder namespace adoption](legacy-empty-child-adoption.md)
 - [Sessions and exact run controls](../packages/module-sessions/README.md)
+- [Public history after interrupted execution and canonical ancestry](session-history.md)
 - [Memory visibility and durable indexing](memory-access.md)
 - [Derived content privacy contracts and current coverage](content-privacy.md)
 - [Authorized vault administration](vault-administration.md)

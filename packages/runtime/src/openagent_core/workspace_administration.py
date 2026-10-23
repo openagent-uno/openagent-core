@@ -322,13 +322,66 @@ class SessionInspection:
                         if isinstance(raw_messages[i],dict) and raw_messages[i].get("role")=="assistant"
                         and not raw_messages[i].get("from_history") and not raw_messages[i].get("tool_calls")),None)
                     if final is not None:
-                        messages[(run_id,final,"assistant")] = {key:frame[key] for key in ("text","parts","attachments")}
+                        public = {key:frame[key] for key in ("text","parts","attachments")}
+                        if run.get('_journal_streamed'):
+                            # Journal deltas already contain the authored text
+                            # in its original tool/message order. The done frame
+                            # may repeat that entire text; attach only its fresh
+                            # CAS refs to the final segment, without replaying it.
+                            text = raw_messages[final].get('content') or ''
+                            public = {'text':text, 'attachments':frame['attachments'],
+                                      'parts':([{'kind':'text','text':text}] if text else []) +
+                                      [p for p in frame['parts'] if p['kind']=='attachment']}
+                        messages[(run_id,final,"assistant")] = public
 
         return inputs, messages
 
+    async def _transcript_runs(self, context, session_id, limit):
+        """Union the provider mirror with exact admitted turns, without replay."""
+        from .session_transcript import runtime_journal_run
+        legacy = await self.db.list_session_runs(session_id, limit=limit)
+        conn = await self.db._ensure_connected()
+        rows = await (await conn.execute(
+            "SELECT * FROM session_runs WHERE tenant_id=? AND session_id=? AND agent_id=? "
+            "AND json_extract(metadata_json,'$.runtime_contract')=1 "
+            "AND json_extract(metadata_json,'$.execution_context.authority.authority')=? "
+            "ORDER BY ordinal DESC LIMIT ?",
+            (context.tenant_id, session_id, context.agent_id, context.authority.authority, limit))).fetchall()
+        represented = {str(run.get('run_id') or '') for run in legacy}
+        additions = []
+        aliases = {}
+        for row in rows:
+            source = json.loads(row['raw_envelope_json'] or '{}')
+            attested = next((rid for rid in represented
+                if row['id'] == f'run:{session_id}:{rid}' and
+                (source.get('run_id') == rid or source.get('id') == rid)), None)
+            if attested is not None:
+                aliases[attested] = row['ordinal']
+            if row['id'] in represented or attested is not None:
+                continue
+            messages = await (await conn.execute(
+                "SELECT role,text FROM session_messages WHERE tenant_id=? AND session_id=? AND run_id=? AND role='assistant' AND visibility='user_visible' ORDER BY ordinal",
+                (context.tenant_id, session_id, row['id']))).fetchall()
+            events = await conn.execute(
+                "SELECT event_type,metadata_json FROM domain_events WHERE tenant_id=? AND session_id=? AND run_id=? "
+                "AND (event_type IN ('run.status','tool.invoking','tool.completed') OR "
+                "(event_type='run.stream' AND json_extract(metadata_json,'$.kind') IN ('delta','done'))) ORDER BY sequence",
+                (context.tenant_id, session_id, row['id']))
+            try:
+                additions.append(await runtime_journal_run(row, events, messages))
+            finally:
+                await events.close()
+        # Preserve provider ordering for equal timestamps. New canonical turns
+        # use the admission timestamp; one run occupies one limit slot.
+        ordered = list(reversed(legacy)) + additions
+        ordinals = {row['id']:row['ordinal'] for row in rows}
+        ordinals.update(aliases)
+        ordered.sort(key=lambda run: (float(run.get('created_at') or 0), ordinals.get(str(run.get('run_id') or ''), -1)))
+        return list(reversed(ordered[-limit:]))
+
     async def transcript(self,context,session_id,*,limit=20):
         await self.authorize(context,session_id)
-        runs=await self.db.list_session_runs(session_id,limit=max(1,min(int(limit),100)))
+        runs=await self._transcript_runs(context,session_id,max(1,min(int(limit),100)))
         conn=await self.db._ensure_connected()
         children=await (await conn.execute("SELECT id FROM sessions_v2 WHERE parent_session_id=? AND deleted_at_ms IS NULL",(session_id,))).fetchall()
         child_by_run={};allowed_children=set()
@@ -376,17 +429,20 @@ class SessionInspection:
         if len(session_ids)>64 or len(set(session_ids))!=len(session_ids):raise ValueError("Invalid ancestry batch")
         conn=await self.db._ensure_connected();result={}
         async def row(sid):
-            value=await (await conn.execute("SELECT id,tenant_id,parent_session_id,origin FROM sessions_v2 WHERE id=? AND visibility<>'quarantined' AND deleted_at_ms IS NULL",(sid,))).fetchone()
+            value=await (await conn.execute("SELECT id,tenant_id,parent_session_id,root_session_id FROM sessions_v2 WHERE id=? AND visibility<>'quarantined' AND deleted_at_ms IS NULL",(sid,))).fetchone()
             return value if value is not None and value["tenant_id"] == tenant_id else None
         for sid in session_ids:
             current=await row(sid)
-            if current is None or current["origin"]=="chat" or not current["parent_session_id"]:continue
-            chain=[];seen={sid}
+            if current is None or not current["parent_session_id"]:continue
+            chain=[];seen={sid};roots={current['root_session_id']} - {None, ''}
             for _ in range(16):
                 parent=current["parent_session_id"]
                 if not parent or parent in seen:break
                 current=await row(parent)
                 if current is None:break
                 chain.append(parent);seen.add(parent)
-                if not current["parent_session_id"]:result[sid]=chain;break
+                roots.update({current['root_session_id']} - {None, ''})
+                if not current["parent_session_id"]:
+                    if not roots or roots == {parent}:result[sid]=chain
+                    break
         return {"ancestries":result}
