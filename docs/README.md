@@ -1,11 +1,15 @@
 # OpenAgent core documentation
 
-The embedding API is prepared as the `1.1.0b29` modular candidate. Its SQLite
+The embedding API is prepared as the `1.1.0b30` modular candidate. Its SQLite
 adapter, gateway and Python SDK share that version and pin the same Core wheel.
 Beta27 adds an optional authoritative `final_answer` envelope while preserving
 the complete transcript. Concurrent upstream canonical-session indexing and
 retention fixes are included; host, provider and live-channel acceptance remain
 separate from deterministic package qualification.
+Beta30 restores exact admitted inputs and partial tools to public history after
+an interrupted provider write, preserves cancelled turns and attests canonical
+child ancestry independently of display origin. Both embedded hosts and the
+standalone server use this shared read-only service.
 Beta29 prevents full-transcript input/tool preview media from being echoed as
 final-answer attachments. Both Engine and StreamSession bind exact authored
 final markers to normally authorized canonical refs; live snapshots recheck
