@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "status": "official-public-Core-beta30-download-and-normal-installed-qualified",
+  "sourceCommit": "d28aad6687462e91989253e0f72f8f343af32662",
+  "version": "1.1.0b30",
+  "tag": "v1.1.0-beta.30",
+  "releaseURL": "https://github.com/openagent-uno/openagent-core/releases/tag/v1.1.0-beta.30",
+  "manifestURL": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.30/manifest.json",
+  "manifestSHA256": "21aaf0bcc6810e30a70c6ac6da6d4e4635c7b053e3729e5f923e491a0bf29579",
+  "checksumURL": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.30/SHA256SUMS",
+  "checksumSHA256": "a5eaceb043faec5917130f3aae42387545e0cf639c6d3add36bc3b0a48dc1d2c",
+  "sourceFilesSHA256": "7abe8fc526395eddf60e4daf28c5dfbd362b5f62d46807f575d5e9428ac687bf",
+  "assetsFullHTTPSHashVerified": 26,
+  "wheelCount": 23,
+  "familyVersions": {
+    "openagent-core": "1.1.0b30",
+    "openagent-gateway": "1.1.0b30",
+    "openagent-sdk": "1.1.0b30",
+    "openagent-storage-sqlite": "1.1.0b30"
+  },
+  "normalPublicInstallation": {
+    "pytestCasesPassed": 186,
+    "subtestsPassed": 30,
+    "skipped": 0,
+    "pipCheckPassed": true,
+    "prefixAndInstalledRECORDVerified": true,
+    "sourceOverlay": false
+  },
+  "requiredNewRegression": {
+    "path": "tests/public/test_session_history_restart.py",
+    "sha256": "2e2e6f31139bcf5a68aeeec12926650684ebb9ece3cfb9bcac6954951aea0ba3",
+    "testCases": 12,
+    "includedInLocalAndPublicInstalledQualification": true
+  },
+  "receipts": {
+    "publicQualificationReceiptSHA256": "1acb35afedeb3b77d47c67e9aac8a0d58447446d373519a1a6b81a4514222f10",
+    "publicationReceiptSHA256": "6ab9290972764bd72c42512d1c3dc3661d9609c194a31faf5c935cc2a5620a76",
+    "publicDownloadReceiptSHA256": "cf30f8adfefd12ea870cae08b0500428cffec6ba7ac2b94add781d588a70111b"
+  },
+  "scope": {
+    "realAIOrNativeUIAcceptance": false,
+    "liveSlackDiscordQualified": false,
+    "productionMigrationQualified": false,
+    "customerDataLossInferred": false,
+    "GitHubActionsInvoked": false
+  }
+}

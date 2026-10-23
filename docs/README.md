@@ -1,6 +1,6 @@
 # OpenAgent core documentation
 
-The embedding API is prepared as the `1.1.0b30` modular candidate. Its SQLite
+The embedding API is released as the `1.1.0b30` modular family. Its SQLite
 adapter, gateway and Python SDK share that version and pin the same Core wheel.
 Beta27 adds an optional authoritative `final_answer` envelope while preserving
 the complete transcript. Concurrent upstream canonical-session indexing and
@@ -55,6 +55,7 @@ repository remains the canonical source for Core contracts and evidence.
 - [Authoritative final answers and the complete stream](final-answer.md)
 - [Core b29 final media boundary source evidence](evidence/final-answer-media-b29-2026-10-23.json)
 - [Core b29 official public package qualification](evidence/core-b29-public-2026-10-23.json)
+- [Core b30 official public package qualification](evidence/core-b30-public-2026-10-23.json)
 - [Selective quarantined legacy-child adoption](legacy-child-adoption.md)
 - [Empty legacy-placeholder namespace adoption](legacy-empty-child-adoption.md)
 - [Sessions and exact run controls](../packages/module-sessions/README.md)
