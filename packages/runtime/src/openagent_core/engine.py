@@ -90,6 +90,7 @@ class AgentExecutor:
                 event = {**event, "text": marker_filter.feed(event.get("text") or "")}
             elif kind == "done":
                 final_text = event.get("text") or ""
+                attachment_bindings = []
                 from .stream.content_parts import parse_response_content
                 parsed = parse_response_content(final_text, allow_inline_ui=False)
                 if parsed.attachments:
@@ -121,6 +122,7 @@ class AgentExecutor:
                         else:
                             attachments.append(ref)
                             parts.append({"kind": "attachment", "attachment": ref})
+                            attachment_bindings.append((part["attachment"], ref))
                     final_text = parsed.text
                     if unavailable:
                         note = "An attachment is unavailable: no authorized file publisher could deliver it."
@@ -130,8 +132,7 @@ class AgentExecutor:
                     event = {**event, "text": final_text, "parts": parts, "attachments": attachments}
                 from .stream.final_answer import project_final_answer
                 event = {**event, "final_answer": project_final_answer(
-                    event.get("final_answer"), parts=event.get("parts", ()),
-                    attachments=event.get("attachments", ()),
+                    event.get("final_answer"), attachment_bindings=attachment_bindings,
                 )}
             elif kind == "error":
                 raise RuntimeError("Agent stream failed")

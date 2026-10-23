@@ -49,10 +49,10 @@ class CompletedAnswer(unittest.TestCase):
     def test_media_projection_has_no_narration_or_private_path(self):
         from openagent_core.stream.final_answer import project_final_answer
         ref = {"artifact_id":"file-one", "filename":"result.csv", "path":"/private/CAS"}
-        answer = project_final_answer({"text":"Final answer."}, parts=[
+        answer = project_final_answer({"text":"Final answer. [FILE:/authorized/result.csv]"}, parts=[
             {"kind":"text","text":"Narration not part of final."},
             {"kind":"attachment","attachment":ref},
-        ], attachments=[ref])
+        ], attachments=[ref], attachment_bindings=[({"type":"file", "path":"/authorized/result.csv"}, ref)])
         self.assertEqual("Final answer.", answer["text"])
         self.assertEqual(["text","attachment"], [p["kind"] for p in answer["parts"]])
         self.assertEqual([{"artifact_id":"file-one","filename":"result.csv"}], answer["attachments"])

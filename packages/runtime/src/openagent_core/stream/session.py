@@ -2091,6 +2091,7 @@ class StreamTurnRunner:
             clean = parsed_content.text
             att_list = [dict(a) for a in parsed_content.attachments]
             content_parts = [dict(part) for part in parsed_content.parts]
+            attachment_bindings = []
             if att_list:
                 from openagent_core.memory.artifacts import ArtifactError, persist_output_attachments
 
@@ -2102,6 +2103,8 @@ class StreamTurnRunner:
                         principal=artifact_principal,
                     )
                     att_list = [dict(item) for item in persisted]
+                    if len(att_list) == len(parsed_content.attachments):
+                        attachment_bindings = list(zip(parsed_content.attachments, att_list))
                     attachment_iter = iter(att_list)
                     for part in content_parts:
                         if part.get("kind") == "attachment":
@@ -2241,7 +2244,7 @@ class StreamTurnRunner:
                 attachments=tuple(att_list),
                 parts=tuple(content_parts),
                 model=meta.get("model"),
-                final_answer=(project_final_answer(final_answer, parts=content_parts, attachments=att_list)
+                final_answer=(project_final_answer(final_answer, attachment_bindings=attachment_bindings)
                               if stream_error is None and not cancelled else None),
             ))
             # One ``OutError`` per failed turn, wherever the failure came

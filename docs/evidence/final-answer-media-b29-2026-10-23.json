@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "component": "openagent-core",
+  "version": "1.1.0b29",
+  "baseSourceCommit": "65ea462d2048335b5c76ddb278c08eade731acf4",
+  "problem": "Aggregate transcript media was copied into an unrelated attested final answer.",
+  "observedBoundary": {
+    "attestedFinalAttachmentMarkers": 0,
+    "aggregateAttachments": 8,
+    "incorrectFinalAttachments": 8,
+    "currentInputMatchesByArtifactIDAndSHA256": 6,
+    "otherAggregateMedia": 2,
+    "realProviderRunNotRepeated": true
+  },
+  "sourceRegression": {
+    "redOnOriginalCore": true,
+    "focusedPassed": 28,
+    "focusedSubtestsPassed": 21,
+    "expandedPassed": 151,
+    "expandedSubtestsPassed": 23,
+    "skipped": 0,
+    "engineAndStreamSessionUseActualSQLiteAndCAS": true,
+    "scriptedProviderIO": true
+  },
+  "preserved": [
+    "Complete text and mixed-content transcript",
+    "Fresh authorization and artifact revocation checks",
+    "Explicit final generated/forward/media-only output",
+    "Path-free canonical references",
+    "Existing wire field names"
+  ],
+  "changed": [
+    "Exact final marker-to-authorized-ref selection",
+    "Snapshot reauthorization of selected final refs only"
+  ],
+  "notClaimed": [
+    "Live Slack acceptance of the new component",
+    "Business bug implementation",
+    "Native host or application upgrade"
+  ],
+  "testSources": {
+    "tests/public/test_final_answer_media_scope.py": "2ec8cf85c35b3142cc09490811ffdaadba2214151f4ce562b4b954e2e441c326",
+    "tests/public/test_final_answer.py": "3006842dd504fbb9b4a95b3d1acee3f6e5805a5b9e505875aa30e1503208243c",
+    "tests/public/test_engine_executor.py": "28a4bedf3d575d7138a783f8ac602cd3a491975cc2c3de5dfd27b437fbcad2db"
+  }
+}

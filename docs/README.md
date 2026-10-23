@@ -1,11 +1,15 @@
 # OpenAgent core documentation
 
-The embedding API is prepared as the `1.1.0b28` modular candidate. Its SQLite
+The embedding API is prepared as the `1.1.0b29` modular candidate. Its SQLite
 adapter, gateway and Python SDK share that version and pin the same Core wheel.
 Beta27 adds an optional authoritative `final_answer` envelope while preserving
 the complete transcript. Concurrent upstream canonical-session indexing and
 retention fixes are included; host, provider and live-channel acceptance remain
 separate from deterministic package qualification.
+Beta29 prevents full-transcript input/tool preview media from being echoed as
+final-answer attachments. Both Engine and StreamSession bind exact authored
+final markers to normally authorized canonical refs; live snapshots recheck
+only those selected final refs. The complete transcript remains unchanged.
 Beta28 fixes the isolated audio worker stdout contract. It keeps vendor asynchronous and interpreter-shutdown
 logs off its single-result JSON pipe; see the audio host contract.
 The Replio example is `1.1.0b2` and
@@ -42,6 +46,7 @@ repository remains the canonical source for Core contracts and evidence.
 - [Image model and attachment contract](image-generation.md)
 - [Audio host and transcribed attachment contract](audio-host-contract.md)
 - [Authoritative final answers and the complete stream](final-answer.md)
+- [Core b29 final media boundary source evidence](evidence/final-answer-media-b29-2026-10-23.json)
 - [Selective quarantined legacy-child adoption](legacy-child-adoption.md)
 - [Empty legacy-placeholder namespace adoption](legacy-empty-child-adoption.md)
 - [Sessions and exact run controls](../packages/module-sessions/README.md)

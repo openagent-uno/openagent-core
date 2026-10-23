@@ -44,18 +44,32 @@ aggregate draft, the old final attestation is invalidated rather than reused.
 `Agent.run_stream` carries the raw textual boundary. `AgentExecutor` and
 `StreamSession` resolve output using their normal authorization, persistence and
 attachment paths before constructing the public envelope. Its `parts` contain
-the final text followed by already-authorized output media in their original
-media order. The original mixed-content transcript keeps its full ordering.
+the final text followed only by media explicitly selected by a supported
+`[FILE:...]`, `[IMAGE:...]`, `[VOICE:...]` or `[VIDEO:...]` marker in that attested
+message. Exact internal marker-to-reference bindings come from the normal
+authorized resolution of the complete output; names, hashes and filesystem
+path similarity are never used to infer that a file should be sent. A
+text-only final therefore has no media, even when earlier narration or a tool
+preview referenced an admitted input image. Explicit final forwarding of an
+admitted file and generated output remain supported through the same normal
+permissions. An unbound or unavailable final marker produces an explicit
+unavailable notice, without reading an arbitrary path. Final media retain
+their authored order and canonical duplicate refs are sent once. The original
+mixed-content transcript keeps its full ordering.
 Attachment references are path-free; markers do not grant filesystem access.
-Media-only output is supported when the run supplies an attested empty message.
+Media-only output uses an attested marker-only message; its rendered text is
+empty and its selected media remain explicit.
 
 `OutTextFinal`, `BatchedReply`, `StreamCollector.to_legacy_reply()` and the
 authorized Sessions live snapshot preserve the field. Snapshot reads resolve
-attachment references again, so deleted or no-longer-linked artifacts cannot
-survive solely inside a nested final envelope. Product-owned wire encoders must
+only the references already selected in that final envelope again, so deleted
+or no-longer-linked artifacts cannot survive solely inside it. Snapshot
+rehydration never repopulates a final answer from full-transcript media.
+Product-owned wire encoders must
 forward the additive field; this library does not import a product transport.
 
-Deterministic regressions in `tests/public/test_final_answer.py` cover the real
+Deterministic regressions in `tests/public/test_final_answer.py` and
+`tests/public/test_final_answer_media_scope.py` cover the real
 NativeProvider/runtime tool loop with scripted provider IO, separate parent and
 child completions, concurrent calls, fallback, cancellation, guard revision,
 Engine and StreamSession delivery, collector failure, and durable SQLite

@@ -179,12 +179,30 @@ class SessionInspection:
                 ref=await session_output_reference(self.db,tenant_id=context.tenant_id,session_id=session_id,value=part.get("attachment"))
                 if ref is not None:
                     public.append({"kind":"attachment","attachment":ref})
-        from .stream.final_answer import project_final_answer
+        from .stream.final_answer import canonical_final_answer
         from .contracts import TERMINAL_STATUSES
         failed = frame.get("errored") or (run_status in TERMINAL_STATUSES and run_status != "success")
+        answer = None if failed else frame.get("final_answer")
+        final = None
+        if isinstance(answer,dict) and isinstance(answer.get("text"),str):
+            selected, unavailable = [], False
+            values = answer.get("attachments", ())
+            if not isinstance(values,(list,tuple)):
+                values, unavailable = (), True
+            # The engine already selected the attested final boundary. A live
+            # read must reauthorize its own refs, never reattach transcript
+            # input/tool previews to an otherwise text-only final answer.
+            for value in values[:256]:
+                ref = await session_output_reference(self.db,tenant_id=context.tenant_id,
+                    session_id=session_id,value=value)
+                if ref is None:
+                    unavailable = True
+                else:
+                    selected.append(ref)
+            final = canonical_final_answer(answer["text"],selected,unavailable=unavailable)
         return {**frame,"text":"".join(p["text"] for p in public if p["kind"]=="text").strip(),
             "parts":public,"attachments":[p["attachment"] for p in public if p["kind"]=="attachment"],
-            "final_answer":project_final_answer(None if failed else frame.get("final_answer"),parts=public)}
+            "final_answer":final}
 
     async def live_runs(self,context,session_id,*,limit=8):
         """Bounded canonical stream snapshots, without authority/credential data.
