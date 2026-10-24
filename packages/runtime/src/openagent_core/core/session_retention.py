@@ -436,7 +436,7 @@ def reclaim_free_pages(conn: sqlite3.Connection, db_path: str, *, step_pages: in
     if mode != 2:
         out["free_after"] = int(free_before)
         return out
-    wal = db_path + "-wal"
+    page_size = conn.execute("PRAGMA page_size").fetchone()[0]
     released = 0
     while released < max_pages:
         free = conn.execute("PRAGMA freelist_count").fetchone()[0]
@@ -453,13 +453,15 @@ def reclaim_free_pages(conn: sqlite3.Connection, db_path: str, *, step_pages: in
             out["stopped"] = f"{type(exc).__name__}: {exc}"[:80]
             break
         released += free - conn.execute("PRAGMA freelist_count").fetchone()[0]
-        conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
-        try:
-            if os.path.getsize(wal) > max_wal_bytes:
-                out["stopped"] = "wal_limit"
-                break
-        except OSError:
-            pass
+        checkpoint = conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        # PASSIVE deliberately leaves an allocated high-water file. Once its
+        # frames are copied the next writer can reuse it: file size alone must
+        # not strand free pages forever. Bound only outstanding frame bytes.
+        pending_bytes = max(0, checkpoint[1] - checkpoint[2]) * page_size
+        out["pending_wal_bytes"] = int(pending_bytes)
+        if pending_bytes > max_wal_bytes:
+            out["stopped"] = "wal_limit"
+            break
         time.sleep(pause)
     out["released"] = int(released)
     out["free_after"] = int(conn.execute("PRAGMA freelist_count").fetchone()[0])

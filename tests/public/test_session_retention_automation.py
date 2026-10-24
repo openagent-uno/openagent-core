@@ -276,3 +276,31 @@ def test_success_receipt_records_effective_policy_and_real_backlog(tmp_path):
     assert state["settings"]["automation_hours"] == 6
     assert state["automation_eligible"] == 0 and state["backlog_since"] is None
     assert state["storage"]["page_count"] > 0
+
+
+def test_reclaim_reuses_checkpointed_wal_high_water_and_stops_on_real_pin(tmp_path):
+    for pinned in (False, True):
+        db = tmp_path / ("pinned.db" if pinned else "copied.db")
+        con = sqlite3.connect(db)
+        con.execute("PRAGMA auto_vacuum=INCREMENTAL")
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA wal_autocheckpoint=0")
+        con.execute("CREATE TABLE payload(x BLOB)")
+        con.executemany("INSERT INTO payload VALUES (?)", [(b"x" * 4000,) for _ in range(600)])
+        con.commit(); con.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        reader = sqlite3.connect(db)
+        try:
+            if pinned:
+                reader.execute("BEGIN")
+                reader.execute("SELECT count(*) FROM payload").fetchone()
+            con.execute("DELETE FROM payload"); con.commit()
+            assert Path(str(db) + "-wal").stat().st_size > 1
+            out = sr.reclaim_free_pages(con, str(db), step_pages=100, max_pages=10000,
+                                        max_wal_bytes=1, pause=0)
+            if pinned:
+                assert out["stopped"] == "wal_limit" and out["pending_wal_bytes"] > 1
+            else:
+                assert out["free_after"] == 0 and out["pending_wal_bytes"] == 0
+                assert "stopped" not in out
+        finally:
+            reader.close(); con.close()
