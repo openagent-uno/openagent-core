@@ -57,6 +57,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 import os
 import shutil
@@ -73,6 +74,11 @@ DEFAULTS = {"days": 3, "max_runs": 5, "interval_hours": 6, "trim_threshold_bytes
             # days idle; their bulky domain events go this many days after
             # the tombstone.
             "automation_days": 1,
+            # Optional hourly policy; zero preserves the legacy day setting.
+            "automation_hours": 0,
+            # -1 keeps the legacy extra automation_days grace period.
+            "domain_event_grace_hours": -1,
+            "interval_minutes": 0,
             # Sessions tombstoned per batch (one transaction each) and the
             # per-cycle ceiling, so a backlog drains over a few cycles.
             "automation_batch": 50,
@@ -150,6 +156,7 @@ def prune_deleted_payloads(conn: sqlite3.Connection, *, batch_size: int = 200) -
         "AND NOT EXISTS (SELECT 1 FROM sessions l WHERE l.session_id=s.id)"
     ).fetchall()
     counts = {}
+    inactive = inactive_session_predicate(conn, "s.id")
     for table in ("tool_invocations", "session_messages"):
         if table not in tables:
             continue
@@ -163,7 +170,8 @@ def prune_deleted_payloads(conn: sqlite3.Connection, *, batch_size: int = 200) -
                         f"DELETE FROM {table} WHERE rowid IN ("
                         f"SELECT p.rowid FROM {table} p JOIN sessions_v2 s ON s.id=p.session_id "
                         "WHERE s.id=? AND s.deleted_at_ms IS NOT NULL "
-                        "AND NOT EXISTS (SELECT 1 FROM sessions l WHERE l.session_id=s.id) LIMIT ?)",
+                        "AND NOT EXISTS (SELECT 1 FROM sessions l WHERE l.session_id=s.id) "
+                        f"AND {inactive} LIMIT ?)",
                         (sid, max(1, batch_size)),
                     )
                 count += cur.rowcount
@@ -307,7 +315,7 @@ def _idle_automation_predicate(conn: sqlite3.Connection, cutoff_ms: int) -> tupl
     return sql, (*AUTOMATION_GLOBS, cutoff_ms, cutoff_ms, cutoff_ms, cutoff_ms)
 
 
-def tombstone_idle_automation_sessions(conn: sqlite3.Connection, *, days: int, batch_size: int = 50,
+def tombstone_idle_automation_sessions(conn: sqlite3.Connection, *, days: int, hours: int = 0, batch_size: int = 50,
                                        max_per_cycle: int = 2000, pause: float = 0.05,
                                        max_lock_skips: int = 5, tombstone=None,
                                        now_ms: int | None = None) -> dict[str, int]:
@@ -329,7 +337,7 @@ def tombstone_idle_automation_sessions(conn: sqlite3.Connection, *, days: int, b
         counts["unavailable"] = 1
         return counts
     now = int(time.time() * 1000) if now_ms is None else int(now_ms)
-    cutoff_ms = now - int(days) * 86_400_000
+    cutoff_ms = now - (max(1, int(hours)) * 3_600_000 if hours > 0 else int(days) * 86_400_000)
     where, params = _idle_automation_predicate(conn, cutoff_ms)
     if conn.in_transaction:
         conn.commit()
@@ -376,7 +384,7 @@ def tombstone_idle_automation_sessions(conn: sqlite3.Connection, *, days: int, b
     return counts
 
 
-def prune_deleted_domain_events(conn: sqlite3.Connection, *, days: int, batch_size: int = 500,
+def prune_deleted_domain_events(conn: sqlite3.Connection, *, days: int, hours: int = -1, batch_size: int = 500,
                                 pause: float = 0.05, now_ms: int | None = None) -> int:
     """Drop the bulky run/tool telemetry of sessions tombstoned > ``days`` ago.
 
@@ -389,7 +397,7 @@ def prune_deleted_domain_events(conn: sqlite3.Connection, *, days: int, batch_si
     if not {"sessions_v2", "sessions", "domain_events"} <= tables:
         return 0
     now = int(time.time() * 1000) if now_ms is None else int(now_ms)
-    cutoff_ms = now - int(days) * 86_400_000
+    cutoff_ms = now - (int(hours) * 3_600_000 if hours >= 0 else int(days) * 86_400_000)
     types = ",".join("?" for _ in PRUNABLE_EVENT_TYPES)
     inactive = inactive_session_predicate(conn, "s.id")
     count = 0
@@ -428,7 +436,7 @@ def reclaim_free_pages(conn: sqlite3.Connection, db_path: str, *, step_pages: in
     if mode != 2:
         out["free_after"] = int(free_before)
         return out
-    wal = db_path + "-wal"
+    page_size = conn.execute("PRAGMA page_size").fetchone()[0]
     released = 0
     while released < max_pages:
         free = conn.execute("PRAGMA freelist_count").fetchone()[0]
@@ -445,13 +453,15 @@ def reclaim_free_pages(conn: sqlite3.Connection, db_path: str, *, step_pages: in
             out["stopped"] = f"{type(exc).__name__}: {exc}"[:80]
             break
         released += free - conn.execute("PRAGMA freelist_count").fetchone()[0]
-        conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
-        try:
-            if os.path.getsize(wal) > max_wal_bytes:
-                out["stopped"] = "wal_limit"
-                break
-        except OSError:
-            pass
+        checkpoint = conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        # PASSIVE deliberately leaves an allocated high-water file. Once its
+        # frames are copied the next writer can reuse it: file size alone must
+        # not strand free pages forever. Bound only outstanding frame bytes.
+        pending_bytes = max(0, checkpoint[1] - checkpoint[2]) * page_size
+        out["pending_wal_bytes"] = int(pending_bytes)
+        if pending_bytes > max_wal_bytes:
+            out["stopped"] = "wal_limit"
+            break
         time.sleep(pause)
     out["released"] = int(released)
     out["free_after"] = int(conn.execute("PRAGMA freelist_count").fetchone()[0])
@@ -470,7 +480,7 @@ def prune(db_path: str, days: int, max_runs: int, trim_threshold: int,
 
         # 0) native 1.1 automation sessions: tombstone once idle (see module doc).
         auto = tombstone_idle_automation_sessions(
-            conn, days=opts["automation_days"], batch_size=opts["automation_batch"],
+            conn, days=opts["automation_days"], hours=opts["automation_hours"], batch_size=opts["automation_batch"],
             max_per_cycle=opts["automation_max_per_cycle"],
         )
         if auto.get("unavailable"):
@@ -480,6 +490,8 @@ def prune(db_path: str, days: int, max_runs: int, trim_threshold: int,
             print(f"[retention] automation_tombstones={auto['tombstoned']} "
                   f"skipped_locked={auto['skipped_locked']} failed={auto['failed']} "
                   f"automation_days={opts['automation_days']}", flush=True)
+            if auto['failed']:
+                raise sqlite3.OperationalError("native automation tombstones failed; retry required")
         cutoff = f"strftime('%s','now','-{int(days)} days')"
         exempt = " AND ".join(f"session_id NOT LIKE '{p}%'" for p in EXEMPT_PREFIXES)
 
@@ -564,7 +576,7 @@ def prune(db_path: str, days: int, max_runs: int, trim_threshold: int,
         reclaimed = prune_deleted_payloads(conn)
         stripped = prune_deleted_run_payloads(conn)
         outbox = prune_consumed_outbox_deletes(conn)
-        events = prune_deleted_domain_events(conn, days=opts["automation_days"])
+        events = prune_deleted_domain_events(conn, days=opts["automation_days"], hours=opts["domain_event_grace_hours"])
         print(f"[retention] deleted_payloads={reclaimed} stripped_run_payloads={stripped} "
               f"outbox_deleted={outbox} domain_events_deleted={events}", flush=True)
         # PASSIVE does not wait for readers while holding the writer lock. File
@@ -600,6 +612,7 @@ def prune(db_path: str, days: int, max_runs: int, trim_threshold: int,
 
 def run_once(db_path: str, yaml_path: str, *, vacuum: bool = False) -> dict:
     settings = load_settings(yaml_path)
+    native_available = _load_tombstone_api() is not None
     deleted, trimmed = prune(
         db_path, settings["days"], settings["max_runs"],
         settings["trim_threshold_bytes"], settings["max_bytes"], vacuum=vacuum,
@@ -610,6 +623,39 @@ def run_once(db_path: str, yaml_path: str, *, vacuum: bool = False) -> dict:
         f"days={settings['days']} max_runs={settings['max_runs']}",
         flush=True,
     )
+    # A size threshold cannot diagnose retention. Publish an atomic health
+    # receipt only after every pruning/reclaim step has completed successfully.
+    state_path = os.path.join(os.path.dirname(os.path.abspath(db_path)), "session-retention.json")
+    import tempfile
+    now = time.time()
+    try:
+        with open(state_path) as previous:
+            prior_state = json.load(previous)
+    except (OSError, ValueError):
+        prior_state = {}
+    with closing(sqlite3.connect("file:" + os.path.abspath(db_path) + "?mode=ro", uri=True, timeout=2)) as health:
+        idle_ms = (settings["automation_hours"] * 3_600_000 if settings["automation_hours"] > 0
+                   else settings["automation_days"] * 86_400_000)
+        where, params = _idle_automation_predicate(health, int(now * 1000) - idle_ms)
+        eligible = health.execute("SELECT count(*) FROM sessions_v2 s WHERE " + where, params).fetchone()[0]
+        storage = {key: health.execute("PRAGMA " + key).fetchone()[0]
+                   for key in ("page_count", "page_size", "freelist_count", "auto_vacuum")}
+    state = {"checked_at": now, "last_success_at": now if native_available else prior_state.get("last_success_at", 0),
+             "state": "ok" if native_available else "degraded", "native_retention_available": native_available,
+             "settings": settings,
+             "db_bytes": os.path.getsize(db_path), "deleted": deleted, "trimmed": trimmed,
+             "storage": storage, "automation_eligible": eligible,
+             "backlog_since": (prior_state.get("backlog_since") or now) if eligible else None}
+    fd, temporary = tempfile.mkstemp(prefix=".retention-", dir=os.path.dirname(state_path))
+    try:
+        with os.fdopen(fd, "w") as output:
+            json.dump(state, output, sort_keys=True)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, state_path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
     return settings
 
 
@@ -635,7 +681,9 @@ def main() -> None:
             print(f"[retention] deferred: {type(exc).__name__}: {exc}", flush=True)
             time.sleep(60)
             continue
-        time.sleep(max(1, settings["interval_hours"]) * 3600)
+        interval = (max(5, settings["interval_minutes"]) * 60 if settings["interval_minutes"] > 0
+                    else max(1, settings["interval_hours"]) * 3600)
+        time.sleep(interval)
 
 
 if __name__ == "__main__":
