@@ -138,7 +138,8 @@ def _coerce_json_value(value: Any, depth: int, state: _JsonCoercionState) -> Any
                     envelope[wire_key] = _coerce_json_value(
                         attr_value, depth + 1, state
                     )
-            return envelope
+            from openagent_core.mcp.media_dedup import deduplicate_image_aliases
+            return deduplicate_image_aliases(envelope)
     model_dump = getattr(value, "model_dump", None)
     if callable(model_dump):
         try:

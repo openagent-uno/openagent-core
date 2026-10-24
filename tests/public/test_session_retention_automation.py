@@ -228,3 +228,51 @@ def test_without_the_repository_the_step_is_skipped(tmp_path, monkeypatch):
     con = _connect(db)
     assert sr.tombstone_idle_automation_sessions(con, days=1, pause=0).get("unavailable") == 1
     assert not _deleted(con, "automation:event:support:old")
+
+
+def test_hourly_policy_prunes_completed_automation_and_telemetry_together(tmp_path):
+    db = tmp_path / "hourly.db"
+    _seed(db)
+    con = _connect(db)
+    _session(con, "automation:event:support:seven-hours", age_ms=7 * 3600_000)
+    _session(con, "automation:event:support:two-hours", age_ms=2 * 3600_000)
+    con.commit(); con.close()
+    sr.prune(str(db), days=3, max_runs=5, trim_threshold=200_000,
+             settings={"automation_hours": 6, "domain_event_grace_hours": 0})
+    con = _connect(db)
+    expired = "automation:event:support:seven-hours"
+    assert _deleted(con, expired)
+    assert not _deleted(con, "automation:event:support:two-hours")
+    assert con.execute("SELECT count(*) FROM tool_invocations WHERE session_id=?", (expired,)).fetchone()[0] == 0
+    assert con.execute("SELECT count(*) FROM domain_events WHERE session_id=? AND event_type='tool.completed'", (expired,)).fetchone()[0] == 0
+    assert con.execute("SELECT count(*) FROM domain_events WHERE session_id=? AND event_type='run.success'", (expired,)).fetchone()[0] == 1
+    assert con.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_tombstoned_session_with_inflight_work_keeps_tool_and_message_payloads(tmp_path):
+    db = tmp_path / "protected.db"
+    _seed(db)
+    con = _connect(db)
+    sid = "automation:event:support:inflight"
+    con.execute("UPDATE sessions_v2 SET deleted_at_ms=? WHERE id=?", (_now_ms(), sid))
+    con.commit()
+    before = {table: con.execute("SELECT * FROM " + table + " WHERE session_id=?", (sid,)).fetchall()
+              for table in ("tool_invocations", "session_messages")}
+    sr.prune_deleted_payloads(con)
+    after = {table: con.execute("SELECT * FROM " + table + " WHERE session_id=?", (sid,)).fetchall()
+             for table in before}
+    assert before == after
+
+
+def test_success_receipt_records_effective_policy_and_real_backlog(tmp_path):
+    import json
+    db = tmp_path / "receipt.db"
+    _seed(db)
+    config = tmp_path / "openagent.yaml"
+    config.write_text("retention:\n  automation_hours: 6\n  domain_event_grace_hours: 0\n  interval_minutes: 60\n")
+    sr.run_once(str(db), str(config))
+    state = json.loads((tmp_path / "session-retention.json").read_text())
+    assert state["state"] == "ok" and state["last_success_at"] > 0
+    assert state["settings"]["automation_hours"] == 6
+    assert state["automation_eligible"] == 0 and state["backlog_since"] is None
+    assert state["storage"]["page_count"] > 0
