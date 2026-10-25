@@ -1,0 +1,24 @@
+{
+  "sourceCommit": "35a68a796b90a4eef65c0b4a4c91c9517c60a4fb",
+  "manifestSHA256": "9075f713c7c3e41fd277d1613ce032fa8f2f7479f93e24dfdbc243084ef84875",
+  "assetsFullHTTPSHashVerified": 26,
+  "wheelCount": 23,
+  "installedFocusedTestsSkipped": 0,
+  "installedPytestCasesPassed": 263,
+  "installedSubtestsPassed": 51,
+  "pipCheckPassed": true,
+  "importPrefixAndInstalledRECORDVerified": true,
+  "sourceWheelICSDerivationApplied": false,
+  "version": "1.1.0b32",
+  "sourceTestResult": {
+    "passed": 262,
+    "subtestsPassed": 51
+  },
+  "publicInstalledTestResult": {
+    "passed": 263,
+    "subtestsPassed": 51,
+    "skipped": 0
+  },
+  "sourceOverlay": false,
+  "releaseURL": "https://github.com/openagent-uno/openagent-core/releases/tag/v1.1.0-beta.32"
+}
