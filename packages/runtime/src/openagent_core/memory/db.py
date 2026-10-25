@@ -5585,41 +5585,41 @@ class MemoryDB:
                 f"expected one of {LLM_FRAMEWORKS}"
             )
         now = time.time()
-        conn = await self._ensure_connected()
-        await conn.execute(
-            """
-            INSERT INTO providers (name, framework, api_key, base_url, enabled, metadata_json, kind, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(name, framework) DO UPDATE SET
-                api_key = excluded.api_key,
-                base_url = excluded.base_url,
-                enabled = excluded.enabled,
-                metadata_json = excluded.metadata_json,
-                kind = excluded.kind,
-                updated_at = excluded.updated_at
-            """,
-            (
-                name.strip(),
-                framework,
-                (api_key or None),
-                (base_url or None),
-                1 if enabled else 0,
-                json.dumps(metadata or {}),
-                kind,
-                now,
-                now,
-            ),
-        )
-        await conn.commit()
-        # Fetch the id (stable across upserts on conflict).
-        cursor = await conn.execute(
-            "SELECT id FROM providers WHERE name = ? AND framework = ?",
-            (name.strip(), framework),
-        )
-        row = await cursor.fetchone()
-        if not row:
-            raise RuntimeError("upsert_provider: row not found after insert")
-        return int(row[0])
+        await self._ensure_connected()
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            await conn.execute(
+                """
+                INSERT INTO providers (name, framework, api_key, base_url, enabled, metadata_json, kind, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(name, framework) DO UPDATE SET
+                    api_key = excluded.api_key,
+                    base_url = excluded.base_url,
+                    enabled = excluded.enabled,
+                    metadata_json = excluded.metadata_json,
+                    kind = excluded.kind,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    name.strip(),
+                    framework,
+                    (api_key or None),
+                    (base_url or None),
+                    1 if enabled else 0,
+                    json.dumps(metadata or {}),
+                    kind,
+                    now,
+                    now,
+                ),
+            )
+            # Fetch the id (stable across upserts on conflict).
+            cursor = await conn.execute(
+                "SELECT id FROM providers WHERE name = ? AND framework = ?",
+                (name.strip(), framework),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                raise RuntimeError("upsert_provider: row not found after insert")
+            return int(row[0])
 
     async def update_provider_fields(self, provider_id: int, changes: dict[str, Any]) -> dict[str, Any]:
         """Update one provider identity and migrate its exact session pins atomically."""
@@ -5680,20 +5680,20 @@ class MemoryDB:
             return self._shape_enriched(row)
 
     async def set_provider_enabled(self, provider_id: int, enabled: bool) -> None:
-        conn = await self._ensure_connected()
-        await conn.execute(
-            "UPDATE providers SET enabled = ?, updated_at = ? WHERE id = ?",
-            (1 if enabled else 0, time.time(), int(provider_id)),
-        )
-        await conn.commit()
+        await self._ensure_connected()
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            await conn.execute(
+                "UPDATE providers SET enabled = ?, updated_at = ? WHERE id = ?",
+                (1 if enabled else 0, time.time(), int(provider_id)),
+            )
 
     async def delete_provider(self, provider_id: int) -> None:
         """Delete a provider row. FK cascade wipes its models."""
-        conn = await self._ensure_connected()
-        await conn.execute(
-            "DELETE FROM providers WHERE id = ?", (int(provider_id),),
-        )
-        await conn.commit()
+        await self._ensure_connected()
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            await conn.execute(
+                "DELETE FROM providers WHERE id = ?", (int(provider_id),),
+            )
 
     async def providers_max_updated(self) -> float:
         conn = await self._ensure_connected()
@@ -6013,79 +6013,87 @@ class MemoryDB:
         metadata: dict | None = None,
         kind: str = "llm",
     ) -> int:
-        """Insert or update a model row. Returns the model's surrogate id."""
+        """Insert or update a model row. Returns the model's surrogate id.
+
+        Catalog writes acquire the WAL writer on a fresh connection before
+        reading the provider. The MCP singleton may retain a read snapshot
+        while the runtime commits; promoting that snapshot fails immediately
+        with SQLITE_BUSY_SNAPSHOT, regardless of the configured busy timeout.
+        An isolated transaction also rolls back failures/cancellation instead
+        of leaving the shared connection unusable for every following call.
+        """
         if not provider_id:
             raise ValueError("provider_id is required")
         if not model or not str(model).strip():
             raise ValueError("model is required")
         if kind not in ("llm", "tts", "stt", "image"):
             raise ValueError(f"invalid kind {kind!r}; expected llm/tts/stt/image")
-        conn = await self._ensure_connected()
-        # FK integrity: make sure the parent provider exists before we
-        # try the insert so callers get a clear error instead of the
-        # generic "FOREIGN KEY constraint failed".
-        prov_row = await (
-            await conn.execute(
-                "SELECT name FROM providers WHERE id = ?", (int(provider_id),),
-            )
-        ).fetchone()
-        if prov_row is None:
-            raise ValueError(f"Provider id={provider_id!r} does not exist")
-        stored_metadata = dict(metadata or {})
-        if kind == "llm":
-            from openagent_core.models.media_capabilities import normalize_model_metadata
+        await self._ensure_connected()
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            # FK integrity: make sure the parent provider exists before we
+            # try the insert so callers get a clear error instead of the
+            # generic "FOREIGN KEY constraint failed".
+            prov_row = await (
+                await conn.execute(
+                    "SELECT name FROM providers WHERE id = ?", (int(provider_id),),
+                )
+            ).fetchone()
+            if prov_row is None:
+                raise ValueError(f"Provider id={provider_id!r} does not exist")
+            stored_metadata = dict(metadata or {})
+            if kind == "llm":
+                from openagent_core.models.media_capabilities import normalize_model_metadata
 
-            stored_metadata = normalize_model_metadata(
-                stored_metadata,
-                provider=str(prov_row["name"] or ""),
-                model=str(model).strip(),
+                stored_metadata = normalize_model_metadata(
+                    stored_metadata,
+                    provider=str(prov_row["name"] or ""),
+                    model=str(model).strip(),
+                )
+            now = time.time()
+            await conn.execute(
+                """
+                INSERT INTO models (provider_id, model, display_name, tier_hint,
+                                    enabled, is_classifier, metadata_json,
+                                    kind, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(provider_id, model) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    tier_hint = excluded.tier_hint,
+                    enabled = excluded.enabled,
+                    is_classifier = excluded.is_classifier,
+                    metadata_json = excluded.metadata_json,
+                    kind = excluded.kind,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    int(provider_id),
+                    str(model).strip(),
+                    display_name,
+                    tier_hint,
+                    1 if enabled else 0,
+                    1 if is_classifier else 0,
+                    json.dumps(stored_metadata, sort_keys=True, separators=(",", ":")),
+                    kind,
+                    now,
+                    now,
+                ),
             )
-        now = time.time()
-        await conn.execute(
-            """
-            INSERT INTO models (provider_id, model, display_name, tier_hint,
-                                enabled, is_classifier, metadata_json,
-                                kind, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(provider_id, model) DO UPDATE SET
-                display_name = excluded.display_name,
-                tier_hint = excluded.tier_hint,
-                enabled = excluded.enabled,
-                is_classifier = excluded.is_classifier,
-                metadata_json = excluded.metadata_json,
-                kind = excluded.kind,
-                updated_at = excluded.updated_at
-            """,
-            (
-                int(provider_id),
-                str(model).strip(),
-                display_name,
-                tier_hint,
-                1 if enabled else 0,
-                1 if is_classifier else 0,
-                json.dumps(stored_metadata, sort_keys=True, separators=(",", ":")),
-                kind,
-                now,
-                now,
-            ),
-        )
-        await conn.commit()
-        cursor = await conn.execute(
-            "SELECT id FROM models WHERE provider_id = ? AND model = ?",
-            (int(provider_id), str(model).strip()),
-        )
-        row = await cursor.fetchone()
-        if not row:
-            raise RuntimeError("upsert_model: row not found after insert")
-        return int(row[0])
+            cursor = await conn.execute(
+                "SELECT id FROM models WHERE provider_id = ? AND model = ?",
+                (int(provider_id), str(model).strip()),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                raise RuntimeError("upsert_model: row not found after insert")
+            return int(row[0])
 
     async def set_model_enabled(self, model_id: int, enabled: bool) -> None:
-        conn = await self._ensure_connected()
-        await conn.execute(
-            "UPDATE models SET enabled = ?, updated_at = ? WHERE id = ?",
-            (1 if enabled else 0, time.time(), int(model_id)),
-        )
-        await conn.commit()
+        await self._ensure_connected()
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            await conn.execute(
+                "UPDATE models SET enabled = ?, updated_at = ? WHERE id = ?",
+                (1 if enabled else 0, time.time(), int(model_id)),
+            )
 
     async def set_model_is_classifier(self, model_id: int, flag: bool) -> None:
         """Toggle the ``is_classifier`` flag on ``model_id``.
@@ -6101,17 +6109,17 @@ class MemoryDB:
         catalog order, so with several flagged rows the first simply
         wins and the others are inert.
         """
-        conn = await self._ensure_connected()
-        await conn.execute(
-            "UPDATE models SET is_classifier = ?, updated_at = ? WHERE id = ?",
-            (1 if flag else 0, time.time(), int(model_id)),
-        )
-        await conn.commit()
+        await self._ensure_connected()
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            await conn.execute(
+                "UPDATE models SET is_classifier = ?, updated_at = ? WHERE id = ?",
+                (1 if flag else 0, time.time(), int(model_id)),
+            )
 
     async def delete_model(self, model_id: int) -> None:
-        conn = await self._ensure_connected()
-        await conn.execute("DELETE FROM models WHERE id = ?", (int(model_id),))
-        await conn.commit()
+        await self._ensure_connected()
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            await conn.execute("DELETE FROM models WHERE id = ?", (int(model_id),))
 
     async def models_max_updated(self) -> float:
         conn = await self._ensure_connected()

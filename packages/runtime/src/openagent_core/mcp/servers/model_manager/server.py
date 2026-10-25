@@ -24,6 +24,7 @@ Transport: stdio. Storage: the shared OpenAgent SQLite DB via
 from __future__ import annotations
 
 from openagent_core.configuration import runtime_environment
+import asyncio
 import logging
 import os
 from typing import Any
@@ -39,14 +40,21 @@ logger = logging.getLogger(__name__)
 # every tool call; reopening on each call would re-run ``SCHEMA_SQL`` and
 # turn a chatty agent into a DDL-parsing fest.
 _db: MemoryDB | None = None
+_db_lock = asyncio.Lock()
 
 
 async def _get_db() -> MemoryDB:
     global _db
-    if _db is None:
-        _db = MemoryDB(runtime_environment().get("OPENAGENT_DB_PATH", "openagent.db"))
-        await _db.connect()
-    return _db
+    async with _db_lock:
+        if _db is None:
+            candidate = MemoryDB(runtime_environment().get("OPENAGENT_DB_PATH", "openagent.db"))
+            try:
+                await candidate.connect()
+            except BaseException:
+                await candidate.close()
+                raise
+            _db = candidate
+        return _db
 
 
 mcp = FastMCP("model-manager")
