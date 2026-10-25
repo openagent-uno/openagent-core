@@ -16,6 +16,7 @@ shim for callers that don't drive the queues themselves.
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 import logging
 import tempfile
 import weakref
@@ -1673,6 +1674,28 @@ class StreamTurnRunner:
         turn_context: Any = None,
         turn_token: object | None = None,
     ) -> dict[str, Any]:
+        async with AsyncExitStack() as stream_cleanup:
+            return await self._run(text, client_id=client_id, session_id=session_id,
+                attachments=attachments, transcribed_audio=transcribed_audio, speak=speak,
+                author=author, execution_origin=execution_origin, ingress_identity=ingress_identity,
+                turn_context=turn_context, turn_token=turn_token, stream_cleanup=stream_cleanup)
+
+    async def _run(
+        self,
+        text: str,
+        *,
+        stream_cleanup: AsyncExitStack,
+        client_id: str,
+        session_id: str,
+        attachments: list[dict] | None = None,
+        transcribed_audio: bool = False,
+        speak: bool = False,
+        author: dict | None = None,
+        execution_origin: Any = None,
+        ingress_identity: Any = None,
+        turn_context: Any = None,
+        turn_token: object | None = None,
+    ) -> dict[str, Any]:
         sess = self._session
         if turn_context is None:
             from openagent_core.core.execution_origin import TrustedTurnContext
@@ -1721,6 +1744,8 @@ class StreamTurnRunner:
             await sess._publish(evt, ingress_identity=ingress_identity)
         accumulated: list[str] = []
         final_answer = None
+        canonical_output = None
+        canonical_context = None
         from openagent_core.stream.content_parts import ContentMarkerStreamFilter
         content_stream_filter = ContentMarkerStreamFilter()
         audio_started = False
@@ -1907,7 +1932,7 @@ class StreamTurnRunner:
         try:
             try:
                 terminal_text_replaced_stream = False
-                async for event in self._agent.run_stream(
+                agent_stream = self._agent.run_stream(
                     message=text,
                     user_id=client_id,
                     session_id=session_id,
@@ -1915,7 +1940,13 @@ class StreamTurnRunner:
                     on_status=on_status,
                     author=author,
                     **({"run_id": turn_context.request_id} if getattr(turn_context,"request_id",None) else {}),
-                ):
+                )
+                # Retain the facade's admitted scope through publication,
+                # including privacy fences, and close in this same task.
+                close_stream = getattr(agent_stream, "aclose", None)
+                if close_stream is not None:
+                    stream_cleanup.push_async_callback(close_stream)
+                async for event in agent_stream:
                     # Engagement signal — soonest reliable indicator
                     # the prompt reached the provider. Idempotent bool,
                     # safe to set on every event. See ``_dispatch_turn``.
@@ -1966,6 +1997,14 @@ class StreamTurnRunner:
                             break
                         terminal_text = event.get("text")
                         final_answer = event.get("final_answer")
+                        if event.get("content_format") == "openagent.canonical-content/v1":
+                            from openagent_core.runtime import current_runtime, current_execution_context
+                            runtime = current_runtime()
+                            context = current_execution_context()
+                            if runtime is None or context is None or context.session_id != session_id:
+                                raise PermissionError("Canonical output requires its admitted session context")
+                            canonical_output = event
+                            canonical_context = (runtime, context)
                         if terminal_text is not None:
                             streamed_text = "".join(accumulated)
                             if streamed_text:
@@ -2084,52 +2123,72 @@ class StreamTurnRunner:
                 )
 
             from openagent_core.stream.content_parts import parse_response_content
-            parsed_content = parse_response_content(
-                full_text,
-                allow_inline_ui=turn_context.supports_client_capability("inline_ui"),
-            )
-            clean = parsed_content.text
-            att_list = [dict(a) for a in parsed_content.attachments]
-            content_parts = [dict(part) for part in parsed_content.parts]
-            attachment_bindings = []
-            if att_list:
-                from openagent_core.memory.artifacts import ArtifactError, persist_output_attachments
+            if canonical_output is not None and stream_error is None and not cancelled:
+                from openagent_core.contracts import ResourceRef, require_authorized
+                from openagent_core.workspace_administration import SessionInspection
+                runtime, context = canonical_context
+                async def can_publish_canonical():
+                    await require_authorized(runtime.services.authorizer, context, "run.publish",
+                        ResourceRef("session", context.tenant_id, session_id), audience=context.audience)
+                await can_publish_canonical()
+                # The engine already consumed path markers and selected the
+                # authored final boundary. Re-resolve only its current-session
+                # refs; reparsing clean text here would erase every attachment.
+                frame = await SessionInspection(artifact_db, runtime.services.authorizer)._public_output_frame(
+                    context, session_id, canonical_output)
+                await can_publish_canonical()
+                clean = frame["text"]
+                att_list = frame["attachments"]
+                content_parts = frame["parts"]
+                final_answer = frame["final_answer"]
+                attachment_bindings = []
+            else:
+                parsed_content = parse_response_content(
+                    full_text,
+                    allow_inline_ui=turn_context.supports_client_capability("inline_ui"),
+                )
+                clean = parsed_content.text
+                att_list = [dict(a) for a in parsed_content.attachments]
+                content_parts = [dict(part) for part in parsed_content.parts]
+                attachment_bindings = []
+                if att_list:
+                    from openagent_core.memory.artifacts import ArtifactError, persist_output_attachments
 
-                try:
-                    persisted = await persist_output_attachments(
-                        artifact_db,
-                        session_id,
-                        att_list,
-                        principal=artifact_principal,
-                    )
-                    att_list = [dict(item) for item in persisted]
-                    if len(att_list) == len(parsed_content.attachments):
-                        attachment_bindings = list(zip(parsed_content.attachments, att_list))
-                    attachment_iter = iter(att_list)
-                    for part in content_parts:
-                        if part.get("kind") == "attachment":
-                            try:
-                                part["attachment"] = next(attachment_iter)
-                            except StopIteration:
-                                part["attachment"] = None
-                    content_parts = [
-                        part for part in content_parts
-                        if part.get("kind") != "attachment" or part.get("attachment")
-                    ]
-                except ArtifactError as exc:
-                    # Never expose a stale arbitrary path if persistence failed.
-                    logger.warning(
-                        "output attachment persistence failed (%s)",
-                        type(exc).__name__,
-                    )
-                    att_list = []
-                    content_parts = [
-                        part for part in content_parts
-                        if part.get("kind") != "attachment"
-                    ]
-                    suffix = "An attachment could not be saved."
-                    clean = f"{clean}\n\n({suffix})" if clean else f"({suffix})"
-                    content_parts.append({"kind": "text", "text": f"\n\n({suffix})"})
+                    try:
+                        persisted = await persist_output_attachments(
+                            artifact_db,
+                            session_id,
+                            att_list,
+                            principal=artifact_principal,
+                        )
+                        att_list = [dict(item) for item in persisted]
+                        if len(att_list) == len(parsed_content.attachments):
+                            attachment_bindings = list(zip(parsed_content.attachments, att_list))
+                        attachment_iter = iter(att_list)
+                        for part in content_parts:
+                            if part.get("kind") == "attachment":
+                                try:
+                                    part["attachment"] = next(attachment_iter)
+                                except StopIteration:
+                                    part["attachment"] = None
+                        content_parts = [
+                            part for part in content_parts
+                            if part.get("kind") != "attachment" or part.get("attachment")
+                        ]
+                    except ArtifactError as exc:
+                        # Never expose a stale arbitrary path if persistence failed.
+                        logger.warning(
+                            "output attachment persistence failed (%s)",
+                            type(exc).__name__,
+                        )
+                        att_list = []
+                        content_parts = [
+                            part for part in content_parts
+                            if part.get("kind") != "attachment"
+                        ]
+                        suffix = "An attachment could not be saved."
+                        clean = f"{clean}\n\n({suffix})" if clean else f"({suffix})"
+                        content_parts.append({"kind": "text", "text": f"\n\n({suffix})"})
 
             # Syntactic markers are only carriers.  Recheck the referenced
             # immutable inline revision against the authenticated turn and
@@ -2244,7 +2303,8 @@ class StreamTurnRunner:
                 attachments=tuple(att_list),
                 parts=tuple(content_parts),
                 model=meta.get("model"),
-                final_answer=(project_final_answer(final_answer, attachment_bindings=attachment_bindings)
+                final_answer=((final_answer if canonical_output is not None else
+                               project_final_answer(final_answer, attachment_bindings=attachment_bindings))
                               if stream_error is None and not cancelled else None),
             ))
             # One ``OutError`` per failed turn, wherever the failure came

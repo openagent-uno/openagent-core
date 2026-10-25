@@ -147,6 +147,65 @@ class NormalDeliveryPaths(unittest.IsolatedAsyncioTestCase):
                 finally:
                     await session.close()
 
+    async def test_engine_output_survives_stream_session_without_reparsing_or_preview_promotion(self):
+        from openagent_core.engine import AgentExecutor
+        from openagent_core.runtime import Runtime, RuntimeServices, RuntimeSettings, execution_scope, current_execution_context
+        from openagent_core.stream.session import StreamSession
+        from openagent_core.stream.collector import StreamCollector, fold_outbound_event
+        from openagent_core.stream.events import TextFinal
+        cases = [("All done.", []),
+                 (f"Result [FILE:{self.generated['path']}]", [self.generated["artifact_id"]]),
+                 (f"[IMAGE:{self.input['path']}][FILE:{self.generated['path']}]",
+                  [self.input["artifact_id"], self.generated["artifact_id"]])]
+        for case, (final, expected) in enumerate(cases):
+            with self.subTest(final=final[:12]):
+                frame = self.frames(final)
+                events, closed = [], []
+                async def append(*args): events.append(args)
+                runtime = Runtime(RuntimeSettings("agent", self.path), RuntimeServices(
+                    store=SimpleNamespace(append_event=append), executor=None, authorizer=self.policy))
+                class ProviderAgent:
+                    memory_db = self.db
+                    async def run_stream(_self, *args, **kwargs):
+                        conn = await self.db._ensure_connected()
+                        for ordinal, role in enumerate(("user", "assistant")):
+                            sequence = (case + 1) * 10 + ordinal
+                            await conn.execute("INSERT INTO session_messages "
+                                "(id,tenant_id,session_id,run_id,sequence,ordinal,role,status,author_kind,author_principal_id,text,visibility,source_version,completeness,raw_envelope_json,raw_envelope_schema,legacy_inferred,created_at_ms,updated_at_ms) "
+                                "VALUES (?,?,?,?,?,?,?,'complete',?,'user:alice',?,'user_visible',1,'complete','{}',1,0,1,1)",
+                                (f"composed-{case}-{role}", "tenant", "session", "run", sequence, sequence,
+                                 role, "user" if role == "user" else "agent", "question" if role == "user" else frame["text"]))
+                        await conn.commit()
+                        yield frame
+                class RuntimeFacade:
+                    name = "runtime-facade"
+                    memory_db = self.db
+                    async def run_stream(_self, *args, **kwargs):
+                        await AgentExecutor(ProviderAgent()).execute(self.request, self.ctx, runtime)
+                        with execution_scope(runtime, self.ctx, "run"):
+                            try:
+                                for event in events:
+                                    if event[-2] == "run.stream":
+                                        yield event[-1]
+                            finally:
+                                closed.append(current_execution_context())
+                async def no_provider(_db): return None
+                session = StreamSession(RuntimeFacade(), client_id="fixture", session_id="session", coalesce_window_ms=0)
+                await session.start(stt_factory=no_provider, tts_factory=no_provider)
+                try:
+                    await session.push_in(TextFinal(session_id="session", text="question"))
+                    reply = StreamCollector()
+                    while not fold_outbound_event(reply, await asyncio.wait_for(session.outbound.get(), 5)): pass
+                    if session._current_turn is not None:
+                        await asyncio.wait_for(asyncio.shield(session._current_turn), 5)
+                    self.assertGreaterEqual(len(reply.attachments), 2)
+                    self.assertEqual(expected, [ref["artifact_id"] for ref in reply.final_answer["attachments"]])
+                    self.assertEqual([self.ctx], closed)
+                    self.assertNotIn(self.temp.name, str(reply.attachments) + str(reply.final_answer))
+                    self.assertIsNone(current_execution_context())
+                finally:
+                    await session.close()
+
     async def test_deleted_and_unbound_final_artifact_never_delivers_or_exposes_path(self):
         from openagent_core.engine import AgentExecutor
         conn = await self.db._ensure_connected()

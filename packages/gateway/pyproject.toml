@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 [project]
 name = "openagent-gateway"
-version = "1.1.0b32"
+version = "1.1.0b33"
 requires-python = ">=3.11"
-dependencies = ["openagent-core==1.1.0b32", "aiohttp>=3.10,<4"]
+dependencies = ["openagent-core==1.1.0b33", "aiohttp>=3.10,<4"]
 [tool.setuptools.packages.find]
 where = ["src"]

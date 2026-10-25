@@ -131,7 +131,7 @@ class AgentExecutor:
                     await can_publish()
                     event = {**event, "text": final_text, "parts": parts, "attachments": attachments}
                 from .stream.final_answer import project_final_answer
-                event = {**event, "final_answer": project_final_answer(
+                event = {**event, "content_format": "openagent.canonical-content/v1", "final_answer": project_final_answer(
                     event.get("final_answer"), attachment_bindings=attachment_bindings,
                 )}
             elif kind == "error":
