@@ -1,0 +1,16 @@
+{
+  "sourceCommit": "60470a21391d0f388d56c2665e1d1d6afe85e4bd",
+  "manifestSHA256": "9194f88c5a8393975a6a3d3e50a26d8f226bbcb6e9ba4fd83ecd72632e55dd35",
+  "assetsFullHTTPSHashVerified": 26,
+  "wheelCount": 23,
+  "installedFocusedTestsSkipped": 0,
+  "installedPytestCasesPassed": 263,
+  "installedSubtestsPassed": 54,
+  "pipCheckPassed": true,
+  "importPrefixAndInstalledRECORDVerified": true,
+  "sourceWheelICSDerivationApplied": false,
+  "version": "1.1.0b33",
+  "releaseURL": "https://github.com/openagent-uno/openagent-core/releases/tag/v1.1.0-beta.33",
+  "composedRegression": "AgentExecutor -> scoped runtime observation -> StreamSession -> canonical final media selection",
+  "realProviderAcceptance": false
+}
