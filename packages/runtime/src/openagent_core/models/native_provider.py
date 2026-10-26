@@ -64,14 +64,11 @@ from openagent_core.models.credential_pool import get_or_build_pool
 logger = logging.getLogger(__name__)
 
 
-# Backstop on how many tools ONE run may call before the runtime stops handing
-# it more. Not a budget for normal work — real turns measured 3.3 tool calls on
-# average, 13 at the worst — but a ceiling on the pathological one: the loop
-# re-sends the ENTIRE context on every step, so an agent that keeps calling
-# tools pays for its whole history again each time. Past the limit the runtime
-# returns "tool call limit reached" instead of executing, and the model has to
-# answer with what it has. Tune with OPENAGENT_MAX_TOOL_CALLS_PER_RUN.
-_DEFAULT_MAX_TOOL_CALLS_PER_RUN = 60
+# An explicit host/operator execution envelope is authoritative. Ordinary
+# interactive document work must not silently lose its final delivery tool
+# after sixty legitimate preparation steps. Invalid explicit configuration
+# still falls back to the historical bound rather than removing that control.
+_INVALID_MAX_TOOL_CALLS_FALLBACK = 60
 
 
 # ── la guardia sulle chiamate ripetute e' STACCATA ────────────────────────
@@ -134,11 +131,11 @@ def _max_tool_calls_per_run() -> Optional[int]:
         return value if value > 0 else default
     raw = runtime_environment().get("OPENAGENT_MAX_TOOL_CALLS_PER_RUN", "").strip()
     if not raw:
-        return _DEFAULT_MAX_TOOL_CALLS_PER_RUN
+        return None
     try:
         val = int(raw)
     except ValueError:
-        return _DEFAULT_MAX_TOOL_CALLS_PER_RUN
+        return _INVALID_MAX_TOOL_CALLS_FALLBACK
     # 0 / negative = explicitly unbounded, for an operator who knows why.
     return val if val > 0 else None
 
@@ -1568,9 +1565,8 @@ class NativeProvider(ProviderResources, BaseModel):
             # user-scoped persistence. Keeping it off avoids the legacy agno_memories
             # table creation and keeps all state in the sessions table.
             enable_agentic_memory=False,
-            # Backstop against a run that never stops calling tools: every step
-            # re-sends the whole context, so an unbounded loop pays for the
-            # history again on each one.
+            # Honor the host/operator envelope, without inventing an
+            # additional hidden limit for ordinary interactive work.
             tool_call_limit=_max_tool_calls_per_run(),
             markdown=False,
         )

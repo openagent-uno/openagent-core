@@ -1,5 +1,7 @@
 # OpenAgent core documentation
 
+- [Interactive tool budgets and final delivery](interactive-tool-budgets.md)
+
 The embedding API is released as the `1.1.0b31` modular family. Its SQLite
 adapter, gateway and Python SDK share that version and pin the same Core wheel.
 Beta27 adds an optional authoritative `final_answer` envelope while preserving
