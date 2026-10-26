@@ -39,12 +39,40 @@ PUBLIC_MESSAGES: dict[str, str] = {
         "provider's status before retrying."
     ),
     "auth": (
-        "The model provider rejected authentication or access. Check this "
-        "agent's provider settings."
+        "AI account authentication is invalid or access was denied. Reconnect the "
+        "account or check its API key and model permissions in Models and Providers."
+    ),
+    "auth_expired": (
+        "AI account authentication has expired or was revoked. Reconnect the "
+        "account in Models and Providers; retrying the message cannot renew it."
+    ),
+    "provider_not_configured": (
+        "No AI provider account is configured. Open Models and Providers and "
+        "connect an account or add an API key."
+    ),
+    "model_not_configured": (
+        "No AI model is configured and enabled. Open Models and Providers, "
+        "add a model under a connected AI account and enable it."
+    ),
+    "model_unavailable": (
+        "The selected AI model is unavailable. Check its identifier and your "
+        "account's access in Models and Providers, or select another enabled model."
+    ),
+    "quota_exhausted": (
+        "The AI account's usage allowance or credits are exhausted. Check usage "
+        "and billing; wait for the quota reset, add credits or select another account."
+    ),
+    "budget_exhausted": (
+        "This agent's configured AI spending budget has been reached. Review "
+        "Budgets or select a model that is within the budget."
+    ),
+    "context_length": (
+        "This conversation exceeds the AI model's context limit. Start a new "
+        "conversation or use a model with a larger context window."
     ),
     "rate_limit": (
-        "The model provider reported a rate or quota limit. Check usage and "
-        "retry when it clears."
+        "The AI provider temporarily limited the request rate. Wait for the "
+        "retry interval or quota reset shown by the provider, then retry."
     ),
 }
 
@@ -105,12 +133,16 @@ def classify_run_error(error: BaseException | None) -> RunErrorClass:
             break
         seen.add(id(error))
 
-        if isinstance(error, RunTurnError):
+        if isinstance(error, RunTurnError) and error.code != GENERIC:
             return RunErrorClass(error.code)
 
         diagnostic = ""
         if isinstance(error, BaseException):
             diagnostic = str(error).lower()
+
+        signal = _model_diagnostic_code(diagnostic)
+        if signal is not None:
+            return RunErrorClass(signal)
 
         if any(marker in diagnostic for marker in _DNS_MARKERS):
             return RunErrorClass("dns")
@@ -124,6 +156,8 @@ def classify_run_error(error: BaseException | None) -> RunErrorClass:
             data = getattr(error, "additional_data", None)
             if isinstance(data, dict):
                 status = data.get("status_code")
+        if status == 402:
+            return RunErrorClass("quota_exhausted")
         if status in (401, 403):
             return RunErrorClass("auth")
         if status == 429:
@@ -132,3 +166,23 @@ def classify_run_error(error: BaseException | None) -> RunErrorClass:
         error = getattr(error, "__cause__", None) or getattr(error, "__context__", None)
 
     return RunErrorClass()
+
+
+# Diagnostics are inspected locally; only an allowlisted code and constant
+# message are published. Never return provider JSON, keys or request bodies.
+def _model_diagnostic_code(text: str) -> str | None:
+    patterns = (
+        ("auth_expired", ("invalid_grant", "refresh token expired", "refresh_token expired", "token has expired", "token is expired", "token expired", "authentication expired", "authentication has expired", "credentials have expired", "credentials expired", "token was revoked")),
+        ("provider_not_configured", ("provider_not_configured", "no ai account is configured", "no claude ai account", "no provider configured", "provider is not configured", "api key is required", "no api key", "api_key must be set", "missing api key", "missing api_key")),
+        ("model_not_configured", ("no_enabled_model", "no models are enabled", "no model is currently enabled", "no models configured", "no model configured")),
+        ("quota_exhausted", ("insufficient_quota", "quota_exhausted", "quota exceeded", "quota has been exceeded", "exceeded your current quota", "credit balance is too low", "insufficient credits", "out of credits", "credits exhausted", "usage allowance", "usage limit reached", "usage limit exceeded", "spending limit reached", "billing hard limit", "billing_hard_limit")),
+        ("context_length", ("context_length_exceeded", "maximum context length", "context window exceeded", "prompt is too long", "input is too long")),
+        ("budget_exhausted", ("budget exceeded", "budget exhausted", "budget has been reached", "excluded by its budget")),
+        ("auth", ("authentication_error", "modelauthenticationerror", "invalid_api_key", "invalid api key", "incorrect api key", "invalid bearer token", "unauthorized", "authentication is invalid")),
+        ("model_unavailable", ("model_not_found", "model not found", "model does not exist", "model is not available", "pinned model is unavailable", "pinned model is not configured")),
+        ("rate_limit", ("rate_limit_error", "modelratelimiterror", "rate limit", "rate_limit_exceeded", "too many requests", "tokens per minute", "requests per minute")),
+    )
+    for code, markers in patterns:
+        if any(marker in text for marker in markers):
+            return code
+    return None

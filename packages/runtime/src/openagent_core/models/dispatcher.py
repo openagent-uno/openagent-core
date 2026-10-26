@@ -2401,8 +2401,8 @@ class ModelDispatcher(BaseModel):
                 session_id=session_id,
                 reason=decision.reason,
             )
-            _mark_no_capacity(decision.reason)
-            return ModelResponse(content="No model is currently enabled.", stop_reason="error")
+            from openagent_core.core.public_errors import RunTurnError, PUBLIC_MESSAGES
+            raise RunTurnError(PUBLIC_MESSAGES["model_not_configured"], code="model_not_configured")
 
         runtime_id = decision.primary_model
         if files or images or audio or videos:
@@ -2510,9 +2510,8 @@ class ModelDispatcher(BaseModel):
                 session_id=session_id,
                 reason=decision.reason,
             )
-            _mark_no_capacity(decision.reason)
-            yield "No model is currently enabled."
-            return
+            from openagent_core.core.public_errors import RunTurnError, PUBLIC_MESSAGES
+            raise RunTurnError(PUBLIC_MESSAGES["model_not_configured"], code="model_not_configured")
 
         runtime_id = decision.primary_model
         if files or images or audio or videos:

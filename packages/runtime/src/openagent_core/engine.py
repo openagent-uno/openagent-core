@@ -84,7 +84,9 @@ class AgentExecutor:
                 # Agent.run_stream reports provider failures as a terminal
                 # frame so channel clients can display them. A durable run
                 # must fail instead of recording that frame as an answer.
-                raise RuntimeError(event.get("error_public") or "Agent execution failed")
+                from .core.public_errors import RunTurnError, RunErrorClass
+                failure = RunErrorClass(event.get("error_code"))
+                raise RunTurnError(failure.public_message, code=failure.code)
             if kind == "delta":
                 chunks.append(event.get("text") or "")
                 event = {**event, "text": marker_filter.feed(event.get("text") or "")}
@@ -135,12 +137,17 @@ class AgentExecutor:
                     event.get("final_answer"), attachment_bindings=attachment_bindings,
                 )}
             elif kind == "error":
-                raise RuntimeError("Agent stream failed")
+                from .core.public_errors import RunTurnError, RunErrorClass
+                failure = RunErrorClass(event.get("error_code"))
+                raise RunTurnError(failure.public_message, code=failure.code)
             await runtime.services.store.append_event(request.run_id,"run.stream",event)
         result = final_text if final_text is not None else "".join(chunks)
         failure = take_run_failure()
         if failure:
-            raise RuntimeError('Agent execution failed')
+            from .core.public_errors import RunTurnError, classify_run_error
+            error = RuntimeError(failure)
+            classified = classify_run_error(error)
+            raise RunTurnError(classified.public_message, code=classified.code)
         return result
 
 

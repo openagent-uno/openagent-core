@@ -46,9 +46,9 @@ class EngineExecutor(unittest.IsolatedAsyncioTestCase):
         executor = AgentExecutor(_Agent([
             {"kind": "delta", "text": "partial"},
             {"kind": "done", "text": "internal detail", "errored": True,
-             "error_public": "The model is unavailable."},
+             "error_public": "PRIVATE arbitrary detail", "error_code":"model_unavailable"},
         ]))
-        with self.assertRaisesRegex(RuntimeError, "model is unavailable"):
+        with self.assertRaisesRegex(RuntimeError, "selected AI model is unavailable"):
             await executor.execute(self.request, self.context, self.runtime)
         self.assertEqual(
             ["delta"],

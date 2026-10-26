@@ -757,6 +757,10 @@ class Runtime:
             # Details may include secrets or private provider diagnostics.
             from .content_privacy import ToolResultPrivacyPublisher,PrivacyFence
             error_output={'error_type':type(exc).__name__}
+            from .core.public_errors import classify_run_error, GENERIC
+            failure = classify_run_error(exc)
+            if failure.code != GENERIC:
+                error_output.update(error_code=failure.code, error_public=failure.public_message)
             privacy=self.service(ToolResultPrivacyPublisher)
             if privacy is not None:
                 try:

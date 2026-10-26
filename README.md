@@ -10,7 +10,7 @@ Products supply authentication, system instructions, resources, tools, and polic
 embedding-host builds its own worker and sandbox from pinned core packages; the
 standalone app/CLI/server are maintained in the `openagent` product monorepo.
 
-The `1.1.0b35` kernel, SQLite adapter, gateway and SDK add bounded completion
+The `1.1.0b36` kernel, SQLite adapter, gateway and SDK add bounded completion
 repair when an authenticated send-file call is omitted from the terminal reply.
 The same model must author the exact markers; publication and recipient checks
 remain in force. Beta29 confines final-answer media to exact markers authored
@@ -32,14 +32,14 @@ the boundaries that still require product-specific qualification.
 Public architecture and product installation guides are published at
 [openagent.uno](https://openagent.uno/guide/architecture). Download the exact
 Core wheel set and manifest from
-[`v1.1.0-beta.35`](https://github.com/openagent-uno/openagent-core/releases/tag/v1.1.0-beta.35).
+[`v1.1.0-beta.36`](https://github.com/openagent-uno/openagent-core/releases/tag/v1.1.0-beta.36).
 
 ```sh
 pip install --find-links /path/to/verified-wheelhouse \
-  openagent-core==1.1.0b35 openagent-storage-sqlite==1.1.0b35
+  openagent-core==1.1.0b36 openagent-storage-sqlite==1.1.0b36
 # Hosts that need the full algorithm select the relevant extras:
 pip install --find-links /path/to/verified-wheelhouse \
-  'openagent-core[engine,providers,modules,retrieval]==1.1.0b35'
+  'openagent-core[engine,providers,modules,retrieval]==1.1.0b36'
 ```
 
 Packages shown above are independent distribution names. Hosts pin exact wheel
