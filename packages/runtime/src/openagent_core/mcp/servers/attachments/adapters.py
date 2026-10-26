@@ -124,11 +124,17 @@ def build_runtime_toolkit() -> Any:
             if verified is None or not isinstance(ref.get("path"), str):
                 raise ValueError("The host publisher did not return a session-linked artifact")
             marker = f"[FILE:{ref['path']}]"
+            from openagent_core.core.output_delivery import record_delivery
+            record_delivery(marker)
             return {"ok": True, "marker": marker, "attachment": verified,
                 "instruction": "Include the marker verbatim in the final reply to deliver this attachment."}
         if runtime is not None:
             return {"ok": False, "error": "Attachment delivery capability is unavailable on this host."}
-        return _send_file_impl(path)
+        result = _send_file_impl(path)
+        if result.get("ok"):
+            from openagent_core.core.output_delivery import record_delivery
+            record_delivery(result["marker"])
+        return result
 
     return Toolkit(
         name="attachments",

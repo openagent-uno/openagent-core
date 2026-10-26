@@ -98,3 +98,28 @@ normal public-wheel installation passed pip check, installed version/prefix and
 RECORD checks plus 174 tests and 30 subtests, zero skips. This qualifies the
 component boundary, separately from native host adoption or live channel
 acceptance.
+
+## Prepared files omitted by the final answer
+
+A successful authenticated `attachments.send_file_to_user` call records its
+normally published, session-linked marker in a bounded execution-local scope.
+If an attested terminal answer omits a marker requested by that tool, Agent
+asks the same model for a corrected complete final answer, without re-running
+the tools or regenerating the file. At most two repairs are allowed, and the
+configured autoloop cap still applies. Persistent omission fails the turn;
+cancellation does not deliver a file. Unsupported unattested stream providers
+retain their existing contract.
+
+The model still authors the exact final markers. Core neither appends a marker
+to an attestation nor selects files from names, prose, images, read-tool
+previews, old turns or child sessions. The scope is bound to the runtime,
+authenticated execution and run identity; nested/concurrent runs and late tasks
+cannot add deliveries to another scope. A final marker still crosses the same
+publication, artifact/session and recipient authorization checks. Preparing a
+file is not a receipt that a messaging platform has accepted its upload.
+
+`tests/public/test_attachment_completion.py` covers the actual Agent streaming
+and generate loops with the built-in tool, normal SQLite artifact publication,
+model-authored correction, persistent omission, configured limits,
+cancellation and scope isolation. Product/channel delivery remains a separate
+live acceptance gate.

@@ -1,0 +1,26 @@
+{
+  "status": "source-debug-passed-not-product-qualified",
+  "baseCommit": "f2df94148a42456c5cffcb5763bc4e2b80a8fa71",
+  "regression": "Successful send_file_to_user result followed by a terminal answer omitting its exact marker previously closed as successful text-only delivery.",
+  "sourceTestsPassed": 132,
+  "subtestsPassed": 26,
+  "newTestsPassed": 10,
+  "checks": [
+    "normal SQLite publication and built-in send-file tool",
+    "same-model authored correction, streaming and generate",
+    "persistent omission closes with failure",
+    "existing iteration limit retained",
+    "cancellation retained",
+    "runtime, execution, run and child scope isolation",
+    "legacy unattested behavior preserved",
+    "existing final media authorization and preview non-forwarding regressions retained"
+  ],
+  "sourceSHA256": {
+    "packages/runtime/src/openagent_core/core/output_delivery.py": "6c5ee12d8abe5dec7e0b19b8a5b121d551bb2e80fc637f196fff22660cec4204",
+    "packages/runtime/src/openagent_core/core/agent.py": "a92657b4e77cac1ef35573bd684a7cd027abad4726f6b9cf9b60deba95cab4d1",
+    "packages/runtime/src/openagent_core/mcp/servers/attachments/adapters.py": "e44d8c2b0bdad8a6d58d0d4d0f1faf73c93750ffca271785f158cc3bff564ab8",
+    "tests/public/test_attachment_completion.py": "8223272b5a7889ee310a437aec0b0913c5e480e0da169fe80b2d33fa2363dfbc"
+  },
+  "realProviderOrChannelQualified": false,
+  "nativeProductQualified": false
+}

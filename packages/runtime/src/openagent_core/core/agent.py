@@ -1782,6 +1782,8 @@ class Agent:
             pre = _format_shell_reminder(pending)
             current_input = f"{pre}\n\n{current_input}"
 
+        from openagent_core.core import output_delivery
+        delivery_scope, delivery_token = output_delivery.open_scope()
         try:
             while True:
                 iter_count += 1
@@ -1878,6 +1880,15 @@ class Agent:
                     response, session_id=session_id, iter_count=iter_count,
                 )
 
+                answer = getattr(response, "final_answer", None)
+                answer_text = (answer.get("text", "") if isinstance(answer, dict)
+                               else response.content or "")
+                delivery_reminder = delivery_scope.repair(
+                    answer_text, iteration=iter_count, cap=cap)
+                if delivery_reminder is not None:
+                    current_input = delivery_reminder
+                    continue
+
                 events = hub.drain(session_id, context_key=job_context)
                 if not events:
                     if not hub.has_running(
@@ -1901,6 +1912,7 @@ class Agent:
                 )
                 current_input = _format_shell_reminder(events)
         finally:
+            output_delivery.close_scope(delivery_scope, delivery_token)
             self._release_model_slot(active_model)
             # Balance the mark_turn_active above. In ``finally`` (not the
             # normal-completion path) so the active-turn count is released even
@@ -2194,6 +2206,8 @@ class Agent:
         # ModelResponse from that call wins for last_response_meta()
         # over the synthetic placeholder.
         fallback_response: ModelResponse | None = None
+        from openagent_core.core import output_delivery
+        delivery_scope, delivery_token = output_delivery.open_scope()
         try:
             while True:
                 final_answer = None  # Never reuse a prior autoloop iteration.
@@ -2303,6 +2317,18 @@ class Agent:
                 finally:
                     reset_delegation_context(delegation_tokens)
                     reset_author_context(author_token)
+
+                # Keep the final-answer boundary authored by the provider. A
+                # successful send-file call is not itself an attestation, and
+                # tool previews never become final output. Ask the same model
+                # for a corrected terminal answer rather than appending files.
+                if final_answer is not None:
+                    delivery_reminder = delivery_scope.repair(
+                        final_answer["text"], iteration=iter_count, cap=cap)
+                    if delivery_reminder is not None:
+                        yield {"kind": "iteration_break"}
+                        current_input = delivery_reminder
+                        continue
 
                 events = hub.drain(session_id, context_key=job_context)
                 if not events:
@@ -2432,6 +2458,7 @@ class Agent:
                         error=str(e) or repr(e),
                     )
         finally:
+            output_delivery.close_scope(delivery_scope, delivery_token)
             self._release_model_slot(active_model)
             # Balance the mark_turn_active above (streaming twin of _run_inner).
             if turn_registered and session_id:
