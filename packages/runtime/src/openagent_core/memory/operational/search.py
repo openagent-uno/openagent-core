@@ -16,6 +16,8 @@ import os
 import re
 import sqlite3
 import time
+import threading
+import contextvars
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -885,6 +887,51 @@ async def _source_row(conn: Any, source_kind: str, source_id: str) -> tuple[dict
     return None
 
 
+async def _index_thread_call(function, *args, _close_result_on_cancel=False, **kwargs):
+    """Keep a handed-off SQLite connection alive until its worker has stopped.
+
+    Cancelling to_thread only cancels its waiter. Closing the connection from
+    the caller's finally while SQLite is still stepping can crash the process.
+    Interrupt long queries, drain even repeated cancellation, then let the
+    caller roll back/close. A cancelled open closes its otherwise lost result.
+    """
+    cancelled = threading.Event()
+    conn = args[0] if args and isinstance(args[0], sqlite3.Connection) else None
+
+    def work():
+        if conn is not None:
+            conn.set_progress_handler(lambda: int(cancelled.is_set()), 1000)
+        try:
+            return function(*args, **kwargs)
+        finally:
+            if conn is not None:
+                conn.set_progress_handler(None, 0)
+
+    context = contextvars.copy_context()
+    task = asyncio.get_running_loop().run_in_executor(None, context.run, work)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        cancelled.set()
+        if conn is not None:
+            conn.interrupt()
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        try:
+            value = task.result()
+        except Exception:
+            pass
+        else:
+            if _close_result_on_cancel:
+                value.close()
+        raise
+
+
 async def _sync_operational_search_unlocked(
     db: Any,
     *,
@@ -910,7 +957,7 @@ async def _sync_operational_search_unlocked(
             ).fetchone()
         )[0]
     )
-    index = await asyncio.to_thread(_open_index, target)
+    index = await _index_thread_call(_open_index, target, _close_result_on_cancel=True)
     try:
         state = index.execute("SELECT * FROM search_index_state WHERE singleton_id=1").fetchone()
         incompatible = _index_is_incompatible(
@@ -928,10 +975,10 @@ async def _sync_operational_search_unlocked(
         rowid_mismatch = (
             False
             if incompatible
-            else await asyncio.to_thread(_index_has_rowid_mismatch, index)
+            else await _index_thread_call(_index_has_rowid_mismatch, index)
         )
         if incompatible or rowid_mismatch:
-            await asyncio.to_thread(
+            await _index_thread_call(
                 _reset_index_generation,
                 index,
                 target,
@@ -995,7 +1042,7 @@ async def _sync_operational_search_unlocked(
             documents = int(index.execute("SELECT COUNT(*) FROM search_documents WHERE deleted_at_ms IS NULL").fetchone()[0])
             chunks = int(index.execute("SELECT COUNT(*) FROM search_chunks").fetchone()[0])
             fts_rows = int(index.execute("SELECT COUNT(*) FROM search_fts").fetchone()[0])
-            rowids_match = not await asyncio.to_thread(
+            rowids_match = not await _index_thread_call(
                 _index_has_rowid_mismatch,
                 index,
             )
@@ -1140,7 +1187,7 @@ async def operational_search_status(db: Any) -> dict[str, Any]:
             ).fetchone()
         )[0]
     )
-    conn = await asyncio.to_thread(_open_index, path)
+    conn = await _index_thread_call(_open_index, path, _close_result_on_cancel=True)
     try:
         state = conn.execute(
             "SELECT * FROM search_index_state WHERE singleton_id=1"
@@ -1157,7 +1204,7 @@ async def operational_search_status(db: Any) -> dict[str, Any]:
         # Integrity verification is proportional to the complete derived
         # corpus, not the small status row.  Keep it off the gateway event
         # loop so a large index cannot freeze chat, REST, or scheduler ticks.
-        rowid_mismatch = await asyncio.to_thread(
+        rowid_mismatch = await _index_thread_call(
             _index_has_rowid_mismatch,
             conn,
         )
@@ -1208,7 +1255,7 @@ async def refresh_privacy_search(db: Any, *, through_seq: int, batch_size: int =
     lock=_SYNC_LOCKS.setdefault(key,asyncio.Lock())
     async with lock:
         target=operational_search_path(db.db_path)
-        index=await asyncio.to_thread(_open_index,target)
+        index=await _index_thread_call(_open_index, target, _close_result_on_cancel=True)
         try:
             index.execute('PRAGMA secure_delete=ON')
             # FTS5 tombstones otherwise retain terms even after source refresh.
@@ -1234,7 +1281,7 @@ async def refresh_privacy_search(db: Any, *, through_seq: int, batch_size: int =
                 return index.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0]==0
             finally:
                 index.close()
-        return await asyncio.to_thread(scrub)
+        return await _index_thread_call(scrub)
 
 
 def read_search_rows(
