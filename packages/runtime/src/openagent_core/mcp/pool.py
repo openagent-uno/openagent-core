@@ -501,6 +501,40 @@ class _ToolkitSupervisor:
     name: str
     task: asyncio.Task
     stop_event: asyncio.Event
+    # The exact toolkit this task owns, and the mailbox shared with the task:
+    # ``closing`` (shutdown requested), ``pending`` (the in-flight reconnect)
+    # and ``ready``. See ``MCPPool.reconnect_toolkit``.
+    toolkit: Any = None
+    control: dict[str, Any] | None = None
+    spec: Any = None
+
+
+def _forget_session(toolkit: Any) -> None:
+    """Reset a closed toolkit so the next ``__aenter__`` opens a new session.
+
+    ``MCPTools.__aexit__`` leaves ``session``/``_context`` set when closing a
+    dead session raises, and ``_connect`` would then try to re-initialize the
+    dead session instead of opening a new transport.
+    """
+    for attr, value in (("session", None), ("_session_context", None),
+                        ("_context", None), ("_initialized", False)):
+        if hasattr(toolkit, attr):
+            try:
+                setattr(toolkit, attr, value)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _toolkit_ready(toolkit: Any) -> bool:
+    """``MCPTools.initialize`` swallows its own failures: check the outcome."""
+    if getattr(toolkit, "_initialized", True) is False:
+        return False
+    return not hasattr(toolkit, "session") or toolkit.session is not None
+
+
+# Bounds one in-task session reconnect (close the dead session, reopen it,
+# re-run the MCP handshake) as seen by the caller that asked for it.
+_MCP_RECONNECT_WAIT = 30 + 5 + 5 + 5 + 5
 
 
 def _normalized_mcp_name(name: object) -> str:
@@ -525,6 +559,9 @@ class MCPPool:
             raise ValueError("MCP source names must be nonempty and unique")
         self.specs: list[_ServerSpec] = specs
         self._capability_binding = None
+        # Bumped by reload()/close_all(): a wedged-toolkit replacement built
+        # across one of them must not publish into the new (or closed) pool.
+        self._lifecycle_generation = 0
         # Lazily populated on connect_all. Each toolkit gets its *own*
         # supervisor task (parallel arrays, ``_runtime_toolkits[i]`` is owned
         # by ``_toolkit_supervisors[i]``). The supervisor holds the
@@ -699,6 +736,7 @@ class MCPPool:
         new_specs = await self.rebuild_specs()
 
         async with self._lock:
+            self._lifecycle_generation = getattr(self, "_lifecycle_generation", 0) + 1
             old_supervisors = list(self._toolkit_supervisors)
             old_toolkits = list(self._runtime_toolkits)
             old_in_proc_agno = list(self._in_process_runtime_toolkits)
@@ -889,6 +927,7 @@ class MCPPool:
         async with self._lock:
             if not self._connected:
                 return
+            self._lifecycle_generation = getattr(self, "_lifecycle_generation", 0) + 1
             supervisors = list(self._toolkit_supervisors)
             self._toolkit_supervisors.clear()
             self._runtime_toolkits.clear()
@@ -986,6 +1025,8 @@ class MCPPool:
         task and swallow any BaseException that follows (anyio cleanup on a
         cancelled task can still raise during shutdown).
         """
+        if sup.control is not None:
+            sup.control["closing"] = True
         sup.stop_event.set()
         try:
             await asyncio.wait_for(sup.task, timeout=_MCP_CLOSE_TIMEOUT)
@@ -1048,35 +1089,124 @@ class MCPPool:
         stop_event = asyncio.Event()
         # Holds the exception raised during handshake, if any.
         handshake_error: dict[str, BaseException | None] = {"err": None}
+        # Mailbox shared with ``reconnect_toolkit`` / ``_shutdown_supervisor``.
+        # ``stop_event`` is the single wake-up signal; ``closing`` says whether
+        # the wake-up means "exit" or "replace the session".
+        control: dict[str, Any] = {"closing": False, "pending": None, "ready": False}
+
+        def _resolve_pending(ok: bool) -> None:
+            waiter, control["pending"] = control.get("pending"), None
+            if waiter is not None and not waiter.done():
+                waiter.set_result(ok)
+
+        async def _wait_for_request() -> bool:
+            """Block until shutdown or a reconnect request. True = reconnect."""
+            try:
+                await stop_event.wait()
+            except asyncio.CancelledError:
+                # close_all upgrades to cancel when the graceful wait_for
+                # times out. Let the stack unwind on this same task.
+                control["closing"] = True
+                return False
+            if control["closing"]:
+                return False
+            stop_event.clear()
+            return True
+
+        async def _enter() -> AsyncExitStack:
+            stack = AsyncExitStack()
+            try:
+                async with asyncio.timeout(_MCP_CONNECT_TIMEOUT):
+                    await stack.enter_async_context(toolkit)
+            except BaseException:
+                # Unwind any partial __aenter__ on this same task.
+                try:
+                    await stack.aclose()
+                except BaseException:  # noqa: BLE001
+                    pass
+                raise
+            return stack
+
+        async def _close(stack: AsyncExitStack | None) -> None:
+            # Bounded: a transport that hangs while closing must not wedge the
+            # supervisor (and with it every later reconnect) forever.
+            if stack is not None:
+                try:
+                    async with asyncio.timeout(_MCP_CLOSE_TIMEOUT):
+                        await stack.aclose()
+                except asyncio.CancelledError:
+                    raise
+                except BaseException:  # noqa: BLE001 — a dead transport may fail to close
+                    # ``MCPTools.__aexit__`` skips its transport context when
+                    # closing the session raised; close that one too, on this
+                    # task, so the old transport's workers do not outlive it.
+                    context = getattr(toolkit, "_context", None)
+                    if context is not None:
+                        try:
+                            async with asyncio.timeout(_MCP_CLOSE_TIMEOUT):
+                                await context.__aexit__(None, None, None)
+                        except asyncio.CancelledError:
+                            raise
+                        except BaseException:  # noqa: BLE001
+                            pass
+            _forget_session(toolkit)
 
         async def _supervisor() -> None:
             # Open the stack INSIDE this task so __aenter__ and __aexit__
             # are both on the same task — anyio's cancel-scope invariant.
+            # On request the loop re-enters the SAME toolkit instance: a
+            # streamable-HTTP/stdio session whose streams closed (one timed
+            # out POST is enough) never recovers in place, and the capability
+            # catalog is bound to this exact toolkit object, so the session
+            # is replaced here rather than the toolkit.
+            stack: AsyncExitStack | None = None
             try:
-                async with AsyncExitStack() as stack:
-                    try:
-                        async with asyncio.timeout(_MCP_CONNECT_TIMEOUT):
-                            await stack.enter_async_context(toolkit)
-                    except BaseException as e:
-                        handshake_error["err"] = e
-                        ready_event.set()
-                        # Exiting the AsyncExitStack here runs any partial
-                        # __aexit__ on the same task — correct.
-                        return
-                    # Handshake succeeded. Signal the pool and hold the
-                    # stack open until shutdown asks us to close.
+                try:
+                    stack = await _enter()
+                except BaseException as e:
+                    handshake_error["err"] = e
                     ready_event.set()
+                    return
+                # Handshake succeeded. Signal the pool and hold the stack open
+                # until shutdown or a reconnect request.
+                control["ready"] = True
+                ready_event.set()
+                while await _wait_for_request():
+                    control["ready"] = False
+                    # Close the dead session on this task. A dead transport may
+                    # raise while closing; it is gone either way.
+                    await _close(stack)
+                    stack = None
+                    if control["closing"]:
+                        return
                     try:
-                        await stop_event.wait()
+                        stack = await _enter()
+                        if not _toolkit_ready(toolkit):
+                            raise RuntimeError("MCP session did not initialize")
                     except asyncio.CancelledError:
-                        # close_all upgrades to cancel when the graceful
-                        # wait_for times out. Let the stack unwind on this
-                        # same task — do NOT re-raise until after __aexit__.
-                        pass
+                        raise
+                    except BaseException as e:  # noqa: BLE001
+                        elog("mcp.session_reconnect_failed", level="warning",
+                             name=spec.name, error=f"{type(e).__name__}: {e}")
+                        await _close(stack)
+                        stack = None
+                        _resolve_pending(False)
+                        continue
+                    if control["closing"]:
+                        return
+                    control["ready"] = True
+                    _resolve_pending(True)
             except BaseException:  # noqa: BLE001 — best-effort cleanup
                 # Any cleanup exception is logged by the caller; keep the
                 # task complete so close_all's await returns.
                 pass
+            finally:
+                control["ready"] = False
+                # Resolve first: a cancellation while closing must not leave
+                # callers waiting on a reconnect that will never finish.
+                _resolve_pending(False)
+                if stack is not None:
+                    await _close(stack)
 
         sup_task = asyncio.create_task(
             _supervisor(), name=f"mcp-supervisor:{spec.name}"
@@ -1099,6 +1229,7 @@ class MCPPool:
             # the inner ``asyncio.timeout(_MCP_CONNECT_TIMEOUT)`` should
             # already have fired and set ready_event with an error.
             elog("mcp.timeout", level="warning", name=spec.name, seconds=_MCP_CONNECT_TIMEOUT)
+            control["closing"] = True
             stop_event.set()
             try:
                 await asyncio.wait_for(sup_task, timeout=_MCP_CLOSE_TIMEOUT)
@@ -1113,6 +1244,7 @@ class MCPPool:
             # The outer task itself was cancelled while we were waiting.
             # Tell the supervisor to exit, then re-raise so shutdown
             # propagates like it used to.
+            control["closing"] = True
             stop_event.set()
             try:
                 await asyncio.wait_for(sup_task, timeout=_MCP_CLOSE_TIMEOUT)
@@ -1149,9 +1281,212 @@ class MCPPool:
 
         # Success — register the supervisor so close_all can unwind it.
         self._toolkit_supervisors.append(
-            _ToolkitSupervisor(name=spec.name, task=sup_task, stop_event=stop_event)
+            _ToolkitSupervisor(name=spec.name, task=sup_task, stop_event=stop_event,
+                               toolkit=toolkit, control=control, spec=spec)
         )
+        # The tool entrypoints (``_runner/utils/mcp.py``) call this when the
+        # session they were handed is structurally dead. Fakes and toolkits
+        # that refuse new attributes simply keep the old behaviour.
+        try:
+            toolkit._openagent_reconnect = self._reconnect_hook(toolkit)
+            toolkit._openagent_await_ready = self._ready_hook(toolkit)
+        except Exception:  # noqa: BLE001
+            pass
         return toolkit
+
+    def _ready_hook(self, toolkit: Any):
+        async def _await_ready() -> bool:
+            return await self.await_toolkit_ready(toolkit)
+        return _await_ready
+
+    async def _replace_wedged_toolkit(self, sup: _ToolkitSupervisor, *, reason: str = "") -> bool:
+        """Swap a toolkit whose supervisor is stuck for a freshly built one.
+
+        The stuck task keeps the old toolkit (its contexts can only be exited
+        on that task); it is told to close and is cancelled best-effort. The
+        replacement runs as a pool-owned task, so cancelling the caller cannot
+        strand the registry half-way, and at most one runs per supervisor. It
+        publishes only if no reload/close_all happened meanwhile. Returns
+        False: the caller's toolkit is the old one, and its next lookup finds
+        the replacement.
+        """
+        control = sup.control if sup.control is not None else {}
+        task = control.get("replacement")
+        if task is None:
+            # Captured now, not when the task starts: a reload() that runs in
+            # between must invalidate this replacement.
+            generation = getattr(self, "_lifecycle_generation", 0)
+            task = asyncio.create_task(self._run_replacement(sup, reason, generation),
+                                       name=f"mcp-replace:{sup.name}")
+            control["replacement"] = task
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — the replacement logs its own failure
+            logger.debug("MCP toolkit replacement for %s failed: %s", sup.name, e)
+        return False
+
+    def _replacement_is_current(self, name: str, generation: int, old: Any) -> bool:
+        return (
+            self._connected
+            and getattr(self, "_lifecycle_generation", 0) == generation
+            and any(spec.name == name for spec in self.specs)
+            and self._toolkit_by_name.get(name) in (None, old)
+        )
+
+    async def _run_replacement(self, sup: _ToolkitSupervisor, reason: str, generation: int) -> None:
+        control = sup.control if sup.control is not None else {}
+        control["closing"] = True
+        sup.stop_event.set()
+        if sup not in self._toolkit_supervisors or not self._replacement_is_current(
+                sup.name, generation, sup.toolkit):
+            # Retired by close_all()/reload() before this task started.
+            return
+        self._toolkit_supervisors.remove(sup)
+        if not sup.task.done():
+            sup.task.cancel()
+        elog("mcp.session_reconnect_wedged", level="warning", name=sup.name, reason=reason)
+        old = sup.toolkit
+        spec = sup.spec
+        if spec is None:
+            return
+        new_toolkit = await self._build_and_enter_toolkit(spec)
+        if not self._replacement_is_current(sup.name, generation, old):
+            # The pool was closed or reloaded while we built: the new pool
+            # owns this name now. Retire our build instead of publishing it.
+            if new_toolkit is not None:
+                mine = next((s for s in self._toolkit_supervisors if s.toolkit is new_toolkit), None)
+                if mine is not None:
+                    self._toolkit_supervisors.remove(mine)
+                    await self._shutdown_supervisor(mine)
+            elog("mcp.session_replacement_discarded", level="warning", name=sup.name)
+            return
+        try:
+            self._runtime_toolkits.remove(old)
+        except ValueError:
+            pass
+        if new_toolkit is None:
+            self._toolkit_by_name.pop(sup.name, None)
+            self._tool_counts[sup.name] = 0
+            elog("mcp.respawn_failed", level="warning", name=sup.name)
+        else:
+            count = len(getattr(new_toolkit, "functions", {}) or {})
+            if count == 0 or not _toolkit_ready(new_toolkit):
+                # MCPTools.initialize() swallows handshake failures: give the
+                # build the same stealth-fail recovery connect_all() gives it.
+                count = await self._recover_dormant_toolkit(new_toolkit, spec)
+                if not self._replacement_is_current(sup.name, generation, old):
+                    mine = next((s for s in self._toolkit_supervisors if s.toolkit is new_toolkit), None)
+                    if mine is not None:
+                        self._toolkit_supervisors.remove(mine)
+                        await self._shutdown_supervisor(mine)
+                    elog("mcp.session_replacement_discarded", level="warning", name=sup.name)
+                    return
+            self._runtime_toolkits.append(new_toolkit)
+            self._toolkit_by_name[sup.name] = new_toolkit
+            self._tool_counts[sup.name] = count
+            if count > 0:
+                self._last_connect_error.pop(sup.name, None)
+                elog("mcp.respawn_succeeded", name=sup.name, tools=count)
+            else:
+                # Same state connect_all() leaves a server in when it cannot
+                # handshake: visible as dormant (monitored), recovered by reload.
+                self._last_connect_error.setdefault(
+                    sup.name, "replacement connected but exposed 0 tools",
+                )
+                elog("mcp.dormant", level="warning", name=sup.name)
+        self._catalog_summary_cache = None
+        if self._capability_binding is not None:
+            self._capability_binding.sync()
+
+    async def await_toolkit_ready(self, toolkit: Any) -> bool:
+        """Join an in-flight reconnect before a call resolves the session.
+
+        ``MCPTools._connect`` publishes the new ``session`` before its
+        handshake finishes, so a caller arriving mid-reconnect must wait for
+        the handshake instead of sending ``tools/call`` on a session that is
+        not initialized. No-op (True) when nothing is pending.
+        """
+        sup = next((s for s in self._toolkit_supervisors if s.toolkit is toolkit), None)
+        if sup is None or sup.control is None:
+            return True
+        waiter = sup.control.get("pending")
+        if waiter is None:
+            return True
+        loop = asyncio.get_running_loop()
+        if (not waiter.done()
+                and loop.time() - sup.control.get("pending_since", loop.time()) > _MCP_RECONNECT_WAIT):
+            return await self._replace_wedged_toolkit(sup, reason="reconnect_stuck")
+        try:
+            return bool(await asyncio.wait_for(asyncio.shield(waiter), timeout=_MCP_RECONNECT_WAIT))
+        except asyncio.TimeoutError:
+            return False
+
+    def _reconnect_hook(self, toolkit: Any):
+        async def _reconnect(dead_session: Any = None, *, reason: str = "") -> bool:
+            return await self.reconnect_toolkit(toolkit, dead_session, reason=reason)
+        return _reconnect
+
+    async def reconnect_toolkit(
+        self, toolkit: Any, dead_session: Any = None, *, reason: str = "",
+    ) -> bool:
+        """Replace a structurally dead MCP session on its own supervisor task.
+
+        A closed stream (``ClosedResourceError`` & friends) never recovers in
+        place: before this, every later call on that toolkit failed until the
+        process restarted, while callers treated the ``Error:`` results as
+        completed work (2026-10-28, lyra-agent → Replio for two hours).
+
+        The supervisor task that entered the toolkit exits its context (closing
+        the dead session on the task that opened it, as anyio requires) and
+        re-enters the same toolkit object, so the capability catalog binding
+        and the tool names stay valid. Concurrent callers share one reconnect;
+        a caller whose ``dead_session`` was already replaced returns at once.
+        Returns True when the toolkit has a live, re-initialized session.
+        """
+        sup = next((s for s in self._toolkit_supervisors if s.toolkit is toolkit), None)
+        if sup is None or sup.control is None or sup.control.get("closing"):
+            return False
+        control = sup.control
+        waiter = control.get("pending")
+        loop = asyncio.get_running_loop()
+        if (waiter is not None and not waiter.done()
+                and loop.time() - control.get("pending_since", loop.time()) > _MCP_RECONNECT_WAIT):
+            # The supervisor is stuck closing the dead transport (e.g. an
+            # anyio task group draining a shielded child ignores the bounded
+            # close). It can never service another reconnect: replace it.
+            return await self._replace_wedged_toolkit(sup, reason=reason)
+        initiator = waiter is None
+        if initiator:
+            current = getattr(toolkit, "session", None)
+            if (dead_session is not None and current is not None
+                    and current is not dead_session and control.get("ready")):
+                # Another caller already replaced that session, and the new
+                # one finished its handshake.
+                return True
+            waiter = loop.create_future()
+            control["pending"] = waiter
+            control["pending_since"] = loop.time()
+            elog("mcp.session_reconnect_attempt", level="warning", name=sup.name, reason=reason)
+            # Only the caller that opens a reconnect wakes the supervisor;
+            # later callers join it, so a fresh session is never torn down
+            # by a request that arrived while it was being opened.
+            sup.stop_event.set()
+        try:
+            ok = bool(await asyncio.wait_for(asyncio.shield(waiter), timeout=_MCP_RECONNECT_WAIT))
+        except asyncio.TimeoutError:
+            ok = False
+        if initiator:
+            if ok:
+                count = len(getattr(toolkit, "functions", {}) or {})
+                self._tool_counts[sup.name] = count
+                self._catalog_summary_cache = None
+                elog("mcp.session_reconnected", name=sup.name, tools=count)
+            else:
+                elog("mcp.session_reconnect_failed", level="warning", name=sup.name,
+                     reason=reason)
+        return ok
 
     # Last error from the most recent _recover_dormant_toolkit call,
     # keyed by spec.name. Lets connect_all decide whether a dead session
