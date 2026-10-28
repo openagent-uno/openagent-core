@@ -43,7 +43,8 @@ async def call(toolkit, tool_name, **arguments):
     Complete wire comparisons live in test_management_wire_envelopes and use
     the unmodified entrypoint/broker result, never this payload accessor.
     """
-    result = await toolkit.async_functions[tool_name].entrypoint(**arguments)
+    public_name = toolkit.name.replace("-", "_") + "_" + tool_name
+    result = await toolkit.async_functions[public_name].entrypoint(**arguments)
     wire = result.mcp_result
     assert isinstance(wire, dict) and isinstance(wire.get('content'), list)
     if wire['isError']:
@@ -119,18 +120,18 @@ class ManagementAdapters(unittest.IsolatedAsyncioTestCase):
                         and any(isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
                                 and d.func.attr == "tool" for d in node.decorator_list)}
             toolkit = await self.toolkit(role)
-            self.assertEqual(exported, set(toolkit.async_functions))
+            self.assertEqual({role.replace("-", "_") + "_" + name for name in exported}, set(toolkit.async_functions))
             self.assertEqual(exported, set(_TOOLS[role]))
             for name, fn in toolkit.async_functions.items():
                 wrapped = fn.entrypoint
-                original = getattr(module, name)
+                original = getattr(module, name.removeprefix(role.replace("-", "_") + "_"))
                 self.assertEqual(inspect.signature(wrapped), inspect.signature(original, eval_str=True))
                 self.assertEqual(inspect.getdoc(wrapped), inspect.getdoc(original))
 
     async def test_input_schemas_match_public_mcp_sdk(self):
         for role, module in MODULES.items():
             toolkit = await self.toolkit(role)
-            sdk = {tool.name: tool for tool in await module.mcp.list_tools()}
+            sdk = {role.replace("-", "_") + "_" + tool.name: tool for tool in await module.mcp.list_tools()}
             for name, fn in toolkit.async_functions.items():
                 fn.process_entrypoint()
                 self.assertEqual(sdk[name].inputSchema, fn.parameters, name)
@@ -157,7 +158,7 @@ class ManagementAdapters(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await call(toolkit, "list_supported_providers"), await models.list_supported_providers())
             with self.assertRaisesRegex(ValueError, "last enabled model"):
                 await models.remove_model(model_id=model_id)
-            rejected = await toolkit.async_functions["remove_model"].entrypoint(model_id=model_id)
+            rejected = await toolkit.async_functions["model_manager_remove_model"].entrypoint(model_id=model_id)
             self.assertTrue(rejected.mcp_result['isError'])
             self.assertIn('last enabled model', rejected.mcp_result['content'][0]['text'])
         updated = await call(toolkit, "update_model", model_id=model_id, display_name="Synthetic updated")
@@ -200,7 +201,7 @@ class ManagementAdapters(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await call(toolkit, name), await getattr(budgets, name)())
             with self.assertRaisesRegex(ValueError, "amount"):
                 await budgets.set_budget(scope="global", amount=-1.0)
-            rejected = await toolkit.async_functions['set_budget'].entrypoint(scope='global', amount=-1.0)
+            rejected = await toolkit.async_functions['budget_manager_set_budget'].entrypoint(scope='global', amount=-1.0)
             self.assertTrue(rejected.mcp_result['isError'])
             self.assertIn('amount', rejected.mcp_result['content'][0]['text'])
         self.assertEqual(await call(toolkit, "remove_budget", id=again["id"]), {"ok": True, "id": again["id"]})
@@ -262,7 +263,7 @@ class ManagementAdapters(unittest.IsolatedAsyncioTestCase):
             observed.append(db)
             raise ValueError("synthetic connect failure")
         with patch.object(MemoryDB, "connect", failing):
-            rejected = await toolkit.async_functions['list_providers'].entrypoint()
+            rejected = await toolkit.async_functions['model_manager_list_providers'].entrypoint()
             self.assertTrue(rejected.mcp_result['isError'])
             self.assertIn('synthetic connect failure', rejected.mcp_result['content'][0]['text'])
         self.assertIsNone(observed[0]._conn)
@@ -449,20 +450,20 @@ class RuntimeIsolation(unittest.IsolatedAsyncioTestCase):
             return await runtime.capabilities.call_tool(tool.tool_ref, arguments, context)
 
     async def test_two_real_runtimes_concurrent_tools_preserve_database_and_policy(self):
-        await asyncio.gather(self.invoke(0, "add_provider", {"name": "first", "api_key": "synthetic-first"}),
-                             self.invoke(1, "add_provider", {"name": "second", "api_key": "synthetic-second"}))
-        a, b = await asyncio.gather(self.invoke(0, "list_providers", {}),
-                                   self.invoke(1, "list_providers", {}))
+        await asyncio.gather(self.invoke(0, "model_manager_add_provider", {"name": "first", "api_key": "synthetic-first"}),
+                             self.invoke(1, "model_manager_add_provider", {"name": "second", "api_key": "synthetic-second"}))
+        a, b = await asyncio.gather(self.invoke(0, "model_manager_list_providers", {}),
+                                   self.invoke(1, "model_manager_list_providers", {}))
         self.assertFalse(a['isError'])
         self.assertFalse(b['isError'])
         self.assertEqual([row["name"] for row in a['structuredContent']['result']], ["first"])
         self.assertEqual([row["name"] for row in b['structuredContent']['result']], ["second"])
         self.policies[0].denied.add("tool.call")
         with self.assertRaises(PermissionError):
-            await self.invoke(0, "list_providers", {})
-        self.assertEqual([row['name'] for row in (await self.invoke(1, 'list_providers', {}))['structuredContent']['result']], ['second'])
+            await self.invoke(0, "model_manager_list_providers", {})
+        self.assertEqual([row['name'] for row in (await self.invoke(1, 'model_manager_list_providers', {}))['structuredContent']['result']], ['second'])
         await self.runtimes[0].close()
-        self.assertEqual([row['name'] for row in (await self.invoke(1, 'list_providers', {}))['structuredContent']['result']], ['second'])
+        self.assertEqual([row['name'] for row in (await self.invoke(1, 'model_manager_list_providers', {}))['structuredContent']['result']], ['second'])
 
     async def test_foreign_runtime_cannot_use_retained_toolkit(self):
         runtime = self.runtimes[0]
@@ -480,7 +481,7 @@ class RuntimeIsolation(unittest.IsolatedAsyncioTestCase):
         runtime, context = self.runtimes[0], self.contexts[0]
         with execution_scope(runtime, context, "fixture", module_generation=1,
                              capability_revision=runtime.capabilities.snapshot_revision()):
-            tool = next(tool for tool in await runtime.capabilities.discover(context) if tool.name == "list_providers")
+            tool = next(tool for tool in await runtime.capabilities.discover(context) if tool.name == "model_manager_list_providers")
         other, foreign = self.runtimes[1], self.contexts[1]
         from openagent_core import CapabilityUnavailable
         with execution_scope(other, foreign, "fixture", module_generation=1,
@@ -492,7 +493,7 @@ class RuntimeIsolation(unittest.IsolatedAsyncioTestCase):
         runtime, context = self.runtimes[0], self.contexts[0]
         with execution_scope(runtime, context, "fixture", module_generation=1,
                              capability_revision=runtime.capabilities.snapshot_revision()):
-            tool = next(tool for tool in await runtime.capabilities.discover(context) if tool.name == "list_providers")
+            tool = next(tool for tool in await runtime.capabilities.discover(context) if tool.name == "model_manager_list_providers")
             self.policies[0].denied.add("tool.call")
             with self.assertRaises(PermissionError):
                 await runtime.capabilities.call_tool(tool.tool_ref, {}, context)
@@ -508,17 +509,17 @@ class RuntimeIsolation(unittest.IsolatedAsyncioTestCase):
             runtime, context = self.runtimes[0], self.contexts[0]
             with execution_scope(runtime, context, "fixture", module_generation=1,
                                  capability_revision=runtime.capabilities.snapshot_revision()):
-                self.assertFalse(any(tool.name == "list_providers"
+                self.assertFalse(any(tool.name == "model_manager_list_providers"
                     for tool in await runtime.capabilities.discover(context)))
         finally:
             reset_tool_allowlist(token)
         runtime, context = self.runtimes[0], self.contexts[0]
         with execution_scope(runtime, context, "fixture", module_generation=1,
                              capability_revision=runtime.capabilities.snapshot_revision()):
-            tool = next(tool for tool in await runtime.capabilities.discover(context) if tool.name == "list_providers")
+            tool = next(tool for tool in await runtime.capabilities.discover(context) if tool.name == "model_manager_list_providers")
             object.__setattr__(runtime, "settings", replace(runtime.settings,
-                environment=(("OPENAGENT_MCP_TOOL_DENYLIST", "model-manager:list_providers"),)))
-            self.assertFalse(any(item.name == "list_providers"
+                environment=(("OPENAGENT_MCP_TOOL_DENYLIST", "model-manager:model_manager_list_providers"),)))
+            self.assertFalse(any(item.name == "model_manager_list_providers"
                 for item in await runtime.capabilities.discover(context)))
             from openagent_core import CapabilityUnavailable
             with self.assertRaises(CapabilityUnavailable):

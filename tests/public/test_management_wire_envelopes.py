@@ -38,7 +38,8 @@ class ManagementWireEnvelopes(unittest.IsolatedAsyncioTestCase):
     async def candidate(self, toolkit, name, arguments):
         # No payload accessor or fixture normalization: compare the whole SDK
         # envelope, including null fields, errors, media and extension metadata.
-        result = await toolkit.async_functions[name].entrypoint(**arguments)
+        public_name = toolkit.name.replace("-", "_") + "_" + name
+        result = await toolkit.async_functions[public_name].entrypoint(**arguments)
         return result.mcp_result
 
     async def model_toolkit(self):

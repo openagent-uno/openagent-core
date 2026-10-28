@@ -51,6 +51,8 @@ class ManagementToolkit(Toolkit):
         self._db_lock = asyncio.Lock()
         self._module = module
         self._published = {}
+        from .pool import _safe_prefix
+        self._public_names = {tool_name: f"{_safe_prefix(name)}_{tool_name}" for tool_name in _TOOLS[name]}
         tools = [self._wrap(getattr(module, tool_name), tool_name) for tool_name in _TOOLS[name]]
         super().__init__(name=name, tools=tools)
 
@@ -58,10 +60,11 @@ class ManagementToolkit(Toolkit):
         # Use the SDK's public published schema, including nullable/default
         # arguments; do not regenerate a subtly different provider contract.
         published = {tool.name: tool for tool in await module.mcp.list_tools()}
-        if set(published) != set(self.async_functions):
+        if set(published) != set(self._public_names) or set(self._public_names.values()) != set(self.async_functions):
             raise RuntimeError("Management handler and published tool sets disagree")
         self._published = {name: tool.model_copy(deep=True) for name, tool in published.items()}
-        for name, function in self.async_functions.items():
+        for name, public_name in self._public_names.items():
+            function = self.async_functions[public_name]
             function.parameters = deepcopy(published[name].inputSchema)
             function.description = published[name].description or ""
             # Preserve the SDK's protocol validation/error envelope, rather
@@ -166,7 +169,7 @@ class ManagementToolkit(Toolkit):
             return_annotation=hints.get("return", signature.return_annotation),
         )
         invoke.__annotations__ = hints
-        invoke.__name__ = name
+        invoke.__name__ = self._public_names[name]
         return invoke
 
     async def aclose(self) -> None:

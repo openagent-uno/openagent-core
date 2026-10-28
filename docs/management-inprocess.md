@@ -41,6 +41,12 @@ results and errors keep their existing semantics. Provider discovery/probe tools
 still contact their provider when an authorized caller requests them; enabling
 the transport itself does not contact a provider.
 
+Published function names use the same `MCPPool._safe_prefix(source) + "_"`
+convention as stdio, for example `model_manager_list_providers`. Only the
+internal call to FastMCP keeps the original `list_providers` handler name.
+Original module handlers are not renamed or patched. Contract comparisons must
+compare the actual published names and schemas without stripping prefixes.
+
 Pool close and replacement close the owned toolkit, deny new calls, cancel and
 drain only its active calls, and close its database. A failed or cancelled pool
 replacement also closes the now-unreachable previous instance. The module
@@ -86,6 +92,38 @@ host CPU PSI avg10 reached 26.30%, exceeding the unchanged 20% guard. Memory
 and I/O PSI avg10 were zero; cgroup peak was 211,095,552 bytes. No idle result
 was obtained, and the opt-in phase was not started. This is an unaccepted
 measurement, not a functional regression or evidence of net memory savings.
+
+A later single-Runtime probe first exposed a real discovery naming mismatch;
+the opt-in now uses the stdio prefixes described above. Its failed run is
+preserved, including the sampler's process-exit race. The corrected sampler
+ignores a disappeared PID only during close, after proving it belonged to this
+cgroup and either became a zombie with the same start time or disappeared from
+both `/proc` and the cgroup. Reused PIDs, permission failures and unexpected loss
+during idle fail the test.
+
+After that correction, a separate serial Linux comparison passed for **one
+Runtime and three management sources per transport**. Each phase first passed
+the same 34 focused tests and raw SDK probe. The complete actual discovery
+names, input schemas and descriptions (27 tools), and the three exercised
+Runtime result envelopes, matched exactly; the stdio reference was read-only
+in the opt-in phase. Both used equivalent synthetic DBs and policy, five seconds
+of fixed warm-up and five seconds of idle sampling. Thirty later calls were
+timed after discarding the three warm-up calls.
+
+Median parent-plus-children idle PSS was **269,126,656 bytes** for stdio and
+**107,147,264 bytes** for opt-in: an observed synthetic delta of **161,979,392
+bytes (154.5 MiB)** for this one Runtime. The counts were five processes
+(measurement process, sandbox coordinator and three stdio workers) versus two.
+Both measurement processes had the same focused-suite imports loaded. Cgroup
+idle anonymous memory was 252,604,416 versus 91,013,120 bytes; idle file memory
+was 3,579,904 versus 3,190,784 bytes. Warm call median/p95 was 31.68/78.77 ms
+versus 16.61/35.95 ms under the same one-CPU quota. All owned children drained,
+and postflight again preserved original hashes, factory receipt and production
+PID/start time. Limits and guards were unchanged.
+
+This single-instance synthetic observation does not replace the refused
+five-Runtime measurement, qualify a released bundle, or establish reclaimed
+production memory. Do not multiply it by the number of hosted agents.
 
 Run the Core suite from this checkout with the configured source paths:
 
