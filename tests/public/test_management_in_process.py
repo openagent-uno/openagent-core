@@ -11,7 +11,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
+from typing import get_origin, get_type_hints
 from unittest.mock import patch, AsyncMock
+
+from mcp.server.fastmcp import FastMCP
 
 from openagent_core import (ExecutionContext, ModuleCatalog, ModuleConfig, PrincipalRef, RunRequest,
     Runtime, RuntimeProfile, RuntimeServices, RuntimeSettings)
@@ -34,8 +37,20 @@ FACTORIES = {"model-manager": build_model_toolkit, "budget-manager": build_budge
 MODULES = {"model-manager": models, "budget-manager": budgets, "skill-data": skills}
 
 
-def call(toolkit, tool_name, **arguments):
-    return toolkit.async_functions[tool_name].entrypoint(**arguments)
+async def call(toolkit, tool_name, **arguments):
+    """Read the documented structured output for domain/lifecycle assertions.
+
+    Complete wire comparisons live in test_management_wire_envelopes and use
+    the unmodified entrypoint/broker result, never this payload accessor.
+    """
+    result = await toolkit.async_functions[tool_name].entrypoint(**arguments)
+    wire = result.mcp_result
+    assert isinstance(wire, dict) and isinstance(wire.get('content'), list)
+    if wire['isError']:
+        return result
+    annotation = get_type_hints(getattr(toolkit._module, tool_name)).get('return')
+    structured = wire['structuredContent']
+    return structured['result'] if get_origin(annotation) is list else structured
 
 
 class ManagementAdapters(unittest.IsolatedAsyncioTestCase):
@@ -140,9 +155,11 @@ class ManagementAdapters(unittest.IsolatedAsyncioTestCase):
         with patch.object(models, "_db", self.db):
             self.assertEqual(await call(toolkit, "get_model", model_id=model_id), await models.get_model(model_id))
             self.assertEqual(await call(toolkit, "list_supported_providers"), await models.list_supported_providers())
-            for handler in (models.remove_model, toolkit.async_functions["remove_model"].entrypoint):
-                with self.assertRaisesRegex(ValueError, "last enabled model"):
-                    await handler(model_id=model_id)
+            with self.assertRaisesRegex(ValueError, "last enabled model"):
+                await models.remove_model(model_id=model_id)
+            rejected = await toolkit.async_functions["remove_model"].entrypoint(model_id=model_id)
+            self.assertTrue(rejected.mcp_result['isError'])
+            self.assertIn('last enabled model', rejected.mcp_result['content'][0]['text'])
         updated = await call(toolkit, "update_model", model_id=model_id, display_name="Synthetic updated")
         self.assertEqual(updated["display_name"], "Synthetic updated")
         classified = await call(toolkit, "set_classifier_model", model_id=model_id)
@@ -181,9 +198,11 @@ class ManagementAdapters(unittest.IsolatedAsyncioTestCase):
         with patch.object(budgets, "_db", self.db):
             for name in ("list_budgets", "get_budget_usage"):
                 self.assertEqual(await call(toolkit, name), await getattr(budgets, name)())
-            for handler in (budgets.set_budget, toolkit.async_functions["set_budget"].entrypoint):
-                with self.assertRaisesRegex(ValueError, "amount"):
-                    await handler(scope="global", amount=-1.0)
+            with self.assertRaisesRegex(ValueError, "amount"):
+                await budgets.set_budget(scope="global", amount=-1.0)
+            rejected = await toolkit.async_functions['set_budget'].entrypoint(scope='global', amount=-1.0)
+            self.assertTrue(rejected.mcp_result['isError'])
+            self.assertIn('amount', rejected.mcp_result['content'][0]['text'])
         self.assertEqual(await call(toolkit, "remove_budget", id=again["id"]), {"ok": True, "id": again["id"]})
         self.assertEqual(await self.db.list_budgets(), [])
 
@@ -243,8 +262,9 @@ class ManagementAdapters(unittest.IsolatedAsyncioTestCase):
             observed.append(db)
             raise ValueError("synthetic connect failure")
         with patch.object(MemoryDB, "connect", failing):
-            with self.assertRaisesRegex(ValueError, "synthetic connect failure"):
-                await call(toolkit, "list_providers")
+            rejected = await toolkit.async_functions['list_providers'].entrypoint()
+            self.assertTrue(rejected.mcp_result['isError'])
+            self.assertIn('synthetic connect failure', rejected.mcp_result['content'][0]['text'])
         self.assertIsNone(observed[0]._conn)
         self.assertIsNone(toolkit._db)
         self.assertEqual(await call(toolkit, "list_providers"), [])
@@ -277,8 +297,12 @@ class ManagementAdapters(unittest.IsolatedAsyncioTestCase):
                 await asyncio.Event().wait()
             finally:
                 cleaned.set()
-        module = SimpleNamespace(**{name: wait for name in _TOOLS["budget-manager"]})
+        sdk = FastMCP('synthetic-management-close')
+        for name in _TOOLS['budget-manager']:
+            sdk.add_tool(wait, name=name)
+        module = SimpleNamespace(mcp=sdk, **{name: wait for name in _TOOLS["budget-manager"]})
         toolkit = ManagementToolkit("budget-manager", module, {"OPENAGENT_DB_PATH": str(self.path)})
+        await toolkit.prepare(module)
         self.toolkits.append(toolkit)
         pending = asyncio.create_task(toolkit.tools[0]())
         unrelated = asyncio.create_task(asyncio.sleep(0.03, result="unrelated"))
@@ -429,14 +453,16 @@ class RuntimeIsolation(unittest.IsolatedAsyncioTestCase):
                              self.invoke(1, "add_provider", {"name": "second", "api_key": "synthetic-second"}))
         a, b = await asyncio.gather(self.invoke(0, "list_providers", {}),
                                    self.invoke(1, "list_providers", {}))
-        self.assertEqual([row["name"] for row in a], ["first"])
-        self.assertEqual([row["name"] for row in b], ["second"])
+        self.assertFalse(a['isError'])
+        self.assertFalse(b['isError'])
+        self.assertEqual([row["name"] for row in a['structuredContent']['result']], ["first"])
+        self.assertEqual([row["name"] for row in b['structuredContent']['result']], ["second"])
         self.policies[0].denied.add("tool.call")
         with self.assertRaises(PermissionError):
             await self.invoke(0, "list_providers", {})
-        self.assertEqual([row["name"] for row in await self.invoke(1, "list_providers", {})], ["second"])
+        self.assertEqual([row['name'] for row in (await self.invoke(1, 'list_providers', {}))['structuredContent']['result']], ['second'])
         await self.runtimes[0].close()
-        self.assertEqual([row["name"] for row in await self.invoke(1, "list_providers", {})], ["second"])
+        self.assertEqual([row['name'] for row in (await self.invoke(1, 'list_providers', {}))['structuredContent']['result']], ['second'])
 
     async def test_foreign_runtime_cannot_use_retained_toolkit(self):
         runtime = self.runtimes[0]
@@ -471,7 +497,9 @@ class RuntimeIsolation(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(PermissionError):
                 await runtime.capabilities.call_tool(tool.tool_ref, {}, context)
             self.policies[0].denied.clear()
-            self.assertEqual(await runtime.capabilities.call_tool(tool.tool_ref, {}, context), [])
+            value = await runtime.capabilities.call_tool(tool.tool_ref, {}, context)
+            self.assertFalse(value['isError'])
+            self.assertEqual(value['structuredContent']['result'], [])
 
     async def test_tool_family_scope_and_denylist_remain_enforced(self):
         from openagent_core.core.tool_scope import set_tool_allowlist, reset_tool_allowlist

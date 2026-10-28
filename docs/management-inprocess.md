@@ -28,7 +28,14 @@ there is no binding, through a lightweight context module.
 
 Toolkits take their exact published input schemas and descriptions from the
 public `FastMCP.list_tools()` API. Pydantic validates the preserved callable
-signature. Ordinary catalog discovery, references, per-call authorization,
+signature through the public `FastMCP.call_tool()` API. The adapter deliberately
+does not pre-validate inputs against JSON Schema: FastMCP disables that low-level
+validator to preserve its own argument conversion and validation messages.
+The SDK converts handler results; the adapter preserves the complete
+`CallToolResult` in `ToolResult.mcp_result`, including structured output, media,
+error flags, null fields, metadata and extension fields. It validates structured
+output against the published output schema, as the MCP server does. Ordinary
+catalog discovery, references, per-call authorization,
 revocation, family allowlists and the deployment denylist still apply. Handler
 results and errors keep their existing semantics. Provider discovery/probe tools
 still contact their provider when an authorized caller requests them; enabling
@@ -55,10 +62,35 @@ ran nice 19 with a 45 CPU-second limit and an external 256 MiB RSS/60 s wall
 guard; macOS supplied no cgroup CPU quota. Earlier fixture/schema failures are
 retained in the private qualification logs.
 
+The first isolated Linux wire probe found that the original opt-in returned a
+raw handler value instead of the MCP envelope. The first envelope correction
+passed that probe and 33 of 34 focused tests, but failed the exact SDK invalid
+argument comparison because it added JSON-schema input pre-validation. Both
+failed runs remain unaccepted. `tests/public/test_management_wire_envelopes.py`
+adds exact whole-result comparisons through a real SDK protocol session,
+including invalid input, handler errors, structured results, media and metadata.
+These tests do not use the domain-payload accessor in the lifecycle test file.
+
+After removing only the redundant input pre-validation, Linux qualification
+passed the exact SDK wire probe and **34/34 Core tests**, with no skips, in
+6.187 seconds on Python 3.12.15 and MCP 1.30.0. Kernel cgroup memory peak was
+101,490,688 bytes, with no memory-limit or OOM events. The isolated unit used
+one CPU, 1536 MiB, no swap, nice 19 and a 600-second limit. Synthetic data and
+logs used private 128 MiB tmpfs; source and closure were read-only, with exact
+read-only masks, no capabilities, private networking and effective ingress and
+egress BPF denial. Original source hashes, factory receipt and production
+PID/start time remained unchanged. No Mac tests were rerun.
+
+The subsequent five-Runtime stdio comparison stopped during worker imports:
+host CPU PSI avg10 reached 26.30%, exceeding the unchanged 20% guard. Memory
+and I/O PSI avg10 were zero; cgroup peak was 211,095,552 bytes. No idle result
+was obtained, and the opt-in phase was not started. This is an unaccepted
+measurement, not a functional regression or evidence of net memory savings.
+
 Run the Core suite from this checkout with the configured source paths:
 
 ```sh
-.venv/bin/python -m pytest -q tests/public/test_management_in_process.py
+.venv/bin/python -m pytest -q tests/public/test_management_in_process.py tests/public/test_management_wire_envelopes.py
 ```
 
 This is source qualification, not a released wheel or an installed native

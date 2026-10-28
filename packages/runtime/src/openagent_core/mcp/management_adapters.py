@@ -13,8 +13,11 @@ import inspect
 from pathlib import Path
 from typing import Any, Mapping, get_type_hints
 
-from pydantic import validate_call
+import jsonschema
+from mcp import types as mcp_types
+from mcp.shared.exceptions import UrlElicitationRequiredError
 
+from openagent_core.mcp._runtime.function import ToolResult
 from openagent_core.mcp._runtime.toolkit import Toolkit
 from .management_context import _binding
 
@@ -46,7 +49,9 @@ class ManagementToolkit(Toolkit):
         self._active: set[asyncio.Task] = set()
         self._db = None
         self._db_lock = asyncio.Lock()
-        tools = [self._wrap(getattr(module, tool_name)) for tool_name in _TOOLS[name]]
+        self._module = module
+        self._published = {}
+        tools = [self._wrap(getattr(module, tool_name), tool_name) for tool_name in _TOOLS[name]]
         super().__init__(name=name, tools=tools)
 
     async def prepare(self, module: Any) -> ManagementToolkit:
@@ -55,11 +60,12 @@ class ManagementToolkit(Toolkit):
         published = {tool.name: tool for tool in await module.mcp.list_tools()}
         if set(published) != set(self.async_functions):
             raise RuntimeError("Management handler and published tool sets disagree")
+        self._published = {name: tool.model_copy(deep=True) for name, tool in published.items()}
         for name, function in self.async_functions.items():
             function.parameters = deepcopy(published[name].inputSchema)
             function.description = published[name].description or ""
-            # MCP transports also retain the SDK schema verbatim. Validation
-            # is already attached to our entrypoint, without regenerating it.
+            # Preserve the SDK's protocol validation/error envelope, rather
+            # than raising a different outer pydantic validation exception.
             function.skip_entrypoint_processing = True
         return self
 
@@ -87,7 +93,54 @@ class ManagementToolkit(Toolkit):
                 self._db = db
             return self._db
 
-    def _wrap(self, handler):
+    async def _protocol_result(self, name: str, arguments: dict[str, Any]) -> ToolResult:
+        """Keep the public FastMCP conversion and the complete SDK envelope.
+
+        FastMCP produces content blocks and optional structured output; the
+        low-level MCP contract packs those into CallToolResult. Do not infer
+        text/JSON serialization from one handler's return value.
+        """
+        tool = self._published[name]
+        try:
+            # FastMCP deliberately disables the low-level JSON-schema input
+            # validator: its own public call_tool validates and converts the
+            # arguments. Pre-validating here changes coercion and error text.
+            converted = await self._module.mcp.call_tool(name, arguments)
+            if isinstance(converted, mcp_types.CallToolResult):
+                result = converted
+            else:
+                if isinstance(converted, tuple) and len(converted) == 2:
+                    content, structured = converted
+                else:
+                    content, structured = converted, None
+                if tool.outputSchema is not None:
+                    if structured is None:
+                        raise ValueError("Output validation error: outputSchema defined but no structured output returned")
+                    try:
+                        jsonschema.validate(instance=structured, schema=tool.outputSchema)
+                    except jsonschema.ValidationError as exc:
+                        raise ValueError(f"Output validation error: {exc.message}") from exc
+                result = mcp_types.CallToolResult(content=list(content), structuredContent=structured, isError=False)
+        except UrlElicitationRequiredError:
+            raise  # The MCP server also delegates this protocol error upstream.
+        except Exception as exc:
+            result = mcp_types.CallToolResult(content=[mcp_types.TextContent(type="text", text=str(exc))], isError=True)
+
+        from openagent_core.core._runner.utils.mcp import (
+            _bounded_mcp_text, _MCP_COMBINED_TEXT_MAX_CHARS, _MCP_COMBINED_TEXT_MAX_BYTES,
+            _MCP_CONTENT_MAX_ITEMS,
+        )
+        display = "\n".join(_bounded_mcp_text(block.text, label="MCP text content")[0]
+                            for block in result.content[:_MCP_CONTENT_MAX_ITEMS]
+                            if isinstance(block, mcp_types.TextContent)).strip()
+        if result.isError:
+            display = f"Error from MCP tool '{name}': {display or 'MCP tool returned no displayable error content'}"
+        display, _ = _bounded_mcp_text(display, label="MCP combined tool output",
+                                     max_chars=_MCP_COMBINED_TEXT_MAX_CHARS,
+                                     max_bytes=_MCP_COMBINED_TEXT_MAX_BYTES)
+        return ToolResult(content=display, mcp_result=result.model_dump(mode="json", by_alias=True, exclude_none=False))
+
+    def _wrap(self, handler, name: str):
         @wraps(handler)
         async def invoke(*args, **kwargs):
             self._check_owner()
@@ -97,7 +150,8 @@ class ManagementToolkit(Toolkit):
             self._active.add(task)
             token = _binding.set((self, task))
             try:
-                return await handler(*args, **kwargs)
+                arguments = dict(inspect.signature(handler).bind(*args, **kwargs).arguments) if args else kwargs
+                return await self._protocol_result(name, arguments)
             finally:
                 _binding.reset(token)
                 self._active.discard(task)
@@ -112,7 +166,8 @@ class ManagementToolkit(Toolkit):
             return_annotation=hints.get("return", signature.return_annotation),
         )
         invoke.__annotations__ = hints
-        return validate_call(invoke, config={"arbitrary_types_allowed": True})
+        invoke.__name__ = name
+        return invoke
 
     async def aclose(self) -> None:
         self._closed = True  # No new work is admitted while draining this instance.
