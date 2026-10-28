@@ -355,7 +355,8 @@ def _resolve_specs(
     for entry in (mcp_config or []):
         if "builtin" in entry:
             try:
-                kwargs = resolve_builtin_entry(entry["builtin"], env=entry.get("env"))
+                kwargs = resolve_builtin_entry(entry["builtin"], env=entry.get("env"),
+                                               in_process=entry.get("in_process", False))
                 specs.append(_spec_from_kwargs(kwargs))
             except Exception as exc:
                 raise ValueError(f"Cannot configure selected module {entry['builtin']!r}: {exc}") from exc
@@ -759,13 +760,14 @@ class MCPPool:
             self._catalog_summary_cache = None
 
         # connect_all has its own lock; new subprocesses come up first.
-        await self.connect_all()
-
-        # Tear down the old supervisors. Best-effort — a broken shutdown on
-        # the old set must not prevent new tools from being used. Close in
-        # reverse order to mirror close_all's contract.
-        for sup in reversed(old_supervisors):
-            await self._shutdown_supervisor(sup)
+        try:
+            await self.connect_all()
+        finally:
+            # The old set is no longer reachable, even if replacement failed
+            # or was cancelled. Its owned DB connections must not be leaked.
+            for sup in reversed(old_supervisors):
+                await self._shutdown_supervisor(sup)
+            await self._close_in_process(old_in_proc_agno)
         elog(
             "mcp.pool.reload",
             new_servers=len(new_specs),
@@ -886,6 +888,8 @@ class MCPPool:
 
                 try:
                     runtime_tk = runtime_factory(**_factory_kwargs(runtime_factory))
+                    if inspect.isawaitable(runtime_tk):
+                        runtime_tk = await runtime_tk
                 except Exception as e:  # noqa: BLE001
                     elog("mcp.error", level="warning", name=spec.name, error=str(e), phase="factory")
                     continue
@@ -912,6 +916,16 @@ class MCPPool:
             if self._capability_binding is not None:
                 self._capability_binding.sync()
 
+    @staticmethod
+    async def _close_in_process(toolkits: list[Any]) -> None:
+        for toolkit in reversed(toolkits):
+            close = getattr(toolkit, "aclose", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception:
+                    logger.exception("Failed to close owned in-process toolkit")
+
     async def close_all(self) -> None:
         """Close every connected toolkit. Per-toolkit supervisors are closed
         independently so one failing teardown doesn't skip the rest.
@@ -929,6 +943,7 @@ class MCPPool:
                 return
             self._lifecycle_generation = getattr(self, "_lifecycle_generation", 0) + 1
             supervisors = list(self._toolkit_supervisors)
+            in_process = list(self._in_process_runtime_toolkits)
             self._toolkit_supervisors.clear()
             self._runtime_toolkits.clear()
             self._in_process_runtime_toolkits.clear()
@@ -940,6 +955,7 @@ class MCPPool:
         # resources tear down the way AsyncExitStack would have.
         for sup in reversed(supervisors):
             await self._shutdown_supervisor(sup)
+        await self._close_in_process(in_process)
 
     async def _respawn_after_dead_session(
         self, spec: _ServerSpec, dead_toolkit: Any,

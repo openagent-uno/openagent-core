@@ -375,8 +375,20 @@ def _find_node_binary() -> str | None:
     return shutil.which("node")
 
 
-def resolve_builtin_entry(name: str, env: dict[str, str] | None = None) -> dict[str, Any]:
+def resolve_builtin_entry(name: str, env: dict[str, str] | None = None, *,
+                          in_process: bool = False) -> dict[str, Any]:
     """Resolve a built-in MCP by name into MCPTools kwargs."""
+    if type(in_process) is not bool:
+        raise TypeError("in_process must be a boolean")
+    if in_process:
+        factories = {"model-manager": "build_model_toolkit",
+                     "budget-manager": "build_budget_toolkit",
+                     "skill-data": "build_skill_data_toolkit"}
+        if name not in factories:
+            raise ValueError("Explicit in-process transport is limited to management sources")
+        return {"name": name, "_trusted_module": name, "in_process": True,
+                "adapter_module": "openagent_core.mcp.management_adapters",
+                "runtime_toolkit_factory": factories[name], "env": dict(env or {})}
     if name not in BUILTIN_MCP_SPECS:
         available = ", ".join(BUILTIN_MCP_SPECS.keys())
         raise ValueError(f"Unknown built-in MCP: {name}. Available: {available}")

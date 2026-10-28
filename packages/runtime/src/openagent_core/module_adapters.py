@@ -1,8 +1,8 @@
 """Generic adapters used by independently packaged native modules.
 
-This file contains no feature selection table.  A module distribution supplies
-its own stable ID, native source names, aliases and prompt rule IDs.  The
-underlying subprocess transport is an implementation detail: these sources are
+The host selects modules; a module distribution supplies its own stable ID,
+native source names, aliases and prompt rule IDs. An optional management-only
+transport choice does not install or grant a module. These sources are
 registered directly by the module graph and are never MCP catalog resources.
 """
 from __future__ import annotations
@@ -35,8 +35,17 @@ class NativeCapabilityDescriptor:
     provided_services: frozenset[object] = frozenset()
     supported_surfaces: frozenset[str] = frozenset({"service", "agent_tools", "host_api", "workers", "event_ingress"})
     api_version: str = MODULE_API_VERSION
+    # Appended to preserve all existing positional descriptor arguments.
+    # Host-owned transport choice; standalone/module defaults remain stdio.
+    in_process_management: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.in_process_management) is not bool:
+            raise TypeError("in_process_management must be a boolean")
+        if self.in_process_management and not (
+            set(self.native_sources) & {"model-manager", "budget-manager", "skill-data"}
+        ):
+            raise ValueError("This descriptor has no supported management source")
         if not self.provided_services:
             object.__setattr__(self, "provided_services", frozenset({self.id + ".service"}))
 
@@ -90,6 +99,12 @@ class _NativeCapabilityInstance:
                 sorted(self.context.profile.module_ids)
             )
             db_path = config.options.get("db_path")
+            if self.descriptor.in_process_management:
+                from pathlib import Path
+                if not db_path or not Path(db_path).is_absolute():
+                    raise ValueError("In-process management requires an explicit absolute db_path")
+                if environment.get("OPENAGENT_DB_PATH", str(db_path)) != str(db_path):
+                    raise ValueError("Management environment and module db_path must agree")
             if db_path:
                 environment.setdefault("OPENAGENT_DB_PATH", str(db_path))
             vault_path = config.options.get("vault_path")
@@ -99,12 +114,21 @@ class _NativeCapabilityInstance:
             # It does not register these module-owned sources in the MCP catalog.
             entries = [{"builtin": name, "env": dict(environment)}
                        for name in self.descriptor.native_sources]
+            if self.descriptor.in_process_management:
+                for entry in entries:
+                    if entry["builtin"] in {"model-manager", "budget-manager", "skill-data"}:
+                        entry["in_process"] = True
             self.pool = MCPPool.from_config(entries, include_defaults=False,
                                             db_path=str(db_path) if db_path else None)
-            await self.pool.connect_all()
+            try:
+                await self.pool.connect_all()
+            except BaseException:
+                await self.close()
+                raise
             for builtin in self.descriptor.native_sources:
                 toolkit = self.pool.toolkit_by_name(builtin)
                 if toolkit is None:
+                    await self.close()
                     raise RuntimeError(f"Module {self.descriptor.id} failed to start capability source {builtin}")
                 canonical = self.descriptor.source_names.get(builtin, builtin)
                 effects = _trusted_effects(self.descriptor.id, builtin, toolkit)

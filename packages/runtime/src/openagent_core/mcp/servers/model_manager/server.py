@@ -44,6 +44,10 @@ _db_lock = asyncio.Lock()
 
 
 async def _get_db() -> MemoryDB:
+    from openagent_core.mcp.management_context import scoped_database
+    scoped = await scoped_database("model-manager")
+    if scoped is not None:
+        return scoped
     global _db
     async with _db_lock:
         if _db is None:

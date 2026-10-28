@@ -33,6 +33,10 @@ mcp = FastMCP("skill-data")
 
 def _db_path() -> str:
     """Same resolution as every other builtin MCP."""
+    from openagent_core.mcp.management_context import scoped_path
+    path = scoped_path("skill-data")
+    if path is not None:
+        return path
     return runtime_environment().get("OPENAGENT_DB_PATH", "./openagent.db")
 
 

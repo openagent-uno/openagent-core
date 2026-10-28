@@ -52,6 +52,7 @@ The public product guide is at [openagent.uno](https://openagent.uno/); this
 repository remains the canonical source for Core contracts and evidence.
 
 - [Architecture and ownership](architecture.md)
+- [Opt-in instance-owned management transport and source qualification](management-inprocess.md)
 - [Symmetric module contract and product profiles](modules-v1.1.md)
 - [Implementation and acceptance ledger](migration/implementation.md)
 - [Uniform capability catalog](tool-catalog.md)
