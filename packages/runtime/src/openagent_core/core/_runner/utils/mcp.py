@@ -109,6 +109,81 @@ def _bounded_mcp_text(
     return text, truncated
 
 
+_SESSION_DEAD_ERROR_NAMES = frozenset({
+    "ClosedResourceError",
+    "BrokenResourceError",
+    "EndOfStream",
+})
+
+
+def _session_is_dead(exc: BaseException) -> bool:
+    """Whether ``exc`` means the MCP session's streams are gone for good.
+
+    A streamable-HTTP or stdio session whose memory streams closed (one timed
+    out POST tears down the transport task group) raises one of these on every
+    later send; nothing but a new session recovers it. Walks causes, contexts
+    and exception groups because anyio/the MCP SDK wrap them.
+    """
+    seen: set[int] = set()
+    stack: list[BaseException] = [exc]
+    while stack:
+        item = stack.pop()
+        if item is None or id(item) in seen:
+            continue
+        seen.add(id(item))
+        if type(item).__name__ in _SESSION_DEAD_ERROR_NAMES:
+            return True
+        if type(item).__name__ == "McpError" and "connection closed" in str(item).lower():
+            return True
+        stack.extend(getattr(item, "exceptions", ()) or ())
+        stack.append(item.__cause__)
+        stack.append(item.__context__)
+    return False
+
+
+def _describe_error(exc: BaseException) -> str:
+    # ``str(ClosedResourceError())`` is empty: "Error: " told nobody anything.
+    text = str(exc)
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
+def _failed_tool_result(tool_name: str, exc: BaseException) -> ToolResult:
+    """A failed call, marked as failed in the MCP envelope callers inspect.
+
+    ``content`` keeps the historical ``Error: ...`` string for the model. The
+    envelope carries ``isError`` so tool-search, workflows and product callers
+    can never read a transport failure as a completed action.
+    """
+    detail = _describe_error(exc)
+    text = f"Error: {detail}"
+    return ToolResult(
+        content=text,
+        mcp_result={
+            "content": [{"type": "text", "text": text, "annotations": None, "_meta": None}],
+            "structuredContent": None,
+            "isError": True,
+            "_meta": {
+                "openagent/transport_error": {
+                    "tool": tool_name,
+                    "type": type(exc).__name__,
+                    "session_dead": _session_is_dead(exc),
+                },
+            },
+        },
+    )
+
+
+async def _reconnect_session(mcp_tools_instance, dead_session, exc: BaseException) -> bool:
+    reconnect = getattr(mcp_tools_instance, "_openagent_reconnect", None) if mcp_tools_instance else None
+    if not callable(reconnect):
+        return False
+    try:
+        return bool(await reconnect(dead_session, reason=type(exc).__name__))
+    except Exception as e:  # noqa: BLE001 — never mask the original failure
+        log_exception(e)
+        return False
+
+
 def get_entrypoint_for_tool(
     tool: MCPTool,
     session: ClientSession,
@@ -135,8 +210,7 @@ def get_entrypoint_for_tool(
         team: Optional["Team"] = None,
         **kwargs,
     ) -> ToolResult:
-        # Execute the MCP tool call
-        try:
+        async def _resolve_session():
             # Get the appropriate session for this run
             # If mcp_tools_instance has header_provider and run_context is provided,
             # this will create/reuse a session with dynamic headers
@@ -146,20 +220,52 @@ def get_entrypoint_for_tool(
 
                 # For MultiMCPTools, pass server_idx; for MCPTools, only pass run_context
                 if isinstance(mcp_tools_instance, MultiMCPTools):
-                    active_session = await mcp_tools_instance.get_session_for_run(
+                    return await mcp_tools_instance.get_session_for_run(
                         run_context=run_context, server_idx=server_idx, agent=agent, team=team
                     )
-                else:
-                    active_session = await mcp_tools_instance.get_session_for_run(
-                        run_context=run_context, agent=agent, team=team
-                    )
-            else:
-                active_session = session
+                return await mcp_tools_instance.get_session_for_run(
+                    run_context=run_context, agent=agent, team=team
+                )
+            return session
+
+        active_session = None
+        # Execute the MCP tool call
+        try:
+            # A reconnect in flight publishes its session before the handshake
+            # completes: wait for it rather than calling on a half-open session.
+            await_ready = getattr(mcp_tools_instance, "_openagent_await_ready", None) if mcp_tools_instance else None
+            if callable(await_ready) and not await await_ready():
+                raise ConnectionError(
+                    "MCP session reconnect did not complete; the request was not sent"
+                )
+            try:
+                active_session = await _resolve_session()
+            except ValueError as e:
+                # "Session is not initialized": an earlier reconnect failed and
+                # left the toolkit without a session. Try again rather than
+                # failing every later call until the process restarts.
+                if not await _reconnect_session(mcp_tools_instance, None, e):
+                    raise
+                active_session = await _resolve_session()
 
             try:
                 await active_session.send_ping()
             except Exception as e:
-                log_exception(e)
+                if not _session_is_dead(e):
+                    log_exception(e)
+                else:
+                    # The request below has not been sent, so replacing the
+                    # session and calling once on the new one cannot repeat a
+                    # side effect. Without a live session, fail the call
+                    # visibly instead of sending into a closed stream.
+                    log_exception(
+                        f"MCP session for tool '{tool_name}' is dead "
+                        f"({_describe_error(e)}); reconnecting"
+                    )
+                    if not await _reconnect_session(mcp_tools_instance, active_session, e):
+                        log_exception(f"Failed to call MCP tool '{tool_name}': {_describe_error(e)}")
+                        return _failed_tool_result(tool_name, e)
+                    active_session = await _resolve_session()
 
             # Stamp dry-run meta when the current run is a dry-run so the MCP
             # server captures/rejects writes instead of executing them. None on
@@ -415,8 +521,12 @@ def get_entrypoint_for_tool(
                 mcp_result=mcp_result,
             )
         except Exception as e:
-            log_exception(f"Failed to call MCP tool '{tool_name}': {e}")
-            return ToolResult(content=f"Error: {e}")
+            log_exception(f"Failed to call MCP tool '{tool_name}': {_describe_error(e)}")
+            if _session_is_dead(e) and active_session is not None:
+                # The request may already have been written, so it is never
+                # retried here; only the NEXT call gets a fresh session.
+                await _reconnect_session(mcp_tools_instance, active_session, e)
+            return _failed_tool_result(tool_name, e)
 
     return partial(call_tool, tool_name=tool.name)
 
