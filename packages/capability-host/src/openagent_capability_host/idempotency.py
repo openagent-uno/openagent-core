@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AbstractContextManager
 import hashlib
 import json
 import math
@@ -12,6 +13,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+
+from ._sqlite import transaction
 
 from openagent_tool_protocol.types import HostError, ToolResult
 
@@ -44,11 +47,8 @@ class IdempotencyLedger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, timeout=5.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout=5000")
-        return conn
+    def _connect(self) -> AbstractContextManager[sqlite3.Connection]:
+        return transaction(self.path)
 
     def _initialize(self) -> None:
         with self._connect() as conn:
