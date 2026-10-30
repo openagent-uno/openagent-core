@@ -1,5 +1,7 @@
 import json
 import base64
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import partial
 from typing import TYPE_CHECKING, Optional, Union
 from urllib.parse import unquote, urlparse
@@ -34,6 +36,39 @@ if TYPE_CHECKING:
     from openagent_core.core._runner.team.team import Team
     from openagent_core.mcp._runtime.mcp.mcp import MCPTools
     from openagent_core.mcp._runtime.mcp.multi_mcp import MultiMCPTools
+
+
+# A catalog-authorized call must not migrate to a replacement connection while
+# awaiting readiness, credentials, ping or provider I/O. Unscoped legacy calls
+# retain their existing recovery behavior.
+_capability_generation_scope: ContextVar[tuple[object, str] | None] = ContextVar(
+    "openagent_mcp_capability_generation", default=None
+)
+
+
+def _check_capability_generation(instance) -> None:
+    expected = _capability_generation_scope.get()
+    if expected is not None and expected[0] is instance:
+        if getattr(instance, "capability_generation", None) != expected[1]:
+            from openagent_core.capabilities import CapabilityUnavailable
+            raise CapabilityUnavailable("The exact MCP connection changed or its catalog is unavailable")
+
+
+@contextmanager
+def mcp_capability_generation_scope(instance):
+    generation = getattr(instance, "capability_generation", NotImplemented)
+    if generation is NotImplemented:
+        yield lambda: None
+        return
+    if generation is None:
+        from openagent_core.capabilities import CapabilityUnavailable
+        raise CapabilityUnavailable("The current MCP connection has no complete catalog")
+    token = _capability_generation_scope.set((instance, generation))
+    try:
+        yield lambda: _check_capability_generation(instance)
+        _check_capability_generation(instance)
+    finally:
+        _capability_generation_scope.reset(token)
 
 
 # MCP payloads are already resident when the SDK hands them to us, but these
@@ -238,6 +273,7 @@ def get_entrypoint_for_tool(
                 raise ConnectionError(
                     "MCP session reconnect did not complete; the request was not sent"
                 )
+            _check_capability_generation(mcp_tools_instance)
             try:
                 active_session = await _resolve_session()
             except ValueError as e:
@@ -248,6 +284,7 @@ def get_entrypoint_for_tool(
                     raise
                 active_session = await _resolve_session()
 
+            _check_capability_generation(mcp_tools_instance)
             try:
                 await active_session.send_ping()
             except Exception as e:
@@ -273,9 +310,12 @@ def get_entrypoint_for_tool(
             from openagent_core.core.dry_run import call_meta
 
             log_debug(f"Calling MCP Tool '{tool_name}' with args: {kwargs}")
+            _check_capability_generation(mcp_tools_instance)
             result: CallToolResult = await active_session.call_tool(
                 tool_name, kwargs, meta=call_meta()
             )  # type: ignore
+
+            _check_capability_generation(mcp_tools_instance)
 
             # Preserve the COMPLETE MCP envelope.  The runtime's historical
             # path below turns content blocks into a human/model-facing string

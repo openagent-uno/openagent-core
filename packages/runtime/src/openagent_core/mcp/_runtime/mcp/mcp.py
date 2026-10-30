@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import secrets
 import time
 import weakref
 from dataclasses import asdict
@@ -192,6 +193,9 @@ class MCPTools(Toolkit):
         self._catalog_lock = asyncio.Lock()
         self._mcp_function_names: set[str] = set()
         self._app_functions: dict[str, Any] = {}
+        self._catalog_session: Any = None
+        self._catalog_generation: str | None = None
+        self._catalog_available = False
 
         def cleanup():
             """Cancel active connections"""
@@ -204,6 +208,17 @@ class MCPTools(Toolkit):
     @property
     def initialized(self) -> bool:
         return self._initialized
+
+    @property
+    def capability_generation(self) -> str | None:
+        """Opaque identity of a complete catalog on the current connection.
+
+        Retained Function objects are not authority while a replacement session
+        is initializing or its catalog refresh has failed.
+        """
+        if not self._catalog_available or self.session is None or self.session is not self._catalog_session:
+            return None
+        return self._catalog_generation
 
     @property
     def _session_creation_lock(self) -> asyncio.Lock:
@@ -599,6 +614,7 @@ class MCPTools(Toolkit):
             raise ValueError("Session is not initialized")
 
         async with self._catalog_lock:
+            self._catalog_available = False
             try:
                 # A catalog is a snapshot. Never publish a partial page or retain
                 # removed tools when an initialized server refreshes its catalog.
@@ -703,9 +719,13 @@ class MCPTools(Toolkit):
                         log_error(f"Failed to register tool {tool.name}: {str(e)}")
                         raise
 
+                if session is not self._catalog_session:
+                    self._catalog_generation = secrets.token_urlsafe(24)
+                self._catalog_session = session
                 self.functions = functions
                 self._mcp_function_names = mcp_function_names
                 self._app_functions = app_functions
+                self._catalog_available = True
 
             except (RuntimeError, BaseException):
                 log_error(f"Failed to get tools for {str(self)}")

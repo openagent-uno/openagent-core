@@ -33,6 +33,17 @@ class PoolCapabilitySource:
     def _check(self) -> None:
         if self.pool.toolkit_by_name(self.toolkit_name) is not self.toolkit:
             raise CapabilityUnavailable("The registered MCP instance was removed or replaced")
+        if getattr(self.toolkit, "capability_generation", NotImplemented) is None:
+            raise CapabilityUnavailable("The current MCP connection has no complete catalog")
+
+    def _metadata(self, function) -> dict:
+        metadata = dict(getattr(function, "mcp_metadata", None) or {})
+        generation = getattr(self.toolkit, "capability_generation", NotImplemented)
+        if generation is not NotImplemented:
+            # Host-owned random identity overrides any remote value, never a
+            # principal, credential or transport/session identifier.
+            metadata["openagent/resource-generation"] = generation
+        return metadata
 
     async def inspect(self, context) -> tuple[ToolDefinition, ...]:
         # Schema-only host administration; the catalog authorizes this path
@@ -40,7 +51,7 @@ class PoolCapabilitySource:
         from .servers.tool_search.adapters import _functions_dict
         self._check()
         return tuple(ToolDefinition(name, getattr(fn, "description", "") or "",
-            getattr(fn, "parameters", None) or {}, metadata=getattr(fn, "mcp_metadata", None) or {}) for name, fn in _functions_dict(self.toolkit).items())
+            getattr(fn, "parameters", None) or {}, metadata=self._metadata(fn)) for name, fn in _functions_dict(self.toolkit).items())
 
     async def discover(self, context: ExecutionContext) -> tuple[ToolDefinition, ...]:
         from .servers.tool_search.adapters import _functions_dict, _tool_is_denied, _require_server_allowed
@@ -50,7 +61,7 @@ class PoolCapabilitySource:
         except (PermissionError, CapabilityUnavailable):
             return ()
         return tuple(ToolDefinition(name, getattr(fn, "description", "") or "",
-                                    getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()), getattr(fn, "mcp_metadata", None) or {})
+                                    getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()), self._metadata(fn))
                      for name, fn in _functions_dict(self.toolkit).items()
                      if not _tool_is_denied(self.toolkit_name, name))
 
@@ -61,31 +72,34 @@ class PoolCapabilitySource:
         _require_server_allowed(self.toolkit_name)
         functions = {**_functions_dict(self.toolkit), **getattr(self.toolkit, "_app_functions", {})}
         return tuple(ToolDefinition(getattr(fn, "mcp_name", None) or name, getattr(fn, "description", "") or "",
-            getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()), getattr(fn, "mcp_metadata", None) or {})
+            getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()), self._metadata(fn))
             for name, fn in functions.items() if not _tool_is_denied(self.toolkit_name, name)
             and tool_visible(getattr(fn, "mcp_metadata", None) or {}, "app"))
 
     @asynccontextmanager
     async def _app_session(self, context: ExecutionContext):
         self._check()
-        session = getattr(self.toolkit, "session", None)
-        ephemeral = None
-        if getattr(self.toolkit, "header_provider", None):
-            # UI reads/actions cannot borrow discovery credentials or another
-            # viewer's cached HTTP session, even in a shared conversation.
-            from openagent_core.core._run_state import RunContext
-            ephemeral = "mcp-ui:" + secrets.token_urlsafe(24)
-            session = await self.toolkit.get_session_for_run(run_context=RunContext(
-                run_id=ephemeral, session_id=context.session_id,
-                user_id=context.author.subject_id))
-        if session is None:
-            raise CapabilityUnavailable("The exact MCP session is unavailable")
-        try:
-            yield session
-            self._check()
-        finally:
-            if ephemeral is not None:
-                await self.toolkit.cleanup_run_session(ephemeral)
+        from openagent_core.core._runner.utils.mcp import mcp_capability_generation_scope
+        with mcp_capability_generation_scope(self.toolkit) as check_generation:
+            session = getattr(self.toolkit, "session", None)
+            ephemeral = None
+            try:
+                if getattr(self.toolkit, "header_provider", None):
+                    # UI reads/actions cannot borrow discovery credentials or
+                    # another viewer's cached HTTP session.
+                    from openagent_core.core._run_state import RunContext
+                    ephemeral = "mcp-ui:" + secrets.token_urlsafe(24)
+                    session = await self.toolkit.get_session_for_run(run_context=RunContext(
+                        run_id=ephemeral, session_id=context.session_id,
+                        user_id=context.author.subject_id))
+                if session is None:
+                    raise CapabilityUnavailable("The exact MCP session is unavailable")
+                check_generation()
+                yield session
+                self._check()
+            finally:
+                if ephemeral is not None:
+                    await self.toolkit.cleanup_run_session(ephemeral)
 
     async def call_app_tool(self, name: str, arguments: dict, context: ExecutionContext) -> Any:
         self._check()
@@ -113,7 +127,11 @@ class PoolCapabilitySource:
     async def call_tool(self, name: str, arguments: dict, context: ExecutionContext) -> Any:
         from .servers.tool_search.adapters import _invoke_registered_tool
         self._check()
-        return await _invoke_registered_tool(self.pool, self.toolkit_name, name, arguments)
+        from openagent_core.core._runner.utils.mcp import mcp_capability_generation_scope
+        with mcp_capability_generation_scope(self.toolkit):
+            result = await _invoke_registered_tool(self.pool, self.toolkit_name, name, arguments)
+            self._check()
+            return result
 
 
 class InteractiveCapabilitySource:

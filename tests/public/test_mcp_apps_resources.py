@@ -82,7 +82,7 @@ class McpAppResourceTests(unittest.IsolatedAsyncioTestCase):
         pool=SimpleNamespace(toolkit_by_name=lambda _:toolkit)
         source=PoolCapabilitySource(pool,'counter',toolkit)
         definition=(await source.discover(self.context))[0]
-        self.assertEqual(definition.metadata,{'ui':{'resourceUri':URI}})
+        self.assertEqual(definition.metadata,{'ui':{'resourceUri':URI}, 'openagent/resource-generation':toolkit.capability_generation})
 
 class McpAppSessionTests(McpAppResourceTests):
     async def test_service_same_source_dedup_and_revocation(self):
