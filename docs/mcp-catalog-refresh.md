@@ -1,6 +1,6 @@
 # Complete MCP catalog snapshots and live local refresh
 
-Release preparation for Core `1.1.0b38` and capability-host `1.0.0b2`,
+Release preparation for Core `1.1.0b39` and capability-host `1.0.0b2`,
 30 October 2026. Earlier source-only receipts remain historical evidence and
 are not relabelled as publication or installed-release acceptance.
 
@@ -42,7 +42,7 @@ For development, place this repository's
 and neutral tool-protocol source paths. The package root pytest configuration
 already sets these paths for the qualification command below.
 
-The release cohort is Core/SQLite/gateway/Python SDK `1.1.0b38` plus
+The release cohort is Core/SQLite/gateway/Python SDK `1.1.0b39` plus
 capability-host `1.0.0b2`, consuming the independent tool protocol `1.0.0b2`.
 Receiving products still require exact public dependency pins, verified
 manifests, rebuilt sidecars/installers and device acceptance. Version promotion
@@ -63,3 +63,9 @@ See [the source qualification receipt](evidence/mcp-catalog-refresh-2026-10-30.j
 for commands, actual outcomes and the separate missing optional audio dependency.
 These are local deterministic source tests, not acceptance of a real remote MCP
 provider, native computer-control surface, installer or deployed product.
+
+Pool-backed MCP tool references include a host-owned opaque connection generation.
+An identical catalog on a replacement connection requires fresh discovery and a new
+MCP App view. A failed catalog refresh hides retained Function objects until a
+complete current catalog is available. Resource reads, cached view replies and
+mutations recheck the generation; an in-flight call is never rerun on a replacement.

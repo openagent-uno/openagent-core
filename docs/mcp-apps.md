@@ -24,6 +24,6 @@ A completed ledger entry retains a digest, terminal state and bounded error stri
 
 Close releases cached data and reserved ledger entries and cancels admitted work. Shutdown also drains pending providers, including retired work that has not yet settled. A closed view cannot repopulate its cache through a late completion.
 
-These APIs are included in the Core `1.1.0b38` release preparation. Earlier
+These APIs are included in Core `1.1.0b39`, which also binds pool-backed views and tool references to an exact MCP connection generation. Earlier
 qualification used local candidate artifacts; see the [integration release
-boundary](releases/v1.1.0-beta.38.md). A product must still compose its own authenticated transport, exact-owner presentation, approvals and sandbox policy; Core does not imply third-party service or signed-release acceptance.
+boundary](releases/v1.1.0-beta.39.md). A product must still compose its own authenticated transport, exact-owner presentation, approvals and sandbox policy; Core does not imply third-party service or signed-release acceptance.
