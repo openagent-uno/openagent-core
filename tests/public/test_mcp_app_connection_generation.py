@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from mcp.types import CallToolResult, ListToolsResult, Tool
 from openagent_core.capabilities import CapabilityCatalog, CapabilityUnavailable
@@ -165,3 +165,42 @@ class ConnectionGenerationTests(unittest.IsolatedAsyncioTestCase):
             await self.service.request(self.view["handle"], "tools/call", {"name": "mutate"},
                 self.context, request_id="once")
         self.assertEqual(1, self.first.call_tool.await_count)
+
+    async def test_durable_admission_reconnect_finishes_ledger_without_dispatch(self):
+        store = SimpleNamespace(begin_tool=AsyncMock(side_effect=self.replace), finish_tool=AsyncMock())
+        # begin_tool has four real ledger arguments; replacement ignores them.
+        async def admitted(*args, **kwargs):
+            await self.replace()
+        store.begin_tool.side_effect = admitted
+        runtime = SimpleNamespace(capabilities=self.catalog, settings=SimpleNamespace(environment={}), services=SimpleNamespace(store=store),
+            authorize=AsyncMock())
+        ref = next(t.tool_ref for t in await self.catalog.discover(self.context) if t.name == "mutate")
+        with patch("openagent_core.runtime.current_runtime", return_value=runtime), \
+                patch("openagent_core.runtime.current_run_id", return_value="owned-run"):
+            with self.assertRaises(CapabilityUnavailable):
+                await self.catalog.call_tool(ref, {}, self.context, call_id="owned-call")
+        store.begin_tool.assert_awaited_once()
+        store.finish_tool.assert_awaited_once()
+        receipt = store.finish_tool.await_args.kwargs
+        self.assertEqual("CapabilityUnavailable", receipt["error"]["error_type"])
+        self.assertFalse(receipt["error"]["retry_allowed"])
+        self.assertNotIn("result", receipt)
+        self.first.call_tool.assert_not_awaited()
+        self.second.call_tool.assert_not_awaited()
+
+    async def test_publication_policy_reconnect_rejects_executed_result_without_replay(self):
+        store = SimpleNamespace(begin_tool=AsyncMock(), finish_tool=AsyncMock())
+        async def authorize(context, action, resource, **kwargs):
+            if action == "tool.publish":
+                await self.replace()
+        runtime = SimpleNamespace(capabilities=self.catalog, settings=SimpleNamespace(environment={}), services=SimpleNamespace(store=store),
+            authorize=authorize)
+        ref = next(t.tool_ref for t in await self.catalog.discover(self.context) if t.name == "mutate")
+        with patch("openagent_core.runtime.current_runtime", return_value=runtime), \
+                patch("openagent_core.runtime.current_run_id", return_value="owned-run"):
+            with self.assertRaises(CapabilityUnavailable):
+                await self.catalog.call_tool(ref, {}, self.context, call_id="once")
+        self.first.call_tool.assert_awaited_once()
+        self.second.call_tool.assert_not_awaited()
+        store.finish_tool.assert_awaited_once()
+        self.assertNotIn("result", store.finish_tool.await_args.kwargs)

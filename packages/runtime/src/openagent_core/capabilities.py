@@ -464,6 +464,17 @@ class CapabilityCatalog:
             raise PermissionError("Tool is not visible to this presentation surface")
         if definition not in current or not self._available(registration, context):
             raise CapabilityUnavailable("Tool was removed or changed after discovery")
+        async def recheck_definition():
+            # Admission/provenance persistence and publication policy may await.
+            # Revalidate the exact definition after them, not merely the source
+            # registration: a reconnect can keep the same toolkit object.
+            latest = tuple(replace(d, effects=d.effects & (
+                registration.trusted_effects.get(d.name, frozenset())
+                if isinstance(registration.trusted_effects, Mapping) else registration.trusted_effects))
+                for d in await discover(context))
+            if definition not in latest or not self._available(registration, context):
+                raise CapabilityUnavailable("The exact tool binding changed during admission or execution")
+
         descriptor = self._descriptor(tool_ref, registration, definition)
         if durable:
             host = {"kind":"capability","device_label":registration.target_label,"source_id":registration.source_id}
@@ -487,6 +498,9 @@ class CapabilityCatalog:
             else:
                 await runtime.services.store.begin_tool(run_id,call_id,binding,arguments)
         try:
+            # Inside the try so a stale post-ledger admission receives the
+            # ordinary terminal failed receipt, never a stranded pending row.
+            await recheck_definition()
             invoke = getattr(registration.executor, "call_app_tool", registration.executor.call_tool) if surface == "app" else registration.executor.call_tool
             result = await invoke(definition.name, copy.deepcopy(dict(arguments)), context)
             # Publication is distinct from execution. Do not persist the
@@ -494,6 +508,7 @@ class CapabilityCatalog:
             await authorize("tool.publish")
             if not self._available(registration, context):
                 raise CapabilityUnavailable("The invocation source was revoked during execution")
+            await recheck_definition()
             if durable:
                 if hasattr(result,"model_dump"):
                     envelope = result.model_dump(mode="json",by_alias=True)
@@ -516,6 +531,7 @@ class CapabilityCatalog:
                 await authorize('tool.publish')
                 if not self._available(registration, context):
                     raise CapabilityUnavailable("The invocation source was revoked while resolving result provenance")
+                await recheck_definition()
         except BaseException as exc:
             if durable:
                 await runtime.services.store.finish_tool(run_id,call_id,
