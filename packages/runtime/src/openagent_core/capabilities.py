@@ -13,12 +13,31 @@ class CapabilityUnavailable(LookupError):
     pass
 
 
+def ui_resource_uri(metadata: Mapping[str, Any]) -> Any:
+    """Read the current and legacy MCP Apps URI spelling as presentation data."""
+    if not isinstance(metadata, Mapping):
+        return None
+    ui = metadata.get("ui")
+    return (ui.get("resourceUri") if isinstance(ui, Mapping) else None) or metadata.get("ui/resourceUri")
+
+
+def tool_visible(metadata: Mapping[str, Any], surface: str) -> bool:
+    """MCP Apps visibility is presentation routing, never an authorization grant."""
+    ui = metadata.get("ui") if isinstance(metadata, Mapping) else None
+    visibility = ui.get("visibility") if isinstance(ui, Mapping) else None
+    if visibility is None:
+        return True
+    return (isinstance(visibility, (list, tuple)) and bool(visibility)
+            and all(value in {"model", "app"} for value in visibility) and surface in visibility)
+
+
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
     name: str
     description: str
     input_schema: Mapping[str, Any]
     effects: frozenset[str] = frozenset()
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +49,7 @@ class ToolDescriptor:
     source_id: str
     target_label: str
     effects: frozenset[str] = frozenset()
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +60,7 @@ class ToolInventoryEntry:
     description: str
     input_schema: Mapping[str, Any]
     target_label: str
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 class CapabilitySource(Protocol):
@@ -270,7 +291,7 @@ class CapabilityCatalog:
                     raise ValueError("Catalog inventory is ambiguous or exceeds its bound")
                 names.add(definition.name)
                 result.append(ToolInventoryEntry(registration.source_id, definition.name, definition.description,
-                    copy.deepcopy(definition.input_schema), registration.target_label))
+                    copy.deepcopy(definition.input_schema), registration.target_label, copy.deepcopy(definition.metadata)))
         return tuple(result)
 
     async def discover(self, context: ExecutionContext) -> tuple[ToolDescriptor, ...]:
@@ -284,6 +305,8 @@ class CapabilityCatalog:
                 continue
             seen: set[str] = set()
             for definition in definitions:
+                if not tool_visible(definition.metadata, "model"):
+                    continue
                 definition = replace(definition, effects=definition.effects & (registration.trusted_effects.get(definition.name, frozenset()) if isinstance(registration.trusted_effects, Mapping) else registration.trusted_effects))
                 if definition.name in seen:
                     raise ValueError("A source returned ambiguous duplicate tool names")
@@ -304,9 +327,109 @@ class CapabilityCatalog:
     @staticmethod
     def _descriptor(reference: str, registration: _Registration, definition: ToolDefinition) -> ToolDescriptor:
         return ToolDescriptor(reference, definition.name, definition.description, copy.deepcopy(definition.input_schema),
-                              registration.source_id, registration.target_label, definition.effects)
+                              registration.source_id, registration.target_label, definition.effects, copy.deepcopy(definition.metadata))
 
-    async def call_tool(self, tool_ref: str, arguments: Mapping[str, Any], context: ExecutionContext, *, call_id: str | None = None) -> Any:
+    async def _current_binding(self, tool_ref: str, context: ExecutionContext):
+        binding = self._refs.get(tool_ref)
+        if binding is None:
+            raise CapabilityUnavailable("Unknown or revoked tool reference; discover current tools")
+        registration, definition = binding
+        if not self._available(registration, context):
+            raise CapabilityUnavailable("The exact capability instance is unavailable")
+        await require_authorized(self.authorizer, context, "tool.discover",
+            ResourceRef("capability", context.tenant_id, registration.source_id), audience=context.audience)
+        definitions = tuple(replace(d, effects=d.effects & (
+            registration.trusted_effects.get(d.name, frozenset())
+            if isinstance(registration.trusted_effects, Mapping) else registration.trusted_effects))
+            for d in await registration.source.discover(context))
+        if definition not in definitions or not self._available(registration, context):
+            raise CapabilityUnavailable("Tool was removed or changed after discovery")
+        return registration, definition, definitions
+
+    async def describe_tool(self, tool_ref: str, context: ExecutionContext) -> ToolDescriptor:
+        """Describe one current opaque binding, including untrusted presentation metadata."""
+        registration, definition, _ = await self._current_binding(tool_ref, context)
+        return self._descriptor(tool_ref, registration, definition)
+
+    async def call_source_tool(self, origin_tool_ref: str, name: str, arguments: Mapping[str, Any],
+                               context: ExecutionContext, *, call_id: str | None = None) -> Any:
+        """Call a current sibling tool on the exact originating registration.
+
+        This host API lets an interactive resource use its MCP server without
+        treating a server name or a resource URI as execution authority.
+        """
+        registration, _, _ = await self._current_binding(origin_tool_ref, context)
+        discover = getattr(registration.source, "discover_app", registration.source.discover)
+        definitions = tuple(await discover(context))
+        if not self._available(registration, context):
+            raise CapabilityUnavailable("The originating source is unavailable")
+        matches = [definition for definition in definitions if definition.name == name]
+        if len(matches) != 1:
+            raise CapabilityUnavailable("The originating source does not expose this tool")
+        definition = replace(matches[0], effects=matches[0].effects & (
+            registration.trusted_effects.get(name, frozenset())
+            if isinstance(registration.trusted_effects, Mapping) else registration.trusted_effects))
+        if not tool_visible(definition.metadata, "app"):
+            raise PermissionError("This tool is not visible to the originating app")
+        reference_key = "app\0" + name
+        previous = registration.references.get(reference_key)
+        if previous is None or previous[1] != definition:
+            if previous:
+                self._refs.pop(previous[0], None)
+            reference = secrets.token_urlsafe(32)
+            definition = copy.deepcopy(definition)
+            registration.references[reference_key] = reference, definition
+            self._refs[reference] = registration, definition
+        else:
+            reference = previous[0]
+        return await self.call_tool(reference, arguments, context, call_id=call_id, surface="app")
+
+    async def read_tool_resource(self, tool_ref: str, uri: str, context: ExecutionContext) -> Any:
+        """Read only the UI resource declared by the same current tool/source.
+
+        Publication and execution authorization are checked around I/O. The
+        resource's contents and metadata remain data; they cannot grant access
+        to another MCP or expand the originating capability lease.
+        """
+        registration, definition, _ = await self._current_binding(tool_ref, context)
+        declared = ui_resource_uri(definition.metadata)
+        if (not isinstance(uri, str) or not uri.startswith("ui://") or len(uri) > 4096
+                or any(ord(c) < 32 for c in uri) or uri != declared):
+            raise PermissionError("The resource is not declared by this exact tool")
+        resource = ResourceRef("tool", context.tenant_id, registration.source_id + "/" + definition.name)
+        await require_authorized(self.authorizer, context, "tool.call", resource, audience=context.audience)
+        read = getattr(registration.executor, "read_resource", None)
+        if not callable(read):
+            raise CapabilityUnavailable("This exact capability executor does not support resources")
+        result = await read(uri, context)
+        await require_authorized(self.authorizer, context, "tool.publish", resource, audience=context.audience)
+        current, current_definition, _ = await self._current_binding(tool_ref, context)
+        if current is not registration or current_definition != definition:
+            raise CapabilityUnavailable("The resource source changed during execution")
+        if hasattr(result, "model_dump"):
+            result = result.model_dump(mode="json", by_alias=True)
+        result = json.loads(json.dumps(result, allow_nan=False))
+        if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > 2 * 1024 * 1024:
+            raise ValueError("MCP UI resource exceeds the two MiB bound")
+        contents = result.get("contents") if isinstance(result, dict) else None
+        if not isinstance(contents, list) or not 1 <= len(contents) <= 16:
+            raise ValueError("MCP UI resource requires bounded contents")
+        for content in contents:
+            if (not isinstance(content, dict) or str(content.get("uri")) != uri
+                    or content.get("mimeType") != "text/html;profile=mcp-app"
+                    or (isinstance(content.get("text"), str) == isinstance(content.get("blob"), str))):
+                raise ValueError("MCP UI resource has an unexpected URI, MIME type or content")
+            if "blob" in content:
+                import base64
+                try:
+                    base64.b64decode(content["blob"], validate=True).decode("utf-8", errors="strict")
+                except (ValueError, UnicodeError) as exc:
+                    raise ValueError("MCP UI resource blob must contain UTF-8 HTML") from exc
+        return result
+
+    async def call_tool(self, tool_ref: str, arguments: Mapping[str, Any], context: ExecutionContext, *, call_id: str | None = None, surface: str = "model") -> Any:
+        if surface not in {"model", "app"}:
+            raise ValueError("Unknown tool presentation surface")
         call_id = call_id or secrets.token_urlsafe(24)
         binding = self._refs.get(tool_ref)
         if binding is None:
@@ -334,8 +457,11 @@ class CapabilityCatalog:
             await privacy_publisher.validate_tool_admission(context,run_id,
                 privacy_fenced=(registration.privacy_fenced.get(definition.name,False)
                     if isinstance(registration.privacy_fenced,Mapping) else registration.privacy_fenced))
+        discover = getattr(registration.source, "discover_app", registration.source.discover) if surface == "app" else registration.source.discover
         current = tuple(replace(d, effects=d.effects & (registration.trusted_effects.get(d.name, frozenset()) if isinstance(registration.trusted_effects, Mapping) else registration.trusted_effects))
-                        for d in await registration.source.discover(context))
+                        for d in await discover(context))
+        if not tool_visible(definition.metadata, surface):
+            raise PermissionError("Tool is not visible to this presentation surface")
         if definition not in current or not self._available(registration, context):
             raise CapabilityUnavailable("Tool was removed or changed after discovery")
         descriptor = self._descriptor(tool_ref, registration, definition)
@@ -344,7 +470,8 @@ class CapabilityCatalog:
             if registration.lease is not None:
                 host.update(instance_id=registration.lease.instance_id,generation=registration.lease.generation)
             binding = {"tool_ref":tool_ref,"source_id":registration.source_id,"name":definition.name,
-                       "target_label":registration.target_label,"effects":sorted(definition.effects),"execution_host":host}
+                       "target_label":registration.target_label,"effects":sorted(definition.effects),"execution_host":host,
+                       "metadata":copy.deepcopy(dict(definition.metadata))}
             provider_call_id = current_provider_tool_call_id()
             if provider_call_id is not None:
                 binding['provider_call_id'] = provider_call_id
@@ -360,7 +487,8 @@ class CapabilityCatalog:
             else:
                 await runtime.services.store.begin_tool(run_id,call_id,binding,arguments)
         try:
-            result = await registration.executor.call_tool(definition.name, copy.deepcopy(dict(arguments)), context)
+            invoke = getattr(registration.executor, "call_app_tool", registration.executor.call_tool) if surface == "app" else registration.executor.call_tool
+            result = await invoke(definition.name, copy.deepcopy(dict(arguments)), context)
             # Publication is distinct from execution. Do not persist the
             # private result into shared history when this authorization fails.
             await authorize("tool.publish")

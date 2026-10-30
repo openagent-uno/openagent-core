@@ -2650,6 +2650,10 @@ class Agent:
             "any absolute date you record — never guess the year from memory."
         ), "runtime"))
         dynamic = {"catalog": build_mcp_catalog_summary(self._mcp)}
+        from openagent_core.mcp_apps import current_application_context
+        external_apps = current_application_context()
+        if external_apps:
+            dynamic["untrusted_app_context"] = external_apps
         host_context = getattr(self, "host_context_provider", None)
         if host_context is not None:
             dynamic["host_context"] = dict(host_context.prompt_context(context))

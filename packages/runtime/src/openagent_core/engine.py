@@ -75,72 +75,78 @@ class AgentExecutor:
             await can_publish()
             await runtime.services.store.append_event(request.run_id,"run.status",{"text":text})
         final_text = None
-        async for event in self.agent.run_stream(request.input,session_id=request.session_id,
-                attachments=list(request.attachments),on_status=status,model_override=model,
-                author={"kind":context.author.kind,"handle":context.author.key}):
-            await can_publish()
-            kind = event.get("kind")
-            if kind == "done" and event.get("errored"):
-                # Agent.run_stream reports provider failures as a terminal
-                # frame so channel clients can display them. A durable run
-                # must fail instead of recording that frame as an answer.
-                from .core.public_errors import RunTurnError, RunErrorClass
-                failure = RunErrorClass(event.get("error_code"))
-                raise RunTurnError(failure.public_message, code=failure.code)
-            if kind == "delta":
-                chunks.append(event.get("text") or "")
-                event = {**event, "text": marker_filter.feed(event.get("text") or "")}
-            elif kind == "done":
-                final_text = event.get("text") or ""
-                attachment_bindings = []
-                from .stream.content_parts import parse_response_content
-                parsed = parse_response_content(final_text, allow_inline_ui=False)
-                if parsed.attachments:
-                    from .artifacts import session_output_reference
-                    db = getattr(self.agent, "memory_db", None)
-                    parts, attachments = [], []
-                    unavailable = False
-                    for part in parsed.parts:
-                        if part["kind"] != "attachment":
-                            parts.append(part)
-                            continue
-                        value = part["attachment"]
-                        ref = await session_output_reference(db, tenant_id=context.tenant_id,
-                            session_id=context.session_id, value=value, link=True) if db is not None else None
-                        publisher = runtime.service("attachments.publisher") if hasattr(runtime, "service") else None
-                        if ref is None and publisher is not None and db is not None:
-                            try:
-                                value = await publisher.publish(context, value["path"])
-                            except (FileNotFoundError, PermissionError, ValueError):
-                                # An unavailable file must not erase a valid
-                                # answer. Session revocation still fails closed
-                                # at the fresh publication check below.
-                                value = None
-                            await can_publish()
+        from .mcp_apps import application_context_scope
+        lookup = getattr(runtime, "service", None)
+        apps = lookup("mcp_apps") if callable(lookup) else None
+        read_context = getattr(apps, "prompt_context", None)
+        application_context = await read_context(context) if callable(read_context) else {}
+        with application_context_scope(application_context):
+            async for event in self.agent.run_stream(request.input,session_id=request.session_id,
+                    attachments=list(request.attachments),on_status=status,model_override=model,
+                    author={"kind":context.author.kind,"handle":context.author.key}):
+                await can_publish()
+                kind = event.get("kind")
+                if kind == "done" and event.get("errored"):
+                    # Agent.run_stream reports provider failures as a terminal
+                    # frame so channel clients can display them. A durable run
+                    # must fail instead of recording that frame as an answer.
+                    from .core.public_errors import RunTurnError, RunErrorClass
+                    failure = RunErrorClass(event.get("error_code"))
+                    raise RunTurnError(failure.public_message, code=failure.code)
+                if kind == "delta":
+                    chunks.append(event.get("text") or "")
+                    event = {**event, "text": marker_filter.feed(event.get("text") or "")}
+                elif kind == "done":
+                    final_text = event.get("text") or ""
+                    attachment_bindings = []
+                    from .stream.content_parts import parse_response_content
+                    parsed = parse_response_content(final_text, allow_inline_ui=False)
+                    if parsed.attachments:
+                        from .artifacts import session_output_reference
+                        db = getattr(self.agent, "memory_db", None)
+                        parts, attachments = [], []
+                        unavailable = False
+                        for part in parsed.parts:
+                            if part["kind"] != "attachment":
+                                parts.append(part)
+                                continue
+                            value = part["attachment"]
                             ref = await session_output_reference(db, tenant_id=context.tenant_id,
-                                session_id=context.session_id, value=value, link=True)
-                        if ref is None:
-                            unavailable = True
-                        else:
-                            attachments.append(ref)
-                            parts.append({"kind": "attachment", "attachment": ref})
-                            attachment_bindings.append((part["attachment"], ref))
-                    final_text = parsed.text
-                    if unavailable:
-                        note = "An attachment is unavailable: no authorized file publisher could deliver it."
-                        final_text += ("\n\n" if final_text else "") + note
-                        parts.append({"kind": "text", "text": "\n\n" + note})
-                    await can_publish()
-                    event = {**event, "text": final_text, "parts": parts, "attachments": attachments}
-                from .stream.final_answer import project_final_answer
-                event = {**event, "content_format": "openagent.canonical-content/v1", "final_answer": project_final_answer(
-                    event.get("final_answer"), attachment_bindings=attachment_bindings,
-                )}
-            elif kind == "error":
-                from .core.public_errors import RunTurnError, RunErrorClass
-                failure = RunErrorClass(event.get("error_code"))
-                raise RunTurnError(failure.public_message, code=failure.code)
-            await runtime.services.store.append_event(request.run_id,"run.stream",event)
+                                session_id=context.session_id, value=value, link=True) if db is not None else None
+                            publisher = runtime.service("attachments.publisher") if hasattr(runtime, "service") else None
+                            if ref is None and publisher is not None and db is not None:
+                                try:
+                                    value = await publisher.publish(context, value["path"])
+                                except (FileNotFoundError, PermissionError, ValueError):
+                                    # An unavailable file must not erase a valid
+                                    # answer. Session revocation still fails closed
+                                    # at the fresh publication check below.
+                                    value = None
+                                await can_publish()
+                                ref = await session_output_reference(db, tenant_id=context.tenant_id,
+                                    session_id=context.session_id, value=value, link=True)
+                            if ref is None:
+                                unavailable = True
+                            else:
+                                attachments.append(ref)
+                                parts.append({"kind": "attachment", "attachment": ref})
+                                attachment_bindings.append((part["attachment"], ref))
+                        final_text = parsed.text
+                        if unavailable:
+                            note = "An attachment is unavailable: no authorized file publisher could deliver it."
+                            final_text += ("\n\n" if final_text else "") + note
+                            parts.append({"kind": "text", "text": "\n\n" + note})
+                        await can_publish()
+                        event = {**event, "text": final_text, "parts": parts, "attachments": attachments}
+                    from .stream.final_answer import project_final_answer
+                    event = {**event, "content_format": "openagent.canonical-content/v1", "final_answer": project_final_answer(
+                        event.get("final_answer"), attachment_bindings=attachment_bindings,
+                    )}
+                elif kind == "error":
+                    from .core.public_errors import RunTurnError, RunErrorClass
+                    failure = RunErrorClass(event.get("error_code"))
+                    raise RunTurnError(failure.public_message, code=failure.code)
+                await runtime.services.store.append_event(request.run_id,"run.stream",event)
         result = final_text if final_text is not None else "".join(chunks)
         failure = take_run_failure()
         if failure:

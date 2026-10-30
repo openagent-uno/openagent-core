@@ -1,0 +1,83 @@
+{
+  "date": "2026-10-30",
+  "qualification": "unreleased source only",
+  "base_commit": "0ea950800c3b7a16a0d5d0b3c1c53ce2f3d8548a",
+  "published_versions_unchanged": {
+    "openagent-core": "1.1.0b31",
+    "openagent-capability-host": "1.0.0b1"
+  },
+  "next_release_requirements": [
+    "Assign new Core and capability-host package versions before publishing",
+    "Build verified artifacts and update exact receiving-product dependency pins/manifests",
+    "Rebuild and qualify installers and native/live MCP provider boundaries separately"
+  ],
+  "changes": [
+    "Complete bounded MCP pagination in engine and independent stdio adapter",
+    "Reject repeated/invalid cursors and duplicate tool names without publishing partial snapshots",
+    "Remove stale engine MCP functions on explicit refresh while preserving host functions",
+    "Coalesce stdio list-change notifications and refresh the exact process generation",
+    "Invalidate failed local catalog refreshes and publish state/recovery through the public host callback",
+    "Preserve engine initialize/connect cancellation and exact stdio cancellation without replay",
+    "Preserve JSON-RPC ID types and reject malformed result/error envelopes without stranding the reader",
+    "Round-trip multiline/control-character MCP command and environment strings through TOML"
+  ],
+  "tests": [
+    {
+      "command": ".venv/bin/python -m pytest tests/public/test_mcp_catalog_refresh.py packages/capability-host/tests -q",
+      "result": "27 passed in 1.10s"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/public packages/capability-host/tests -q",
+      "result": "509 passed, 83 subtests passed; one unrelated optional audio dependency failure before the final additional cases",
+      "failure": "InstalledAudioWorkerHTTP.test_normal_worker_returns_one_clean_italian_transcription: importlib.metadata.PackageNotFoundError: litellm"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/public packages/capability-host/tests --deselect=tests/public/test_audio_worker_http.py::InstalledAudioWorkerHTTP::test_normal_worker_returns_one_clean_italian_transcription -q",
+      "result": "520 passed, 1 deselected, 83 subtests passed in 35.05s"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    },
+    {
+      "command": ".venv/bin/python -m compileall -q packages/capability-host/src/openagent_capability_host/mcp_stdio.py packages/capability-host/src/openagent_capability_host/config.py packages/runtime/src/openagent_core/mcp/_runtime/mcp/mcp.py",
+      "result": "passed"
+    }
+  ],
+  "boundaries_not_qualified": [
+    "Automatic list-change handling on externally supplied SDK engine sessions (engine refresh remains explicit)",
+    "Public package release or installer adoption",
+    "Remote provider API/OAuth and native computer-control behavior",
+    "Optional installed audio worker test without litellm"
+  ],
+  "files": [
+    {
+      "path": "packages/runtime/src/openagent_core/mcp/_runtime/mcp/mcp.py",
+      "sha256": "d43f6e703f2069cd515caa4053ec25619ac1a45622bf228547e2e1a17ac83041"
+    },
+    {
+      "path": "packages/capability-host/src/openagent_capability_host/mcp_stdio.py",
+      "sha256": "05750cda330e4f38d37414f97245dce2f18751aef0ce156d1cb3bd88ab793d43"
+    },
+    {
+      "path": "packages/capability-host/src/openagent_capability_host/config.py",
+      "sha256": "2eef56cee7de2eddefbe196db012fae1333d2e60aac7a36c2fb2c33b571ce245"
+    },
+    {
+      "path": "packages/capability-host/README.md",
+      "sha256": "9fbb95594488ac725a006fa30ce7b36459177d72e572a9ba3261b47b1a3f97df"
+    },
+    {
+      "path": "docs/README.md",
+      "sha256": "8b1a3f33fbda31ee2ed9093847656a1905b529bc425954ce9f316596ceac7f72"
+    },
+    {
+      "path": "docs/mcp-catalog-refresh.md",
+      "sha256": "1d8730e5417ca139de762b1603c73bd270148e6e617bb7e86fd9434042c46ae1"
+    },
+    {
+      "path": "tests/public/test_mcp_catalog_refresh.py",
+      "sha256": "bab852e44006b98ad976823b15a882dc067cd601ae0b744f0dc035f1079f671a"
+    }
+  ]
+}

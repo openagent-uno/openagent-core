@@ -26,6 +26,10 @@ except (ImportError, ModuleNotFoundError):
     raise ImportError("`mcp` not installed. Please install using `pip install mcp`")
 
 
+_MAX_CATALOG_PAGES = 100
+_MAX_CATALOG_TOOLS = 10_000
+
+
 class MCPTools(Toolkit):
     """
     A toolkit for integrating Model Context Protocol (MCP) servers with the runtime.
@@ -185,6 +189,9 @@ class MCPTools(Toolkit):
         self._run_session_contexts: dict[str, Any] = {}  # Maps run_id to session context managers
         self._session_ttl_seconds: float = 300.0  # 5 minutes TTL for MCP sessions
         self._session_lock: Optional[asyncio.Lock] = None  # Lazily created lock for session creation
+        self._catalog_lock = asyncio.Lock()
+        self._mcp_function_names: set[str] = set()
+        self._app_functions: dict[str, Any] = {}
 
         def cleanup():
             """Cancel active connections"""
@@ -467,6 +474,8 @@ class MCPTools(Toolkit):
 
         try:
             await self._connect()
+        except asyncio.CancelledError:
+            raise
         except (RuntimeError, BaseException):
             log_error(f"Failed to connect to {str(self)}")
 
@@ -589,74 +598,118 @@ class MCPTools(Toolkit):
         if self.session is None:
             raise ValueError("Session is not initialized")
 
-        try:
-            # Get the list of tools from the MCP server
-            available_tools = await self.session.list_tools()  # type: ignore
+        async with self._catalog_lock:
+            try:
+                # A catalog is a snapshot. Never publish a partial page or retain
+                # removed tools when an initialized server refreshes its catalog.
+                session = self.session
+                tools = []
+                names: set[str] = set()
+                cursors: set[str] = set()
+                cursor = None
+                for _ in range(_MAX_CATALOG_PAGES):
+                    page = await session.list_tools(**({"cursor": cursor} if cursor else {}))
+                    for tool in page.tools:
+                        if not tool.name or tool.name in names:
+                            raise ValueError("MCP catalog contains an empty or duplicate tool name")
+                        names.add(tool.name)
+                        tools.append(tool)
+                        if len(tools) > _MAX_CATALOG_TOOLS:
+                            raise ValueError("MCP catalog exceeds the tool limit")
+                    cursor = getattr(page, "nextCursor", None)
+                    if cursor is None:
+                        break
+                    if not isinstance(cursor, str) or not cursor or cursor in cursors:
+                        raise ValueError("MCP catalog returned an invalid or repeated cursor")
+                    cursors.add(cursor)
+                else:
+                    raise ValueError("MCP catalog exceeds the page limit")
 
-            self._check_tools_filters(
-                available_tools=[tool.name for tool in available_tools.tools],
-                include_tools=self.include_tools,
-                exclude_tools=self.exclude_tools,
-            )
+                if self.session is not session:
+                    raise RuntimeError("MCP session changed while reading its catalog")
 
-            # Filter tools based on include/exclude lists
-            filtered_tools = []
-            for tool in available_tools.tools:
-                if self.exclude_tools and tool.name in self.exclude_tools:
-                    continue
-                if self.include_tools is None or tool.name in self.include_tools:
-                    filtered_tools.append(tool)
+                self._check_tools_filters(
+                    available_tools=[tool.name for tool in tools],
+                    include_tools=self.include_tools,
+                    exclude_tools=self.exclude_tools,
+                )
 
-            # Get tool name prefix if available
-            tool_name_prefix = ""
-            if self.tool_name_prefix is not None:
-                tool_name_prefix = self.tool_name_prefix + "_"
+                # Filter tools based on include/exclude lists
+                filtered_tools = []
+                for tool in tools:
+                    if self.exclude_tools and tool.name in self.exclude_tools:
+                        continue
+                    if self.include_tools is None or tool.name in self.include_tools:
+                        filtered_tools.append(tool)
 
-            # Register the tools with the toolkit
-            for tool in filtered_tools:
-                try:
-                    # Get an entrypoint for the tool
-                    entrypoint = get_entrypoint_for_tool(
-                        tool=tool,
-                        session=self.session,  # type: ignore
-                        mcp_tools_instance=self,
-                    )
-                    # Create a Function for the tool
-                    # Apply toolkit-level settings
-                    tool_name = tool.name
-                    stop_after = tool_name in self.stop_after_tool_call_tools
-                    show_result = tool_name in self.show_result_tools or stop_after
+                # Get tool name prefix if available
+                tool_name_prefix = ""
+                if self.tool_name_prefix is not None:
+                    tool_name_prefix = self.tool_name_prefix + "_"
 
-                    f = Function(
-                        name=tool_name_prefix + tool_name,
-                        description=tool.description,
-                        parameters=tool.inputSchema,
-                        classification=classification_from_mcp_annotations(
-                            getattr(tool, "annotations", None)
-                        ),
-                        entrypoint=entrypoint,
-                        # Set skip_entrypoint_processing to True to avoid processing the entrypoint
-                        skip_entrypoint_processing=True,
-                        # Apply toolkit-level settings for HITL and control flow
-                        requires_confirmation=tool_name in self.requires_confirmation_tools,
-                        external_execution=tool_name in self.external_execution_required_tools,
-                        stop_after_tool_call=stop_after,
-                        show_result=show_result,
-                        # Apply toolkit-level cache settings
-                        cache_results=self.cache_results,
-                        cache_dir=self.cache_dir,
-                        cache_ttl=self.cache_ttl,
-                    )
+                functions = {
+                    name: function for name, function in self.functions.items()
+                    if name not in self._mcp_function_names
+                }
+                mcp_function_names: set[str] = set()
+                app_functions: dict[str, Any] = {}
+                from openagent_core.capabilities import tool_visible
+                # Register only after every page and definition was validated.
+                for tool in filtered_tools:
+                    try:
+                        # Get an entrypoint for the tool
+                        entrypoint = get_entrypoint_for_tool(
+                            tool=tool,
+                            session=self.session,  # type: ignore
+                            mcp_tools_instance=self,
+                        )
+                        # Create a Function for the tool
+                        # Apply toolkit-level settings
+                        tool_name = tool.name
+                        stop_after = tool_name in self.stop_after_tool_call_tools
+                        show_result = tool_name in self.show_result_tools or stop_after
 
-                    # Register the Function with the toolkit
-                    self.functions[f.name] = f
-                    log_debug(f"Function: {f.name} registered with {self.name}")
-                except Exception as e:
-                    log_error(f"Failed to register tool {tool.name}: {str(e)}")
+                        f = Function(
+                            name=tool_name_prefix + tool_name,
+                            description=tool.description,
+                            mcp_metadata=getattr(tool, "meta", None) or {},
+                            mcp_name=tool.name,
+                            parameters=tool.inputSchema,
+                            classification=classification_from_mcp_annotations(
+                                getattr(tool, "annotations", None)
+                            ),
+                            entrypoint=entrypoint,
+                            # Set skip_entrypoint_processing to True to avoid processing the entrypoint
+                            skip_entrypoint_processing=True,
+                            # Apply toolkit-level settings for HITL and control flow
+                            requires_confirmation=tool_name in self.requires_confirmation_tools,
+                            external_execution=tool_name in self.external_execution_required_tools,
+                            stop_after_tool_call=stop_after,
+                            show_result=show_result,
+                            # Apply toolkit-level cache settings
+                            cache_results=self.cache_results,
+                            cache_dir=self.cache_dir,
+                            cache_ttl=self.cache_ttl,
+                        )
 
-        except (RuntimeError, BaseException):
-            log_error(f"Failed to get tools for {str(self)}")
-            raise
+                        # Register the Function with the toolkit
+                        if tool_visible(f.mcp_metadata, "model"):
+                            functions[f.name] = f
+                            mcp_function_names.add(f.name)
+                        if tool_visible(f.mcp_metadata, "app"):
+                            app_functions[f.name] = f
+                        log_debug(f"Function: {f.name} registered with {self.name}")
+                    except Exception as e:
+                        log_error(f"Failed to register tool {tool.name}: {str(e)}")
+                        raise
+
+                self.functions = functions
+                self._mcp_function_names = mcp_function_names
+                self._app_functions = app_functions
+
+            except (RuntimeError, BaseException):
+                log_error(f"Failed to get tools for {str(self)}")
+                raise
 
     async def initialize(self) -> None:
         """Initialize the MCP toolkit by getting available tools from the MCP server"""
@@ -674,5 +727,7 @@ class MCPTools(Toolkit):
 
             self._initialized = True
 
+        except asyncio.CancelledError:
+            raise
         except (RuntimeError, BaseException):
             log_error("Failed to initialize MCP toolkit")

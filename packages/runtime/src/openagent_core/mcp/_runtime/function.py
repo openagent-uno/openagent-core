@@ -221,6 +221,9 @@ class Function(BaseModel):
     # deliberately stays out of ``to_dict`` because model-provider tool schemas
     # do not accept OpenAgent-specific top-level fields.
     classification: Literal["read_only", "idempotent", "mutating"] = "mutating"
+    # MCP presentation metadata is untrusted data, never execution policy.
+    mcp_metadata: Dict[str, Any] = Field(default_factory=dict)
+    mcp_name: Optional[str] = None
     strict: Optional[bool] = None
 
     instructions: Optional[str] = None

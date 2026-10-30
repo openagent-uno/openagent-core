@@ -158,6 +158,16 @@ class SessionRef:
             raise ValueError("Invalid session reference") from exc
 
 
+class ToolInvocationStore(Protocol):
+    """Optional saved display-data lookup; hosts must authorize session.read.
+
+    References select only the exact verified session. A matching saved binding
+    is presentation data and never a new grant to invoke its tool.
+    """
+    async def read_tool_invocation(self, reference: SessionRef, tool_call_id: str,
+                                   context: ExecutionContext) -> Mapping[str, Any]: ...
+
+
 class SessionStore(Protocol):
     """Mandatory session substrate implemented by the runtime store adapter."""
     async def list_sessions(self, context: ExecutionContext, *, include_archived: bool,

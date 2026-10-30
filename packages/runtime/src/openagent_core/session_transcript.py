@@ -2,6 +2,46 @@
 from __future__ import annotations
 
 
+def tool_presentation_binding(binding):
+    """Copy only saved source presentation hints; these never grant authority."""
+    import copy
+    if not isinstance(binding, dict):
+        return {}
+    result = {}
+    if isinstance(binding.get("tool_ref"), str):
+        result["tool_ref"] = binding["tool_ref"]
+    if isinstance(binding.get("metadata"), dict):
+        result["metadata"] = copy.deepcopy(binding["metadata"])
+    return result
+
+
+def overlay_tool_presentation(run, envelopes):
+    """Decorate exact provider mirror calls with canonical saved bindings.
+
+    Ambiguous call IDs remain undecorated. Legacy name-only matches never turn
+    a similarly named tool into an interactive source reference.
+    """
+    import copy
+    bindings = {}
+    ambiguous = set()
+    for envelope in envelopes:
+        binding = envelope.get("binding", {})
+        for call in {envelope.get("call_id"), binding.get("provider_call_id")}:
+            if not isinstance(call, str) or not call:
+                continue
+            if call in bindings:
+                ambiguous.add(call)
+            bindings[call] = binding
+    result = copy.deepcopy(run)
+    for tool in result.get("tools", ()):
+        if not isinstance(tool, dict):
+            continue
+        call = tool.get("tool_call_id") or tool.get("tool_use_id") or tool.get("id")
+        if isinstance(call, str) and call in bindings and call not in ambiguous:
+            tool.update(tool_presentation_binding(bindings[call]))
+    return result
+
+
 async def runtime_journal_run(row, events, canonical_messages):
     """Rehydrate an admitted turn when its provider mirror was never saved.
 
@@ -32,7 +72,8 @@ async def runtime_journal_run(row, events, canonical_messages):
             call = provider_call if isinstance(provider_call, str) and provider_call else payload.get('call_id')
             info = {'tool_name': binding.get('name'), 'tool_call_id': call,
                     'tool_args': payload.get('arguments', {}),
-                    'tool_call_error': payload.get('status') == 'error' or bool(payload.get('error'))}
+                    'tool_call_error': payload.get('status') == 'error' or bool(payload.get('error')),
+                    **tool_presentation_binding(binding)}
             if kind == 'tool.completed':
                 info['result'] = payload.get('error', payload.get('result'))
         elif kind == 'run.stream':

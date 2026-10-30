@@ -338,7 +338,7 @@ class SessionInspection:
 
     async def _transcript_runs(self, context, session_id, limit):
         """Union the provider mirror with exact admitted turns, without replay."""
-        from .session_transcript import runtime_journal_run
+        from .session_transcript import runtime_journal_run, overlay_tool_presentation
         legacy = await self.db.list_session_runs(session_id, limit=limit)
         conn = await self.db._ensure_connected()
         rows = await (await conn.execute(
@@ -358,6 +358,12 @@ class SessionInspection:
             if attested is not None:
                 aliases[attested] = row['ordinal']
             if row['id'] in represented or attested is not None:
+                matched = row['id'] if row['id'] in represented else attested
+                bindings = await (await conn.execute(
+                    "SELECT raw_envelope_json FROM tool_invocations WHERE tenant_id=? AND session_id=? AND session_run_id=? AND visibility<>'quarantined' ORDER BY ordinal LIMIT 4096",
+                    (context.tenant_id, session_id, row['id']))).fetchall()
+                envelopes = [json.loads(item['raw_envelope_json'] or '{}') for item in bindings]
+                legacy = [overlay_tool_presentation(run, envelopes) if str(run.get('run_id') or '') == matched else run for run in legacy]
                 continue
             messages = await (await conn.execute(
                 "SELECT role,text FROM session_messages WHERE tenant_id=? AND session_id=? AND run_id=? AND role='assistant' AND visibility='user_visible' ORDER BY ordinal",

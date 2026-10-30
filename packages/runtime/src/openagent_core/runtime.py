@@ -66,7 +66,7 @@ def provider_tool_call_scope(call_id: str | None):
 
 
 @contextmanager
-def execution_scope(runtime: Runtime, context: ExecutionContext, run_id: str, *,
+def execution_scope(runtime: Runtime, context: ExecutionContext, run_id: str | None, *,
                     module_generation: int | None = None,
                     capability_revision: int | None = None):
     tokens = (_current_runtime.set(runtime), _current_context.set(context), _current_run.set(run_id),

@@ -7,6 +7,8 @@ not select another destination when that generation disappears.
 from __future__ import annotations
 
 from typing import Any
+from contextlib import asynccontextmanager
+import secrets
 
 from openagent_core.capabilities import CapabilityCatalog, CapabilityUnavailable, ToolDefinition
 from openagent_core.contracts import CapabilityLease, ExecutionContext
@@ -38,7 +40,7 @@ class PoolCapabilitySource:
         from .servers.tool_search.adapters import _functions_dict
         self._check()
         return tuple(ToolDefinition(name, getattr(fn, "description", "") or "",
-            getattr(fn, "parameters", None) or {}) for name, fn in _functions_dict(self.toolkit).items())
+            getattr(fn, "parameters", None) or {}, metadata=getattr(fn, "mcp_metadata", None) or {}) for name, fn in _functions_dict(self.toolkit).items())
 
     async def discover(self, context: ExecutionContext) -> tuple[ToolDefinition, ...]:
         from .servers.tool_search.adapters import _functions_dict, _tool_is_denied, _require_server_allowed
@@ -48,9 +50,65 @@ class PoolCapabilitySource:
         except (PermissionError, CapabilityUnavailable):
             return ()
         return tuple(ToolDefinition(name, getattr(fn, "description", "") or "",
-                                    getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()))
+                                    getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()), getattr(fn, "mcp_metadata", None) or {})
                      for name, fn in _functions_dict(self.toolkit).items()
                      if not _tool_is_denied(self.toolkit_name, name))
+
+    async def discover_app(self, context: ExecutionContext) -> tuple[ToolDefinition, ...]:
+        from .servers.tool_search.adapters import _functions_dict, _tool_is_denied, _require_server_allowed
+        from openagent_core.capabilities import tool_visible
+        self._check()
+        _require_server_allowed(self.toolkit_name)
+        functions = {**_functions_dict(self.toolkit), **getattr(self.toolkit, "_app_functions", {})}
+        return tuple(ToolDefinition(getattr(fn, "mcp_name", None) or name, getattr(fn, "description", "") or "",
+            getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()), getattr(fn, "mcp_metadata", None) or {})
+            for name, fn in functions.items() if not _tool_is_denied(self.toolkit_name, name)
+            and tool_visible(getattr(fn, "mcp_metadata", None) or {}, "app"))
+
+    @asynccontextmanager
+    async def _app_session(self, context: ExecutionContext):
+        self._check()
+        session = getattr(self.toolkit, "session", None)
+        ephemeral = None
+        if getattr(self.toolkit, "header_provider", None):
+            # UI reads/actions cannot borrow discovery credentials or another
+            # viewer's cached HTTP session, even in a shared conversation.
+            from openagent_core.core._run_state import RunContext
+            ephemeral = "mcp-ui:" + secrets.token_urlsafe(24)
+            session = await self.toolkit.get_session_for_run(run_context=RunContext(
+                run_id=ephemeral, session_id=context.session_id,
+                user_id=context.author.subject_id))
+        if session is None:
+            raise CapabilityUnavailable("The exact MCP session is unavailable")
+        try:
+            yield session
+            self._check()
+        finally:
+            if ephemeral is not None:
+                await self.toolkit.cleanup_run_session(ephemeral)
+
+    async def call_app_tool(self, name: str, arguments: dict, context: ExecutionContext) -> Any:
+        self._check()
+        from .servers.tool_search.adapters import _functions_dict, _tool_is_denied, _require_server_allowed
+        from openagent_core.capabilities import tool_visible
+        _require_server_allowed(self.toolkit_name)
+        functions = {**_functions_dict(self.toolkit), **getattr(self.toolkit, "_app_functions", {})}
+        matches = [(key, fn) for key, fn in functions.items()
+            if (getattr(fn, "mcp_name", None) or key) == name]
+        if len(matches) != 1:
+            raise CapabilityUnavailable("The exact app tool is unavailable or ambiguous")
+        key, function = matches[0]
+        if _tool_is_denied(self.toolkit_name, key) or not tool_visible(getattr(function, "mcp_metadata", None) or {}, "app"):
+            raise PermissionError("App tool is not granted")
+        async with self._app_session(context) as session:
+            result = await session.call_tool(getattr(function, "mcp_name", None) or name, dict(arguments))
+        return result
+
+    async def read_resource(self, uri: str, context: ExecutionContext) -> Any:
+        async with self._app_session(context) as session:
+            if not callable(getattr(session, "read_resource", None)):
+                raise CapabilityUnavailable("The exact MCP session does not support resources")
+            return await session.read_resource(uri)
 
     async def call_tool(self, name: str, arguments: dict, context: ExecutionContext) -> Any:
         from .servers.tool_search.adapters import _invoke_registered_tool
@@ -81,8 +139,18 @@ class InteractiveCapabilitySource:
         for item in tools:
             full = registry.describe_tool(self.origin, self.server_name, item["name"])
             definitions.append(ToolDefinition(item["name"], full.get("description", ""),
-                                              full.get("input_schema", full.get("inputSchema", {}))))
+                                              full.get("input_schema", full.get("inputSchema", {})), metadata=full.get("_meta", {})))
         return tuple(definitions)
+
+    async def read_resource(self, uri: str, context: ExecutionContext) -> Any:
+        self._check(context)
+        read = getattr(self.origin.registry, "read_resource", None)
+        if not callable(read):
+            raise CapabilityUnavailable("The originating client transport does not support resources")
+        result = await read(self.origin, self.server_name, uri, session_id=context.session_id,
+                            execution_context=context, source_id=self.source_id)
+        self._check(context)
+        return result
 
     async def call_tool(self, name: str, arguments: dict, context: ExecutionContext) -> Any:
         self._check(context)

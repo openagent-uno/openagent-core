@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import json
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -117,7 +118,9 @@ def _toml_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, str):
-        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        # JSON basic-string escapes are also valid TOML. Keep Unicode literal
+        # (TOML cannot decode JSON surrogate pairs) and escape DEL explicitly.
+        return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
     if isinstance(value, (list, tuple)):
         return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     if isinstance(value, dict):

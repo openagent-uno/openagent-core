@@ -169,6 +169,73 @@ class CapabilityHost:
             if self._health.get(name, {}).get("available", True)
         ]
 
+    async def read_resource(self, server: str, uri: str, *, principal: str | dict[str, Any],
+                            call_id: str | None = None, deadline_ms: int | float | None = None) -> dict[str, Any]:
+        """Read declared app HTML through the current consented exact provider.
+
+        Resource URIs are selectors within a registration, never capabilities.
+        This operation shares cancellation/revocation tracking with tool calls
+        but performs no idempotency replay or automatic reconnect.
+        """
+        principal = self._normalize_principal(principal)
+        if not isinstance(uri, str) or not uri.startswith("ui://") or len(uri) > 4096 or any(ord(c) < 32 or ord(c) == 127 for c in uri):
+            raise HostError("invalid_resource", "An exact declared ui:// resource is required")
+        timeout = _deadline_seconds(deadline_ms)
+        timeout = min(timeout if timeout is not None else 30.0, 30.0)
+        call_id = call_id or uuid.uuid4().hex
+        async with self._admission_lock:
+            if self._closing or not self.consent().enabled:
+                raise HostError("consent_required", "Local capabilities are disabled")
+            provider = self._servers.get(server)
+            manifest = getattr(provider, "manifest", None)
+            read = getattr(provider, "read_resource", None)
+            if not manifest or manifest.resource_protocol != "mcp-app-resources/1" or not callable(read):
+                raise HostError("mcp_app_resources_unsupported", "This exact provider does not support MCP App resources")
+            declared = set()
+            for tool in manifest.tools:
+                meta = tool.metadata
+                ui = meta.get("ui") or {}
+                value = ui.get("resourceUri") if isinstance(ui, dict) else None
+                value = value or meta.get("ui/resourceUri")
+                if isinstance(value, str): declared.add(value)
+            if uri not in declared or not manifest.available or not self._health.get(server, {}).get("available", True):
+                raise HostError("resource_not_declared", "This provider has not declared the requested app resource")
+            if len(self._active) >= 64:
+                raise HostError("resource_backpressure", "The host has too many active operations")
+            if call_id in self._active:
+                raise HostError("duplicate_call", "Resource call id is already active")
+            async def invoke():
+                token = current_principal.set(principal)
+                try: return await read(uri)
+                finally: current_principal.reset(token)
+            task = asyncio.create_task(invoke(), name="mcp-app-resource-" + call_id)
+            done = asyncio.Event()
+            self._principals.add(principal)
+            self._active[call_id] = task
+            self._active_principals[call_id] = principal
+            self._active_done[call_id] = done
+        try:
+            result = await asyncio.wait_for(task, timeout=timeout)
+            if (self._closing or not self.consent().enabled or self._servers.get(server) is not provider
+                    or provider.manifest is not manifest or principal not in self._principals):
+                raise HostError("resource_revoked", "The resource provider or principal was revoked during the read")
+            if not isinstance(result, dict) or not isinstance(result.get("contents"), list) or len(result["contents"]) != 1:
+                raise HostError("invalid_resource", "MCP App resource must contain one HTML document")
+            item = result["contents"][0]
+            if (not isinstance(item, dict) or item.get("uri") != uri or item.get("mimeType") != "text/html;profile=mcp-app"
+                    or not isinstance(item.get("text", item.get("blob")), str)):
+                raise HostError("invalid_resource", "MCP App resource identity, MIME or content is invalid")
+            if len(json.dumps(result, allow_nan=False, ensure_ascii=False).encode()) > 2 * 1024 * 1024:
+                raise HostError("resource_limit", "MCP App resource exceeds the 2 MiB limit")
+            return result
+        except asyncio.TimeoutError as exc:
+            raise HostError("deadline_exceeded", "MCP App resource read timed out") from exc
+        finally:
+            self._active.pop(call_id, None)
+            self._active_principals.pop(call_id, None)
+            self._active_done.pop(call_id, None)
+            done.set()
+
     async def status(self) -> dict[str, Any]:
         consent = self.consent()
         inventory = []

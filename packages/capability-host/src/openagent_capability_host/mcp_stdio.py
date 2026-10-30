@@ -8,6 +8,7 @@ import inspect
 import json
 import os
 import socket
+import secrets
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -30,6 +31,8 @@ _MCP_PROTOCOL_VERSION = "2024-11-05"
 # finite ceiling above the capability protocol's largest supported artifact to
 # avoid turning an untrusted plugin response into an unbounded buffer.
 _MAX_MCP_STDIO_LINE_BYTES = 128 * 1024 * 1024
+_MAX_CATALOG_PAGES = 100
+_MAX_CATALOG_TOOLS = 10_000
 
 
 class MCPStdioServer:
@@ -74,6 +77,10 @@ class MCPStdioServer:
         self._ready_processes: set[asyncio.subprocess.Process] = set()
         self._restart_attempts = 0
         self._restart_requested = False
+        self._catalog_task: asyncio.Task[None] | None = None
+        self._catalog_process: asyncio.subprocess.Process | None = None
+        self._catalog_dirty = False
+        self._resource_generation = secrets.token_urlsafe(24)
         self.raw_initialize: dict[str, Any] | None = None
 
     async def start(self) -> None:
@@ -122,6 +129,8 @@ class MCPStdioServer:
                 "plugin_unavailable", f"cannot start MCP {self.spec.name!r}: {exc}"
             ) from exc
         self.process = process
+        self._resource_generation = secrets.token_urlsafe(24)
+        self._catalog_dirty = False
         self._stderr_tail = ""
         self._reader = asyncio.create_task(
             self._read_loop(process), name=f"mcp-read-{self.spec.name}"
@@ -138,7 +147,7 @@ class MCPStdioServer:
                     "initialize",
                     {
                         "protocolVersion": _MCP_PROTOCOL_VERSION,
-                        "capabilities": {},
+                        "capabilities": {"extensions": {"io.modelcontextprotocol/ui": {"mimeTypes": ["text/html;profile=mcp-app"]}}},
                         "clientInfo": {
                             "name": "openagent-host-tools",
                             "version": __version__,
@@ -155,14 +164,13 @@ class MCPStdioServer:
                     f"MCP {self.spec.name!r} reported serverInfo.name {server_info.get('name')!r}",
                 )
             await self._notify("notifications/initialized", {})
-            listed = await asyncio.wait_for(
-                self._request("tools/list", {}), timeout=self.startup_timeout
+            tools = await asyncio.wait_for(
+                self._list_tools(process), timeout=self.startup_timeout
             )
         except BaseException:
             await self._stop_process(process)
             raise
         server_info = initialized.get("serverInfo") or {}
-        tools = tuple(self._tool_manifest(raw) for raw in listed.get("tools", []))
         instructions = str(initialized.get("instructions") or "")
         base = self.placeholder or self.manifest
         self.manifest = replace(
@@ -173,13 +181,106 @@ class MCPStdioServer:
             tools=tools,
             available=True,
             unavailable_reason=None,
+            resource_protocol="mcp-app-resources/1" if isinstance((initialized.get("capabilities") or {}).get("resources"), dict) else None,
         )
         if self.process is not process or process.returncode is not None:
             await self._stop_process(process)
             raise HostError("plugin_disconnected", self._disconnect_message())
         self._ready_processes.add(process)
+        if self._catalog_dirty:
+            self._schedule_catalog_refresh(process)
+
+    async def _list_tools(
+        self, process: asyncio.subprocess.Process
+    ) -> tuple[ToolManifest, ...]:
+        tools: list[ToolManifest] = []
+        names: set[str] = set()
+        cursors: set[str] = set()
+        cursor: str | None = None
+        for _ in range(_MAX_CATALOG_PAGES):
+            page = await self._request(
+                "tools/list", {"cursor": cursor} if cursor else {}, process=process
+            )
+            raw_tools = page.get("tools")
+            if not isinstance(raw_tools, list):
+                raise HostError("plugin_catalog_invalid", "MCP tools/list requires a tools array")
+            for raw in raw_tools:
+                if not isinstance(raw, dict):
+                    raise HostError("plugin_catalog_invalid", "MCP tool must be an object")
+                tool = self._tool_manifest(raw)
+                if tool.name in names:
+                    raise HostError("plugin_catalog_invalid", "MCP catalog contains duplicate tool names")
+                names.add(tool.name)
+                tools.append(tool)
+                if len(tools) > _MAX_CATALOG_TOOLS:
+                    raise HostError("plugin_catalog_invalid", "MCP catalog exceeds the tool limit")
+            cursor = page.get("nextCursor")
+            if cursor is None:
+                return tuple(tools)
+            if not isinstance(cursor, str) or not cursor or cursor in cursors:
+                raise HostError("plugin_catalog_invalid", "MCP catalog returned an invalid or repeated cursor")
+            cursors.add(cursor)
+        raise HostError("plugin_catalog_invalid", "MCP catalog exceeds the page limit")
+
+    def _schedule_catalog_refresh(self, process: asyncio.subprocess.Process) -> None:
+        if self._closing or process is not self.process:
+            return
+        self._catalog_dirty = True
+        if process not in self._ready_processes:
+            return
+        if self._catalog_task is not None and not self._catalog_task.done():
+            if self._catalog_process is process:
+                return
+            self._catalog_task.cancel()
+        self._catalog_process = process
+        self._catalog_task = asyncio.create_task(
+            self._refresh_catalog(process), name=f"mcp-catalog-{self.spec.name}"
+        )
+
+    async def _refresh_catalog(self, process: asyncio.subprocess.Process) -> None:
+        try:
+            while self._catalog_dirty and process is self.process and not self._closing:
+                self._catalog_dirty = False
+                try:
+                    tools = await asyncio.wait_for(
+                        self._list_tools(process), timeout=self.startup_timeout
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    if process is not self.process or self._closing:
+                        return
+                    # A failed refresh cannot leave removed tool definitions
+                    # callable through the previously published catalog.
+                    self.manifest = replace(
+                        self.manifest, tools=(), available=False,
+                        unavailable_reason="MCP catalog refresh failed",
+                    )
+                else:
+                    if process is not self.process or process.returncode is not None or self._closing:
+                        return
+                    self.manifest = replace(
+                        self.manifest, tools=tools, available=True, unavailable_reason=None
+                    )
+                await self._notify_state_change()
+        finally:
+            if self._catalog_task is asyncio.current_task():
+                self._catalog_task = None
+                self._catalog_process = None
 
     def _tool_manifest(self, raw: dict[str, Any]) -> ToolManifest:
+        if not isinstance(raw.get("name"), str) or not raw["name"]:
+            raise HostError("plugin_catalog_invalid", "MCP tool requires a nonempty string name")
+        if raw.get("inputSchema") is not None and not isinstance(raw["inputSchema"], dict):
+            raise HostError("plugin_catalog_invalid", "MCP tool inputSchema must be an object")
+        if raw.get("annotations") is not None and not isinstance(raw["annotations"], dict):
+            raise HostError("plugin_catalog_invalid", "MCP tool annotations must be an object")
+        metadata = raw.get("_meta") or {}
+        if not isinstance(metadata, dict) or len(json.dumps(metadata, allow_nan=False).encode()) > 65536:
+            raise HostError("plugin_catalog_invalid", "MCP tool metadata exceeds its bound")
+        ui = metadata.get("ui") or {}
+        if (isinstance(ui, dict) and isinstance(ui.get("resourceUri"), str)) or isinstance(metadata.get("ui/resourceUri"), str):
+            metadata = {**metadata, "openagent/resource-generation": self._resource_generation}
         annotations = raw.get("annotations") or {}
         read_only = annotations.get("readOnlyHint") is True
         idempotent = annotations.get("idempotentHint") is True
@@ -197,19 +298,43 @@ class MCPStdioServer:
             description=str(raw.get("description") or ""),
             input_schema=dict(raw.get("inputSchema") or {"type": "object"}),
             classification=classification,
+            metadata=dict(metadata),
             classification_by_argument=(
                 fallback.classification_by_argument if fallback is not None else {}
             ),
         )
 
-    async def call(self, tool: str, args: dict[str, Any]) -> ToolResult:
-        if self.process is None:
+    async def call(self, tool: str, args: dict[str, Any], *, metadata: dict[str, Any] | None = None) -> ToolResult:
+        if self.process is None or not self.manifest.available:
             raise HostError("plugin_unavailable", f"MCP {self.spec.name!r} is not running")
-        result = await self._request("tools/call", {"name": tool, "arguments": args})
+        if self.manifest.tool(tool) is None:
+            raise HostError("tool_not_found", f"MCP {self.spec.name!r} has no tool {tool!r}")
+        params = {"name": tool, "arguments": args}
+        if metadata is not None:
+            params["_meta"] = dict(metadata)
+        result = await self._request("tools/call", params)
         return ToolResult.from_wire(result)
+
+    async def read_resource(self, uri: str) -> dict[str, Any]:
+        process = self.process
+        manifest = self.manifest
+        if process is None or not manifest.available or manifest.resource_protocol != "mcp-app-resources/1":
+            raise HostError("mcp_app_resources_unsupported", "The exact MCP generation does not advertise resource reads")
+        if not isinstance(uri, str) or not uri.startswith("ui://") or len(uri) > 4096 or any(ord(c) < 32 or ord(c) == 127 for c in uri):
+            raise HostError("invalid_resource", "Only a declared MCP App resource can be read")
+        result = await self._request("resources/read", {"uri": uri})
+        if self.process is not process or self.manifest is not manifest:
+            raise HostError("plugin_replaced", "The MCP instance changed during resource read")
+        return result
 
     async def close(self) -> None:
         self._closing = True
+        catalog = self._catalog_task
+        if catalog is not None and catalog is not asyncio.current_task():
+            catalog.cancel()
+            await asyncio.gather(catalog, return_exceptions=True)
+        self._catalog_task = None
+        self._catalog_process = None
         restart = self._restart_task
         if restart is not None and restart is not asyncio.current_task():
             restart.cancel()
@@ -259,9 +384,12 @@ class MCPStdioServer:
         self._expected_exits.discard(process)
         self._fail_pending(process)
 
-    async def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        process = self.process
-        if process is None or process.stdin is None:
+    async def _request(
+        self, method: str, params: dict[str, Any], *,
+        process: asyncio.subprocess.Process | None = None,
+    ) -> dict[str, Any]:
+        process = process or self.process
+        if process is None or process is not self.process or process.stdin is None:
             raise HostError("plugin_disconnected", self._disconnect_message())
         self._next_id += 1
         request_id = self._next_id
@@ -360,11 +488,14 @@ class MCPStdioServer:
                     continue
                 request_id = value.get("id")
                 if request_id is None:
+                    if value.get("method") == "notifications/tools/list_changed":
+                        self._schedule_catalog_refresh(process)
                     continue
-                try:
-                    normalized_request_id = int(request_id)
-                except (TypeError, ValueError):
+                # IDs are opaque JSON-RPC values: a string or bool must not
+                # resolve a pending numeric request with a similar spelling.
+                if not isinstance(request_id, int) or isinstance(request_id, bool):
                     continue
+                normalized_request_id = request_id
                 future = self._pending.get(normalized_request_id)
                 if (
                     future is None
@@ -373,7 +504,10 @@ class MCPStdioServer:
                 ):
                     continue
                 if "error" in value:
-                    error = value.get("error") or {}
+                    error = value.get("error")
+                    if not isinstance(error, dict):
+                        future.set_exception(HostError("plugin_protocol_error", "MCP error must be an object"))
+                        continue
                     future.set_exception(
                         HostError(
                             "plugin_error",
@@ -382,7 +516,11 @@ class MCPStdioServer:
                         )
                     )
                 else:
-                    future.set_result(dict(value.get("result") or {}))
+                    result = value.get("result")
+                    if not isinstance(result, dict):
+                        future.set_exception(HostError("plugin_protocol_error", "MCP result must be an object"))
+                        continue
+                    future.set_result(result)
         except asyncio.CancelledError:
             raise
         finally:

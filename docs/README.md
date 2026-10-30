@@ -56,6 +56,7 @@ repository remains the canonical source for Core contracts and evidence.
 - [Symmetric module contract and product profiles](modules-v1.1.md)
 - [Implementation and acceptance ledger](migration/implementation.md)
 - [Uniform capability catalog](tool-catalog.md)
+- [Complete MCP catalogs and live local refresh, unreleased source qualification](mcp-catalog-refresh.md)
 - [Attachment admission, previews, canonical history and explicit output delivery](attachments.md)
 - [Core b24 canonical attachment history/delivery evidence](evidence/attachments-b24-2026-10-19.md)
 - [Core b23 deterministic attachment/delegation evidence](evidence/attachments-b23-2026-10-19.md)
@@ -84,3 +85,5 @@ component in a deployment. A successful deterministic test does not qualify an
 installer, a physical device, a real provider, or a live data migration.
 The run observer now waits for terminal state across worker processes as well
 as within one runtime; the Sessions module limits model-facing waits to 30 seconds.
+
+- [Optional MCP Apps host service and memory bounds](mcp-apps.md)
