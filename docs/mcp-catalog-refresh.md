@@ -1,7 +1,8 @@
 # Complete MCP catalog snapshots and live local refresh
 
-Source implementation, 30 October 2026. These changes are unreleased; they do
-not change the published Core b31 or capability-host b1 artifact receipts.
+Release preparation for Core `1.1.0b38` and capability-host `1.0.0b2`,
+30 October 2026. Earlier source-only receipts remain historical evidence and
+are not relabelled as publication or installed-release acceptance.
 
 Both the engine's `MCPTools.build_tools()` and the independent capability-host
 stdio adapter now consume the complete `tools/list` sequence. Discovery stops
@@ -41,10 +42,11 @@ For development, place this repository's
 and neutral tool-protocol source paths. The package root pytest configuration
 already sets these paths for the qualification command below.
 
-A release needs a newly versioned capability-host artifact (next candidate b2)
-and a new Core version, then exact receiving-product dependency pins, verified
-manifests, rebuilt sidecars/installers and device acceptance. No release version,
-checksum or installed package was changed by this source work. Directly supplied
+The release cohort is Core/SQLite/gateway/Python SDK `1.1.0b38` plus
+capability-host `1.0.0b2`, consuming the independent tool protocol `1.0.0b2`.
+Receiving products still require exact public dependency pins, verified
+manifests, rebuilt sidecars/installers and device acceptance. Version promotion
+does not by itself publish artifacts or modify installed products. Directly supplied
 SDK sessions remain owned by their caller; this change does not install an MCP
 notification handler into an externally supplied engine session. Engine catalog
 refresh is explicit; automatic list-change handling here applies to the stdio

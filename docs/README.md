@@ -4,8 +4,15 @@
 
 - [Interactive tool budgets and final delivery](interactive-tool-budgets.md)
 
-The embedding API is released as the `1.1.0b35` modular family. Its SQLite
+The embedding API is prepared as the `1.1.0b38` modular family. Its SQLite
 adapter, gateway and Python SDK share that version and pin the same Core wheel.
+The independent capability host is `1.0.0b2` and consumes tool protocol `1.0.0b2`.
+See [the beta38 integration and release boundary](releases/v1.1.0-beta.38.md).
+Publication and installed-consumer qualification remain separate gates.
+Beta38 combines opt-in instance-owned management, scoped MCP Apps and bounded
+complete MCP catalog refresh over current public main. It retains beta37 SQLite
+cancellation safety, actionable durable errors, canonical content envelopes and
+the upstream dead-session MCP reconnect implementation.
 Beta27 adds an optional authoritative `final_answer` envelope while preserving
 the complete transcript. Concurrent upstream canonical-session indexing and
 retention fixes are included; host, provider and live-channel acceptance remain
