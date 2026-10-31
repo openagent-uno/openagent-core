@@ -835,6 +835,23 @@ class Runtime:
             else:
                 await asyncio.sleep(0.1)
 
+    async def chat_command(self, request: Any, context: ExecutionContext, host: Any, *,
+                           scopes: Any = None) -> Any:
+        """Execute one shared chat command for a verified session.
+
+        It runs beside the session's turns, not behind them: a /stop must not
+        wait for the turn it stops. It is not a run, so it adds no input to the
+        transcript. The host's port decides what can be done.
+        """
+        from .chat_commands import ChatCommandService
+        self._admission()
+        if request.session.session_id != context.session_id:
+            raise ValueError('Command and verified context must identify the same session')
+        async with self._credentials(context):
+            await self._authorize(context,'run.submit',context.session_id,context.tenant_id)
+            with execution_scope(self,context,None):
+                return await ChatCommandService(getattr(self.services.executor,'agent',None),host,scopes=scopes).execute(request)
+
     async def spawn(self, request: RunRequest, context: ExecutionContext, *, deferred: bool = False) -> RunRecord:
         parent_id=current_run_id()
         if parent_id is None or current_runtime() is not self or current_execution_context() != context:

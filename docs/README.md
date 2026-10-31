@@ -1,5 +1,7 @@
 # OpenAgent core documentation
 
+- [Shared chat commands: one catalogue and semantics for every host](chat-commands.md)
+
 - [Beta41: same-task MCP partial-entry rollback](releases/v1.1.0-beta.41.md) — full and installed-wheel qualifications recorded.
 
 - [Bounded completion of explicitly requested file delivery](final-answer.md#prepared-files-omitted-by-the-final-answer)
