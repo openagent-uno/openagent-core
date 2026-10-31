@@ -1,6 +1,6 @@
 # OpenAgent core documentation
 
-- [Beta41 candidate: same-task MCP partial-entry rollback](releases/v1.1.0-beta.41.md) — source prepared; qualification and publication pending.
+- [Beta41: same-task MCP partial-entry rollback](releases/v1.1.0-beta.41.md) — full and installed-wheel qualifications recorded.
 
 - [Bounded completion of explicitly requested file delivery](final-answer.md#prepared-files-omitted-by-the-final-answer)
 

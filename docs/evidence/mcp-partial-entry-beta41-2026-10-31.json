@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "change": "same-task partial MCP entry rollback",
+  "tested_code_commit": "02b6753f5dd452aa32b235809d7786738ac781ad",
+  "code_sha256": {
+    "packages/runtime/src/openagent_core/mcp/_runtime/mcp/mcp.py": "10c430808fa61e5a767c607f5ee549bd3f60d503ba41d6dce4f820dad158c610",
+    "packages/runtime/src/openagent_core/mcp/pool.py": "4a64d04e0f8a4ef53ad5da49cf45c83c72e8cbf1598e3f63f89c0bec5c4c2076",
+    "tests/public/test_mcp_partial_entry.py": "dea0af5920ceb821bb02c8c02a8e475fb510672abc8005398600e2e26846f06c"
+  },
+  "focused_tests_passed": 87,
+  "full_tests_passed": 669,
+  "full_subtests_passed": 97,
+  "installed_wheel_tests_passed": 15,
+  "new_partial_entry_cases": 6,
+  "python311_packaged_files_parsed": 397,
+  "qualification_logs": [
+    "work/release-core41-focused.xml",
+    "work/release-core41-full.log",
+    "work/release-core41-full.xml",
+    "work/release-core41-installed.log",
+    "work/release-core41-installed.xml"
+  ],
+  "qualification_scope": "synthetic contexts with real AnyIO task groups; no live product, provider or remote mutation",
+  "capability_host": {
+    "version": "1.0.0b3",
+    "sha256": "ad8c5b7ad269db72f79c622af0fd7503c139fc9a065469f00c11b964d1c97218",
+    "reuse": "exact public beta40 wheel; source map equal"
+  },
+  "host_b7_changed": false,
+  "module_beta37_changed": false,
+  "publication": "separate exact-source release manifest and anonymous integrity receipt"
+}
