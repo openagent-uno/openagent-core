@@ -183,9 +183,11 @@ class SqliteRuntimeStore:
             if reservation and (reservation['tenant_id']!=context.tenant_id or reservation['session_id']!=request.session_id):
                 raise IdempotencyConflict('Cancelled reservation belongs to another context')
             now=int(time.time()*1000)
-            existing=db.execute('SELECT tenant_id,parent_session_id FROM sessions_v2 WHERE id=?',(request.session_id,)).fetchone()
+            existing=db.execute('SELECT tenant_id,parent_session_id,agent_id FROM sessions_v2 WHERE id=?',(request.session_id,)).fetchone()
             if existing and existing[0]!=context.tenant_id:
                 raise PermissionError('Session belongs to another tenant')
+            if existing and existing[2] is not None and existing[2]!=context.agent_id:
+                raise PermissionError('Session belongs to another agent')
             if not existing:
                 db.execute('''INSERT INTO sessions_v2(id,tenant_id,owner_principal_id,visibility,session_type,kind,
                     status,created_at_ms,updated_at_ms,last_activity_at_ms,agent_id,metadata_json)
@@ -202,9 +204,10 @@ class SqliteRuntimeStore:
                             recipient.key,permission,1,context.authority.key,now))
             else:
                 # This acceptance is the explicit transition to the public run
-                # writer. Preserve all history and host metadata while stopping
-                # legacy projection from replacing newly accepted run records.
-                db.execute("UPDATE sessions_v2 SET metadata_json=json_set(metadata_json,'$.runtime_contract',1) WHERE id=?",(request.session_id,))
+                # writer. Claim agent_id on first runtime acceptance (NULL →
+                # context.agent_id); preserve existing non-NULL agent_id
+                # (idempotent re-acceptance by the same agent, guarded above).
+                db.execute("UPDATE sessions_v2 SET agent_id=COALESCE(agent_id,?),metadata_json=json_set(metadata_json,'$.runtime_contract',1) WHERE id=?",(context.agent_id,request.session_id,))
             if context.parent_run_id:
                 parent=db.execute("SELECT r.session_id,s.root_session_id FROM session_runs r JOIN sessions_v2 s ON s.id=r.session_id WHERE r.id=? AND r.tenant_id=?",(context.parent_run_id,context.tenant_id)).fetchone()
                 if parent is None or parent[0]==request.session_id:
