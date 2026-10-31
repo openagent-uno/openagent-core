@@ -130,7 +130,8 @@ class DurablePublicHistory(unittest.IsolatedAsyncioTestCase):
 
     async def test_same_session_other_agent_or_authority_is_not_unioned(self):
         await self.store.accept(RunRequest('visible', 'parent', 'visible', 'Visible'), self.context)
-        await self.store.accept(RunRequest('other-agent', 'parent', 'other-agent', 'PRIVATE AGENT'), replace(self.context, agent_id='other'))
+        with self.assertRaises(PermissionError):
+            await self.store.accept(RunRequest('other-agent', 'parent', 'other-agent', 'PRIVATE AGENT'), replace(self.context, agent_id='other'))
         foreign = PrincipalRef('other-host', 'tenant', 'alice', 'user')
         await self.store.accept(RunRequest('other-authority', 'parent', 'other-authority', 'PRIVATE AUTHORITY'), replace(self.context, authority=foreign))
         result = await self.inspection.transcript(self.management, 'parent')
