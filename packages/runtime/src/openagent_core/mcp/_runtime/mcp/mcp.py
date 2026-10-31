@@ -553,60 +553,64 @@ class MCPTools(Toolkit):
         # Initialize with the new session
         await self.initialize()
 
-    async def close(self) -> None:
-        """Close the MCP connection and clean up resources"""
-        if not self._initialized:
-            return
+    async def _close_main_contexts(self, exc_type=None, exc_val=None, exc_tb=None) -> None:
+        """Unwind owned session/transport contexts on their entering task.
 
-        import warnings
-
-        # Suppress async generator cleanup warnings
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*async_generator.*")
-            warnings.filterwarnings("ignore", message=".*cancel scope.*")
-
-            try:
-                # Clean up all per-run sessions first
-                run_ids = list(self._run_sessions.keys())
-                for run_id in run_ids:
-                    await self.cleanup_run_session(run_id)
-
-                # Clean up the main session
-                if self._session_context is not None:
-                    try:
-                        await self._session_context.__aexit__(None, None, None)
-                    except (RuntimeError, Exception):
-                        pass  # Silently ignore cleanup errors
-                    self.session = None
-                    self._session_context = None
-
-                if self._context is not None:
-                    try:
-                        await self._context.__aexit__(None, None, None)
-                    except (RuntimeError, Exception):
-                        pass  # Silently ignore cleanup errors
-                    self._context = None
-            except (RuntimeError, BaseException):
-                pass  # Silently ignore all cleanup errors
-
+        Initialization may fail after either context was entered. Neither the
+        initialized flag nor an outer AsyncExitStack then owns their cleanup.
+        A session teardown failure must not skip its enclosing transport.
+        """
+        session_context, self._session_context = self._session_context, None
+        context, self._context = self._context, None
+        if session_context is not None:
+            self.session = None
         self._initialized = False
+        self._active_contexts = [
+            active for active in self._active_contexts
+            if active is not session_context and active is not context
+        ]
+        first_error = None
+        for owned in (session_context, context):
+            if owned is None:
+                continue
+            try:
+                await owned.__aexit__(exc_type, exc_val, exc_tb)
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
+
+    async def close(self) -> None:
+        """Close initialized or partially entered MCP resources."""
+        try:
+            for run_id in list(self._run_sessions):
+                await self.cleanup_run_session(run_id)
+        finally:
+            try:
+                await self._close_main_contexts()
+            except asyncio.CancelledError:
+                raise
+            except BaseException:
+                log_debug("MCP context cleanup failed")
 
     async def __aenter__(self) -> "MCPTools":
-        await self._connect()
+        try:
+            await self._connect()
+        except BaseException:
+            # enter_async_context registers __aexit__ only after this returns.
+            # Unwind here on the SAME task; shield/wait_for would create a new
+            # task and violate AnyIO cancel-scope ownership.
+            try:
+                await self._close_main_contexts()
+            except BaseException:
+                log_debug("MCP partial-entry cleanup failed")
+            raise
         return self
 
-    async def __aexit__(self, _exc_type, _exc_val, _exc_tb):
-        """Exit the async context manager."""
-        if self._session_context is not None:
-            await self._session_context.__aexit__(_exc_type, _exc_val, _exc_tb)
-            self.session = None
-            self._session_context = None
-
-        if self._context is not None:
-            await self._context.__aexit__(_exc_type, _exc_val, _exc_tb)
-            self._context = None
-
-        self._initialized = False
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Release both contexts even when session teardown fails."""
+        await self._close_main_contexts(exc_type, exc_val, exc_tb)
 
     async def build_tools(self) -> None:
         """Build the tools for the MCP toolkit"""

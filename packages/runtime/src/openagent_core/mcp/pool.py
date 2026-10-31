@@ -1135,7 +1135,8 @@ class MCPPool:
                 async with asyncio.timeout(_MCP_CONNECT_TIMEOUT):
                     await stack.enter_async_context(toolkit)
             except BaseException:
-                # Unwind any partial __aenter__ on this same task.
+                # MCPTools.__aenter__ owns rollback of a failed partial entry.
+                # The stack owns only a successfully entered toolkit.
                 try:
                     await stack.aclose()
                 except BaseException:  # noqa: BLE001
