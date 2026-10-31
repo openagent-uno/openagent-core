@@ -6,10 +6,10 @@ the runtime accepts such a session, the ``_accept`` method must set agent_id to
 ``context.agent_id`` (e.g. "coordinator") so that subsequent tool-invocation
 lookups via ``_require_local_session`` succeed.
 
-This test covers the exact failure path observed in production: MCP App opening
-an interactive view returned "mcp_app_unavailable" because
-``_require_local_session`` searched ``WHERE agent_id='coordinator'`` but found
-only ``agent_id=NULL``.
+This test covers the exact failure path observed in isolated QA (beta23 signed
+App against local fixture server): MCP App opening an interactive view returned
+"mcp_app_unavailable" because ``_require_local_session`` searched
+``WHERE agent_id='coordinator'`` but found only ``agent_id=NULL``.
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ class SessionAgentIdAcceptance(unittest.IsolatedAsyncioTestCase):
     async def _seed_legacy_session(self, session_id):
         """Simulate a legacy-projected session in sessions_v2 with agent_id=NULL.
 
-        This mirrors the exact production state: the gateway creates a legacy
+        This mirrors the QA fixture state: the gateway creates a legacy
         ``sessions`` row without agent_id, the projection writes it to
         sessions_v2 with agent_id=NULL (projection.py:672 reads raw
         legacy.get("agent_id") which is None).

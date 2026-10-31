@@ -178,6 +178,11 @@ class SqliteRuntimeStore:
             if rows:
                 if len(rows)!=1 or rows[0]['id']!=request.run_id or self._record(rows[0]).request_digest!=digest:
                     raise IdempotencyConflict('Idempotency key or run ID already belongs to a different request or author')
+                sess=db.execute('SELECT agent_id FROM sessions_v2 WHERE id=?',(request.session_id,)).fetchone()
+                if sess and sess[0] is not None and sess[0]!=context.agent_id:
+                    raise PermissionError('Session belongs to another agent')
+                if sess and sess[0] is None:
+                    db.execute("UPDATE sessions_v2 SET agent_id=? WHERE id=? AND agent_id IS NULL",(context.agent_id,request.session_id))
                 return self._record(rows[0]),False
             reservation=db.execute("SELECT tenant_id,session_id FROM domain_events WHERE run_id=? AND event_type='run.cancel_reserved' ORDER BY sequence LIMIT 1",(request.run_id,)).fetchone()
             if reservation and (reservation['tenant_id']!=context.tenant_id or reservation['session_id']!=request.session_id):
