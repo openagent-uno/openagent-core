@@ -1,5 +1,11 @@
 # OpenAgent core documentation
 
+- [Local MCP startup recovery and credential-free diagnostics candidate](mcp-startup-diagnostics.md)
+
+- [Beta42 local release preparation: shared chat commands](releases/v1.1.0-beta.42.md)
+
+- [Shared chat commands: one catalogue, deferred cleanup ordering and local review](chat-commands.md)
+
 - [Beta41: same-task MCP partial-entry rollback](releases/v1.1.0-beta.41.md) — full and installed-wheel qualifications recorded.
 
 - [Bounded completion of explicitly requested file delivery](final-answer.md#prepared-files-omitted-by-the-final-answer)

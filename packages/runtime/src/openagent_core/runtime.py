@@ -835,6 +835,47 @@ class Runtime:
             else:
                 await asyncio.sleep(0.1)
 
+    async def chat_command(self, request: Any, context: ExecutionContext, host: Any, *,
+                           scopes: Any = None) -> Any:
+        """Execute one shared chat command for a verified session.
+
+        It runs beside the session's turns, not behind them: a /stop must not
+        wait for the turn it stops. It is not a run, so it adds no input to the
+        transcript. The host's port decides what can be done.
+        """
+        from .chat_commands import ChatCommandService
+        self._admission()
+        if request.session.session_id != context.session_id:
+            raise ValueError('Command and verified context must identify the same session')
+        async with self._credentials(context):
+            await self._authorize(context,'run.submit',context.session_id,context.tenant_id)
+            with execution_scope(self,context,None):
+                return await ChatCommandService(getattr(self.services.executor,'agent',None),host,scopes=scopes).execute(request)
+
+    async def chat_command_action(self, action: str, context: ExecutionContext, *, operation_id: str) -> None:
+        """Apply Core's idempotent deferred resource action to the exact session.
+
+        The host applies stop_runs first. The session lock additionally prevents
+        releasing a provider while a local turn is still using it. Retrying the
+        same operation only releases the same old session; it never rotates a
+        host selector or erases stored history.
+        """
+        from .chat_commands import RELEASE_SESSION
+        if action != RELEASE_SESSION or not isinstance(operation_id, str) or not operation_id or len(operation_id) > 256:
+            raise ValueError('Invalid chat command action')
+        self._admission()
+        async with self._credentials(context):
+            await self._authorize(context,'run.submit',context.session_id,context.tenant_id)
+            lock = self._sessions.setdefault((context.tenant_id, context.session_id), asyncio.Lock())
+            # A transport-level stop acknowledgement need not prove provider
+            # cleanup. Bound both draining the live turn and provider release;
+            # failure leaves the host selector on its original generation.
+            async with asyncio.timeout(10):
+                async with lock:
+                    with execution_scope(self,context,None):
+                        agent = getattr(self.services.executor,'agent',None)
+                        await agent.release_session(context.session_id)
+
     async def spawn(self, request: RunRequest, context: ExecutionContext, *, deferred: bool = False) -> RunRecord:
         parent_id=current_run_id()
         if parent_id is None or current_runtime() is not self or current_execution_context() != context:
