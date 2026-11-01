@@ -28,3 +28,10 @@ Hosts must authorize access to the snapshot. Existing raw logging and legacy
 Focused regressions are in `tests/public/test_mcp_startup_diagnostics.py`.
 The external private qualification handoff records actual commands and outcomes;
 until those are executed, source tests are prepared rather than accepted.
+
+This fix is integrated into the local beta42 release family. The refreshed
+installed Core wheel passes687 public tests and97 subtests with PYTHONPATH unset
+and all runtime imports verified inside the isolated environment. Earlier source
+focused21/21 qualification and its sampled-resource receipt remain preserved in
+the connector-recovery Root handoff. No provider operation or French acceptance
+is implied by either result.
