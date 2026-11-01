@@ -95,7 +95,10 @@ def test_a_host_without_rotation_reports_unsupported_not_success():
 
 
 def test_failure_is_an_outcome_and_private_detail_can_be_withheld():
-    host = DeferredChatCommandHost()
+    class Retaining(Host):
+        retains_history = True
+        expose_errors = False
+    host = Retaining()
     result = run(host, "new", agent=Agent(fail=True))
     assert result.status == cc.FAILED and result.host_actions == ()
     assert "not reset" in result.text and "PRIVATE" not in result.text
@@ -104,8 +107,8 @@ def test_failure_is_an_outcome_and_private_detail_can_be_withheld():
 def test_deferred_host_receives_ordered_actions_with_truthful_text():
     host, agent = DeferredChatCommandHost(active_runs=1, queued_runs=2), Agent()
     result = run(host, "new", agent=agent)
-    assert result.host_actions == (cc.STOP_RUNS, cc.ROTATE_SESSION)
-    assert agent.calls == [("release", "s1")]
+    assert result.host_actions == (cc.STOP_RUNS, cc.RELEASE_SESSION, cc.ROTATE_SESSION)
+    assert agent.calls == []  # A deferred host must stop real turns before release.
     assert result.text.startswith("Stopped current operation. cleared 2 queued messages. started a fresh conversation.")
     stopped = run(DeferredChatCommandHost(active_runs=1), "stop")
     assert stopped.text == "Stopped current operation." and stopped.host_actions == (cc.STOP_RUNS,)
@@ -173,13 +176,105 @@ async def test_runtime_entrypoint_verifies_session_and_policy(tmp_path):
     try:
         request = ChatCommandRequest("new", SessionRef("session"))
         result = await runtime.chat_command(request, _context(), DeferredChatCommandHost(), scopes=["session"])
-        assert result.host_actions == (cc.STOP_RUNS, cc.ROTATE_SESSION)
-        assert executor.agent.calls == [("release", "session")]
+        assert result.host_actions == (cc.STOP_RUNS, cc.RELEASE_SESSION, cc.ROTATE_SESSION)
+        assert executor.agent.calls == []
         with pytest.raises(ValueError):
             await runtime.chat_command(ChatCommandRequest("new", SessionRef("other")), _context(), DeferredChatCommandHost())
         policy.allowed = False
         with pytest.raises(PermissionError):
             await runtime.chat_command(request, _context(), DeferredChatCommandHost())
-        assert executor.agent.calls == [("release", "session")]
+        with pytest.raises(PermissionError):
+            await runtime.chat_command_action(cc.RELEASE_SESSION, _context(), operation_id="reset-session")
+        assert executor.agent.calls == []
     finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_deferred_reset_drains_real_runtime_turn_before_provider_release(tmp_path):
+    """A stop acknowledgement may precede a provider's cancellation cleanup."""
+    from dataclasses import replace
+    from openagent_core import RunRequest
+
+    class LiveAgent(Agent):
+        active = False
+        async def release_session(self, session_id):
+            assert not self.active, "provider released while its stream was alive"
+            await super().release_session(session_id)
+
+    class LiveExecutor:
+        def __init__(self):
+            self.agent = LiveAgent()
+            self.started, self.stopping, self.drained = asyncio.Event(), asyncio.Event(), asyncio.Event()
+            self.calls = []
+        async def execute(self, request, context, runtime):
+            self.calls.append(request.run_id)
+            if request.input != "block":
+                return request.input
+            self.agent.active = True
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.stopping.set()
+                await self.drained.wait()
+                raise
+            finally:
+                self.agent.active = False
+
+    executor = LiveExecutor()
+    runtime = Runtime(RuntimeSettings("agent", tmp_path), RuntimeServices(SqliteRuntimeStore(tmp_path / "state.sqlite3"), executor, _Policy()))
+    await runtime.start()
+    context = _context()
+    stop = action = None
+    try:
+        await runtime.submit(RunRequest("active", "session", "active", "block"), context)
+        await asyncio.wait_for(executor.started.wait(), 1)
+        await runtime.submit(RunRequest("queued", "session", "queued", "queued"), context)
+        plan = await runtime.chat_command(ChatCommandRequest("new", SessionRef("session")), context, DeferredChatCommandHost(active_runs=1, queued_runs=1))
+        assert plan.host_actions == (cc.STOP_RUNS, cc.RELEASE_SESSION, cc.ROTATE_SESSION)
+        assert executor.agent.calls == [] and executor.agent.active
+        await runtime.cancel("queued", context)
+        stop = asyncio.create_task(runtime.cancel("active", context))
+        await asyncio.wait_for(executor.stopping.wait(), 1)
+        # Simulate a premature transport acknowledgement: cleanup still waits
+        # for the actual session lock, even though the caller advances its plan.
+        action = asyncio.create_task(runtime.chat_command_action(cc.RELEASE_SESSION, context, operation_id="reset-old-session"))
+        await asyncio.sleep(0)
+        assert not action.done() and executor.agent.calls == []
+        executor.drained.set()
+        await asyncio.wait_for(asyncio.gather(stop, action), 1)
+        assert (await runtime.get_run("active", context)).status == "cancelled"
+        assert (await runtime.get_run("queued", context)).status == "cancelled"
+        assert executor.calls == ["active"]
+        assert executor.agent.calls == [("release", "session")]
+        # The host changes only its selector; the old rows/transcript remain.
+        fresh = replace(context, session_id="fresh-session")
+        await runtime.submit(RunRequest("fresh", "fresh-session", "fresh", "new context"), fresh)
+        assert (await runtime.wait("fresh", fresh)).status == "success"
+        assert (await runtime.get_run("active", context)).session_id == "session"
+        # Reapplying an idempotent resource release never targets the new id.
+        await runtime.chat_command_action(cc.RELEASE_SESSION, context, operation_id="reset-old-session")
+        assert executor.agent.calls[-1] == ("release", "session")
+        # A provider that never drains cannot hang cleanup or reach rotation.
+        from unittest.mock import patch
+        real_timeout = asyncio.timeout
+        lock = runtime._sessions[(context.tenant_id, context.session_id)]
+        before = list(executor.agent.calls)
+        await lock.acquire()
+        try:
+            with patch("openagent_core.runtime.asyncio.timeout", lambda _seconds: real_timeout(0.01)):
+                with pytest.raises(TimeoutError):
+                    await runtime.chat_command_action(cc.RELEASE_SESSION, context, operation_id="blocked-cleanup")
+        finally:
+            lock.release()
+        assert executor.agent.calls == before
+        with pytest.raises(ValueError):
+            await runtime.chat_command_action("erase_history", context, operation_id="reset-old-session")
+    finally:
+        executor.drained.set()
+        if stop is not None:
+            await asyncio.gather(stop, return_exceptions=True)
+        if action is not None:
+            await asyncio.gather(action, return_exceptions=True)
         await runtime.close()

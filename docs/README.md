@@ -1,6 +1,6 @@
 # OpenAgent core documentation
 
-- [Shared chat commands: one catalogue and semantics for every host](chat-commands.md)
+- [Shared chat commands: one catalogue, deferred cleanup ordering and local review](chat-commands.md)
 
 - [Beta41: same-task MCP partial-entry rollback](releases/v1.1.0-beta.41.md) — full and installed-wheel qualifications recorded.
 

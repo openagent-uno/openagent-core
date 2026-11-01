@@ -37,6 +37,7 @@ FAILED = "failed"
 
 STOP_RUNS = "stop_runs"
 ROTATE_SESSION = "rotate_session"
+RELEASE_SESSION = "release_session"
 
 RESET_COMMANDS = frozenset({"new", "reset", "clear"})
 
@@ -63,9 +64,9 @@ class ChatCommandSpec:
 
 
 COMMAND_SPECS = (
-    ChatCommandSpec("new", "Forget everything and start a fresh conversation", "wipe context, clear queue, start fresh"),
-    ChatCommandSpec("reset", "Forget everything and start a fresh conversation", "wipe context, clear queue, start fresh", menu_visible=False, help_visible=False),
-    ChatCommandSpec("clear", "Forget everything and start a fresh conversation", "wipe context, clear queue, start fresh"),
+    ChatCommandSpec("new", "Start a fresh conversation; keep long-term memory and vault", "stop current work, clear queue, start fresh; keep long-term memory and vault"),
+    ChatCommandSpec("reset", "Start a fresh conversation; keep long-term memory and vault", "stop current work, clear queue, start fresh; keep long-term memory and vault", menu_visible=False, help_visible=False),
+    ChatCommandSpec("clear", "Start a fresh conversation; keep long-term memory and vault", "stop current work, clear queue, start fresh; keep long-term memory and vault"),
     ChatCommandSpec("stop", "Cancel the current operation (keeps context)", "cancel the current operation, keep conversation memory"),
     ChatCommandSpec("status", "Show agent status and queue", "show agent status and queue depth"),
     ChatCommandSpec("queue", "Show pending messages", "show pending messages", menu_visible=False),
@@ -170,6 +171,10 @@ class ChatCommandHost:
         """Make the next turn start in a fresh session; return its id if known."""
         raise ChatCommandUnavailable
 
+    async def release_resources(self, session: SessionRef, agent: Any) -> None:
+        """Release live resources only after this host has stopped its turns."""
+        await agent.release_session(session.session_id)
+
     async def session_status(self, session: SessionRef) -> SessionStatus:
         raise ChatCommandUnavailable
 
@@ -219,6 +224,9 @@ class DeferredChatCommandHost(ChatCommandHost):
     async def rotate_session(self, session: SessionRef) -> str | None:
         self._defer(ROTATE_SESSION)
         return None
+
+    async def release_resources(self, session: SessionRef, agent: Any) -> None:
+        self._defer(RELEASE_SESSION)
 
     async def session_status(self, session: SessionRef) -> SessionStatus:
         if not self.can_apply:
@@ -290,7 +298,7 @@ class ChatCommandService:
         if outcome.cleared:
             clauses.append(_cleared_clause(outcome.cleared))
         if self.host.retains_history:
-            await self.agent.release_session(session.session_id)
+            await self.host.release_resources(session, self.agent)
             await self.host.rotate_session(session)
             clauses.append("started a fresh conversation")
             text = (_join_clauses(clauses) + " The previous conversation is kept but no longer used here. "
