@@ -192,7 +192,7 @@ _DORMANT_RECOVERY_BACKOFF = 0.5
 # bridge polling delay.
 _STARTUP_STAGGER_SECONDS = 0.25
 
-# Error types that indicate the MCP session's underlying transport is
+# Errors that indicate the MCP session's underlying transport is
 # closed and no amount of re-calling ``session.initialize()`` will
 # recover it. When recovery exhausts its attempts AND every attempt
 # raised one of these, the in-place retry loop is structurally pointless
@@ -209,11 +209,9 @@ _STARTUP_STAGGER_SECONDS = 0.25
 # Instrument task to surface that), but the *symptom* — dead session
 # inherited by recovery — is universal and worth handling without
 # waiting on the upstream root cause.
-_SESSION_DEAD_ERROR_TYPES = frozenset({
-    "ClosedResourceError",
-    "BrokenResourceError",
-    "EndOfStream",
-})
+# Use the same recursive classifier as call-time recovery. The MCP SDK wraps
+# a closed stream as McpError("Connection closed"), including in exception
+# groups; testing only the outer exception's class misses that signal.
 
 
 def _install_runtime_log_passthrough() -> None:
@@ -585,6 +583,8 @@ class MCPPool:
         self._toolkit_by_name: dict[str, Any] = {}
         self._tool_counts: dict[str, int] = {name: 0 for name in (s.name for s in specs)}
         self._last_recovery_error_type = {}
+        self._dead_recovery_sessions: set[str] = set()
+        self._connection_failures: dict[str, dict[str, str]] = {}
         # Per-MCP last connect/handshake error, keyed by spec name. Set when
         # an MCP ends up dormant (0 tools) so callers — the workflow
         # validator, the UI — can surface the real cause (e.g. a 401 the
@@ -752,6 +752,8 @@ class MCPPool:
             self.specs = new_specs
             self._tool_counts = {s.name: 0 for s in new_specs}
             self._last_recovery_error_type = {}
+            self._dead_recovery_sessions.clear()
+            self._connection_failures.clear()
             self._last_connect_error = {}
             self._connected = False
             # Server set + tool counts changed → drop the cached catalog
@@ -817,7 +819,7 @@ class MCPPool:
                         # Re-spawn escalation: when recovery's bypass loop
                         # exhausts itself entirely on a "session dead"
                         # signature (ClosedResourceError / BrokenResourceError
-                        # / EndOfStream — see _SESSION_DEAD_ERROR_TYPES), the
+                        # / EndOfStream / SDK Connection closed), the
                         # underlying anyio memory stream is gone and no
                         # amount of re-calling initialize on this toolkit
                         # will recover it. Throw the corpse away, build a
@@ -828,13 +830,13 @@ class MCPPool:
                         # first attempt has resolved.
                         if (
                             count == 0
-                            and self._last_recovery_error_type.get(spec.name)
-                            in _SESSION_DEAD_ERROR_TYPES
+                            and spec.name in self._dead_recovery_sessions
                         ):
                             count = await self._respawn_after_dead_session(spec, toolkit)
                     self._tool_counts[spec.name] = count
                     if count > 0:
                         self._last_connect_error.pop(spec.name, None)
+                        self._connection_failures.pop(spec.name, None)
                     elog("mcp.connect", name=spec.name, tools=count)
                     if count == 0:
                         # Ensure a dormant MCP carries *some* cause for the
@@ -859,6 +861,7 @@ class MCPPool:
                     mod = importlib.import_module(spec.adapter_module)  # type: ignore[arg-type]
                     runtime_factory = getattr(mod, spec.runtime_toolkit_factory, None)
                 except Exception as e:  # noqa: BLE001
+                    self._record_connection_failure(spec.name, e, "import")
                     elog("mcp.error", level="warning", name=spec.name, error=str(e), phase="import")
                     continue
                 if runtime_factory is None:
@@ -891,6 +894,7 @@ class MCPPool:
                     if inspect.isawaitable(runtime_tk):
                         runtime_tk = await runtime_tk
                 except Exception as e:  # noqa: BLE001
+                    self._record_connection_failure(spec.name, e, "factory")
                     elog("mcp.error", level="warning", name=spec.name, error=str(e), phase="factory")
                     continue
                 self._in_process_runtime_toolkits.append(runtime_tk)
@@ -966,7 +970,7 @@ class MCPPool:
 
         Called from ``connect_all`` ONLY when ``_recover_dormant_toolkit``
         exhausted its retry budget against a session-dead error
-        (``ClosedResourceError`` & friends — see ``_SESSION_DEAD_ERROR_TYPES``).
+        (``ClosedResourceError`` and the SDK's equivalent closed-stream signal).
         Re-spawn handles the cold-start race where the first subprocess
         managed to spawn but lost its stdio streams during the runtime's
         swallowed init — by the second spawn PyInstaller's _MEI tree is
@@ -1246,6 +1250,7 @@ class MCPPool:
             # the inner ``asyncio.timeout(_MCP_CONNECT_TIMEOUT)`` should
             # already have fired and set ready_event with an error.
             elog("mcp.timeout", level="warning", name=spec.name, seconds=_MCP_CONNECT_TIMEOUT)
+            self._record_connection_failure(spec.name, TimeoutError(), "connect")
             control["closing"] = True
             stop_event.set()
             try:
@@ -1274,6 +1279,7 @@ class MCPPool:
             if callable(cancelling) and cancelling() > cancel_before:
                 raise
             elog("mcp.error", level="warning", name=spec.name, error=str(e), phase="connect")
+            self._record_connection_failure(spec.name, e, "connect")
             return None
 
         err = handshake_error["err"]
@@ -1286,6 +1292,7 @@ class MCPPool:
                 await sup_task
             except BaseException:  # noqa: BLE001
                 pass
+            self._record_connection_failure(spec.name, err, "connect")
             if isinstance(err, asyncio.TimeoutError):
                 elog("mcp.timeout", level="warning", name=spec.name, seconds=_MCP_CONNECT_TIMEOUT)
             else:
@@ -1507,7 +1514,8 @@ class MCPPool:
 
     # Last error from the most recent _recover_dormant_toolkit call,
     # keyed by spec.name. Lets connect_all decide whether a dead session
-    # warrants a full re-spawn (see _SESSION_DEAD_ERROR_TYPES below).
+    # Diagnostic class name; dead-session recovery separately uses the shared
+    # recursive classifier, including SDK wrappers and exception groups.
     # Populated even on success — empty string means "no error captured".
     _last_recovery_error_type: dict[str, str]
 
@@ -1549,8 +1557,9 @@ class MCPPool:
         # Reset the per-attempt error trace BEFORE the loop. We populate
         # ``_last_recovery_error_type[spec.name]`` from each attempt's
         # exception class so ``connect_all`` can decide whether to escalate
-        # to a full re-spawn (see ``_SESSION_DEAD_ERROR_TYPES``).
+        # to a full re-spawn, including SDK wrappers and exception groups.
         self._last_recovery_error_type[spec.name] = ""
+        self._dead_recovery_sessions.discard(spec.name)
 
         # Detect the bypass path. We test for callable methods, not for
         # the MCPTools class, so a future runtime rewrite that keeps the
@@ -1601,11 +1610,15 @@ class MCPPool:
                         if inspect.isawaitable(result):
                             await result
             except BaseException as e:  # noqa: BLE001 — we want EVERYTHING
+                if isinstance(e, asyncio.CancelledError):
+                    raise
                 err = e
 
             count = len(getattr(toolkit, "functions", {}) or {})
             if count > 0:
                 self._last_connect_error.pop(spec.name, None)
+                self._connection_failures.pop(spec.name, None)
+                self._dead_recovery_sessions.discard(spec.name)
                 elog(
                     "mcp.recovery_succeeded",
                     name=spec.name,
@@ -1621,6 +1634,12 @@ class MCPPool:
             # BaseExceptionGroup vs CancelledError vs ConnectionError
             # vs ValueError each point at a different class of bug.
             if err is not None:
+                from openagent_core.core._runner.utils.mcp import _session_is_dead
+                if _session_is_dead(err):
+                    self._dead_recovery_sessions.add(spec.name)
+                else:
+                    self._dead_recovery_sessions.discard(spec.name)
+                self._record_connection_failure(spec.name, err, phase or "initialize")
                 self._last_recovery_error_type[spec.name] = type(err).__name__
                 # Remember a human-readable cause so the workflow validator
                 # and UI can explain a present-but-empty MCP (0 tools) with
@@ -1698,6 +1717,7 @@ class MCPPool:
             from openagent_core.mcp._runtime.mcp.params import StreamableHTTPClientParams
             from mcp import StdioServerParameters
         except ImportError as exc:
+            self._record_connection_failure(spec.name, exc, "import")
             logger.error("Cannot build MCP toolkits — runtime or mcp SDK missing: %s", exc)
             return None
 
@@ -1736,12 +1756,47 @@ class MCPPool:
                 logger.warning("MCP spec '%s' has neither command nor url — skipping", spec.name)
                 return None
         except Exception as e:
+            self._record_connection_failure(spec.name, e, "construct")
             elog("mcp.error", level="warning", name=spec.name, error=str(e), phase="construct")
             return None
 
         return await self._safe_enter(toolkit, spec)
 
     # ── Provider-facing accessors ───────────────────────────────────────
+
+    def _record_connection_failure(self, name: str, error: BaseException, phase: str) -> None:
+        # Administrative diagnostics are deliberately fixed codes. Exception
+        # messages/data may contain credentials, URLs, subprocess output or PII.
+        from openagent_core.core._runner.utils.mcp import _session_is_dead
+        if _session_is_dead(error):
+            code = "transport_closed"
+        elif isinstance(error, TimeoutError):
+            code = "timeout"
+        elif isinstance(error, FileNotFoundError):
+            code = "process_not_found"
+        elif isinstance(error, PermissionError):
+            code = "permission_denied"
+        else:
+            code = "initialization_failed"
+        self._connection_failures[name] = {"code": code, "phase": phase}
+
+    def connection_status(self) -> list[dict[str, Any]]:
+        """Credential-free snapshot of all configured sources, including failed starts.
+
+        This never starts, pings, reconnects or calls a source. Ready describes
+        the current local catalog; provider authentication still needs a real call.
+        """
+        rows = []
+        for spec in self.specs:
+            toolkit = self._toolkit_by_name.get(spec.name)
+            count = self._toolkit_tool_count(toolkit) if toolkit is not None else 0
+            complete = toolkit is not None and getattr(toolkit, "capability_generation", NotImplemented) is not None
+            state = "ready" if complete and count > 0 else ("dormant" if toolkit is not None else "unavailable")
+            row = {"mcp_name": spec.name, "state": state, "tool_count": count if complete else 0}
+            if state != "ready" and spec.name in self._connection_failures:
+                row["failure"] = dict(self._connection_failures[spec.name])
+            rows.append(row)
+        return rows
 
     @property
     def runtime_toolkits(self) -> list[Any]:
