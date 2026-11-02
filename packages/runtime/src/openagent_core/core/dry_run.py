@@ -2,7 +2,7 @@
 
 When an event fires with ``dry_run: true`` in its payload, the whole run is a
 dry-run: every MCP tool call it makes is stamped with ``meta={"dry_run": True}``
-so the MCP server on the other side (Replio, billingbear, …) can CAPTURE or
+so the MCP server on the other side (external service, billingbear, …) can CAPTURE or
 REJECT a write instead of executing it — without OpenAgent needing to know which
 tools are writes. Generic: any MCP can honour the flag.
 

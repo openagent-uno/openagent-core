@@ -71,3 +71,19 @@ run, delayed provider cancellation, and a provider that refuses release while
 active. It verifies bounded failed draining, authorization, retained old run
 records and an independent fresh session. These are synthetic model/provider
 checks; no public wheel or real channel is qualified by them.
+
+## Slash input arriving as an admitted run
+
+Use `AgentExecutor.execute_chat_command` to interpret slash input through the
+same catalogue. It rechecks publication authority and returns `None` for normal
+or multiline input. Supply a host port only for domain authorization. The
+default deferred host cannot stop/rotate its own admitted run and reports those
+operations as unsupported. Interactive command endpoints use
+`Runtime.chat_command` outside the run queue, applying the shared host actions.
+
+## Noninteractive Windows subprocesses
+
+The engine adds the inherited critical-error and fault-error mode before starting
+MCP stdio children, preserving existing flags. This prevents modal error paths
+without modifying the MCP SDK installation. Cleanup jobs and sandbox ownership
+remain with their transport/host. See Microsoft's [process error-mode contract](https://learn.microsoft.com/en-us/windows/win32/api/errhandlingapi/nf-errhandlingapi-seterrormode).

@@ -137,7 +137,7 @@ _MCP_CLOSE_TIMEOUT = 5
 # session even though the subprocess is healthy and a second handshake
 # would succeed.
 #
-# Field evidence (mixout-agent, 2026-05-05): on a freshly-restarted
+# Field evidence (example-agent, 2026-05-05): on a freshly-restarted
 # persona with 20 MCPs configured, 16 came up with 0 tools — every
 # subprocess MCP except the four cheapest cold-starts. A manual restart
 # of the affected agent recovered them in <2s each. Pattern is "TaskGroup
@@ -1460,7 +1460,7 @@ class MCPPool:
         A closed stream (``ClosedResourceError`` & friends) never recovers in
         place: before this, every later call on that toolkit failed until the
         process restarted, while callers treated the ``Error:`` results as
-        completed work (2026-10-28, lyra-agent → Replio for two hours).
+        completed work (2026-10-28, example-agent → external service for two hours).
 
         The supervisor task that entered the toolkit exits its context (closing
         the dead session on the task that opened it, as anyio requires) and

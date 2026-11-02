@@ -14,7 +14,7 @@ reply went out" from "the model talked about the reply".
 So an operator can make the intent machine-readable:
 
     [[execute]]
-    server: replio
+    server: external service
     tool: threads_respond
     args: {"thread_id": "abc", "body_text": "Hola, ..."}
     [[/execute]]

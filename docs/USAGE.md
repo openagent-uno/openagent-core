@@ -18,17 +18,12 @@ executor, then starts Runtime, submits a run, waits and closes it. The database
 lives in an owned temporary directory, which the example removes. It does not
 contact a model or represent a real identity provider.
 
-### Current source limitation: SQLite import coupling
+### Minimal SQLite dependency boundary
 
-In the reviewed source candidate, importing `SqliteRuntimeStore` reaches migration
-helpers through `openagent_core.memory`, whose package initializer imports
-`MemoryDB` eagerly. A bare Python 3.11 environment therefore reports missing
-`aiosqlite`; the adapter currently needs the engine dependency set even when this
-demo selects no reasoning engine. This is generic upstream packaging debt, not
-a reason to patch the consumer or install a standalone server. Correct the lazy
-import/dependency boundary upstream and qualify the exact wheel set before
-claiming a dependency-minimal SQLite installation. The example was executed in
-the existing Core development environment with those dependencies available.
+SQLite imports and synchronous migration/privacy guards do not load the optional
+engine. Select the engine extra only for reasoning or asynchronous memory APIs.
+The isolated import regression runs with Python site packages disabled and
+checks that protected snapshots remain fenced.
 
 From a source checkout on a POSIX shell, use a Python 3.11+ interpreter in that
 prepared development environment and these source paths:
@@ -122,3 +117,9 @@ providers and MCP processes. Configure its paths, providers and consent; it does
 not install the tools or authenticate the application's users. Tools may also
 be called directly without this host. See its [README](../packages/capability-host/README.md)
 and the [Tools usage guide](https://github.com/openagent-uno/openagent-tools/blob/main/docs/USAGE.md).
+
+## Engine-free SQLite import
+
+The SQLite adapter no longer eagerly loads MemoryDB or aiosqlite through
+migration/privacy helpers. Install the engine extra only when selecting the
+reasoning engine or its asynchronous memory API.

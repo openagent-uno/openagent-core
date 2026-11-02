@@ -19,9 +19,10 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, Sequence
 
-import aiosqlite
+if TYPE_CHECKING:
+    import aiosqlite
 
 from .projection import (
     NESTED_LAYOUT_KEY,

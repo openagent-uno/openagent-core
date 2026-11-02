@@ -10,7 +10,7 @@ import unittest
 roots=[Path(path).resolve() for path in site.getsitepackages()]
 for module,distribution in [('openagent_core','openagent-core'),
         ('openagent_storage_sqlite','openagent-storage-sqlite'),
-        ('replio_agent_example','replio-agent-example')]:
+        ('reference_agent_example','reference-agent-example')]:
     specification=util.find_spec(module)
     if specification is None or specification.origin is None:
         raise RuntimeError(f'{distribution} is not installed')
@@ -19,7 +19,7 @@ for module,distribution in [('openagent_core','openagent-core'),
         raise RuntimeError(f'{module} resolves outside installed packages: {origin}')
     print(f'{distribution}=={metadata.version(distribution)}: {origin}')
 
-with tempfile.TemporaryDirectory(prefix='replio-wheel-tests-') as temporary:
+with tempfile.TemporaryDirectory(prefix='reference-wheel-tests-') as temporary:
     tests=Path(temporary)/'tests'
     shutil.copytree(Path(__file__).resolve().parents[1]/'tests',tests)
     suite=unittest.defaultTestLoader.discover(str(tests))

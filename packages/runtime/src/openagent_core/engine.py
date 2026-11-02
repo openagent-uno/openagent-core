@@ -56,6 +56,29 @@ class AgentExecutor:
         if self.owns_agent:
             await self.agent.shutdown()
 
+    async def execute_chat_command(self, request: RunRequest, context: ExecutionContext,
+                                   runtime: Runtime, *, host: Any = None) -> Any:
+        """Interpret single-line slash input through the shared command service.
+
+        For an admitted run, host actions are unavailable by default: a run
+        cannot safely stop itself or rotate a selector owned by another process.
+        Interactive hosts call Runtime.chat_command beside runs for those actions.
+        Supply only domain authorization/session ports, never a command catalogue.
+        Return None for ordinary text, including multiline slash-prefixed input.
+        """
+        from .chat_commands import (ChatCommandRequest, ChatCommandService,
+                                    DeferredChatCommandHost, SessionRef, SESSION_SCOPE)
+        text = request.input
+        if not text.startswith('/') or '\n' in text:
+            return None
+        name, _, argument = text.strip().partition(' ')
+        await require_authorized(runtime.services.authorizer, context, 'run.publish',
+            ResourceRef('session', context.tenant_id, context.session_id), audience=context.audience)
+        port = host if host is not None else DeferredChatCommandHost(can_apply=False)
+        result = await ChatCommandService(self.agent, port, scopes={SESSION_SCOPE}).execute(
+            ChatCommandRequest(name[1:].lower(), SessionRef(context.session_id), argument.strip() or None))
+        return result
+
     async def execute(self, request: RunRequest, context: ExecutionContext, runtime: Runtime) -> str:
         from .core.agent import clear_run_failure, take_run_failure
         clear_run_failure()

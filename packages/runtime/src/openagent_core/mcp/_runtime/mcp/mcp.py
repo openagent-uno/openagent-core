@@ -539,6 +539,8 @@ class MCPTools(Toolkit):
         else:
             if self.server_params is None:
                 raise ValueError("server_params must be provided when using stdio transport.")
+            from openagent_core.process_errors import configure_subprocess_error_mode
+            configure_subprocess_error_mode()
             self._context = stdio_client(self.server_params)  # type: ignore
             client_timeout = self.timeout_seconds
 

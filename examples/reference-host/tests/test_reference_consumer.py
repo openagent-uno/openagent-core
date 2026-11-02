@@ -10,14 +10,14 @@ from aiohttp import web, ClientSession
 from aiohttp.test_utils import TestServer
 from openagent_core.capabilities import FunctionSource
 from openagent_core.contracts import PrincipalRef
-from replio_agent_example import Document, ReplioHost, create_app
+from reference_agent_example import Document, ReferenceHost, create_app
 
 
 class ExternalIdentities:
     def __init__(self):
-        self.alice=PrincipalRef('replio','tenant-a','alice')
-        self.bob=PrincipalRef('replio','tenant-a','bob')
-        self.other=PrincipalRef('replio','tenant-b','alice')
+        self.alice=PrincipalRef('reference','tenant-a','alice')
+        self.bob=PrincipalRef('reference','tenant-a','bob')
+        self.other=PrincipalRef('reference','tenant-b','alice')
         self.tokens={'alice-login':self.alice,'bob-login':self.bob,'other-tenant-login':self.other}
         self.revoked=set()
     async def authenticate(self,bearer):
@@ -40,12 +40,12 @@ class ReferenceConsumerTests(unittest.IsolatedAsyncioTestCase):
         await self.open_host()
 
     async def open_host(self):
-        self.host=ReplioHost(data_dir=Path(self.directory.name),tenant_id='tenant-a',project_id='docs',
+        self.host=ReferenceHost(data_dir=Path(self.directory.name),tenant_id='tenant-a',project_id='docs',
             identity=self.identities,sessions={'shared':(self.identities.alice,self.identities.bob),
                 'alice-private':(self.identities.alice,)},
             documents=(Document('policy','Trial policy','Trial projects last 14 days.'),),
             provider_model='fixture',provider_base_url=str(self.provider.make_url('/v1')),
-            provider_key='model-fixture-secret',system_prompt='Use the Replio project tools and cite the policy title.')
+            provider_key='model-fixture-secret',system_prompt='Use the Reference project tools and cite the policy title.')
         self.server=TestServer(create_app(self.host))
         await self.server.start_server()
 
@@ -89,8 +89,8 @@ class ReferenceConsumerTests(unittest.IsolatedAsyncioTestCase):
             if len(results)==0: call=('tool_search_list_servers',{})
             elif len(results)==1:
                 sources=self.tool_data(results[0]['content'])
-                self.assertEqual({s['source_ref'] for s in sources},{'replio-project'})
-                call=('tool_search_list_tools',{'source_ref':'replio-project'})
+                self.assertEqual({s['source_ref'] for s in sources},{'reference-project'})
+                call=('tool_search_list_tools',{'source_ref':'reference-project'})
             elif len(results)==2:
                 tools=self.tool_data(results[1]['content'])['tools']
                 ref=next(t['tool_ref'] for t in tools if t['name']=='list_documents')
@@ -105,7 +105,7 @@ class ReferenceConsumerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(document['structuredContent']['title'],'Trial policy')
                 final+=' Requested by '+document['_meta']['requested_by']+'.'
         elif 'response_format' in body:
-            final=json.dumps({'summary':'The Replio trial policy was read','topics':['project policy']})
+            final=json.dumps({'summary':'The Reference trial policy was read','topics':['project policy']})
         delta={'role':'assistant'}
         if call:
             delta['tool_calls']=[{'index':0,'id':'fixture-'+str(len(results)),'type':'function',
@@ -149,7 +149,7 @@ class ReferenceConsumerTests(unittest.IsolatedAsyncioTestCase):
         initial=self.model_requests[0]
         system='\n'.join(m['content'] for m in initial['messages'] if m.get('role')=='system')
         self.assertIn('tool_search_list_tools(source_ref)',system)
-        self.assertIn('Use the Replio project tools',system)
+        self.assertIn('Use the Reference project tools',system)
         self.assertNotIn('model-fixture-secret',system)
         self.assertIsNone(self.host.runtime.services.code_executor)
         self.assertFalse(self.host.catalog.allow_dynamic)
@@ -178,14 +178,14 @@ class ReferenceConsumerTests(unittest.IsolatedAsyncioTestCase):
         status,tools=await self.request('GET','/sessions/shared/tools')
         self.assertEqual(status,200)
         self.assertEqual({t['name'] for t in tools},{'list_documents','read_document'})
-        for method,path in [('POST','/sessions/shared/tools'),('DELETE','/sessions/shared/tools/replio-project')]:
+        for method,path in [('POST','/sessions/shared/tools'),('DELETE','/sessions/shared/tools/reference-project')]:
             status,_=await self.request(method,path,body={'command':'forbidden'})
             self.assertEqual(status,403)
         context=await self.host.policy.context(self.identities.alice,'shared')
         empty=FunctionSource((),{})
         with self.assertRaises(PermissionError):
             await self.host.catalog.install('shell',empty,empty,context,target_label='forbidden')
-        with self.assertRaises(PermissionError): await self.host.catalog.remove('replio-project',context)
+        with self.assertRaises(PermissionError): await self.host.catalog.remove('reference-project',context)
         ref=next(t['tool_ref'] for t in tools if t['name']=='read_document')
         with self.assertRaises(ValueError):
             await self.host.catalog.call_tool(ref,{'document_id':'policy','project_id':'other'},context)

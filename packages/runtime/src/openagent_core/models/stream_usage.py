@@ -6,7 +6,7 @@ canonical cost ledger behind Settings → Costs, ``/context`` and the budget.
 streams: chat, the channel bridges, scheduled tasks, and — the one that made
 this expensive — inbound webhook events.
 
-So on 2026-07-13/14 two agents burned ~412M input tokens through the Replio
+So on 2026-07-13/14 two agents burned ~412M input tokens through the external service
 webhook lane and the ledger showed **zero rows** for it. The fire was not
 merely unnoticed; it was structurally invisible. It stopped when DeepSeek
 returned HTTP 402 "Insufficient Balance", which is a hell of a way to find out.

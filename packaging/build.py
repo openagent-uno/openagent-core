@@ -19,7 +19,7 @@ PACKAGES = (
     'packages/module-models', 'packages/module-budget', 'packages/module-attachments',
     'packages/module-logs', 'packages/module-ptc', 'packages/module-tool-discovery',
     'packages/module-full', 'packages/capability-host', 'packages/gateway',
-    'sdk/python', 'examples/replio',
+    'sdk/python', 'examples/reference-host',
 )
 
 

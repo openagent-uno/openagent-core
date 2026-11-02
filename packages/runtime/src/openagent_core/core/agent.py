@@ -566,7 +566,7 @@ def _recall_query(message: str) -> str:
     Why: an event lane hands the agent an orchestration prompt with the person's
     own sentence buried inside it, and embedding all of it dilutes the query
     past the point of usefulness. Measured 2026-08-25 against the live
-    ``replio-thread`` prompt (12,159 chars, vault of 1,066 notes): the note that
+    ``inbound-thread`` prompt (12,159 chars, vault of 1,066 notes): the note that
     answers the question ranked #244-#262 with the full prompt as the query, and
     #1 with the customer's sentence alone. At ``top_k`` 6 that is the difference
     between injecting the right note and injecting nothing.
@@ -763,7 +763,7 @@ def _rrf_merge(sem_hits: list[dict], fts_hits: list[dict], limit: int) -> list[d
     fused: dict[tuple, dict[str, Any]] = {}
 
     def _key(h: dict) -> tuple:
-        return ("note", h.get("path")) if h.get("kind") != "session" \
+        return ("note", h.get("path")) if h.get("kind") != "session"\
             else ("session", h.get("session_id"))
 
     for rank, h in enumerate(sem_hits):

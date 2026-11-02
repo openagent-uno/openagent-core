@@ -137,7 +137,7 @@ def render_prompt_template(template: str, *, payload: dict[str, Any], event: dic
 
     # Webhook callers are allowed to send either the raw payload object or an
     # ``{"event": ..., "payload": {...}}`` envelope.  The dispatcher keeps
-    # the raw object (the normal Replio path), while older prompt templates
+    # the raw object (the normal external service path), while older prompt templates
     # commonly address the envelope as ``payload.payload.*``.  Expose a
     # backwards-compatible view that preserves direct keys *and* provides the
     # nested alias; otherwise a valid delivery dies before the agent turn with
@@ -541,7 +541,7 @@ async def _execute_event(
             # what went wrong, because nothing did.
             #
             # Measured cost of that lie: on a live agent, 11 of these in one window
-            # on a single hot Replio thread, and 230 of 230 `errored=True` entries
+            # on a single hot external service thread, and 230 of 230 `errored=True` entries
             # across the whole log were also `cancelled=True` — every one an
             # interrupt. Dream mode had to spend a `logs_context` round-trip
             # reasoning its way to "this is a barge-in, not a genuine failure",
@@ -777,7 +777,7 @@ async def _dispatch_prompt(*, agent, db, event, payload, delivery_id, source, on
     # `failed` qui NON e' una risposta al cliente: e' la riga di coda. Il
     # re-enqueue e' sicuro perche' la sessione dell'evento e' deterministica
     # (``event:{event_id}:{delivery_id}``), quindi il tentativo successivo
-    # riprende LA STESSA sessione, e il reply_guard di Replio sopprime un
+    # riprende LA STESSA sessione, e il reply_guard di external service sopprime un
     # secondo outbound sul thread che ne ha gia' uno piu' recente dell'inbound.
     failed = bool(getattr(result, "failed", False))
     failure_detail = ""
