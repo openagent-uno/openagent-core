@@ -1,7 +1,9 @@
 # Discovery presentation API v1
 
-This is an unreleased source contract in the `1.1.0b43.dev2026110201` Core and
-SQLite candidate pair. Package publication and host adoption are separate gates.
+This contract is packaged by the `1.1.0b43` Core and SQLite pair. The final beta
+version succeeds the earlier development candidate; published wheels must be
+built from the corresponding committed source, never relabeled in place.
+Package publication and host adoption are separate gates.
 It adds presentation to the existing authorized catalog; it does not install
 sources, change authorization or select a different executor.
 

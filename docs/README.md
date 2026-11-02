@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Core and SQLite beta43 package release](releases/v1.1.0-beta.43.md)
+
 - [Agnostic architecture: mandatory in every OpenAgent repository](AGNOSTICISM.md)
 - [Component responsibilities, organization and communication](COMPONENTS.md)
 - [Using the kernel, clients, tools and runners](USAGE.md)
