@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from openagent_core.core.logging import elog
+from openagent_core.discovery import DiscoveryPresentation
 from openagent_core.mcp.builtins import (
     BUILTIN_MCP_SPECS,
     DEFAULT_MCPS,
@@ -557,6 +558,7 @@ class MCPPool:
         if any(not name for name in names) or len(set(names)) != len(names):
             raise ValueError("MCP source names must be nonempty and unique")
         self.specs: list[_ServerSpec] = specs
+        self._discovery_presentation = DiscoveryPresentation()
         self._capability_binding = None
         # Bumped by reload()/close_all(): a wedged-toolkit replacement built
         # across one of them must not publish into the new (or closed) pool.
@@ -1906,6 +1908,24 @@ class MCPPool:
         return [tk] if tk is not None else []
 
     # ── Introspection (used by Agent for system prompt + health endpoints) ─
+
+    @property
+    def discovery_presentation(self) -> DiscoveryPresentation:
+        """The immutable presentation selected before connecting this pool."""
+        return self._discovery_presentation
+
+    def configure_discovery(self, presentation: DiscoveryPresentation) -> MCPPool:
+        """Configure public discovery hints without replacing an adapter.
+
+        Call before ``connect_all``. Closing a pool before configuring its next
+        lifecycle prevents a live toolkit and its descriptions from diverging.
+        """
+        if not isinstance(presentation, DiscoveryPresentation):
+            raise TypeError("presentation must be a DiscoveryPresentation")
+        if self._connected or self._toolkit_by_name or self._toolkit_supervisors:
+            raise RuntimeError("Configure discovery before connecting the pool")
+        self._discovery_presentation = presentation
+        return self
 
     def server_summary(self) -> dict[str, int]:
         """``{server_name: tool_count}`` for every configured server."""

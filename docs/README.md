@@ -6,6 +6,8 @@
 - [Component responsibilities, organization and communication](COMPONENTS.md)
 - [Using the kernel, clients, tools and runners](USAGE.md)
 
+- [Discovery presentation API v1: authorized bounded hints and descriptions, unreleased source](discovery-presentation.md)
+
 
 - [Local MCP startup recovery and credential-free diagnostics candidate](mcp-startup-diagnostics.md)
 

@@ -477,11 +477,25 @@ def _authorized_catalog(pool):
 
 async def _list_scoped_servers_impl(pool: Any) -> list[dict[str, Any]]:
     catalog, context = _authorized_catalog(pool)
+    presentation = pool.discovery_presentation
     groups = {}
     for tool in await catalog.discover(context):
         entry = groups.setdefault(tool.source_id, {"name": tool.source_id, "source_ref": tool.source_id,
                                                   "target_label": tool.target_label, "tool_count": 0})
         entry["tool_count"] += 1
+        if tool.source_id in presentation.capability_sources:
+            entry.setdefault("capabilities", []).append({
+                "name": tool.name,
+                "description": " ".join(str(tool.description or "").split())[:160],
+            })
+    for source_id, entry in groups.items():
+        if source_id in presentation.source_summaries:
+            entry["description"] = presentation.source_summaries[source_id]
+        if "capabilities" in entry:
+            capabilities = sorted(entry["capabilities"], key=lambda item: (item["name"].casefold(), item["name"]))
+            entry["capabilities"] = capabilities[:presentation.capability_limit]
+            entry["capabilities_total"] = entry["tool_count"]
+            entry["capabilities_has_more"] = len(capabilities) > presentation.capability_limit
     return sorted(groups.values(), key=lambda value: (value["target_label"], value["name"]))
 
 
@@ -961,10 +975,11 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
         raise RuntimeError("tool-search runtime adapter requires a pool kwarg")
 
     async def tool_search_list_servers() -> list[dict[str, Any]]:
-        """List every connected MCP with its tool count.
+        """List current authorized capability sources and tool counts.
 
-        Start here to discover tools beyond the upfront tool list — the
-        OpenAgent runtime trims MCPs above the provider's tool budget.
+        Configured sources may include compact capability hints. A source
+        entry is not its complete inventory: open list_tools and follow its
+        pages before declaring a capability unavailable.
         """
         return await _list_scoped_servers_impl(pool)
 
@@ -1019,4 +1034,7 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
     )
     for function in _functions_dict(toolkit).values():
         function.process_entrypoint()
+        description = pool.discovery_presentation.tool_descriptions.get(function.name)
+        if description is not None:
+            function.description = description
     return toolkit
