@@ -62,5 +62,6 @@ surfaces, prompt revisions and capability generation used at admission.
 
 The full standalone profile enables every domain. embedding-host selects the same
 modules per agent, supplies a federated Sessions backend and managed MCP catalog,
-and owns pods and device capability sources. Replio demonstrates Sessions plus a
-fixed native catalog with Vault, MCP, Scheduler, Workflows and Events absent.
+and owns its infrastructure and device capability sources. A minimal profile can
+select Sessions plus a fixed native catalog with Vault, MCP, Scheduler, Workflows
+and Events absent.

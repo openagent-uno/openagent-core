@@ -15,12 +15,13 @@ the agent engine. The product monorepo `openagent` owns the standalone server,
 app, CLI, MCP bridge, native identity, dashboards, configuration, installers,
 updaters, and support integrations.
 
-embedding-host imports pinned library distributions into its own Python worker and
-image. Its Go control plane owns authentication, delivery, projections, connector
-policy, computers, pods, sandboxes, resource limits, credentials, and volumes.
+An embedding host imports pinned library distributions into its own worker.
+Its control plane owns authentication, delivery, projections, connector policy,
+resources, isolation, limits, credentials and persistence provisioning. Core does
+not require a particular control-plane language or orchestration platform.
 The runtime accepts resources already prepared by the host and has no Kubernetes
-dependency. Replio's reference consumer supplies an external identity authority
-and a fixed capability catalog.
+dependency. A minimal host can supply an external identity authority
+and a fixed capability catalog without standalone product services.
 
 ## Lifecycle and ownership
 

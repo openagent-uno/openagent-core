@@ -18,7 +18,7 @@ end of the call; the host owns executor lifecycle and infrastructure cleanup.
 backed by `openagent-shell`. It has no engine dependency. OpenAgent standalone
 composes its explicitly selected local or Docker backend; embedding-host supplies
 its already provisioned dedicated agent pod and forwards no provider or workload
-credentials. Replio does not enable PTC or provide an executor.
+credentials. A host omitting PTC does not provide or activate a code executor.
 
 The old core shell, device, editor, web-search, dashboard, agent-manager and
 federation implementations have been removed. Tool process code and native

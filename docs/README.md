@@ -1,5 +1,12 @@
 # OpenAgent core documentation
 
+## Architecture and use
+
+- [Agnostic architecture: mandatory in every OpenAgent repository](AGNOSTICISM.md)
+- [Component responsibilities, organization and communication](COMPONENTS.md)
+- [Using the kernel, clients, tools and runners](USAGE.md)
+
+
 - [Local MCP startup recovery and credential-free diagnostics candidate](mcp-startup-diagnostics.md)
 
 - [Beta42 local release preparation: shared chat commands](releases/v1.1.0-beta.42.md)
@@ -42,8 +49,8 @@ already read through tools; unobserved internal reminders request a complete
 final answer rather than assuming earlier narration was delivered.
 Beta28 fixes the isolated audio worker stdout contract. It keeps vendor asynchronous and interpreter-shutdown
 logs off its single-result JSON pipe; see the audio host contract.
-The Replio example is `1.1.0b2` and
-uses the new Sessions module. Product
+The neutral [minimal runtime example](../examples/minimal-runtime.py)
+uses the public kernel without engine or standalone services. Product
 qualification and production cutover remain owned by each host because the core
 does not ship product credentials or create infrastructure.
 

@@ -1,13 +1,16 @@
 <!-- Concrete host labels in this historical record are anonymized; original bytes and hashes are retained in the protected operator audit. -->
 # OpenAgent core
 
+Read [agnostic architecture](docs/AGNOSTICISM.md), [components](docs/COMPONENTS.md)
+and [usage](docs/USAGE.md) before integration or development.
+
 OpenAgent is an embeddable Python agent runtime. The minimum package exposes
 identity, authorization, capability, prompt, lifecycle, and durable run contracts
 without installing the standalone product or computer tools.
 
 The optional engine preserves OpenAgent's agent algorithms and memory vault.
 Products supply authentication, system instructions, resources, tools, and policy.
-embedding-host builds its own worker and sandbox from pinned core packages; the
+An embedding host builds its own worker and sandbox from pinned Core packages; the
 standalone app/CLI/server are maintained in the `openagent` product monorepo.
 
 The `1.1.0b36` kernel, SQLite adapter, gateway and SDK add bounded completion

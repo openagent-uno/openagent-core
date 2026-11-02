@@ -57,8 +57,8 @@ computer, vault, model selection, tokenizer cache or historical identity changes
 
 `tests/public/test_management_in_process.py` contains 28 focused tests against
 real synthetic SQLite databases, the real SDK schema API, real MCP pools and
-two concurrent public Runtime instances. The companion ICS consumer has five
-source tests. The final combined run on 28 October 2026 passed **33/33**, no
+two concurrent public Runtime instances. A companion embedding-host qualification recorded five
+source tests; this does not change the generic management contract. The final combined run on 28 October 2026 passed **33/33**, no
 skips, in 3.33 seconds including imports, with **112,672,768 bytes** maximum RSS
 reported by the process (external sampled peak: **115,441,664 bytes**).
 It used Python 3.11.6, MCP 1.30.0, aiosqlite 0.22.1 and Pydantic 2.14.0 already
