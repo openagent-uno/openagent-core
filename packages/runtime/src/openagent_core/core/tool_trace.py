@@ -5,10 +5,10 @@ WHY THIS EXISTS
 The quality judge (``core/quality_monitor.py``) grades a sampled turn from the
 USER message and the ASSISTANT reply alone. It never saw the run's tool calls.
 So when the agent correctly cited an id/user/ticket that came *verbatim out of a
-tool RESULT* — a Replio thread brief, a ClickUp task id — the judge, seeing no
+tool RESULT* — a external service thread brief, a ClickUp task id — the judge, seeing no
 trace of where that fact came from, ruled it "fabricated / ungrounded / no tool
 calls shown" and emitted a false ``bad`` verdict. (Confirmed on real sessions:
-a reply quoting ids that were present verbatim in a ``replio_thread_brief``
+a reply quoting ids that were present verbatim in a ``external service_thread_brief``
 result was scored ``bad`` for fabrication; a 13-tool-call run was flagged "zero
 tool calls shown".)
 

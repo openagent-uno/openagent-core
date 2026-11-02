@@ -811,7 +811,7 @@ class TeamRouterProvider(ProviderResources, BaseModel):
         # override) is handed this provider directly by
         # ``ModelDispatcher.build_override_model`` and never touches the
         # dispatcher's generate/stream. That is why usage_log held zero rows
-        # for the entire Replio webhook lane while it burned 412M input tokens.
+        # for the entire external service webhook lane while it burned 412M input tokens.
         self._budget = budget
         self._session_runtime: dict[str, Any] = {}  # session_id → Team or fallback
         # session_id → stable hash of the system prompt the cached runtime

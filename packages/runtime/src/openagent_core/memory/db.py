@@ -63,7 +63,7 @@ WORKER_PID = os.getpid()
 #
 # NOT the global ``busy_timeout``, which is three minutes on the agents: these
 # three writes sit on an HTTP request or a scheduler tick, and waiting three
-# minutes there is worse than the failure it avoids. Replio drops a delivery
+# minutes there is worse than the failure it avoids. external service drops a delivery
 # it has been waiting on for ten seconds — which showed up on the receiver as
 # ``ConnectionResetError`` while reading the body — so the ceiling has to be
 # under that.
@@ -3541,8 +3541,8 @@ class MemoryDB:
         # that moment the upgrade fails with SQLITE_BUSY **immediately**: the
         # busy handler is never called, so ``busy_timeout`` — three minutes of
         # it — buys nothing. Measured on the example-product-b agent: an HTTP 500 back to
-        # Replio for every inbound conversation while three task runs sat
-        # holding the database, and before Replio had a durable queue those
+        # external service for every inbound conversation while three task runs sat
+        # holding the database, and before external service had a durable queue those
         # events were simply gone.
         #
         # ``BEGIN IMMEDIATE`` asks for the write lock UP FRONT, which is the
@@ -4020,23 +4020,12 @@ class MemoryDB:
           backfill; gate off with ``recover_failed=False`` /
           ``OPENAGENT_EVENT_REENQUEUE_BACKFILL=0`` to only fix go-forward).
 
-        SAFETY — why a replay never double-messages a customer. The only
-        externally-fired event (``Replio inbound thread``) is a ``prompt``
-        action with ``session_binding_enabled=1`` bound on the thread id, and
-        an event child session id is the deterministic
-        ``event:{event_id}:{delivery_id}``. So a replay *always* resumes the
-        SAME session as the original attempt — bound events via
-        ``event_session_bindings`` (keyed on the thread), unbound events via
-        the deterministic id keyed on the replayed delivery id. The agent
-        therefore re-runs with its own prior transcript in context, and the
-        customer reply itself goes through Replio's server-side ``reply_guard``
-        (LIVE/armed), which suppresses a second outbound when the thread
-        already has one newer than the triggering inbound. Re-enqueue adds no
-        new reply path; it only re-drives the existing, thread-scoped,
-        reply-idempotent one. A ``received`` orphan is safe unconditionally —
-        ``dispatch_event`` flips a delivery to ``running`` as its very first
-        act, so a still-``received`` row proves the turn never ran and no reply
-        could have been sent.
+        Replay is at-least-once, not exactly-once. A bound event reuses its
+        event session; an unbound replay uses its deterministic delivery key.
+        A transcript does not prove that an external effect was not accepted.
+        Hosts and capability sources must deduplicate effects by a durable
+        idempotency identity or reconcile uncertain outcomes before retrying.
+        No external delivery guard is installed or assumed by Core.
 
         ``reenqueue_count`` bounds the replay: an orphan re-enqueued
         ``max_attempts`` times is parked terminal ``failed`` so a delivery that
@@ -4167,8 +4156,8 @@ class MemoryDB:
         ``min_claim_age_seconds`` — a threshold the caller sets comfortably above
         the single-turn wall-clock cap (``OPENAGENT_CHAT_TURN_TIMEOUT``, default
         900 s); the Scheduler passes 2× that (1800 s) by default. A row claimed
-        more recently is assumed still running and left strictly alone. Replio's
-        thread-scoped ``reply_guard`` remains the final backstop, but the age
+        more recently is assumed still running and left strictly alone. The host's
+        thread-scoped delivery deduplication remains an independent safeguard, but the age
         gate is what prevents the double-dispatch in the first place.
 
         Differences from the startup reap, all deliberate:
@@ -7254,7 +7243,7 @@ class MemoryDB:
             # the conversation.  Keeping them after journal recovery both
             # duplicates the facts we just restored and can replay a 50k+
             # system prompt as if it were user history on the next turn (the
-            # production Mixout failure that prompted this recovery path).
+            # production example host failure that prompted this recovery path).
             #
             # Strip only data that is provably replayed scaffolding: system
             # messages are injected fresh by the runtime, while

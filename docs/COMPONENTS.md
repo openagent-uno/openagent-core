@@ -102,13 +102,12 @@ contract whose reusable implementations live in Tools. Hosts provision any
 sandbox and resource budget explicitly. MCP sources own their own transport
 processes; the native sidecar is not the agent engine or a scheduler.
 
-## Current import-boundary debt
+## Minimal SQLite imports
 
-The reviewed SQLite source adapter reaches an eager MemoryDB import through
-its migration helpers; it currently needs engine dependencies in an otherwise
-minimal environment. That does not make the kernel dependent on the standalone
-product. See [the exact source limitation and run prerequisites](USAGE.md) before
-using the demo or claiming a minimal adapter install.
+The SQLite adapter and synchronous migration/privacy checks import without the
+optional engine dependencies. Async MemoryDB APIs load their dependencies only
+when selected. The installed-wheel minimal-import regression exercises this
+boundary with site packages disabled.
 
 ## Using the components
 

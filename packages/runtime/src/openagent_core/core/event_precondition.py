@@ -18,8 +18,8 @@ it first::
 
     {
       "type": "http",
-      "url": "http://replio-api/api/v1/orgs/ORG/threads/{payload.payload.thread_id}",
-      "headers": {"Authorization": "Bearer ${REPLIO_API_KEY}"},
+      "url": "http://service-api/api/v1/orgs/ORG/threads/{payload.payload.thread_id}",
+      "headers": {"Authorization": "Bearer ${external service_API_KEY}"},
       "skip_when": {"path": "waiting_for_team", "equals": false},
       "skip_output": "already handled — nobody is waiting on us"
     }

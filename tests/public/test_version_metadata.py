@@ -11,3 +11,11 @@ def test_runtime_version_matches_distribution_metadata() -> None:
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert openagent_core.__version__ == project["project"]["version"]
+
+
+def test_coupled_distributions_pin_the_same_runtime_version() -> None:
+    root = Path(__file__).resolve().parents[2]
+    for package in ("packages/storage-sqlite", "packages/gateway", "sdk/python"):
+        project = tomllib.loads((root / package / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+        assert project["version"] == openagent_core.__version__, package
+        assert f"openagent-core=={openagent_core.__version__}" in project["dependencies"], package

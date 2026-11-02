@@ -278,3 +278,24 @@ async def test_deferred_reset_drains_real_runtime_turn_before_provider_release(t
         if action is not None:
             await asyncio.gather(action, return_exceptions=True)
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_admitted_executor_uses_shared_catalogue_and_honest_host_actions():
+    from types import SimpleNamespace
+    from openagent_core.engine import AgentExecutor
+    from openagent_core.contracts import RunRequest
+    class Authorizer:
+        async def authorize(self, *args, **kwargs):
+            return True
+    context = SimpleNamespace(tenant_id='tenant', session_id='session', audience=())
+    runtime = SimpleNamespace(services=SimpleNamespace(authorizer=Authorizer()))
+    executor = AgentExecutor(Agent())
+    request = lambda text: SimpleNamespace(input=text)
+    assert await executor.execute_chat_command(request('ordinary text'), context, runtime) is None
+    assert await executor.execute_chat_command(request('/help\nquoted'), context, runtime) is None
+    result = await executor.execute_chat_command(request('/help'), context, runtime)
+    assert '/context' in result.text and '/new' in result.text
+    reset = await executor.execute_chat_command(request('/new'), context, runtime)
+    assert reset.status == 'unsupported' and not reset.host_actions
+    assert executor.agent.calls == []

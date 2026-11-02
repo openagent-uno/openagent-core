@@ -1,0 +1,37 @@
+{
+  "state": "SOURCE_QUALIFIED_NOT_YET_PUBLISHED",
+  "date": "2026-11-02",
+  "sourceParents": [
+    "0c2491d658b404a937bf14be2ce84f3d2452cf83",
+    "c5fc12849b4f5d7b2d05540fdd449af54cc82230"
+  ],
+  "runtimeVersion": "1.1.0b44",
+  "coupledDistributions": [
+    "openagent-core",
+    "openagent-storage-sqlite",
+    "openagent-gateway",
+    "openagent-sdk"
+  ],
+  "testsPassed": 36,
+  "subtestsPassed": 2,
+  "contracts": [
+    "public discovery metadata, schemas, exact dispatch, revocation and pagination",
+    "minimal SQLite/privacy import without site packages",
+    "preserved process error-mode policy",
+    "admitted shared chat commands",
+    "exact coupled distribution versions and Core pins"
+  ],
+  "resources": {
+    "exit": 0,
+    "limit_triggered": null,
+    "peak_process_tree_rss_bytes": 146980864,
+    "peak_owned_processes": 2,
+    "sampled_cpu_seconds": 1.11,
+    "wall_seconds": 1.92,
+    "cpu_budget": 2,
+    "memory_budget": 2147483648,
+    "sampling": "owned process tree; not kernel cgroup"
+  },
+  "public43ArtifactsModified": false,
+  "hostMemoryProviderOrInstallerAcceptanceInherited": false
+}

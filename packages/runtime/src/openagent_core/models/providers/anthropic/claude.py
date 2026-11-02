@@ -785,7 +785,7 @@ class Claude(Model):
         breakpoint sat at the end of the whole string, it used to make the
         ~10.8k framework prompt a per-session cache entry: every session paid
         the 1.25x write and shared nothing with any other session. That is
-        worst for the webhook-driven customer-care agents (Replio), where every
+        worst for the webhook-driven customer-care agents (external service), where every
         event delivery can create a fresh single-call session — one that pays a
         write it never reads back, making caching strictly *more* expensive than
         not caching. With the tag past the breakpoint the framework prefix is

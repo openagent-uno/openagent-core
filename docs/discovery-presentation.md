@@ -1,6 +1,6 @@
 # Discovery presentation API v1
 
-This contract is packaged by the `1.1.0b43` Core and SQLite pair. The final beta
+This contract is packaged by the `1.1.0b44` Core and SQLite pair. The final beta
 version succeeds the earlier development candidate; published wheels must be
 built from the corresponding committed source, never relabeled in place.
 Package publication and host adoption are separate gates.

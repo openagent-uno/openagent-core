@@ -297,8 +297,8 @@ def _denied_tool_rules() -> tuple[tuple[str, str], ...]:
 
     Rules use ``server:tool`` syntax and are comma-separated. Either side may
     be ``*``. Tool leaves and runtime-prefixed keys are treated as aliases, so
-    ``replio:thread_create_task`` also blocks
-    ``replio_thread_create_task``. Invalid entries are ignored rather than
+    ``external service:thread_create_task`` also blocks
+    ``external service_thread_create_task``. Invalid entries are ignored rather than
     making every tool unavailable because of one malformed environment value.
     """
     raw = (runtime_environment().get(_MCP_TOOL_DENYLIST_ENV) or "").strip()

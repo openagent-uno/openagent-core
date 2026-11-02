@@ -2,7 +2,6 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import aiosqlite
 
 from openagent_core.content_privacy import PrivacyFence
 
@@ -33,6 +32,7 @@ def guard_unscoped_history_transaction(connection, session_id, serialized=None):
 @asynccontextmanager
 async def checked_snapshot_source(path):
     """Pin the checked source snapshot before any destination/copy is created."""
+    import aiosqlite
     async with aiosqlite.connect(Path(path).resolve().as_uri()+'?mode=ro',uri=True) as source:
         await source.execute('BEGIN')
         try:

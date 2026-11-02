@@ -70,7 +70,7 @@ COST_OBSERVABILITY_TASK_NAME = "cost-observability"
 # needed a human or was an OVER-ESCALATION the agent could have handled with its
 # own tools (agents routinely have more capability than they use). ROLE-AGNOSTIC
 # and TOOL-AGNOSTIC by design: OpenAgent is a general engine (not only a support
-# runtime), so the builtin NEVER hardcodes Replio/support specifics — it prompts
+# runtime), so the builtin NEVER hardcodes external service/support specifics — it prompts
 # the agent to audit its OWN escalations against its OWN tools + vault. ON by
 # explicit gate (``self_improvement.enabled`` AND
 # ``escalation_audit_enabled``), same
