@@ -81,6 +81,18 @@ the initiating authority while their author is the agent. Read, replay, executio
 tool output, and final publication are separately authorized against current
 policy. Shared output requires authorization for its actual audience.
 
+An authenticated host may preserve an external sender as `author` and
+`initiator` while selecting a distinct channel-granted `authority` and an
+explicit channel/session audience. Every principal still uses the same host
+tenant; an external identity namespace does not permit cross-tenant execution.
+The host owns sender verification and grant policy, including revisions and
+revocation. Core carries that context through admission, tool invocation and
+publication, and rechecks current policy for replay without rebinding the
+original admission. The neutral regression
+[`test_external_channel_authority.py`](../tests/public/test_external_channel_authority.py)
+qualifies this existing public contract through Runtime, SQLite and a function
+capability. It does not qualify a live channel, provider or released package.
+
 Device capabilities are tied to a verified ingress instance and generation.
 App dashboard registration is independent from the local-device consent. CLI and
 channel turns do not acquire dashboard tools merely because an app is connected.
