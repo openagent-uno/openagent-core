@@ -115,3 +115,6 @@ as within one runtime; the Sessions module limits model-facing waits to 30 secon
 - [Optional MCP Apps host service and memory bounds](mcp-apps.md)
 
 - [Native private state permission checks](private-state-permissions.md)
+
+The beta45 candidate adds the dependency-free native permission API; its
+source and wheel workflows distinguish platform contracts from host acceptance.

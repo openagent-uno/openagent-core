@@ -1,7 +1,6 @@
 name: Native private state permission contracts
 on:
-  push:
-    branches: ['fix/private-path-platform-permissions']
+  workflow_call:
   pull_request:
     paths:
       - packages/runtime/src/openagent_core/private_paths.py
