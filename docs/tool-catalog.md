@@ -5,6 +5,10 @@ Hosts can call `CapabilityCatalog.has_source(source_id, context)` to verify that
 a source is a trusted registration in the current run snapshot before applying
 their own audience policy. The check observes the admitted catalog revision,
 module generation, temporary lease and revocation; it does not grant access.
+Trusted hosts may configure [discovery presentation API v1](discovery-presentation.md)
+before connecting an MCP pool. It adds bounded, authorized source hints and
+description metadata without replacing adapters, schemas or invocation routing.
+
 The model receives four discovery functions only:
 
 - `tool_search_list_servers()` returns authorized source references and target labels.

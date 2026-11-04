@@ -1,0 +1,32 @@
+{
+  "state": "SOURCE_QUALIFIED_CANONICAL_BETA_PAIR_NOT_YET_PUBLISHED",
+  "date": "2026-11-02",
+  "sourceBaseCommit": "a2eb2547abb2e8859d89aa83dbe0903627d9d4c0",
+  "coreVersion": "1.1.0b43",
+  "sqliteVersion": "1.1.0b43",
+  "sqliteRequires": "openagent-core==1.1.0b43",
+  "succeedsDevelopmentVersion": "1.1.0b43.dev2026110201",
+  "canonicalPrereleaseVersion": true,
+  "oldArtifactsMutated": false,
+  "runtimeBehaviorChangesBeyondVersion": false,
+  "testsPassed": 5,
+  "testContracts": [
+    "DiscoveryPresentation",
+    "version metadata consistency",
+    "real authorized tool-search schemas and lossless dispatch",
+    "54-tool pagination"
+  ],
+  "resourceQualification": {
+    "exit": 0,
+    "limit_triggered": null,
+    "peak_process_tree_rss_bytes": 86491136,
+    "peak_owned_processes": 2,
+    "sampled_cpu_seconds": 0.57,
+    "wall_seconds": 1.103,
+    "cpu_budget": 2,
+    "memory_budget": 2147483648,
+    "sampling": "owned process tree; not kernel cgroup"
+  },
+  "packagePublicationQualified": false,
+  "hostOrProviderAcceptance": false
+}

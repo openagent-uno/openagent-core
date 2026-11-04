@@ -2,9 +2,13 @@
 
 ## Architecture and use
 
+- [Core beta44: discovery and optional-import contracts](releases/v1.1.0-beta.44.md)
+
 - [Agnostic architecture: mandatory in every OpenAgent repository](AGNOSTICISM.md)
 - [Component responsibilities, organization and communication](COMPONENTS.md)
 - [Using the kernel, clients, tools and runners](USAGE.md)
+
+- [Discovery presentation API v1: authorized bounded hints and descriptions, unreleased source](discovery-presentation.md)
 
 
 - [Local MCP startup recovery and credential-free diagnostics candidate](mcp-startup-diagnostics.md)
@@ -109,3 +113,8 @@ The run observer now waits for terminal state across worker processes as well
 as within one runtime; the Sessions module limits model-facing waits to 30 seconds.
 
 - [Optional MCP Apps host service and memory bounds](mcp-apps.md)
+
+- [Native private state permission checks](private-state-permissions.md)
+
+The beta45 candidate adds the dependency-free native permission API; its
+source and wheel workflows distinguish platform contracts from host acceptance.

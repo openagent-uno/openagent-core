@@ -1,0 +1,23 @@
+{
+  "state": "SOURCE_QUALIFIED_NOT_PUBLISHED",
+  "date": "2026-11-02",
+  "sourceBaseCommit": "98a7969",
+  "contract": "DiscoveryPresentation",
+  "apiVersion": 1,
+  "coreCandidate": "1.1.0b43.dev2026110201",
+  "sqliteCandidate": "1.1.0b43.dev2026110201",
+  "command": "python -m pytest -q tests/public/test_discovery_presentation.py tests/public/test_mcp_catalog.py::CatalogAdapters::test_real_tool_search_schema_and_lossless_exact_dispatch tests/public/test_mcp_catalog.py::CatalogAdapters::test_large_source_discovery_is_compact_searchable_and_paged",
+  "testsPassed": 4,
+  "testsSkipped": 0,
+  "realBuiltinToolkit": true,
+  "authorizedSourcesOnly": true,
+  "defaultResponsePreserved": true,
+  "schemasAndOpaqueReferencesPreserved": true,
+  "exactDispatchAndRevocationChecked": true,
+  "pagination54ToolsChecked": true,
+  "missingContextAndOtherRuntimeDenied": true,
+  "descriptionConfigurationCopiedAndBounded": true,
+  "fullSuiteOrHeavyBuildRun": false,
+  "packagesBuiltOrPublished": false,
+  "hostAdoptionOrLiveProviderAcceptance": false
+}

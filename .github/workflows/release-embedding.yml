@@ -1,0 +1,75 @@
+name: Build and release immutable embedding wheels
+on:
+  push:
+    branches: ['fix/private-path-platform-permissions']
+    tags: ['v1.1.0-beta.*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  platform-contracts:
+    uses: ./.github/workflows/private-path-permissions.yml
+  wheels:
+    needs: platform-contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - run: python -m pip install uv==0.11.14
+      - name: Build all wheels from one clean source snapshot
+        run: python packaging/build.py --out "$RUNNER_TEMP/release-wheels"
+      - name: Verify source, release version and the installed public API
+        run: |
+          python - <<'PY_VERIFY'
+          import json,os,pathlib,tomllib,zipfile
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'release-wheels'
+          m=json.loads((root/'manifest.json').read_text())
+          assert m['repository_commit']==os.environ['GITHUB_SHA'] and not m['dirty_snapshot']
+          version=tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version']
+          if os.environ['GITHUB_REF'].startswith('refs/tags/'):
+           assert os.environ['GITHUB_REF_NAME']=='v'+version.replace('b','-beta.')
+          for name in ['openagent-core','openagent-storage-sqlite','openagent-gateway','openagent-sdk']:
+           row=next(r for r in m['wheels'] if r['name']==name)
+           assert row['version']==version
+          core=next(r for r in m['wheels'] if r['name']=='openagent-core')
+          with zipfile.ZipFile(root/core['file']) as z:
+           assert 'openagent_core/private_paths.py' in z.namelist()
+          PY_VERIFY
+          python -m pip install --no-index --no-deps --find-links "$RUNNER_TEMP/release-wheels" openagent-core
+          python -m unittest discover -s tests/public -p test_private_paths.py -v
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: embedding-${{ github.sha }}
+          path: ${{ runner.temp }}/release-wheels/*
+          retention-days: 3
+          if-no-files-found: error
+  publish:
+    needs: wheels
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v1.1.0-beta.') && github.repository == 'openagent-uno/openagent-core'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: embedding-${{ github.sha }}
+          path: release-wheels
+      - name: Publish the already qualified exact tag, without overwriting releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo 'Preserve the existing release and reconcile its immutable manifest.' >&2
+            exit 1
+          fi
+          printf 'Embedding packages built in CI from commit %s. Native permission contracts passed on Linux, macOS and Windows. See manifest.json for every source and wheel digest. Host runtime acceptance remains separate.\n' "$SOURCE_SHA" > "$RUNNER_TEMP/release-notes.md"
+          gh release create "$RELEASE_TAG" release-wheels/* --verify-tag --prerelease --title "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
