@@ -113,3 +113,5 @@ The run observer now waits for terminal state across worker processes as well
 as within one runtime; the Sessions module limits model-facing waits to 30 seconds.
 
 - [Optional MCP Apps host service and memory bounds](mcp-apps.md)
+
+- [Native private state permission checks](private-state-permissions.md)
