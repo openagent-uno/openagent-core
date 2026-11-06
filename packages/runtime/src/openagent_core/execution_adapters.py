@@ -11,9 +11,12 @@ class ToolInventoryContext:
     The host selects the tool and maps domain data. The kernel neither assumes
     device presence nor interprets identities, sharing rules or provider fields.
     """
-    def __init__(self, *, source_id, tool_name, key, normalize, instructions="", items_key="items", limit=8, timeout=4):
+    def __init__(self, *, source_id, tool_name, key, normalize, instructions="", items_key="items", limit=8, timeout=4, unavailable_errors=()):
         if not source_id or not tool_name or not key or not callable(normalize) or not 1 <= limit <= 256:
             raise ValueError("Explicit bounded inventory contract required")
+        if not isinstance(unavailable_errors, tuple) or any(not isinstance(error, type) or not issubclass(error, Exception) for error in unavailable_errors):
+            raise ValueError("Unavailable inventory errors must be explicit Exception classes")
+        self.unavailable_errors = (TimeoutError, LookupError, ValueError, KeyError, TypeError) + unavailable_errors
         self.source_id, self.tool_name, self.key = source_id, tool_name, key
         self.normalize, self.instructions, self.items_key, self.limit, self.timeout = normalize, instructions, items_key, limit, timeout
         self.current = ContextVar("openagent_tool_inventory", default=None)
@@ -47,7 +50,7 @@ class ToolInventoryContext:
                               "additional_count": max(0, len(values) - self.limit), "instructions": self.instructions}}
         except PermissionError:
             return {}
-        except (TimeoutError, LookupError, ValueError, KeyError, TypeError):
+        except self.unavailable_errors:
             return {self.key: {"status": "unavailable", "instructions":
                 f"Current inventory is unavailable. Discover {self.tool_name} before claiming a destination is reachable. " + self.instructions}}
 

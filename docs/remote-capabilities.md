@@ -56,6 +56,11 @@ media executor. `SessionInspection.participants` returns saved visible human
 authors across the exact authorized session, independently of transcript pages;
 authorship is descriptive and grants no membership or access.
 
-Release cohort: `1.1.0b46`. The public contract suite passed 719 tests and
+Release cohort: `1.1.0b47`. The public contract suite passed 720 tests and
 97 subtests (two optional tests skipped). Package publication, host deployment
 and real-device acceptance are recorded separately.
+
+Hosts can pass explicit `unavailable_errors` classes to `ToolInventoryContext`
+for optional transport failures. Those errors produce unavailable inventory;
+other capabilities remain usable. Cancellation and arbitrary failures are not
+swallowed, and Core imports no host transport or identity implementation.
