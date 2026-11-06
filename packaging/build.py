@@ -2,6 +2,8 @@
 """Build wheels from one clean source snapshot, never a stale build/lib tree."""
 from __future__ import annotations
 import argparse
+import ast
+import tomllib
 import hashlib
 import json
 from pathlib import Path
@@ -32,6 +34,12 @@ def main():
     parser.add_argument('--out',type=Path,required=True)
     options=parser.parse_args()
     root=Path(__file__).resolve().parents[1]
+    project_version=tomllib.loads((root/'pyproject.toml').read_text())['project']['version']
+    tree=ast.parse((root/'packages/runtime/src/openagent_core/__init__.py').read_text())
+    runtime_version=next(ast.literal_eval(node.value) for node in tree.body
+        if isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id=='__version__' for target in node.targets))
+    if runtime_version != project_version:
+        parser.error('Runtime version constant must match the package before building')
     output=options.out.resolve();output.mkdir(parents=True,exist_ok=True)
     if any(output.glob('*.whl')):
         parser.error('Use an empty output directory to avoid mixing source snapshots')
