@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta50: bounded optional summaries and preserved provider failures](releases/v1.1.0-beta.50.md) ([qualification](qualification/async-summary-2026-11-06-b50.json)).
+
 - [Core beta44: discovery and optional-import contracts](releases/v1.1.0-beta.44.md)
 
 - [Agnostic architecture: mandatory in every OpenAgent repository](AGNOSTICISM.md)
@@ -23,7 +25,7 @@
 
 - [Interactive tool budgets and final delivery](interactive-tool-budgets.md)
 
-The current modular family is `1.1.0b40`: Core, SQLite, gateway and Python SDK
+The current modular family is `1.1.0b50`: Core, SQLite, gateway and Python SDK
 pin the same Core wheel. The independent capability host is `1.0.0b3` and
 continues to consume tool protocol `1.0.0b2`. Core and Python SDK expose an
 optional `capabilities` extra requiring capability-host `1.0.0b3`; the base

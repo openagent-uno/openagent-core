@@ -1,0 +1,31 @@
+{
+  "format": 1,
+  "version": "1.1.0b50",
+  "source_commit": "cd4fad6153d1385ec5734eb2cfa49f17c6baea96",
+  "manifest_sha256": "524877e376087bc0deb9ef3b46206929502cd645ec3930fb1878f0f298edbc8d",
+  "remote_wheel_build_and_full_engine_suite": {
+    "run": "https://github.com/openagent-uno/openagent-core/actions/runs/42254115251",
+    "passed": 738,
+    "skipped": 2,
+    "subtests_passed": 97
+  },
+  "native_linux_windows_source_contracts": {
+    "run": "https://github.com/openagent-uno/openagent-core/actions/runs/42252666289",
+    "jobs": [
+      "platform-contracts / actual-os (ubuntu-24.04)",
+      "platform-contracts / actual-os (windows-2025)"
+    ],
+    "result": "success",
+    "remaining_macos_ci_job": "cancelled_after_independent_installed_wheel_check"
+  },
+  "native_macos_installed_wheel_contracts": {
+    "platform": "Darwin",
+    "architecture": "arm64",
+    "python": "3.11",
+    "passed": 4,
+    "skipped_windows_only": 2,
+    "build_performed": false,
+    "wheel_sha256": "8c760a8d71b305de205fe7bb898bda2d62e5e1925464d9f453fe4df487c4fb1d"
+  },
+  "host_provider_acceptance": "separate_private_rollout_receipt"
+}
