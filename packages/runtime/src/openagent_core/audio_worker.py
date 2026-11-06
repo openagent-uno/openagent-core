@@ -7,11 +7,53 @@ import os
 import sys
 
 
+async def transcribe_openai(path, row, *, language=None):
+    """Call the configured transcription endpoint without loading every SDK.
+
+    The worker remains isolated. Credentials, destination and model come only
+    from its explicit row; redirects and environment proxy discovery are off.
+    """
+    from pathlib import Path
+    import httpx
+
+    source = Path(path)
+    if not source.is_file() or not 0 < source.stat().st_size <= 16 << 20:
+        raise ValueError("Audio input exceeds its bound")
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    fields = {"model": row["model"], "response_format": "json"}
+    for key, value in (("language", language or metadata.get("language")),
+                       ("prompt", metadata.get("prompt"))):
+        if value is not None:
+            fields[key] = value
+    url = row["base_url"].rstrip("/") + "/audio/transcriptions"
+    async with httpx.AsyncClient(trust_env=False, follow_redirects=False,
+                                timeout=httpx.Timeout(60, connect=5)) as client:
+        with source.open("rb") as audio:
+            async with client.stream("POST", url,
+                    headers={"Authorization": "Bearer " + row["api_key"]},
+                    data=fields, files={"file": (source.name, audio, "application/octet-stream")}) as response:
+                if response.status_code != 200:
+                    raise RuntimeError("Audio provider unavailable")
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > 256 << 10:
+                        raise ValueError("Audio transcript exceeds its bound")
+    result = json.loads(body)
+    text = result.get("text") if isinstance(result, dict) else None
+    if not isinstance(text, str):
+        raise ValueError("Invalid audio transcript")
+    return text.strip() or None
+
+
 async def execute(request):
     row=request["row"]
     if not row.get("api_key") or not row.get("base_url"):raise ValueError("Explicit audio route required")
     operation=request["operation"]
     if operation=="transcribe":
+        if str(row.get("provider_name") or "").strip().lower() == "openai":
+            return {"text": await transcribe_openai(request["path"], row,
+                                                   language=request.get("language"))}
         from .voice.voice import _transcribe_via_litellm
         text=await _transcribe_via_litellm(request["path"],row,language=request.get("language"))
         return {"text":text}

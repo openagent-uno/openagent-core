@@ -1,4 +1,4 @@
-"""Normal installed VoiceService -> real isolated worker -> LiteLLM -> local HTTP.
+"""Normal installed VoiceService -> real isolated worker -> local HTTP.
 
 Requires the public audio extra. No provider SDK patch, external service, model
 inference, customer recording or paid API is involved.
