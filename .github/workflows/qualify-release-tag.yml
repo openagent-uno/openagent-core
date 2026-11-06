@@ -6,6 +6,10 @@ on:
         description: Existing immutable Core beta tag to qualify
         required: true
         type: string
+      build_only:
+        description: Build and qualify a candidate without native tests or publication
+        default: false
+        type: boolean
       macos_runner:
         description: Hosted macOS pool for native permission qualification
         type: choice
@@ -19,6 +23,7 @@ permissions:
   contents: read
 jobs:
   native:
+    if: ${{ !inputs.build_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -51,6 +56,7 @@ jobs:
           python -m pip install --no-deps .
           python -m unittest discover -s tests/public -p test_private_paths.py -v
   wheels:
+    if: ${{ always() && (needs.native.result == 'success' || inputs.build_only) }}
     needs: native
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -87,7 +93,7 @@ jobs:
           retention-days: 5
   publish:
     needs: wheels
-    if: inputs.publish && github.repository == 'openagent-uno/openagent-core'
+    if: inputs.publish && !inputs.build_only && github.repository == 'openagent-uno/openagent-core'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
