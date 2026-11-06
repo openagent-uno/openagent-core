@@ -260,6 +260,23 @@ class RealTransportCrashTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("t-crash", result.content)
         self.assertGreater(self.server.faults.posts, posts_before + 1)
 
+    async def test_transport_lost_during_the_reconnect_handshake_does_not_loop(self):
+        # The automatic reconnect's own initialize POST fails as well, so the
+        # new transport dies during its handshake. The supervisor must leave
+        # that cancelled scope instead of being woken by it at every await
+        # (found in review with an injected fault: 130 reconnects in 2 s),
+        # and a later call must still get a working session.
+        from datetime import timedelta
+        self._toolkit().session._session_read_timeout_seconds = timedelta(seconds=1)
+        self.server.faults.fail_posts = 2  # the ping's POST, then the reconnect's initialize
+        await self._call("thread_brief", thread_id="t-1")  # may fail: it met both faults
+        await asyncio.sleep(1.5)
+        names = [e for e, _ in self.events]
+        self.assertEqual(names.count("mcp.session_transport_lost"), 1, names)
+        self.assertLessEqual(names.count("mcp.session_reconnect_failed"), 2, names)
+        result = await self._call("thread_brief", thread_id="t-2")
+        self.assertFalse(self._failed(result), result.content)
+
     async def test_reconnect_skips_are_logged(self):
         toolkit = self._toolkit()
         sup = next(s for s in self.pool._toolkit_supervisors if s.toolkit is toolkit)

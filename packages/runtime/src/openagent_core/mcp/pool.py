@@ -1280,8 +1280,10 @@ class MCPPool:
                 except asyncio.CancelledError as exc:
                     if not _own_transport_cancel(exc):
                         raise
-                    # ``MCPTools.__aexit__`` stopped at the session; the
-                    # transport context (the cancelled scope) is still open.
+                    # The dead transport's scope re-delivered its cancellation
+                    # while the session closed. ``MCPTools.__aexit__`` still
+                    # released the transport; a toolkit that stops at the
+                    # session leaves that context (the cancelled scope) open.
                     await _close_transport_context()
                 except BaseException:  # noqa: BLE001 — a dead transport may fail to close
                     # ``MCPTools.__aexit__`` skips its transport context when
@@ -1339,13 +1341,16 @@ class MCPPool:
                     except asyncio.CancelledError as e:
                         if not _own_transport_cancel(e):
                             raise
-                        # The new transport died during its handshake.
+                        # The new transport died during its handshake (one
+                        # failed initialize POST is enough now that
+                        # ``MCPTools.initialize`` re-raises cancellation).
+                        # ``MCPTools.__aenter__`` already unwound both contexts
+                        # on this task, so the supervisor has left the
+                        # cancelled scope and will not be woken again by it.
                         elog("mcp.session_reconnect_failed", level="warning",
                              name=spec.name, error="transport lost during the handshake",
                              reason="transport_lost" if lost else "requested")
                         await _close(stack)
-                        await _close_transport_context()
-                        _forget_session(toolkit)
                         stack = None
                         _resolve_pending(False)
                         continue
