@@ -55,6 +55,7 @@ jobs:
           PY_VERIFY
           python -m pip install --no-deps .
           python -m unittest discover -s tests/public -p test_private_paths.py -v
+          python -m unittest discover -s tests/public -p test_process_lifecycle_compatibility.py -v
   wheels:
     if: ${{ always() && (needs.native.result == 'success' || inputs.build_only) }}
     needs: native
