@@ -361,6 +361,9 @@ class CapabilityCatalog:
         registration, _, _ = await self._current_binding(origin_tool_ref, context)
         discover = getattr(registration.source, "discover_app", registration.source.discover)
         definitions = tuple(await discover(context))
+        resolve = getattr(registration.source, "resolve_app_tool_name", None)
+        if callable(resolve):
+            name = await resolve(name, context)
         if not self._available(registration, context):
             raise CapabilityUnavailable("The originating source is unavailable")
         matches = [definition for definition in definitions if definition.name == name]
@@ -426,6 +429,59 @@ class CapabilityCatalog:
                 except (ValueError, UnicodeError) as exc:
                     raise ValueError("MCP UI resource blob must contain UTF-8 HTML") from exc
         return result
+
+    async def stream_tool(self, tool_ref: str, options: Mapping[str, Any], context: ExecutionContext):
+        """Optional ephemeral media from one exact authorized capability.
+
+        Hosts supply the source and transport. Core has no codec, client,
+        desktop, identity, user count or networking dependency. Every published
+        packet rechecks current authorization; streams are never persisted as
+        reusable grants and never move to a replacement executor.
+        """
+        import json
+        binding = self._refs.get(tool_ref)
+        if binding is None:
+            raise CapabilityUnavailable("Unknown or revoked stream reference")
+        registration, definition = binding
+        resource = ResourceRef("tool", context.tenant_id, registration.source_id + "/" + definition.name)
+        if not isinstance(options, Mapping) or len(json.dumps(dict(options), allow_nan=False).encode()) > 65536:
+            raise ValueError("Invalid stream options")
+        if not self._available(registration, context):
+            raise CapabilityUnavailable("Stream destination unavailable")
+        await require_authorized(self.authorizer, context, "tool.call", resource, audience=context.audience)
+        discover = getattr(registration.source, "discover_app", registration.source.discover)
+        async def definitions():
+            return tuple(replace(item, effects=item.effects & (
+                registration.trusted_effects.get(item.name, frozenset())
+                if isinstance(registration.trusted_effects, Mapping) else registration.trusted_effects))
+                for item in await discover(context))
+        current = await definitions()
+        if not any(item == definition for item in current):
+            raise CapabilityUnavailable("Stream capability changed")
+        if not tool_visible(definition.metadata, "app"):
+            raise PermissionError("Stream is not visible to this surface")
+        if registration.result_provenance is not None or registration.invocation_provenance is not None:
+            raise CapabilityUnavailable("Protected source has no streaming privacy publisher")
+        stream = getattr(registration.executor, "stream_tool", None)
+        if not callable(stream):
+            raise CapabilityUnavailable("Source has no live media transport")
+        iterator = stream(definition.name, dict(options), context)
+        try:
+            async for packet in iterator:
+                await require_authorized(self.authorizer, context, "tool.publish", resource, audience=context.audience)
+                if not self._available(registration, context):
+                    raise CapabilityUnavailable("Stream destination revoked")
+                current = await definitions()
+                if definition not in current:
+                    raise CapabilityUnavailable("Stream capability changed")
+                if not isinstance(packet, dict) or len(json.dumps(packet, allow_nan=False).encode()) > 2 * 1024 * 1024:
+                    raise ValueError("Stream packet exceeds its bound")
+                yield packet
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if callable(close):
+                await close()
+
 
     async def call_tool(self, tool_ref: str, arguments: Mapping[str, Any], context: ExecutionContext, *, call_id: str | None = None, surface: str = "model") -> Any:
         if surface not in {"model", "app"}:

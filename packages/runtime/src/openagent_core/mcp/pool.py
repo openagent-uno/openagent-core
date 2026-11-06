@@ -560,6 +560,7 @@ class MCPPool:
         self.specs: list[_ServerSpec] = specs
         self._discovery_presentation = DiscoveryPresentation()
         self._capability_binding = None
+        self._media_executors: dict[str, Any] = {}
         # Bumped by reload()/close_all(): a wedged-toolkit replacement built
         # across one of them must not publish into the new (or closed) pool.
         self._lifecycle_generation = 0
@@ -622,6 +623,24 @@ class MCPPool:
         # may change ``self._tool_counts``. The render is a 1-2ms walk
         # that adds up across every prompt construction.
         self._catalog_summary_cache: str | None = None
+
+    def register_media_executor(self, server_name: str, executor: Any) -> None:
+        """Attach optional media to one named source before catalog binding.
+
+        The host owns encoder choice and authorization. Replacing an executor
+        revokes existing tool references; it never redirects a running stream.
+        Executors expose ``metadata(tool_name)`` and ``stream_tool``.
+        """
+        if not server_name or not callable(getattr(executor, "stream_tool", None)) or not callable(getattr(executor, "metadata", None)):
+            raise ValueError("An explicit media executor contract is required")
+        self._media_executors[server_name] = executor
+        if self._capability_binding is not None:
+            self._capability_binding.sync()
+
+
+    def media_executor(self, server_name: str):
+        return self._media_executors.get(server_name)
+
 
     def bind_capability_catalog(self, catalog, *, trusted_modules=(), target_label="Agent workspace",
                                 user_sources=frozenset(), graph_generation=None, source_wrapper=None):

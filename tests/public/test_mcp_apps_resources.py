@@ -37,6 +37,30 @@ class McpAppResourceTests(unittest.IsolatedAsyncioTestCase):
         self.catalog.register('left',self.left,self.left,target_label='left')
         self.catalog.register('right',self.right,self.right,target_label='right')
         self.tool=next(d for d in await self.catalog.discover(self.context) if d.source_id=='left' and d.name=='show')
+    async def test_prefixed_mcp_keeps_one_public_identity_for_model_and_app(self):
+        remote=Tool(name='show',description='counter',inputSchema={'type':'object'},**{'_meta':{'ui':{'resourceUri':URI}}})
+        from mcp.types import CallToolResult, TextContent
+        session=SimpleNamespace(list_tools=AsyncMock(return_value=ListToolsResult(tools=[remote])),
+            call_tool=AsyncMock(return_value=CallToolResult(content=[TextContent(type='text',text='same-source')])))
+        toolkit=MCPTools(session=session,tool_name_prefix='counter')
+        await toolkit.build_tools()
+        from openagent_core.mcp.pool import MCPPool
+        pool=MCPPool([]);pool._toolkit_by_name={'counter':toolkit}
+        catalog=CapabilityCatalog(self.policy);pool.bind_capability_catalog(catalog)
+        tool=(await catalog.discover(self.context))[0]
+        self.assertEqual('counter_show',tool.name)
+        result=await catalog.call_tool(tool.tool_ref,{},self.context,surface='app')
+        self.assertEqual('same-source',result.content[0].text)
+        session.call_tool.assert_awaited_once_with('show',{})
+        session.call_tool.reset_mock()
+        await catalog.call_tool(tool.tool_ref,{},self.context)
+        session.call_tool.assert_awaited_once()
+        self.assertEqual('show',session.call_tool.await_args.args[0])
+
+        session.call_tool.reset_mock()
+        await catalog.call_source_tool(tool.tool_ref,'show',{},self.context)
+        session.call_tool.assert_awaited_once_with('show',{})
+
     async def test_metadata_and_exact_ui_resource(self):
         described=await self.catalog.describe_tool(self.tool.tool_ref,self.context)
         self.assertEqual(described.metadata,{'ui':{'resourceUri':URI}})

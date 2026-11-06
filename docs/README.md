@@ -118,3 +118,5 @@ as within one runtime; the Sessions module limits model-facing waits to 30 secon
 
 The beta45 candidate adds the dependency-free native permission API; its
 source and wheel workflows distinguish platform contracts from host acceptance.
+
+- [Optional remote capabilities, inventory and media](remote-capabilities.md)

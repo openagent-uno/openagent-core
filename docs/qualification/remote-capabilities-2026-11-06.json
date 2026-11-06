@@ -1,0 +1,12 @@
+{
+  "date": "2026-11-06",
+  "version": "1.1.0b46",
+  "scope": "generic optional remote capabilities, inventory, media, participants and engine composition",
+  "tests": {
+    "public_suite": 719,
+    "subtests": 97,
+    "skipped": 2
+  },
+  "compatibility": "existing public model/workflow tool names retained; MCP guest raw names resolve only within their exact originating source",
+  "deployment": false
+}

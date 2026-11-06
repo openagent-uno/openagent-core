@@ -123,3 +123,5 @@ and the [Tools usage guide](https://github.com/openagent-uno/openagent-tools/blo
 The SQLite adapter no longer eagerly loads MemoryDB or aiosqlite through
 migration/privacy helpers. Install the engine extra only when selecting the
 reasoning engine or its asynchronous memory API.
+
+- [Optional remote capabilities, inventory and media](remote-capabilities.md)

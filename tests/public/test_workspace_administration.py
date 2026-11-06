@@ -29,6 +29,18 @@ class WorkspaceAdministration(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.store.close();await self.db.close();self.tmp.cleanup()
 
+    async def test_participants_cover_history_outside_loaded_transcript_and_exact_session(self):
+        for number in range(105):
+            author = self.alice if number else PrincipalRef("host", "tenant", "early-participant", "user")
+            context = replace(self.ctx, author=author)
+            await self.store.accept(RunRequest(f"run-{number}", "parent", f"run-{number}", "hello"), context)
+        result = await self.inspection.participants(self.ctx, "parent")
+        self.assertEqual({"alice", "early-participant"}, {p["handle"] for p in result["participants"]})
+        self.assertFalse(result["truncated"])
+        self.policy.denied.add("parent")
+        with self.assertRaises(PermissionError): await self.inspection.participants(self.ctx, "parent")
+
+
     async def test_skill_lifecycle_preserves_body_provenance_and_user_ownership(self):
         result=await self.skills.write(self.management,"create","User Playbook",{"body":"Keep these exact instructions.","description":"Original"})
         self.assertTrue(result["ok"]);self.assertFalse(result["index_refreshed"])

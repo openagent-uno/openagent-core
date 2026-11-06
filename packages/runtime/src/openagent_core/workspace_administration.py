@@ -385,6 +385,41 @@ class SessionInspection:
         ordered.sort(key=lambda run: (float(run.get('created_at') or 0), ordinals.get(str(run.get('run_id') or ''), -1)))
         return list(reversed(ordered[-limit:]))
 
+    async def participants(self, context, session_id):
+        """Saved human authors across the session, independent of transcript pages.
+
+        Authorship is descriptive, never a grant or a membership assertion.
+        Only visible messages in the exact authorized tenant/session contribute.
+        """
+        session = await self.authorize(context, session_id)
+        if session is None:
+            raise LookupError("Session unavailable")
+        conn = await self.db._ensure_connected()
+        rows = await (await conn.execute(
+            "SELECT author_principal_id,author_handle_snapshot,author_display,"
+            "min(created_at_ms) AS first_seen,max(created_at_ms) AS last_seen "
+            "FROM session_messages WHERE tenant_id=? AND session_id=? "
+            "AND visibility='user_visible' AND author_kind='user' AND role='user' "
+            "GROUP BY author_principal_id,author_handle_snapshot,author_display "
+            "ORDER BY first_seen LIMIT 1025", (session["tenant_id"], session_id))).fetchall()
+        people = {}
+        for row in rows[:1024]:
+            principal = row["author_principal_id"] or row["author_handle_snapshot"]
+            if not principal:
+                continue
+            handle = row["author_handle_snapshot"]
+            if not handle:
+                try:
+                    identity = json.loads(principal)
+                    handle = identity["subject_id"] if isinstance(identity, dict) else identity[2]
+                except (ValueError, KeyError, IndexError, TypeError):
+                    handle = str(principal).removeprefix("user:")
+            people[principal] = {"id": principal, "handle": str(handle)[:256],
+                "display": str(row["author_display"] or handle)[:256]}
+        await self.authorize(context, session_id)
+        return {"participants": list(people.values()), "truncated": len(rows) > 1024}
+
+
     async def transcript(self,context,session_id,*,limit=20):
         await self.authorize(context,session_id)
         runs=await self._transcript_runs(context,session_id,max(1,min(int(limit),100)))

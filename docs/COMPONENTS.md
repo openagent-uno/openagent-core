@@ -119,3 +119,5 @@ Standalone composition is documented in the
 [product component guide](https://github.com/openagent-uno/openagent/blob/main/docs/COMPONENTS.md);
 tool execution is documented in the
 [Tools component guide](https://github.com/openagent-uno/openagent-tools/blob/main/docs/COMPONENTS.md).
+
+- [Optional remote capabilities, inventory and media](remote-capabilities.md)

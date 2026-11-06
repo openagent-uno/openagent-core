@@ -21,6 +21,8 @@ class PoolCapabilitySource:
         self.pool, self.source_id, self.toolkit = pool, source_id, toolkit
         self.toolkit_name = toolkit_name or source_id
         self.effects = effects or {}
+        media = getattr(pool, "media_executor", None)
+        self.media = media(self.toolkit_name) if callable(media) else None
         # Deferred in-process tools have not passed through a model's schema
         # preparation. Materialize their real argument schemas before issuing
         # references, so later invocation cannot silently change the contract.
@@ -31,7 +33,8 @@ class PoolCapabilitySource:
                 prepare()
 
     def _check(self) -> None:
-        if self.pool.toolkit_by_name(self.toolkit_name) is not self.toolkit:
+        if (self.pool.toolkit_by_name(self.toolkit_name) is not self.toolkit
+                or self.media is not (self.pool.media_executor(self.toolkit_name) if callable(getattr(self.pool, "media_executor", None)) else None)):
             raise CapabilityUnavailable("The registered MCP instance was removed or replaced")
         if getattr(self.toolkit, "capability_generation", NotImplemented) is None:
             raise CapabilityUnavailable("The current MCP connection has no complete catalog")
@@ -43,7 +46,24 @@ class PoolCapabilitySource:
             # Host-owned random identity overrides any remote value, never a
             # principal, credential or transport/session identifier.
             metadata["openagent/resource-generation"] = generation
+        if self.media is not None:
+            metadata.update(self.media.metadata(getattr(function,"mcp_name",None) or getattr(function,"name","")))
         return metadata
+
+
+
+    async def stream_tool(self, name, options, context):
+        self._check()
+        if self.media is None or not self.media.metadata(name):
+            raise CapabilityUnavailable("The exact source has no live media executor")
+        iterator = self.media.stream_tool(name, options, context)
+        try:
+            async for packet in iterator:
+                self._check()
+                yield packet
+        finally:
+            await iterator.aclose()
+
 
     async def inspect(self, context) -> tuple[ToolDefinition, ...]:
         # Schema-only host administration; the catalog authorizes this path
@@ -71,7 +91,7 @@ class PoolCapabilitySource:
         self._check()
         _require_server_allowed(self.toolkit_name)
         functions = {**_functions_dict(self.toolkit), **getattr(self.toolkit, "_app_functions", {})}
-        return tuple(ToolDefinition(getattr(fn, "mcp_name", None) or name, getattr(fn, "description", "") or "",
+        return tuple(ToolDefinition(name, getattr(fn, "description", "") or "",
             getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()), self._metadata(fn))
             for name, fn in functions.items() if not _tool_is_denied(self.toolkit_name, name)
             and tool_visible(getattr(fn, "mcp_metadata", None) or {}, "app"))
@@ -101,6 +121,17 @@ class PoolCapabilitySource:
                 if ephemeral is not None:
                     await self.toolkit.cleanup_run_session(ephemeral)
 
+    async def resolve_app_tool_name(self, name, context):
+        """Map MCP guest names within this exact source; never parse prefixes."""
+        from .servers.tool_search.adapters import _functions_dict
+        self._check()
+        functions = {**_functions_dict(self.toolkit), **getattr(self.toolkit, "_app_functions", {})}
+        matches = [key for key, function in functions.items()
+                   if (getattr(function, "mcp_name", None) or key) == name]
+        if len(matches) != 1:
+            raise CapabilityUnavailable("The exact app tool is unavailable or ambiguous")
+        return matches[0]
+
     async def call_app_tool(self, name: str, arguments: dict, context: ExecutionContext) -> Any:
         self._check()
         from .servers.tool_search.adapters import _functions_dict, _tool_is_denied, _require_server_allowed
@@ -108,7 +139,7 @@ class PoolCapabilitySource:
         _require_server_allowed(self.toolkit_name)
         functions = {**_functions_dict(self.toolkit), **getattr(self.toolkit, "_app_functions", {})}
         matches = [(key, fn) for key, fn in functions.items()
-            if (getattr(fn, "mcp_name", None) or key) == name]
+            if key == name]
         if len(matches) != 1:
             raise CapabilityUnavailable("The exact app tool is unavailable or ambiguous")
         key, function = matches[0]
@@ -135,10 +166,19 @@ class PoolCapabilitySource:
 
 
 class InteractiveCapabilitySource:
-    def __init__(self, origin: TurnExecutionOrigin, server_name: str, source_id: str) -> None:
+    def __init__(self, origin: TurnExecutionOrigin, server_name: str, source_id: str,
+                 *, interaction_context: ExecutionContext | None = None) -> None:
         self.origin, self.server_name, self.source_id = origin, server_name, source_id
+        self.interaction = ((interaction_context.ingress_id, interaction_context.initiator,
+                             interaction_context.authority, frozenset(interaction_context.audience),
+                             interaction_context.agent_id) if interaction_context else None)
 
     def _check(self, context: ExecutionContext) -> None:
+        if self.interaction is not None:
+            if context.deferred or self.interaction != (context.ingress_id, context.initiator, context.authority,
+                                                       frozenset(context.audience), context.agent_id):
+                raise CapabilityUnavailable("The interactive capability grant does not belong to this ingress")
+            return
         current = current_execution_origin()
         if (context.deferred or current is None or current != self.origin
                 or current.registry is not self.origin.registry):
@@ -176,6 +216,20 @@ class InteractiveCapabilitySource:
                                                     arguments, session_id=context.session_id,
                                                     execution_context=context, source_id=self.source_id)
 
+    async def stream_tool(self, name, options, context):
+        self._check(context)
+        stream = getattr(self.origin.registry, "stream_tool", None)
+        if not callable(stream):
+            raise CapabilityUnavailable("The exact client has no live media transport")
+        iterator = stream(self.origin, self.server_name, name, options,
+                          execution_context=context, source_id=self.source_id)
+        try:
+            async for packet in iterator:
+                self._check(context)
+                yield packet
+        finally:
+            await iterator.aclose()
+
     async def observe_published_result(self, name: str, arguments: dict, result: Any,
                                        context: ExecutionContext) -> None:
         self._check(context)
@@ -186,15 +240,24 @@ class InteractiveCapabilitySource:
 
 
 def register_interactive_capabilities(catalog: CapabilityCatalog, origin: TurnExecutionOrigin,
-                                     *, source_namespace: str) -> tuple[CapabilityLease, ...]:
+                                     *, source_namespace: str,
+                                     interaction_context: ExecutionContext | None = None) -> tuple[CapabilityLease, ...]:
     """Called by authenticated ingress, never from a client-supplied registration.
 
     The host puts the returned leases in the verified ExecutionContext. Its
     disconnect/revoke handler calls catalog.revoke for these source IDs; registry
     authorization is also rechecked on every discovery and invocation.
+
+    ``interaction_context`` optionally binds a destination to a host-authorized
+    ingress, principal, authority, agent and audience, independently of the
+    computer originating that interaction. Hosts choose zero, one or many such
+    destinations and their own sharing policy. Omitting it retains the original
+    exact-origin binding. This API neither discovers accounts nor grants access.
     """
     if not source_namespace or source_namespace.startswith(("client:", "server:")):
         raise ValueError("Provide a host-owned capability namespace")
+    if interaction_context is not None and (interaction_context.deferred or not interaction_context.ingress_id):
+        raise ValueError("Multiple device grants require an authenticated interactive ingress")
     leases = []
     for item in origin.registry.list_servers(origin):
         # The old transport registry's prefix is decoded here only; no model API
@@ -203,7 +266,7 @@ def register_interactive_capabilities(catalog: CapabilityCatalog, origin: TurnEx
         source_id = f"{source_namespace}/{name}"
         lease = CapabilityLease(source_id, origin.client_instance_id,
                                 f"{origin.generation}:{origin.auth_epoch}")
-        adapter = InteractiveCapabilitySource(origin, name, source_id)
+        adapter = InteractiveCapabilitySource(origin, name, source_id, interaction_context=interaction_context)
         catalog.register(source_id, adapter, adapter, target_label=origin.device_label, lease=lease)
         leases.append(lease)
     return tuple(leases)
@@ -245,7 +308,7 @@ class PoolCatalogBinding:
         current = {name: toolkit for name, toolkit in self.pool._toolkit_by_name.items()
                    if name != "tool-search"}
         for name, source in tuple(self.sources.items()):
-            if current.get(name) is not source.toolkit:
+            if (current.get(name) is not source.toolkit or source.media is not self.pool.media_executor(name)):
                 self.catalog.revoke_registration(name, self.graph_generation)
                 del self.sources[name]
         specs = {spec.name: spec for spec in self.pool.specs}

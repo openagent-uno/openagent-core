@@ -33,9 +33,13 @@ def __getattr__(name: str):
 
 
 class AgentExecutor:
-    def __init__(self, agent: Any, *, owns_agent: bool = True) -> None:
+    def __init__(self, agent: Any, *, owns_agent: bool = True, request_scope=None,
+                 command_handler=None, require_final_answer: bool = False) -> None:
         self.agent = agent
         self.owns_agent = owns_agent
+        self.request_scope = request_scope
+        self.command_handler = command_handler
+        self.require_final_answer = require_final_answer
 
     async def start(self, runtime: Runtime) -> None:
         from .core.hooks import set_hooks, set_quick_commands
@@ -80,6 +84,24 @@ class AgentExecutor:
         return result
 
     async def execute(self, request: RunRequest, context: ExecutionContext, runtime: Runtime) -> str:
+        if self.command_handler is not None:
+            handled = await self.command_handler(request, context, runtime)
+            if handled is not None:
+                return handled
+        if self.request_scope is not None:
+            async with self.request_scope(request, context, runtime) as resolved:
+                return await self._execute_agent(resolved, context, runtime)
+        return await self._execute_agent(request, context, runtime)
+
+
+    async def _execute_agent(self, request, context, runtime):
+        result = await self._execute(request, context, runtime)
+        if self.require_final_answer and not result.strip():
+            raise RuntimeError("The agent did not produce a final answer.")
+        return result
+
+
+    async def _execute(self, request: RunRequest, context: ExecutionContext, runtime: Runtime) -> str:
         from .core.agent import clear_run_failure, take_run_failure
         clear_run_failure()
         model = None
