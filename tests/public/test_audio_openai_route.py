@@ -15,6 +15,7 @@ class OpenAITranscriptionRoute(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.requests = []
         self.status, self.body = 200, json.dumps({"text": " the current question "}).encode()
+        self.encoding = None
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -26,6 +27,8 @@ class OpenAITranscriptionRoute(unittest.IsolatedAsyncioTestCase):
                 owner.requests.append((self.path, self.headers.get("Authorization"), body))
                 self.send_response(owner.status)
                 self.send_header("Content-Length", str(len(owner.body)))
+                if owner.encoding:
+                    self.send_header("Content-Encoding", owner.encoding)
                 self.send_header("Location", "/unexpected-redirect")
                 self.end_headers()
                 self.wfile.write(owner.body)
@@ -89,7 +92,13 @@ class OpenAITranscriptionRoute(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"\r\nit\r\n", self.requests[0][2])
 
     async def test_input_bound_rejects_before_provider_io(self):
-        self.path.write_bytes(b"")
+        for data in (b"", b"x" * ((16 << 20) + 1)):
+            self.path.write_bytes(data)
+            with self.assertRaises(ValueError):
+                await self.invoke()
+        self.assertEqual([], self.requests)
+
+    async def test_compressed_transcripts_are_rejected_before_decoding(self):
+        self.encoding = "gzip"
         with self.assertRaises(ValueError):
             await self.invoke()
-        self.assertEqual([], self.requests)

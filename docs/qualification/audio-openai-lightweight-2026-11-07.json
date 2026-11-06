@@ -3,7 +3,7 @@
   "core": "1.1.0b52",
   "scope": "explicit OpenAI transcription route in isolated audio worker",
   "tests": {
-    "focused": "9 passed, 10 subtests",
+    "focused": "10 passed, 10 subtests",
     "command": "pytest tests/public/test_audio_openai_route.py tests/public/test_audio_worker_http.py tests/public/test_audio_worker_protocol.py",
     "provider": "deterministic local authenticated HTTP; no external model"
   },

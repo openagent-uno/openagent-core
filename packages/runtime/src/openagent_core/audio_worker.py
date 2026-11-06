@@ -17,7 +17,9 @@ async def transcribe_openai(path, row, *, language=None):
     import httpx
 
     source = Path(path)
-    if not source.is_file() or not 0 < source.stat().st_size <= 16 << 20:
+    with source.open("rb") as audio:
+        content = audio.read((16 << 20) + 1)
+    if not 0 < len(content) <= 16 << 20:
         raise ValueError("Audio input exceeds its bound")
     metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
     fields = {"model": row["model"], "response_format": "json"}
@@ -28,17 +30,18 @@ async def transcribe_openai(path, row, *, language=None):
     url = row["base_url"].rstrip("/") + "/audio/transcriptions"
     async with httpx.AsyncClient(trust_env=False, follow_redirects=False,
                                 timeout=httpx.Timeout(60, connect=5)) as client:
-        with source.open("rb") as audio:
-            async with client.stream("POST", url,
-                    headers={"Authorization": "Bearer " + row["api_key"]},
-                    data=fields, files={"file": (source.name, audio, "application/octet-stream")}) as response:
-                if response.status_code != 200:
-                    raise RuntimeError("Audio provider unavailable")
-                body = bytearray()
-                async for chunk in response.aiter_bytes():
-                    body.extend(chunk)
-                    if len(body) > 256 << 10:
-                        raise ValueError("Audio transcript exceeds its bound")
+        async with client.stream("POST", url,
+                    headers={"Authorization": "Bearer " + row["api_key"], "Accept-Encoding": "identity"},
+                    data=fields, files={"file": (source.name, content, "application/octet-stream")}) as response:
+            if response.status_code != 200:
+                raise RuntimeError("Audio provider unavailable")
+            if response.headers.get("Content-Encoding", "identity").lower() != "identity":
+                raise ValueError("Unsupported transcript encoding")
+            body = bytearray()
+            async for chunk in response.aiter_raw(65536):
+                body.extend(chunk)
+                if len(body) > 256 << 10:
+                    raise ValueError("Audio transcript exceeds its bound")
     result = json.loads(body)
     text = result.get("text") if isinstance(result, dict) else None
     if not isinstance(text, str):
