@@ -6,6 +6,11 @@ on:
         description: Existing immutable Core beta tag to qualify
         required: true
         type: string
+      macos_runner:
+        description: Hosted macOS pool for native permission qualification
+        type: choice
+        default: macos-latest
+        options: [macos-latest, macos-15-intel, macos-15]
       publish:
         description: Publish only after all native and installed engine checks pass
         default: false
@@ -17,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15-intel, windows-2025]
+        os: [ubuntu-24.04, "${{ inputs.macos_runner || 'macos-latest' }}", windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     defaults:
@@ -98,4 +103,4 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then exit 1; fi
-          gh release create "$RELEASE_TAG" release-wheels/* --verify-tag --prerelease --title "$RELEASE_TAG" --notes 'Exact tag qualified on Linux, Intel macOS and Windows, plus the complete public engine suite. See manifest.json for source and artifact digests.'
+          gh release create "$RELEASE_TAG" release-wheels/* --verify-tag --prerelease --title "$RELEASE_TAG" --notes 'Exact tag qualified on Linux, macOS and Windows, plus the complete public engine suite. See manifest.json for source and artifact digests.'
