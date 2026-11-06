@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-06",
+  "version": "1.1.0b43.post1",
+  "scope": "source contract qualification using synthetic stores",
+  "core_tests_passed": 698,
+  "core_subtests_passed": 97,
+  "targeted_maintenance_cancellation_and_outbox_tests_passed": 14,
+  "unchanged_polls_compared": 3,
+  "released_product_extra_full_corpus_checks": 3,
+  "candidate_extra_full_corpus_checks": 0,
+  "incomplete_history_remains_unready": true,
+  "durable_writes_index_without_foreground_search": true,
+  "deleted_index_rebuild_preserves_canonical_history": true,
+  "periodic_full_audit_retained": true,
+  "repeated_connection_open_cancellation_drains_worker": true,
+  "initial_storage_failure_retries_without_private_error_text": true,
+  "live_provider_and_deployment_qualification": "separate"
+}
