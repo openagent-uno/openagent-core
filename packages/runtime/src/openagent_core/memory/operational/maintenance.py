@@ -88,7 +88,7 @@ async def maintain_operational_storage(
     shared = await db._ensure_connected()
     raw_path = str(db.db_path)
     owns_connection = raw_path != ':memory:' and not raw_path.startswith('file::memory:')
-    conn = shared
+    conn = None if owns_connection else shared
     backoff = 1.0
     last_status = None
     stamp = None
@@ -102,14 +102,14 @@ async def maintain_operational_storage(
             await result
 
     try:
-        if owns_connection:
-            conn = aiosqlite.connect(raw_path, timeout=sqlite_busy_timeout_s())
-            await _drain(conn)
-            conn.row_factory = aiosqlite.Row
-            for pragma in (f'busy_timeout={sqlite_busy_timeout_ms()}', 'journal_mode=WAL', 'synchronous=FULL', 'foreign_keys=ON'):
-                await conn.execute('PRAGMA ' + pragma)
         while True:
             try:
+                if conn is None:
+                    conn = aiosqlite.connect(raw_path, timeout=sqlite_busy_timeout_s())
+                    await _drain(conn)
+                    conn.row_factory = aiosqlite.Row
+                    for pragma in (f'busy_timeout={sqlite_busy_timeout_ms()}', 'journal_mode=WAL', 'synchronous=FULL', 'foreign_keys=ON'):
+                        await conn.execute('PRAGMA ' + pragma)
                 if (last_status is not None
                         and last_status.search.get('ready') and time.monotonic() < audit_at
                         and _index_stamp(index_path) == stamp
@@ -159,10 +159,17 @@ async def maintain_operational_storage(
             except asyncio.CancelledError:
                 raise
             except Exception:
-                try:
-                    await conn.rollback()
-                except Exception:
-                    pass
+                if conn is not None:
+                    try:
+                        await conn.rollback()
+                    except Exception:
+                        pass
+                    if owns_connection:
+                        try:
+                            await _drain(conn.close())
+                        except Exception:
+                            pass
+                        conn = None
                 last_status = None
                 await publish(OperationalMaintenanceStatus(False, {
                     'ready': False, 'state': 'degraded', 'generation': 'unavailable',
@@ -174,5 +181,5 @@ async def maintain_operational_storage(
                 await asyncio.sleep(backoff)
                 backoff = min(30.0, backoff * 2)
     finally:
-        if owns_connection and conn is not shared:
+        if owns_connection and conn is not None:
             await _drain(conn.close())

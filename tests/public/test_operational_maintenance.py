@@ -152,6 +152,23 @@ class OperationalMaintenanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(worker.is_alive())
         self.assertIsNone(conn._connection)
 
+    async def test_initial_connection_failure_is_redacted_and_recovered(self):
+        import aiosqlite
+        original = aiosqlite.connect
+        calls = 0
+        def transient(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise OSError('PRIVATE_CONNECT_SENTINEL')
+            return original(*args, **kwargs)
+        with patch.object(aiosqlite, 'connect', side_effect=transient), \
+                self.assertLogs(maintenance.logger, level='ERROR') as logs:
+            await self.start_worker()
+        self.assertTrue(any(update.failed for update in self.updates))
+        self.assertFalse(self.updates[-1].failed)
+        self.assertNotIn('PRIVATE_CONNECT_SENTINEL', '\n'.join(logs.output))
+
 
 if __name__ == '__main__':
     unittest.main()
