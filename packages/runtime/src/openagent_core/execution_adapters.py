@@ -16,7 +16,7 @@ class ToolInventoryContext:
             raise ValueError("Explicit bounded inventory contract required")
         if not isinstance(unavailable_errors, tuple) or any(not isinstance(error, type) or not issubclass(error, Exception) for error in unavailable_errors):
             raise ValueError("Unavailable inventory errors must be explicit Exception classes")
-        self.unavailable_errors = (TimeoutError, LookupError, ValueError, KeyError, TypeError) + unavailable_errors
+        self.unavailable_errors = (TimeoutError, LookupError) + unavailable_errors
         self.source_id, self.tool_name, self.key = source_id, tool_name, key
         self.normalize, self.instructions, self.items_key, self.limit, self.timeout = normalize, instructions, items_key, limit, timeout
         self.current = ContextVar("openagent_tool_inventory", default=None)
@@ -34,6 +34,13 @@ class ToolInventoryContext:
                 if len(matches) != 1:
                     raise LookupError("Inventory capability unavailable")
                 result = await runtime.capabilities.call_tool(matches[0].tool_ref, {}, context)
+        except PermissionError:
+            return {}
+        except self.unavailable_errors:
+            return self._unavailable()
+        # Malformed optional inventory is distinct from errors raised by its
+        # executor. Programming errors from discovery/dispatch must propagate.
+        try:
             if not isinstance(result, dict) or result.get("isError") or result.get("error"):
                 raise ValueError("Invalid inventory result")
             content = result.get("content")
@@ -50,9 +57,12 @@ class ToolInventoryContext:
                               "additional_count": max(0, len(values) - self.limit), "instructions": self.instructions}}
         except PermissionError:
             return {}
-        except self.unavailable_errors:
-            return {self.key: {"status": "unavailable", "instructions":
-                f"Current inventory is unavailable. Discover {self.tool_name} before claiming a destination is reachable. " + self.instructions}}
+        except (ValueError,KeyError,TypeError):
+            return self._unavailable()
+
+    def _unavailable(self):
+        return {self.key:{"status":"unavailable","instructions":
+            f"Current inventory is unavailable. Discover {self.tool_name} before claiming a destination is reachable. " + self.instructions}}
 
     @asynccontextmanager
     async def execution(self, runtime, context):

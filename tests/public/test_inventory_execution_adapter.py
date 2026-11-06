@@ -33,5 +33,5 @@ class InventoryAdapter(unittest.IsolatedAsyncioTestCase):
         adapter=ToolInventoryContext(**options,unavailable_errors=(OptionalTransportUnavailable,))
         async with adapter.execution(runtime,ctx):self.assertEqual('unavailable',adapter.prompt_context(ctx)['optional']['status'])
         self.assertEqual({},adapter.prompt_context(ctx))
-        failure=asyncio.CancelledError()
-        with self.assertRaises(asyncio.CancelledError):await adapter.prepare(runtime,ctx)
+        for failure in [asyncio.CancelledError(), TypeError("programming failure")]:
+            with self.assertRaises(type(failure)):await adapter.prepare(runtime,ctx)
