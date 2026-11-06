@@ -37,3 +37,20 @@ cross-agent/authority isolation and ordinary `Runtime.spawn` ancestry. Published
 Core29 reproduces the three original gaps; source tests verify the correction.
 This evidence does not assert loss of an embedding host's data and does not
 qualify a new published wheel, installer, live provider or production migration.
+
+
+## Optional summary latency
+
+`SessionSummaryManager.acreate_session_summary` has a ten-second default
+`async_timeout_seconds` budget for the provider call, including retries. On expiry
+it cancels and awaits the call and preserves the previous summary. It starts no
+background task that could mutate a persisted turn later. Hosts can configure a
+positive finite budget on their manager, or explicitly set `None` to opt out.
+Caller cancellation propagates. Synchronous summary generation continues to use
+the model's own transport timeout. This optional maintenance budget does not
+truncate the user's model response or its tool execution.
+
+Runtime adapter failures retain the provider error category even when the
+runtime has converted the exception into a terminal event. Only stable error
+codes and constant public messages should be displayed to end users; provider
+diagnostics remain private.

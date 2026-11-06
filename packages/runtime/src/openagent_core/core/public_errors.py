@@ -138,7 +138,7 @@ def classify_run_error(error: BaseException | None) -> RunErrorClass:
 
         diagnostic = ""
         if isinstance(error, BaseException):
-            diagnostic = str(error).lower()
+            diagnostic = f"{type(error).__name__}: {error}".lower()
 
         signal = _model_diagnostic_code(diagnostic)
         if signal is not None:
@@ -175,7 +175,7 @@ def _model_diagnostic_code(text: str) -> str | None:
         ("auth_expired", ("invalid_grant", "refresh token expired", "refresh_token expired", "token has expired", "token is expired", "token expired", "authentication expired", "authentication has expired", "credentials have expired", "credentials expired", "token was revoked")),
         ("provider_not_configured", ("provider_not_configured", "no ai account is configured", "no claude ai account", "no provider configured", "provider is not configured", "api key is required", "no api key", "api_key must be set", "missing api key", "missing api_key")),
         ("model_not_configured", ("no_enabled_model", "no models are enabled", "no model is currently enabled", "no models configured", "no model configured")),
-        ("quota_exhausted", ("insufficient_quota", "quota_exhausted", "quota exceeded", "quota has been exceeded", "exceeded your current quota", "credit balance is too low", "insufficient credits", "out of credits", "credits exhausted", "usage allowance", "usage limit reached", "usage limit exceeded", "spending limit reached", "billing hard limit", "billing_hard_limit")),
+        ("quota_exhausted", ("insufficient_quota", "exceeded_current_quota_error", "quota_exhausted", "quota exceeded", "quota has been exceeded", "exceeded your current quota", "credit balance is too low", "insufficient credits", "out of credits", "credits exhausted", "usage allowance", "usage limit reached", "usage limit exceeded", "spending limit reached", "billing hard limit", "billing_hard_limit")),
         ("context_length", ("context_length_exceeded", "maximum context length", "context window exceeded", "prompt is too long", "input is too long")),
         ("budget_exhausted", ("budget exceeded", "budget exhausted", "budget has been reached", "excluded by its budget")),
         ("auth", ("authentication_error", "modelauthenticationerror", "invalid_api_key", "invalid api key", "incorrect api key", "invalid bearer token", "unauthorized", "authentication is invalid")),
@@ -186,3 +186,15 @@ def _model_diagnostic_code(text: str) -> str | None:
         if any(marker in text for marker in markers):
             return code
     return None
+
+
+def run_error_from_runtime(content: object, error_type: object = None) -> RunTurnError:
+    """Reconstruct a terminal runtime failure without losing its classification.
+
+    Runtime events have already caught the exception. Keep the diagnostic local
+    and classify its type as well as its content before crossing the adapter.
+    Only allowlisted codes and constant public messages reach untrusted clients.
+    """
+    diagnostic = str(content or "Runtime run failed.")
+    signal = RuntimeError(f"{error_type or ''}: {diagnostic}")
+    return RunTurnError(diagnostic, code=classify_run_error(signal).code)

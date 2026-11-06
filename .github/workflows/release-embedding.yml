@@ -12,7 +12,7 @@ jobs:
   wheels:
     needs: platform-contracts
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -42,6 +42,15 @@ jobs:
           PY_VERIFY
           python -m pip install --no-index --no-deps --find-links "$RUNNER_TEMP/release-wheels" openagent-core
           python -m unittest discover -s tests/public -p test_private_paths.py -v
+      - name: Qualify the complete public engine suite on the remote runner
+        run: |
+          curl --fail --location --retry 3 https://github.com/openagent-uno/openagent/releases/download/v1.1.9-beta.10/install.sh -o "$RUNNER_TEMP/bootstrap.sh"
+          echo "4b765f994e365fc0cc9c7a4a645b8862b60fb3559e121462ac070672e55947b9  $RUNNER_TEMP/bootstrap.sh" | sha256sum --check
+          OPENAGENT_INSTALL_ROOT="$RUNNER_TEMP/qualified-base" sh "$RUNNER_TEMP/bootstrap.sh" --server --prefix "$RUNNER_TEMP/qualified-bin"
+          PYTHON="$RUNNER_TEMP/qualified-base/venv/bin/python"
+          "$PYTHON" -m pip install pytest pytest-asyncio pytest-subtests
+          "$PYTHON" -m pip install --no-deps --force-reinstall "$RUNNER_TEMP"/release-wheels/openagent_core-*.whl "$RUNNER_TEMP"/release-wheels/openagent_storage_sqlite-*.whl "$RUNNER_TEMP"/release-wheels/openagent_gateway-*.whl "$RUNNER_TEMP"/release-wheels/openagent_sdk-*.whl
+          "$PYTHON" -m pytest tests/public -q
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: embedding-${{ github.sha }}

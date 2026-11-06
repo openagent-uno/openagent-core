@@ -340,8 +340,10 @@ async def _arun_runtime_collect(
     status = getattr(run_output,"status",None)
     status = str(getattr(status,"value",status) or '').upper()
     if status in {'ERROR','FAILED'}:
-        from openagent_core.core.public_errors import RunTurnError
-        raise RunTurnError(str(getattr(run_output,'content',None) or 'Runtime run failed.'))
+        from openagent_core.core.public_errors import run_error_from_runtime
+        raise run_error_from_runtime(
+            getattr(run_output, 'content', None), getattr(run_output, 'error_type', None),
+        )
     if status in {'CANCELLED','CANCELED'}:
         raise asyncio.CancelledError(str(getattr(run_output,'content',None) or 'Runtime run was cancelled.'))
     content = str(getattr(run_output, "content", "") or "")
@@ -548,7 +550,7 @@ async def _arun_runtime_stream(
         # the terminal outcome and raise it after the runtime generator has
         # drained so the ordinary run_stream error/cancellation path owns the
         # final state.
-        terminal_error: str | None = None
+        terminal_error: Exception | None = None
         terminal_cancel_reason: str | None = None
         stream_iter = runtime.arun(prompt, **stream_kwargs)
         async for event in stream_iter:
@@ -586,9 +588,8 @@ async def _arun_runtime_stream(
                 if ev_sid is None or ev_sid == session_id:
                     content = getattr(event, "content", None)
                     error_type = getattr(event, "error_type", None)
-                    terminal_error = str(
-                        content or error_type or "Runtime stream ended with an error"
-                    )
+                    from openagent_core.core.public_errors import run_error_from_runtime
+                    terminal_error = run_error_from_runtime(content, error_type)
             elif isinstance(event, run_cancelled_event_types):
                 ev_sid = getattr(event, "session_id", None)
                 if ev_sid is None or ev_sid == session_id:
@@ -683,8 +684,7 @@ async def _arun_runtime_stream(
         if terminal_cancel_reason is not None:
             raise asyncio.CancelledError(terminal_cancel_reason)
         if terminal_error is not None:
-            from openagent_core.core.public_errors import RunTurnError
-            raise RunTurnError(terminal_error)
+            raise terminal_error
 
         # Silent-leader safety net: a turn that delegated but whose leader
         # emitted NO synthesis of its own would otherwise yield zero content

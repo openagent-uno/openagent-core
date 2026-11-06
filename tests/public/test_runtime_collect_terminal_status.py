@@ -36,3 +36,14 @@ async def test_cancel_status_propagates_without_response_or_retry(status):
 @pytest.mark.parametrize('status',[RunStatus.completed,'COMPLETED',None])
 async def test_success_and_legacy_missing_status_preserve_normal_response(status):
     assert (await collect(status,'MODEL ANSWER')).content=='MODEL ANSWER'
+
+
+@pytest.mark.asyncio
+async def test_collected_runtime_error_preserves_type_when_content_has_no_category():
+    from openagent_core.core.public_errors import classify_run_error
+    runtime = Runtime('ERROR', 'PRIVATE-DIAGNOSTIC')
+    runtime.output.error_type = 'ModelRateLimitError'
+    with pytest.raises(RunTurnError) as raised:
+        await _arun_runtime_collect(runtime, prompt='hello', session_id='s', user_id='u',
+            error_event='test.error', entry_runtime_id='model')
+    assert classify_run_error(raised.value).code == 'rate_limit'

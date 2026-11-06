@@ -1,3 +1,5 @@
+import asyncio
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from textwrap import dedent
@@ -80,7 +82,17 @@ class SessionSummaryManager:
     # Maximum number of messages to include in the summary conversation. None means no limit.
     conversation_limit: Optional[int] = None
 
+    # Optional maintenance must not hold an asynchronous user turn open through
+    # provider retries/cooldowns. None explicitly opts out of this deadline.
+    async_timeout_seconds: Optional[float] = 10.0
+
     def __post_init__(self) -> None:
+        if self.async_timeout_seconds is not None and (
+            isinstance(self.async_timeout_seconds, bool)
+            or not math.isfinite(self.async_timeout_seconds)
+            or self.async_timeout_seconds <= 0
+        ):
+            raise ValueError("async_timeout_seconds must be positive and finite, or None")
         if self.last_n_runs is not None and self.last_n_runs <= 0:
             raise ValueError(f"last_n_runs must be a positive integer, got {self.last_n_runs}")
         if self.conversation_limit is not None and self.conversation_limit <= 0:
@@ -265,7 +277,13 @@ class SessionSummaryManager:
         session: Union["AgentSession", "TeamSession"],
         run_metrics: Optional["RunMetrics"] = None,
     ) -> Optional[SessionSummary]:
-        """Creates a summary of the session"""
+        """Create an optional summary within the configured async deadline.
+
+        On expiry retain the last durable summary. Caller cancellation still
+        propagates; no detached task can overwrite state after the turn ends.
+        Synchronous generation retains the model's own request timeout.
+        """
+        self.summaries_updated = False
         log_debug("Creating session summary", center=True)
         self.model = get_model(self.model)
         if self.model is None:
@@ -280,7 +298,15 @@ class SessionSummaryManager:
 
         response_format = self.get_response_format(self.model)
 
-        summary_response = await self.model.aresponse(messages=messages, response_format=response_format)
+        deadline = asyncio.timeout(self.async_timeout_seconds)
+        try:
+            async with deadline:
+                summary_response = await self.model.aresponse(messages=messages, response_format=response_format)
+        except TimeoutError:
+            if not deadline.expired():
+                raise
+            log_warning("Session summary deadline exceeded; retaining the previous summary")
+            return None
 
         # Accumulate session summary model metrics
         if run_metrics is not None:
