@@ -1,0 +1,38 @@
+{
+  "format": 1,
+  "status": "published-public-artifacts-verified",
+  "tag": "v1.1.0-beta.53",
+  "source_commit": "6c6a8fff02e63d072f95eb9ce3092e151e9d675e",
+  "remote_release_run": "https://github.com/openagent-uno/openagent-core/actions/runs/42374331917",
+  "remote_jobs_passed": [
+    "platform-contracts / actual-os (ubuntu-24.04)",
+    "platform-contracts / actual-os (macos-15-intel)",
+    "platform-contracts / actual-os (windows-2025)",
+    "wheels",
+    "publish"
+  ],
+  "public_manifest_sha256": "6f2c22fd7de22943e0df2c93068aa057f110122f3919585047a99770ae87a23b",
+  "anonymous_wheels_verified": 23,
+  "wheel_bytes_verified": 2514058,
+  "public_installed_runtime_suite": {
+    "source_package_pythonpath_disabled": true,
+    "working_directory_outside_checkout": true,
+    "python_tests_passed": 792,
+    "python_tests_skipped": 2,
+    "subtests_passed": 128,
+    "failed": 0
+  },
+  "independent_versions": {
+    "core_sqlite_gateway_python_sdk": "1.1.0b53",
+    "sessions": "1.1.0b3",
+    "full_and_compatibility_profiles": "1.1.0b4",
+    "reference_example": "1.1.0b3"
+  },
+  "unchanged_optional_distribution_bytes_preserved": true,
+  "not_claimed": [
+    "An existing agent deployment or data migration",
+    "A live Telegram message or incident attribution",
+    "Generative-model continuation quality",
+    "Complete-task token or billed-cost savings"
+  ]
+}
