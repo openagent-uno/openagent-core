@@ -1,0 +1,59 @@
+{
+  "format": 1,
+  "status": "development-tests-passed-not-a-published-release",
+  "candidate": {
+    "core_sqlite_gateway_sdk": "1.1.0b53",
+    "sessions": "1.1.0b3",
+    "full_and_compatibility_modules": "1.1.0b4",
+    "generic_reference_example": "1.1.0b3",
+    "unchanged_distributions": "All fifteen unchanged module/capability-host wheels matched the public beta52 SHA256 bytes"
+  },
+  "development_qualification": {
+    "fresh_non_editable_wheel_environment": true,
+    "dependency_check": "passed",
+    "typescript_compiler": "Locked TypeScript 5.9.3; global 4.7 not selected",
+    "python_passed": 792,
+    "python_skipped": 2,
+    "subtests_passed": 128,
+    "python_failed": 0,
+    "node_sdk_unit_tests_passed": 1,
+    "isolated_audio_worker_and_real_http_gateway_fixtures": "passed",
+    "dirty_source_development_build": true,
+    "clean_tag_and_remote_platform_qualification": "not claimed by this receipt"
+  },
+  "previous_nine_failures": {
+    "seven_mcp_catalog_cases": "Old installed Tool Protocol beta1 lacked the metadata field already present in the declared beta2 dependency",
+    "typescript_case": "The gateway test selected an arbitrary global TypeScript 4.7 rather than the declared 5.9 toolchain",
+    "audio_case": "The -I subprocess loaded old installed Core beta24 rather than the current FD-isolated worker",
+    "resolution": "Use the entire verified candidate cohort in a fresh environment, prove isolated imports match it, install exact independent Tools contracts, and select the SDK lockfile"
+  },
+  "remote_semantic_evaluation": {
+    "embedding_model": "bge-m3:latest",
+    "inference_location": "Explicit operator-selected remote local-model server; no model weights loaded on the control machine",
+    "data": "Three synthetic canonical conversations aged four days and reopened with a new SQLite store",
+    "expected_top_one_matches": 3,
+    "actual_top_one_matches": 3,
+    "cosine_scores": [0.5758, 0.6766, 0.5683],
+    "exact_original_budget_readable": true,
+    "generative_llm_called": false,
+    "live_telegram": false
+  },
+  "discovery_payload_evaluation": {
+    "fixture_tools": 193,
+    "sources": 8,
+    "tokenizer": "cl100k_base",
+    "baseline": "Source inventory, targeted scoped discovery, describe selected tool",
+    "candidate": "Global targeted discovery, describe the same exact tool",
+    "baseline_result_tokens": 336,
+    "candidate_result_tokens": 179,
+    "saved_result_tokens": 157,
+    "selected_target_identical": true,
+    "scope": "One synthetic run, tool-result payloads only; not complete-task token/cost savings. Opaque references can change token counts across runs"
+  },
+  "not_claimed": [
+    "A published release, installer or deployed agent",
+    "Specific live Telegram incident attribution",
+    "Live provider message delivery or generative-model continuation quality",
+    "An 80 percent incremental cost reduction over already-deferred OpenAgent"
+  ]
+}

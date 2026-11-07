@@ -70,9 +70,11 @@ class GatewaySDK(unittest.IsolatedAsyncioTestCase):
 
     async def test_typescript_sdk_against_same_live_gateway(self):
         root=Path(__file__).resolve().parents[2]
-        node=shutil.which('node');tsc=shutil.which('tsc')
-        if not node or not tsc: self.skipTest('Node/TypeScript are not installed on this platform')
-        process=await asyncio.create_subprocess_exec(tsc,'-p',str(root/'sdk/typescript/tsconfig.json'),stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT)
+        node=shutil.which('node')
+        if not node: self.skipTest('Node is not installed on this platform')
+        compiler=root/'sdk/typescript/node_modules/typescript/bin/tsc'
+        self.assertTrue(compiler.is_file(), 'Install the locked SDK compiler: npm --prefix sdk/typescript ci')
+        process=await asyncio.create_subprocess_exec(node,str(compiler),'-p',str(root/'sdk/typescript/tsconfig.json'),stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT)
         output=await process.communicate();self.assertEqual(process.returncode,0,output)
         script=root/'sdk/typescript/test/live-gateway.mjs'
         process=await asyncio.create_subprocess_exec(node,str(script),self.url,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT)

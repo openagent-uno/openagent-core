@@ -10,12 +10,21 @@ import json
 import tempfile
 import threading
 import unittest
+import subprocess
+import sys
 
+from openagent_core import __version__
 from openagent_core.audio import VoiceService
 
 
 class InstalledAudioWorkerHTTP(unittest.IsolatedAsyncioTestCase):
     async def test_normal_worker_returns_one_clean_italian_transcription(self):
+        # -I deliberately ignores source PYTHONPATH. Never qualify a current
+        # parent against an older installed worker and call that a regression.
+        installed=subprocess.check_output([sys.executable,'-I','-c',
+            'import openagent_core; print(openagent_core.__version__)'],text=True).strip()
+        self.assertEqual(installed,__version__,
+            'The isolated audio worker must use the candidate Core wheel; run packaging/qualify.py')
         # Required dependency, not a skip: the release qualifier installs [audio].
         self.assertTrue(importlib.metadata.version('litellm'))
         requests=[]

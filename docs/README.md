@@ -2,6 +2,9 @@
 
 ## Architecture and use
 
+- [Beta53 candidate: complete isolated engine qualification and current-session recovery](releases/v1.1.0-beta.53.md)
+  ([qualification procedure](USAGE.md#reproducible-engine-qualification)).
+
 - [Unreleased compact cross-source BM25 discovery](tool-catalog.md#lexical-retrieval-unreleased-source-candidate)
   and [current-conversation history recovery](session-history.md#resuming-a-conversation-and-recovering-omitted-details).
 
@@ -31,7 +34,7 @@
 
 - [Interactive tool budgets and final delivery](interactive-tool-budgets.md)
 
-The current modular family is `1.1.0b52`: Core, SQLite, gateway and Python SDK
+The current source candidate is `1.1.0b53`: Core, SQLite, gateway and Python SDK
 pin the same Core wheel. The independent capability host is `1.0.0b3` and
 continues to consume tool protocol `1.0.0b2`. Core and Python SDK expose an
 optional `capabilities` extra requiring capability-host `1.0.0b3`; the base
