@@ -14,7 +14,7 @@ from openagent_core import DiscoveryPresentation
 from openagent_core.capabilities import CapabilityCatalog, FunctionSource, ToolDefinition
 from openagent_core.contracts import ExecutionContext, PrincipalRef
 from openagent_core.engine import FfmpegVideoFrameExtractor
-from openagent_core.mcp._runtime.function import ToolResult
+from openagent_core.mcp._runtime.function import Function, FunctionCall, ToolResult
 from openagent_core.mcp.pool import MCPPool
 from openagent_core.mcp.servers.tool_search.adapters import _model_visible_result, build_runtime_toolkit
 from openagent_core.models.providers.message import Message
@@ -274,3 +274,23 @@ class ToolSearchMediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(named_projected.content, projected.content)
         self.assertEqual([frame.content for frame in named_projected.images],
                          [frame.content for frame in projected.images])
+
+    async def test_error_with_an_image_preserves_diagnostic_media_and_sets_tool_status(self):
+        png = b"\x89PNG\r\n\x1a\nfixture"
+        encoded = base64.b64encode(png).decode("ascii")
+        envelope = {"content": [
+            {"type": "text", "text": "failed with diagnostic screenshot"},
+            {"type": "image", "data": encoded, "mimeType": "image/png"},
+        ], "isError": True}
+        result = await _model_visible_result(envelope)
+        self.assertEqual(result.mcp_result, envelope)
+        self.assertNotIn(encoded, result.content)
+
+        model = OpenAIChat(id="test", api_key="unused")
+        call = FunctionCall(function=Function(name="inspect", entrypoint=lambda: result), call_id="failure")
+        messages = []
+        frames = list(model.run_function_call(call, messages))
+        self.assertTrue(frames[-1].tool_executions[0].tool_call_error)
+        self.assertTrue(messages[0].tool_call_error)
+        self.assertIn("Error from MCP tool.", messages[0].content)
+        self.assertEqual(messages[0].images[0].content, png)

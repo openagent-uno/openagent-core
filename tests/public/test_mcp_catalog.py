@@ -344,10 +344,10 @@ class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
 from mcp.types import CallToolResult, TextContent, EmbeddedResource, TextResourceContents
 mcp = FastMCP("fixture")
 @mcp.tool()
-def envelope(value: str) -> CallToolResult:
+def envelope(value: str, fail: bool = False) -> CallToolResult:
     return CallToolResult(content=[TextContent(type="text", text=value),
         EmbeddedResource(type="resource", resource=TextResourceContents(uri="fixture://attachment", text="attached", mimeType="text/plain"))],
-        structuredContent={"value": value}, isError=False,
+        structuredContent={"value": value}, isError=fail,
         _meta={"proof": "retained", "child_session_id": "child-exact"})
 mcp.run(transport="stdio")
 ''')
@@ -366,6 +366,37 @@ mcp.run(transport="stdio")
                 self.assertEqual(result["_meta"], {"proof": "retained", "child_session_id": "child-exact"})
                 self.assertEqual(result["content"][1]["resource"]["text"], "attached")
                 self.assertFalse(result["isError"])
+
+                from openagent_core.core._run_state.agent import RunOutput, ToolCallErrorEvent
+                from openagent_core.core._runner.utils.events import create_tool_call_terminal_event
+                from openagent_core.mcp._runtime.function import FunctionCall
+                from openagent_core.models._tool_status import tool_exec_to_wire_json
+                from openagent_core.models.providers.openai.chat import OpenAIChat
+                from openagent_core.models.providers.response import ModelResponseEvent
+
+                toolkit = build_runtime_toolkit(pool=pool)
+                call = FunctionCall(
+                    function=toolkit.async_functions["tool_search_call_tool"],
+                    arguments={"tool_ref": definitions[0].tool_ref, "args": {"value": "diagnostic", "fail": True}},
+                    call_id="failure",
+                )
+                model = OpenAIChat(id="test", api_key="unused")
+                messages = []
+                frames = [frame async for frame in model.arun_function_calls([call], messages)]
+                completed, = [frame for frame in frames if frame.event == ModelResponseEvent.tool_call_completed.value]
+                tool = completed.tool_executions[0]
+                event = create_tool_call_terminal_event(RunOutput(run_id="stdio-run"), tool)
+                self.assertIsInstance(event, ToolCallErrorEvent)
+                status = json.loads(tool_exec_to_wire_json(event.tool, error_text=event.error))
+                self.assertTrue(status["tool_call_error"])
+                self.assertTrue(messages[0].tool_call_error)
+                model_message = model._format_message(messages[0])
+                self.assertTrue(model_message["content"].startswith("Error from MCP tool:"))
+                self.assertIn("diagnostic", model_message["content"])
+                returned = runtime.events[-1][3]["result"]
+                self.assertTrue(returned["isError"])
+                self.assertEqual(returned["structuredContent"], {"value": "diagnostic"})
+                self.assertEqual(returned["_meta"]["proof"], "retained")
         finally:
             await pool.close_all()
 
