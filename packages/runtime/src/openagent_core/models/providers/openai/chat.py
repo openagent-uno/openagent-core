@@ -1,3 +1,4 @@
+from base64 import b64encode
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from openagent_core.configuration import getenv
@@ -73,6 +74,7 @@ class OpenAIChat(Model):
     extra_body: Optional[Any] = None
     request_params: Optional[Dict[str, Any]] = None
     role_map: Optional[Dict[str, str]] = None
+    video_input_format: Optional[Literal["input_video"]] = None
 
     # Client parameters
     api_key: Optional[str] = None
@@ -298,6 +300,7 @@ class OpenAIChat(Model):
                 "extra_query": self.extra_query,
                 "extra_body": self.extra_body,
                 "service_tier": self.service_tier,
+                "video_input_format": self.video_input_format,
             }
         )
         cleaned_dict = {k: v for k, v in model_dict.items() if v is not None}
@@ -351,9 +354,6 @@ class OpenAIChat(Model):
             message_dict["content"] = ""
             message_dict["audio"] = {"id": message.audio_output.id}
 
-        if message.videos is not None and len(message.videos) > 0:
-            log_warning("Video input is currently unsupported.")
-
         # OpenAI expects the tool_calls to be None if empty, not an empty list
         if message.tool_calls is not None and len(message.tool_calls) == 0:
             message_dict["tool_calls"] = None
@@ -375,6 +375,27 @@ class OpenAIChat(Model):
         # Manually add the content field even if it is None
         if message.content is None:
             message_dict["content"] = ""
+
+        if message.videos:
+            if self.video_input_format == "input_video":
+                content = message_dict.get("content")
+                if isinstance(content, str):
+                    content = [{"type": "text", "text": content}] if content else []
+                elif content is None:
+                    content = []
+                else:
+                    content = list(content)
+                for video in message.videos:
+                    if not video.content:
+                        raise ValueError("This provider requires inline video bytes")
+                    content.append({
+                        "type": "input_video",
+                        "input_video": {"data": b64encode(video.content).decode("ascii")},
+                    })
+                message_dict["content"] = content
+            else:
+                log_warning("Video input is currently unsupported.")
+
         return message_dict
 
     def _format_all_messages(

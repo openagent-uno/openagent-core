@@ -31,6 +31,22 @@ state that limitation or request an appropriate capability, without claiming
 that it read the binary. A host must retain originals for the authorized tool's
 lifetime; this routing change does not extend a temporary file's lifetime.
 
+## Inline video for OpenAI-compatible providers
+
+A provider configuration may declare `video_input_format: input_video` when
+its OpenAI-compatible chat endpoint accepts `input_video.data` as base64.
+Declare `video` in the corresponding model's `input_modalities` so the
+dispatcher can select it. The formatter sends inline bytes with the original
+text and image parts and refuses video URLs and filesystem paths. Hosts own
+admission and supply resolved, bounded bytes. Verify the model, projector and
+decoder at the configured endpoint before advertising video to users. Existing
+provider configurations retain their original input behavior.
+
+`tests/public/test_openai_video_input.py` covers provider opt-in, mixed
+text/image/video, external-reference rejection, default behavior and an
+actual SDK request against a controlled endpoint. Live decoder and model
+acceptance is endpoint-specific.
+
 ## XLSX safety and bounds
 
 The local reader uses the Python standard library, with no workbook engine,
