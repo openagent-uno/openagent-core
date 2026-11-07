@@ -269,11 +269,8 @@ _TRANSIENT_TOKENS = (
     # enabled." e il turno si chiude. E' mancanza di capacita' quanto un 429,
     # e come quella va ritentata appena il catalogo torna.
     "no_enabled_model", "no model is currently enabled",
-    # Una sessione MCP morta (stream chiuso) e' un guasto del trasporto, non
-    # dell'evento: la sessione si sostituisce e il thread va ripreso. Il 6-nov-2026
-    # 12 delivery Replio sono uscite `permanent` per `ClosedResourceError`
-    # mentre i timeout dello stesso guasto uscivano `transient`: con il breaker
-    # acceso, 5 di fila avrebbero bloccato l'unico evento "Replio inbound thread".
+    # A dead MCP stream is a transport failure, not a permanent event error.
+    # Replace the session and let the normal delivery retry policy apply.
     "closedresourceerror", "brokenresourceerror", "endofstream",
     "connection closed", "failed in transport", "transport failure",
 )

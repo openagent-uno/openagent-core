@@ -246,14 +246,14 @@ def _env_float(name: str) -> float | None:
     except ValueError:
         logger.warning("Ignoring %s=%r: not a number", name, raw)
         return None
-    return value if value > 0 else None
+    return value if math.isfinite(value) and value > 0 else None
 
 
 def _mcp_read_timeout_seconds(name: str) -> int | None:
     """Per-server MCP read timeout override, in seconds (None = default).
 
     ``OPENAGENT_MCP_READ_TIMEOUT_<NAME>`` (name upper-cased, every other
-    character as ``_``; e.g. ``OPENAGENT_MCP_READ_TIMEOUT_REPLIO``) wins over
+    character as ``_``; e.g. ``OPENAGENT_MCP_READ_TIMEOUT_REMOTE``) wins over
     ``OPENAGENT_MCP_READ_TIMEOUT_SECONDS``. Without either, a URL server keeps
     the SDK parameters' 30 s (``MCPTools`` takes the smaller of its own
     ``timeout_seconds`` and the transport's ``timeout``) and a stdio server
@@ -1223,9 +1223,9 @@ class MCPPool:
                     return False
                 # Not a shutdown: the toolkit's transport (an anyio task group
                 # entered on THIS task) lost a worker and cancelled its host.
-                # 6-Nov-2026: read as a shutdown, this left esound's Replio
-                # session dead and every reconnect refused, silently, for 35
-                # minutes. Replace the session now, before a caller finds it.
+                # Reading this as a shutdown leaves a dead session bound and
+                # silently refuses later reconnects. Replace the session now,
+                # before a caller finds it.
                 control["transport_lost"] = True
                 stop_event.clear()
                 if control.get("pending") is None:
@@ -1929,8 +1929,8 @@ class MCPPool:
                     # ``MCPTools`` uses the smaller of ``timeout_seconds`` and
                     # this ``timeout`` as the session read timeout, so without
                     # an override every HTTP MCP call is cut at the params'
-                    # 30 s (not _MCP_TIMEOUT_SECONDS). Replio's thread_brief
-                    # ran p95 28.5 s on 6-Nov-2026 and 19 of 140 timed out.
+                    # 30 s (not _MCP_TIMEOUT_SECONDS), which may be too short
+                    # for a server with long-running read operations.
                     http_params.timeout = timedelta(seconds=read_timeout)
                     sse_read = http_params.sse_read_timeout or timedelta(seconds=300)
                     if sse_read.total_seconds() < read_timeout:

@@ -1,9 +1,6 @@
 """A crashed streamable-HTTP transport must be replaced, not silently abandoned.
 
-Incident 2026-11-06 (esound-openagent -> Replio, streamable HTTP, image v65 =
-openagent-core 1.1.0b24+ss4 with the 2026-10-28 reconnect fix): one HTTP
-request of the MCP transport failed (no request reached Replio for 30 s, then
-the httpx request raised). The SDK runs every POST as a child of the
+When an HTTP request of the MCP transport fails, the SDK runs that POST as a child of the
 transport's anyio task group, so the failure tore the group down and closed
 the session's streams. That task group was entered on the pool's supervisor
 task, so anyio also cancelled the supervisor while it waited for work. The
@@ -11,11 +8,10 @@ supervisor read that cancellation as a shutdown, marked itself ``closing``
 and exited without forgetting the dead session. From then on every call
 pinged the dead session (``ClosedResourceError``), asked for a reconnect, and
 ``reconnect_toolkit`` returned ``False`` at its ``closing`` check without a
-single event: 12 support deliveries failed over 35 minutes until the process
-was restarted.
+single event, requiring a process restart to recover.
 
 These tests drive the real ``MCPPool`` + ``MCPTools`` + MCP SDK against a real
-FastMCP streamable-HTTP server (stateless, like Replio), not fakes.
+stateless FastMCP streamable-HTTP server, not only fakes.
 """
 from __future__ import annotations
 
@@ -61,7 +57,7 @@ class _FaultInjector:
 
 
 class _Server:
-    """A FastMCP streamable-HTTP server (stateless, like Replio) on a fixed
+    """A stateless FastMCP streamable-HTTP server on a fixed
     port. ``stop()``/``start()`` simulate an outage; each start builds a new
     app because the SDK's session manager runs once per instance."""
 
@@ -75,11 +71,11 @@ class _Server:
     def _app():
         from mcp.server.fastmcp import FastMCP
 
-        mcp = FastMCP("replio-fake", stateless_http=True, streamable_http_path="/")
+        mcp = FastMCP("remote-fake", stateless_http=True, streamable_http_path="/")
 
         @mcp.tool()
-        async def thread_brief(thread_id: str) -> str:
-            return json.dumps({"thread": thread_id, "messages": []})
+        async def read_record(record_id: str) -> str:
+            return json.dumps({"record": record_id, "items": []})
 
         @mcp.tool()
         async def slow(seconds: float) -> str:
@@ -136,20 +132,20 @@ class RealTransportCrashTests(unittest.IsolatedAsyncioTestCase):
         self.server = _Server()
         await self.server.start()
         self.addAsyncCleanup(self.server.stop)
-        self.pool = MCPPool([_ServerSpec(name="replio", url=self.server.url)])
+        self.pool = MCPPool([_ServerSpec(name="remote", url=self.server.url)])
         await self.pool.connect_all()
         self.addAsyncCleanup(self.pool.close_all)
-        self.assertGreater(self.pool.server_summary().get("replio", 0), 0)
+        self.assertGreater(self.pool.server_summary().get("remote", 0), 0)
 
     def _toolkit(self):
-        toolkit = self.pool.toolkit_by_name("replio")
+        toolkit = self.pool.toolkit_by_name("remote")
         self.assertIsNotNone(toolkit)
         return toolkit
 
     async def _call(self, tool: str, **kwargs):
         # The capability catalog resolves the CURRENT toolkit by name on every
         # call, which is also how a replacement toolkit becomes visible.
-        fn = self._toolkit().functions[f"replio_{tool}"]
+        fn = self._toolkit().functions[f"remote_{tool}"]
         return await fn.entrypoint(**kwargs)
 
     @staticmethod
@@ -161,13 +157,12 @@ class RealTransportCrashTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.02)
 
     async def test_healthy_calls_work(self):
-        result = await self._call("thread_brief", thread_id="t-1")
+        result = await self._call("read_record", record_id="t-1")
         self.assertFalse(self._failed(result), result.content)
         self.assertIn("t-1", result.content)
 
     async def test_read_timeout_alone_does_not_kill_the_transport(self):
-        # 6-Nov evidence: three 30 s McpError timeouts on thread_brief were
-        # each followed by successful calls on the same session.
+        # A slow tool alone must not make a healthy session unrecoverable.
         toolkit = self._toolkit()
         session = toolkit.session
         saved = session._session_read_timeout_seconds
@@ -182,18 +177,18 @@ class RealTransportCrashTests(unittest.IsolatedAsyncioTestCase):
         meta = result.mcp_result["_meta"]["openagent/transport_error"]
         self.assertFalse(meta["session_dead"])
         await asyncio.sleep(2.0)  # the abandoned response arrives later
-        result = await self._call("thread_brief", thread_id="t-2")
+        result = await self._call("read_record", record_id="t-2")
         self.assertFalse(self._failed(result), result.content)
         self.assertIs(self._toolkit().session, session)
 
     async def test_crashed_transport_is_replaced_and_later_calls_work(self):
-        self.assertFalse(self._failed(await self._call("thread_brief", thread_id="t-0")))
+        self.assertFalse(self._failed(await self._call("read_record", record_id="t-0")))
         # The next POST is the pre-call ping: it gets a 502 and the SDK's POST
         # task raises inside the transport task group, which dies.
         self.server.faults.fail_posts = 1
-        await self._call("thread_brief", thread_id="t-1")  # may fail: it was in flight
+        await self._call("read_record", record_id="t-1")  # may fail: it was in flight
         await self._settle()
-        results = [await self._call("thread_brief", thread_id=f"t-{i}") for i in range(2, 5)]
+        results = [await self._call("read_record", record_id=f"t-{i}") for i in range(2, 5)]
         failures = [r.content for r in results if self._failed(r)]
         self.assertEqual(failures, [], "calls after a crashed transport must recover, "
                          f"events={[e for e, _ in self.events]}")
@@ -220,24 +215,24 @@ class RealTransportCrashTests(unittest.IsolatedAsyncioTestCase):
 
         faults.app = _selective
         try:
-            first = await self._call("thread_brief", thread_id="t-1")
+            first = await self._call("read_record", record_id="t-1")
         finally:
             faults.app = app
         self.assertTrue(self._failed(first))
         await self._settle()
-        second = await self._call("thread_brief", thread_id="t-2")
+        second = await self._call("read_record", record_id="t-2")
         self.assertFalse(self._failed(second), second.content)
         self.assertGreater(self.server.faults.posts, original_posts)
 
     async def test_server_outage_then_recovery(self):
         await self.server.stop()
-        down = await self._call("thread_brief", thread_id="t-1")
+        down = await self._call("read_record", record_id="t-1")
         self.assertTrue(self._failed(down))
         await self._settle()
         await self.server.start()
         results = []
         for i in range(3):
-            results.append(await self._call("thread_brief", thread_id=f"t-{i + 2}"))
+            results.append(await self._call("read_record", record_id=f"t-{i + 2}"))
             if not self._failed(results[-1]):
                 break
             await asyncio.sleep(0.3)
@@ -246,7 +241,7 @@ class RealTransportCrashTests(unittest.IsolatedAsyncioTestCase):
                          f"events={[e for e, _ in self.events]}")
 
     async def test_call_coinciding_with_the_crash_is_retried_once_on_a_new_session(self):
-        # 6-Nov 17:16:43: the pre-call ping waited its whole 30 s read timeout
+        # The pre-call ping can wait its whole read timeout
         # on a transport that had already died, then the call hit the closed
         # stream. The request had not been sent, so it may go out once on the
         # replacement session. A short read timeout keeps the test fast.
@@ -255,7 +250,7 @@ class RealTransportCrashTests(unittest.IsolatedAsyncioTestCase):
         toolkit.session._session_read_timeout_seconds = timedelta(seconds=1)
         self.server.faults.fail_posts = 1  # the ping's POST
         posts_before = self.server.faults.posts
-        result = await self._call("thread_brief", thread_id="t-crash")
+        result = await self._call("read_record", record_id="t-crash")
         self.assertFalse(self._failed(result), result.content)
         self.assertIn("t-crash", result.content)
         self.assertGreater(self.server.faults.posts, posts_before + 1)
@@ -269,12 +264,12 @@ class RealTransportCrashTests(unittest.IsolatedAsyncioTestCase):
         from datetime import timedelta
         self._toolkit().session._session_read_timeout_seconds = timedelta(seconds=1)
         self.server.faults.fail_posts = 2  # the ping's POST, then the reconnect's initialize
-        await self._call("thread_brief", thread_id="t-1")  # may fail: it met both faults
+        await self._call("read_record", record_id="t-1")  # may fail: it met both faults
         await asyncio.sleep(1.5)
         names = [e for e, _ in self.events]
         self.assertEqual(names.count("mcp.session_transport_lost"), 1, names)
         self.assertLessEqual(names.count("mcp.session_reconnect_failed"), 2, names)
-        result = await self._call("thread_brief", thread_id="t-2")
+        result = await self._call("read_record", record_id="t-2")
         self.assertFalse(self._failed(result), result.content)
 
     async def test_reconnect_skips_are_logged(self):
@@ -298,9 +293,9 @@ class SupervisorExitedTests(unittest.IsolatedAsyncioTestCase):
         saved_elog = pool_module.elog
         pool_module.elog = lambda event, **f: events.append((event, f))
         self.addCleanup(setattr, pool_module, "elog", saved_elog)
-        pool = MCPPool([_ServerSpec(name="replio", url="http://replio.invalid/mcp")])
+        pool = MCPPool([_ServerSpec(name="remote", url="http://remote.invalid/mcp")])
         toolkit = _ReconnectingToolkit()
-        self.assertIs(await pool._safe_enter(toolkit, _ServerSpec(name="replio")), toolkit)
+        self.assertIs(await pool._safe_enter(toolkit, _ServerSpec(name="remote")), toolkit)
         pool._connected = True
         self.addAsyncCleanup(pool.close_all)
         fresh = _ReconnectingToolkit()
@@ -321,7 +316,7 @@ class SupervisorExitedTests(unittest.IsolatedAsyncioTestCase):
         skipped = [f for e, f in events if e == "mcp.session_reconnect_skipped"]
         self.assertEqual(skipped[0]["why"], "supervisor_exited")
         self.assertTrue(skipped[0]["replace"])
-        self.assertIs(pool._toolkit_by_name["replio"], fresh)
+        self.assertIs(pool._toolkit_by_name["remote"], fresh)
         self.assertEqual([s.toolkit for s in pool._toolkit_supervisors], [fresh])
         # The retired toolkit is never reconnected again, and says why.
         self.assertFalse(await pool.reconnect_toolkit(toolkit, None))
@@ -339,9 +334,9 @@ class SupervisorWakeTests(unittest.IsolatedAsyncioTestCase):
         saved_elog = pool_module.elog
         pool_module.elog = lambda event, **f: self.events.append((event, f))
         self.addCleanup(setattr, pool_module, "elog", saved_elog)
-        pool = MCPPool([_ServerSpec(name="replio", url="http://replio.invalid/mcp")])
+        pool = MCPPool([_ServerSpec(name="remote", url="http://remote.invalid/mcp")])
         toolkit = _ReconnectingToolkit()
-        self.assertIs(await pool._safe_enter(toolkit, _ServerSpec(name="replio")), toolkit)
+        self.assertIs(await pool._safe_enter(toolkit, _ServerSpec(name="remote")), toolkit)
         pool._connected = True
         self.addAsyncCleanup(pool.close_all)
         return pool, toolkit, pool._toolkit_supervisors[0]
@@ -392,14 +387,24 @@ class ReadTimeoutConfigTests(unittest.TestCase):
         import os
         from unittest import mock
         with mock.patch.dict(os.environ, {"OPENAGENT_MCP_READ_TIMEOUT_SECONDS": "45",
-                                          "OPENAGENT_MCP_READ_TIMEOUT_REPLIO": "89.2"}):
-            self.assertEqual(pool_module._mcp_read_timeout_seconds("replio"), 90)
-            self.assertEqual(pool_module._mcp_read_timeout_seconds("clickup"), 45)
-        with mock.patch.dict(os.environ, {"OPENAGENT_MCP_READ_TIMEOUT_ESOUND_ADMIN": "120"}):
-            self.assertEqual(pool_module._mcp_read_timeout_seconds("esound-admin"), 120)
-        with mock.patch.dict(os.environ, {"OPENAGENT_MCP_READ_TIMEOUT_REPLIO": "nope"}, clear=False):
+                                          "OPENAGENT_MCP_READ_TIMEOUT_REMOTE": "89.2"}):
+            self.assertEqual(pool_module._mcp_read_timeout_seconds("remote"), 90)
+            self.assertEqual(pool_module._mcp_read_timeout_seconds("other"), 45)
+        with mock.patch.dict(os.environ, {"OPENAGENT_MCP_READ_TIMEOUT_HOST_A": "120"}):
+            self.assertEqual(pool_module._mcp_read_timeout_seconds("host-a"), 120)
+        with mock.patch.dict(os.environ, {"OPENAGENT_MCP_READ_TIMEOUT_REMOTE": "nope"}, clear=False):
             os.environ.pop("OPENAGENT_MCP_READ_TIMEOUT_SECONDS", None)
-            self.assertIsNone(pool_module._mcp_read_timeout_seconds("replio"))
+            self.assertIsNone(pool_module._mcp_read_timeout_seconds("remote"))
+
+    def test_non_finite_overrides_are_ignored(self):
+        import os
+        from unittest import mock
+        for value in ("inf", "-inf", "nan", "0", "-1"):
+            with self.subTest(value=value), mock.patch.dict(os.environ, {
+                "OPENAGENT_MCP_READ_TIMEOUT_REMOTE": value,
+                "OPENAGENT_MCP_READ_TIMEOUT_SECONDS": "45",
+            }):
+                self.assertEqual(pool_module._mcp_read_timeout_seconds("remote"), 45)
 
     def test_connect_phase_stays_bounded(self):
         import httpx
@@ -420,16 +425,16 @@ class RealReadTimeoutOverrideTests(unittest.IsolatedAsyncioTestCase):
         server = _Server()
         await server.start()
         self.addAsyncCleanup(server.stop)
-        with mock.patch.dict(os.environ, {"OPENAGENT_MCP_READ_TIMEOUT_REPLIO": "1"}):
-            pool = MCPPool([_ServerSpec(name="replio", url=server.url)])
+        with mock.patch.dict(os.environ, {"OPENAGENT_MCP_READ_TIMEOUT_REMOTE": "1"}):
+            pool = MCPPool([_ServerSpec(name="remote", url=server.url)])
             await pool.connect_all()
         self.addAsyncCleanup(pool.close_all)
-        toolkit = pool.toolkit_by_name("replio")
+        toolkit = pool.toolkit_by_name("remote")
         self.assertEqual(toolkit.session._session_read_timeout_seconds.total_seconds(), 1)
-        slow = await toolkit.functions["replio_slow"].entrypoint(seconds=2.5)
+        slow = await toolkit.functions["remote_slow"].entrypoint(seconds=2.5)
         self.assertIn("Timed out", slow.content)
         await asyncio.sleep(2.0)
-        ok = await toolkit.functions["replio_thread_brief"].entrypoint(thread_id="t")
+        ok = await toolkit.functions["remote_read_record"].entrypoint(record_id="t")
         self.assertFalse((ok.mcp_result or {}).get("isError"), ok.content)
 
 
@@ -437,8 +442,7 @@ class DeliveryFailureClassTests(unittest.TestCase):
     def test_transport_failures_are_transient(self):
         from openagent_core.core.event_dispatcher import _classify_delivery_failure
         for text in (
-            "support controller: replio replio_thread_brief failed in transport "
-            "(Error: ClosedResourceError); failing the delivery so the thread is re-fired",
+            "remote tool failed in transport (Error: ClosedResourceError)",
             "Error: BrokenResourceError",
             "McpError: Connection closed",
         ):
