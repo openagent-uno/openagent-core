@@ -48,7 +48,7 @@ outcome; check the run again before reporting that it stopped.""",
 @dataclass(frozen=True, slots=True)
 class SessionsDescriptor:
     id: str = "sessions"
-    version: str = "1.1.0b2"
+    version: str = "1.1.0b3"
     api_version: str = MODULE_API_VERSION
     requires_modules: frozenset[str] = frozenset()
     optional_integrations: frozenset[str] = frozenset({"search"})

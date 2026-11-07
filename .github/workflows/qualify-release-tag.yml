@@ -71,6 +71,9 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m pip install uv==0.11.14
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
       - run: python packaging/build.py --out "$RUNNER_TEMP/release-wheels"
       - name: Qualify installed public engine and exact source provenance
         run: |
@@ -80,13 +83,7 @@ jobs:
           assert not m['dirty_snapshot']
           assert m['repository_commit']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
           PY_VERIFY
-          curl --fail --location --retry 3 https://github.com/openagent-uno/openagent/releases/download/v1.1.9-beta.10/install.sh -o "$RUNNER_TEMP/bootstrap.sh"
-          echo "4b765f994e365fc0cc9c7a4a645b8862b60fb3559e121462ac070672e55947b9  $RUNNER_TEMP/bootstrap.sh" | sha256sum --check
-          OPENAGENT_INSTALL_ROOT="$RUNNER_TEMP/qualified-base" sh "$RUNNER_TEMP/bootstrap.sh" --server --prefix "$RUNNER_TEMP/qualified-bin"
-          PYTHON="$RUNNER_TEMP/qualified-base/venv/bin/python"
-          "$PYTHON" -m pip install pytest pytest-asyncio pytest-subtests
-          "$PYTHON" -m pip install --no-deps --force-reinstall "$RUNNER_TEMP"/release-wheels/openagent_core-*.whl "$RUNNER_TEMP"/release-wheels/openagent_storage_sqlite-*.whl "$RUNNER_TEMP"/release-wheels/openagent_gateway-*.whl "$RUNNER_TEMP"/release-wheels/openagent_sdk-*.whl
-          "$PYTHON" -m pytest tests/public -q
+          python packaging/qualify.py --wheels "$RUNNER_TEMP/release-wheels" --environment "$RUNNER_TEMP/qualified-engine"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: qualified-${{ inputs.release_tag }}

@@ -1,6 +1,34 @@
 # Using Core, the engine, gateway and SDK
 
 Read [components](COMPONENTS.md) and [agnostic architecture](AGNOSTICISM.md).
+
+## Reproducible engine qualification
+
+Use a clean checkout with Python 3.11+, Node/npm and `uv==0.11.14` available in
+the build toolchain. No standalone product or existing agent environment is
+needed. Output and environment directories must be new, task-owned directories:
+
+```sh
+python packaging/build.py --out /path/to/new-wheel-directory
+python packaging/qualify.py --wheels /path/to/new-wheel-directory --environment /path/to/new-environment
+```
+
+The runner checks candidate wheel hashes/metadata and exact source files before
+creating an isolated environment. It installs the entire candidate cohort,
+including independently versioned optional modules, and checksum-pinned public
+Tools contracts. It checks dependency consistency and the isolated Python import
+versions, installs the SDK lockfile, then runs Node SDK and Python public/prompt
+tests. `installed-environment.json`, `public-engine-tests.xml` and
+`engine-qualification.json` record the actual scope. A receipt is written only
+after all commands succeed. `--allow-dirty-source` is a development-only opt-in;
+it never records release qualification. Existing environments are never modified.
+
+Do not mix a source checkout with an older installed Core: audio workers use
+`python -I`, deliberately ignoring source `PYTHONPATH`. Likewise, do not replace
+the SDK compiler with a global `tsc`; run `npm --prefix sdk/typescript ci`.
+Version mismatches are preparation failures, not evidence of a current runtime
+regression. This gate performs no model inference or real messaging-provider IO.
+
 Python examples require **Python 3.11+**. Exact dependency versions come from the
 reviewed wheel manifest and each distribution's `pyproject.toml`, not a moving
 README version. A source candidate is not automatically a published release.

@@ -1,0 +1,8 @@
+# Only test/qualification dependencies; none become mandatory kernel imports.
+pytest>=8,<10
+pytest-asyncio>=0.24,<2
+pytest-subtests>=0.13,<1
+# Independent public Tools contracts, pinned to reviewed immutable wheel bytes.
+openagent-tool-protocol @ https://github.com/openagent-uno/openagent-tools/releases/download/v1.0.0-beta.6/openagent_tool_protocol-1.0.0b2-py3-none-any.whl#sha256=1e0cbdc1007ddcf96aae9538983727841228b40ebb50f481a915d2020115ea6c
+openagent-execution @ https://github.com/openagent-uno/openagent-tools/releases/download/v1.0.0-beta.6/openagent_execution-1.0.0b3-py3-none-any.whl#sha256=d0d2a5ab2c83d8f94944cd25226bab3af529256528bfc2704e19445b867d99ca
+openagent-shell @ https://github.com/openagent-uno/openagent-tools/releases/download/v1.0.0-beta.6/openagent_shell-1.0.0b3-py3-none-any.whl#sha256=95dc0e5094345061835d3f36057c4e3a300615959c6f2ceb8ada8e879cc8c35f
