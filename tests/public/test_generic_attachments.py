@@ -274,9 +274,14 @@ def test_dispatcher_sends_real_video_frames_in_chronological_order(tmp_path):
         selected_runtime_id="local:vision", messages=MESSAGES, files=None, audio=None,
         images=[still], videos=[video], session_id=None,
     ))
+    pinned = dispatcher.build_override_model("local:vision")
+    pinned_result = asyncio.run(pinned._prepare_pinned_media(
+        messages=MESSAGES, files=None, audio=None, images=[still], videos=[video], session_id="test",
+    ))
     prepared = result.prepared
     assert not result.fell_back and prepared.videos is None
     assert prepared.images[0] is still and len(prepared.images) == 4
+    assert [frame.content for frame in pinned_result.prepared.images] == [frame.content for frame in prepared.images]
     text = prompt(prepared)
     assert '"id": "synthetic-video"' in text and "They contain no audio" in text
     for index, timestamp in enumerate((0.0, 1.35, 2.55), start=2):
