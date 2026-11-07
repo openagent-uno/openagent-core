@@ -1,0 +1,36 @@
+{
+  "format": 1,
+  "status": "published-public-artifacts-verified",
+  "tag": "v1.1.0-beta.54",
+  "source_commit": "de609445e4f9c66bc56726719abd2990b5770ed7",
+  "remote_release_run": "https://github.com/openagent-uno/openagent-core/actions/runs/42403843229",
+  "remote_jobs_passed": [
+    "platform-contracts / actual-os (ubuntu-24.04)",
+    "platform-contracts / actual-os (macos-15-intel)",
+    "platform-contracts / actual-os (windows-2025)",
+    "wheels",
+    "publish"
+  ],
+  "public_manifest_sha256": "0c442887ccc2dde405444dcccdf6bb8d470e1b8bef4a7bcc6fa8984b50660a29",
+  "anonymous_wheels_verified": 23,
+  "wheel_bytes_verified": 2517152,
+  "remote_engine_suite": {
+    "junit_reported_cases_including_subtests": 924,
+    "skipped": 3,
+    "failed": 0,
+    "real_mp4_fixture": "skipped because the hosted wheel runner did not have FFmpeg"
+  },
+  "local_exact_source_engine_suite": {
+    "python_tests_passed": 794,
+    "python_tests_skipped": 2,
+    "subtests_passed": 128,
+    "failed": 0
+  },
+  "local_public_wheel_attachment_suite": {
+    "source_package_pythonpath_disabled": true,
+    "working_directory_outside_checkout": true,
+    "python_tests_passed": 45,
+    "failed": 0,
+    "real_mp4_fixture": "verified ordered frame pixels and approximate timestamps on standard and pinned model routes"
+  }
+}

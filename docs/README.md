@@ -2,7 +2,7 @@
 
 ## Architecture and use
 
-- [Beta54 candidate: optional video frame previews for image models](attachments.md#optional-video-frame-previews).
+- [Beta54: optional video frame previews for image models](releases/v1.1.0-beta.54.md).
 
 - [Beta53: complete isolated engine qualification and current-session recovery](releases/v1.1.0-beta.53.md)
   ([qualification procedure](USAGE.md#reproducible-engine-qualification)).
@@ -36,7 +36,7 @@
 
 - [Interactive tool budgets and final delivery](interactive-tool-budgets.md)
 
-The published modular family is `1.1.0b53`: Core, SQLite, gateway and Python SDK
+The published modular family is `1.1.0b54`: Core, SQLite, gateway and Python SDK
 pin the same Core wheel. The independent capability host is `1.0.0b3` and
 continues to consume tool protocol `1.0.0b2`. Core and Python SDK expose an
 optional `capabilities` extra requiring capability-host `1.0.0b3`; the base

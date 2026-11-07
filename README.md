@@ -13,10 +13,9 @@ Products supply authentication, system instructions, resources, tools, and polic
 An embedding host builds its own worker and sandbox from pinned Core packages; the
 standalone app/CLI/server are maintained in the `openagent` product monorepo.
 
-The published `1.1.0b53` cohort adds compact cross-source BM25 discovery and
-current-session history recovery. Sessions is `1.1.0b3`; the compatibility/full
-profile is `1.1.0b4`. See [public qualification](docs/qualification/core-b53-public-2026-11-07.json)
-for exact source, artifact checks and the separate live-channel/model limits.
+The published `1.1.0b54` cohort adds optional video frame previews for image
+models. Sessions is `1.1.0b3` and the compatibility/full profile is `1.1.0b4`.
+See [the release and its qualification](docs/releases/v1.1.0-beta.54.md).
 
 The `1.1.0b36` kernel, SQLite adapter, gateway and SDK add bounded completion
 repair when an authenticated send-file call is omitted from the terminal reply.
@@ -40,14 +39,14 @@ the boundaries that still require product-specific qualification.
 Public architecture and product installation guides are published at
 [openagent.uno](https://openagent.uno/guide/architecture). Download the exact
 Core wheel set and manifest from
-[`v1.1.0-beta.53`](https://github.com/openagent-uno/openagent-core/releases/tag/v1.1.0-beta.53).
+[`v1.1.0-beta.54`](https://github.com/openagent-uno/openagent-core/releases/tag/v1.1.0-beta.54).
 
 ```sh
 pip install --find-links /path/to/verified-wheelhouse \
-  openagent-core==1.1.0b53 openagent-storage-sqlite==1.1.0b53
+  openagent-core==1.1.0b54 openagent-storage-sqlite==1.1.0b54
 # Hosts that need the full algorithm select the relevant extras:
 pip install --find-links /path/to/verified-wheelhouse \
-  'openagent-core[engine,providers,modules,retrieval]==1.1.0b53'
+  'openagent-core[engine,providers,modules,retrieval]==1.1.0b54'
 ```
 
 Packages shown above are independent distribution names. Hosts pin exact wheel
