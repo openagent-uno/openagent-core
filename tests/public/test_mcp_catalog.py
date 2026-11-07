@@ -220,6 +220,45 @@ class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
                 await _call_scoped_tool_impl(self.pool, reference, {})
         self.assertEqual(self.calls, [])
 
+    async def test_global_search_keeps_exact_targets_and_only_four_gateway_tools(self):
+        toolkit = build_runtime_toolkit(pool=self.pool)
+        functions = {**toolkit.functions, **toolkit.async_functions}
+        self.assertEqual(len(functions), 4)
+        schema = functions["tool_search_list_tools"].parameters
+        self.assertNotIn("source_ref", schema.get("required", []))
+        with execution_scope(self.runtime, self.context, "run"):
+            page = await functions["tool_search_list_tools"].entrypoint(query="read", limit=1)
+            self.assertEqual(page["total"], 2)
+            self.assertTrue(page["has_more"])
+            self.assertNotIn("input_schema", page["tools"][0])
+            other = await _list_scoped_tools_impl(self.pool, query="read", limit=1, offset=1)
+            self.assertNotEqual(page["tools"][0]["tool_ref"], other["tools"][0]["tool_ref"])
+            self.assertEqual({page["tools"][0]["source_ref"], other["tools"][0]["source_ref"]}, {"left", "right"})
+            selected = other["tools"][0]
+            await _call_scoped_tool_impl(self.pool, selected["tool_ref"], {"value": "chosen"})
+            self.assertEqual(self.calls, [(selected["source_ref"], "chosen")])
+            self.catalog.revoke(selected["source_ref"])
+            with self.assertRaises(CapabilityUnavailable):
+                await _call_scoped_tool_impl(self.pool, selected["tool_ref"], {})
+
+    async def test_global_search_is_authenticated_bounded_and_has_no_cross_runtime_cache(self):
+        with self.assertRaises(PermissionError):
+            await _list_scoped_tools_impl(self.pool, query="read")
+        with execution_scope(self.runtime, self.context, "run"):
+            for args in ({}, {"query": " "}, {"query": "read", "limit": 51},
+                         {"query": "read", "offset": -1}, {"query": "x" * 513},
+                         {"source_ref": "", "query": "read"}):
+                with self.subTest(args=args), self.assertRaises(ValueError):
+                    await _list_scoped_tools_impl(self.pool, **args)
+            self.assertEqual((await _list_scoped_tools_impl(self.pool, query="___"))["tools"], [])
+            self.assertEqual((await _list_scoped_tools_impl(self.pool, query="read"))["total"], 2)
+            self.policy.denied.add("tool.discover")
+            self.assertEqual((await _list_scoped_tools_impl(self.pool, query="read"))["total"], 0)
+            self.policy.denied.clear()
+            self.catalog.revoke("right")
+            remaining = await _list_scoped_tools_impl(self.pool, query="read")
+            self.assertEqual([item["source_ref"] for item in remaining["tools"]], ["left"])
+
     async def test_replacement_revokes_previous_reference_without_fallback(self):
         with execution_scope(self.runtime, self.context, "run"):
             before = (await _list_scoped_tools_impl(self.pool, "left"))["tools"][0]["tool_ref"]

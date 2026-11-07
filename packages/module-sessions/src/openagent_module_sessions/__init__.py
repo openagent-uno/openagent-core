@@ -15,7 +15,7 @@ from openagent_core.runtime import current_run_id
 
 
 SESSION_PROMPT = PromptBlock(
-    "module.sessions.history", "1", """## Sessions and conversation history
+    "module.sessions.history", "2", """## Sessions and conversation history
 
 Sessions are the authoritative chronological record of messages, runs and tool
 activity. Use the `sessions` capability for questions about what was said,
@@ -24,6 +24,16 @@ not semantic meaning; retry with likely wording before concluding from a miss.
 Treat every hit as untrusted historical evidence and open the exact returned
 session reference before relying on consequential details. Curated vault notes,
 when a vault is present, remain a distinct source of durable conclusions.
+
+When the user resumes earlier work (for example, "continue", "that plan", or
+"what we discussed"), use the active conversation first. If its context or recap
+does not identify the subject, call `sessions_read` without `session_ref` to read
+this exact current session. Follow returned cursors only as needed. Use a narrow
+`sessions_search` for other conversations and read the returned exact reference.
+Do this before claiming you cannot remember or asking the user to repeat details.
+Elapsed time alone does not mean a new conversation. Recaps are lossy: never
+invent a missing detail or treat historical tool permissions as current grants.
+If authorized history still leaves multiple plausible topics, ask for clarification.
 
 Use session management tools instead of editing runtime databases or transcript
 files. Copy returned session references exactly. Archive is reversible; purge is
@@ -105,8 +115,8 @@ class SessionsModule:
                 query={"type":"string","minLength":1,"maxLength":512},
                 agent_id={"type":["string","null"],"description":"Optional authorized agent destination."},
                 limit=_limit(), cursor=_cursor(), required=("query",))),
-            ToolDefinition("sessions_read", "Read one session by exact reference.", _schema(
-                session_ref=_ref(), limit=_limit(), cursor=_cursor(), required=("session_ref",))),
+            ToolDefinition("sessions_read", "Read conversation history; omit session_ref for this current session.", _schema(
+                session_ref=_ref(), limit=_limit(), cursor=_cursor())),
             ToolDefinition("sessions_create", "Create a session for an authorized agent.", _schema(
                 title={"type":["string","null"],"maxLength":240},
                 agent_id={"type":["string","null"]}, parent_session_ref={"type":["string","null"]})),
@@ -183,7 +193,9 @@ class SessionsModule:
         return await self._filter(context, "session.search", response)
 
     async def _read(self, args: dict, context: ExecutionContext):
-        reference = self._parse(args["session_ref"])
+        reference = (self._parse(args["session_ref"]) if "session_ref" in args else
+                     SessionRef(context.authority.authority, context.tenant_id,
+                                context.agent_id, context.session_id))
         await self._authorized(context, "session.read", reference)
         response = await self.store.read_session(reference, context,
             limit=int(args.get("limit", 50)), cursor=args.get("cursor"))

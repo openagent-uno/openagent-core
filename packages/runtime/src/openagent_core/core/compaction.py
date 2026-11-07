@@ -1691,7 +1691,7 @@ async def compact(
         "content_type": "str",
         "status": "COMPLETED",
         "messages": [
-            {"role": "user", "content": "[Previous conversation was compacted into this summary. Continue helping the user as if you had read the full conversation — all key context, decisions, and pending tasks are captured below.]"},
+            {"role": "user", "content": "[Previous conversation was compacted into this summary. Continue from the goals, decisions and pending tasks below. The recap may omit details; consult authorized session-history tools when available before claiming a missing detail or asking the user to repeat it.]"},
             {"role": "assistant", "content": summary},
         ],
         # Persist the same stats the live "done" hint carries so a

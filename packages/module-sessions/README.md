@@ -17,3 +17,16 @@ run is not sufficient to quote its output into a shared session.
 another worker process. A nonlocal active run is not mistaken for a completion;
 each observation rechecks current authorization. Cancelling an observer does
 not cancel the accepted run.
+
+## Current-conversation recovery (unreleased source candidate)
+
+`sessions_read` accepts an omitted `session_ref` to read this exact current
+conversation. Core derives the reference from the verified execution context;
+the same read and publication permissions apply. Explicit references retain
+their existing meaning, including foreign-reference denial. Use returned
+pagination cursors for further messages.
+
+Prompt revision 2 asks the model to recover missing context before saying it
+cannot remember an earlier plan, and to distinguish a lossy recap from original
+history. It does not load all prior chats into every prompt or assume that
+historical permission grants still apply. See [session continuity](../../docs/session-history.md#resuming-a-conversation-and-recovering-omitted-details).

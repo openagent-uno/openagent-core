@@ -38,6 +38,52 @@ Core29 reproduces the three original gaps; source tests verify the correction.
 This evidence does not assert loss of an embedding host's data and does not
 qualify a new published wheel, installer, live provider or production migration.
 
+## Resuming a conversation and recovering omitted details
+
+Durable history, the model's working context and curated Vault notes are distinct
+surfaces. Merely storing a transcript does not prove that a provider received it
+on its next call. A host must keep the same session identity and storage, preserve
+its current authorization, and select the ordinary history-enabled engine path.
+Core does not create a fresh chat merely because it has been inactive for days.
+Explicit resets, deletion, identity/audience changes and host retention policy
+are separate boundaries; history tools do not bypass them.
+
+The engine's in-place compaction is enabled by default. Its ordinary trigger is
+75% of the resolved model context or the configured history cost ceiling
+(150,000 tokens by default), whichever is smaller. It preserves the latest four
+runs verbatim and summarizes the older span. The background end-of-turn pass and
+start-of-turn safety check share the per-session lock. These defaults are
+configurable through `OPENAGENT_COMPACTION_ENABLED`,
+`OPENAGENT_COMPACTION_THRESHOLD`, `OPENAGENT_COMPACTION_MAX_HISTORY_TOKENS` and
+`OPENAGENT_COMPACTION_KEEP_RUNS`. A summary is lossy; it is not a claim that every
+identifier or decision is still in the model's context.
+
+For runtime-admitted native sessions, the canonical original messages remain
+available through the optional Sessions module when the provider's compatibility
+conversation buffer is compacted. This is not an archival guarantee for historical
+legacy-only sessions whose transcript was already replaced or purged.
+
+The unreleased source candidate lets `sessions_read` omit `session_ref`. Core
+then resolves the current session from the trusted execution context, keeping the
+same read and publish authorization checks. An explicitly supplied reference is
+still parsed exactly; invalid or foreign references never fall back to the current
+chat. Existing explicit-reference callers are unchanged. The result is paginated
+in chronological order; follow returned cursors rather than inventing one.
+
+Sessions prompt revision 2 directs the model to use current context first, read
+the current session when a continuation lacks enough detail, and use a narrow
+`sessions_search` plus the exact returned reference for another conversation.
+It must check authorized history before claiming it cannot remember or asking
+for a repetition, and must clarify genuinely ambiguous references. This is
+model guidance, not a guarantee that every model follows it. The module remains
+optional; Core does not turn on Vault, unscoped recall or cross-chat access.
+
+`tests/public/test_session_resume_tools.py` covers current-session resolution,
+pagination, read/publication denial, foreign/invalid references, a four-day aged
+canonical transcript reopened through a new runtime, and a real buffer compaction
+with an intentionally lossy **stub** summarizer followed by exact history recovery.
+These are deterministic storage/tool tests, not real-model or live-channel QA.
+
 
 ## Optional summary latency
 
