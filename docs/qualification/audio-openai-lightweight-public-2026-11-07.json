@@ -1,0 +1,39 @@
+{
+  "state": "published public immutable release; not consumer deployment",
+  "tag": "v1.1.0-beta.52",
+  "source": "40127479fd865a0cebc801c2f467ea5feb171844",
+  "workflow": 42313321066,
+  "manifestSHA256": "2c30e8ed432dde19c22d46f14a2d26d3605b97d0de89f3b20b5b92dc2aea5d0a",
+  "nativePermissionAndLifecyclePlatforms": [
+    "Linux",
+    "macOS",
+    "Windows"
+  ],
+  "installedEngineSuite": {
+    "passed": 745,
+    "subtestsPassed": 107,
+    "skipped": 2
+  },
+  "audioFocused": {
+    "passed": 10,
+    "subtestsPassed": 10
+  },
+  "selectedWheels": [
+    {
+      "file": "openagent_core-1.1.0b52-py3-none-any.whl",
+      "name": "openagent-core",
+      "version": "1.1.0b52",
+      "sha256": "860f2da40ae9f585a8dd370131ed0a5fe2a021d33274a8c25878aa2ee786c6a5",
+      "bytes": 1788612
+    },
+    {
+      "file": "openagent_storage_sqlite-1.1.0b52-py3-none-any.whl",
+      "name": "openagent-storage-sqlite",
+      "version": "1.1.0b52",
+      "sha256": "2078f71d07e6590159902a99bf688e507164146df6c48e9fac946fef20587cf3",
+      "bytes": 60956
+    }
+  ],
+  "hostDeployment": false,
+  "externalAudioProviderAcceptance": false
+}
