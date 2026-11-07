@@ -1443,6 +1443,11 @@ class NativeProvider(ProviderResources, BaseModel):
                 except (TypeError, ValueError):
                     lean_max_tokens = int(default)
                 extra_kwargs["max_tokens"] = max(128, lean_max_tokens)
+            video_input_format = self._provider_setting("video_input_format")
+            if video_input_format:
+                if video_input_format != "input_video" or not hasattr(model_class, "video_input_format"):
+                    raise ValueError("Invalid video_input_format for this model provider")
+                extra_kwargs["video_input_format"] = video_input_format
             # I parametri di campionamento della riga del modello vincono sui
             # default del provider: sono la scelta esplicita di un operatore.
             extra_kwargs = {**extra_kwargs, **self._sampling_from_model_row()}
