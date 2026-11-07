@@ -39,3 +39,8 @@ reads, plus cancellation and deadline configuration tests. Run it with
 their shared fixtures. Broader source qualification also covers partial-entry,
 startup-diagnostics and connection-generation regressions. This is source
 qualification, not a published wheel or consumer deployment.
+
+The [7 November source qualification](qualification/mcp-transport-recovery-2026-11-07.json)
+records 61 passing targeted cases. The full public run has seven catalogue cases
+that also fail on the unmodified baseline in the same environment; it is not an
+entirely green suite and does not certify installed packages.
