@@ -20,6 +20,9 @@ def __getattr__(name: str):
     if name == "ModelDispatcher":
         from .models.dispatcher import ModelDispatcher
         return ModelDispatcher
+    if name == "FfmpegVideoFrameExtractor":
+        from .models.video_frames import FfmpegVideoFrameExtractor
+        return FfmpegVideoFrameExtractor
     if name == "NativeProvider":
         from .models.native_provider import NativeProvider
         return NativeProvider

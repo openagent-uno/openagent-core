@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta54 candidate: optional video frame previews for image models](attachments.md#optional-video-frame-previews).
+
 - [Beta53: complete isolated engine qualification and current-session recovery](releases/v1.1.0-beta.53.md)
   ([qualification procedure](USAGE.md#reproducible-engine-qualification)).
 

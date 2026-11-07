@@ -5,6 +5,8 @@ import html
 import io
 import json
 from pathlib import Path
+import shutil
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
 import zipfile
@@ -244,6 +246,91 @@ def test_media_selection_prefers_compatible_model_then_reference_only_without_on
     assert all(ref in text for ref in ('image-id', 'audio-id', 'video-id'))
     assert 'ORIGINAL' not in text and 'model_modality_unavailable' in text
     assert image.content == b'PNG ORIGINAL' and audio.content == b'RIFF ORIGINAL'
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg not installed")
+def test_dispatcher_sends_real_video_frames_in_chronological_order(tmp_path):
+    from openagent_core.engine import FfmpegVideoFrameExtractor, ModelDispatcher
+    from openagent_core.stream.media import Video
+
+    path = tmp_path / "synthetic.mp4"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=640x360:r=10:d=1",
+         "-f", "lavfi", "-i", "color=c=green:s=640x360:r=10:d=1",
+         "-f", "lavfi", "-i", "color=c=blue:s=640x360:r=10:d=1",
+         "-filter_complex", "[0:v][1:v][2:v]concat=n=3:v=1:a=0", "-c:v", "mpeg4", str(path)],
+        check=True, timeout=15,
+    )
+    video = Video(content=path.read_bytes(), mime_type="video/mp4", id="synthetic-video")
+    still = Image(content=b"existing image", mime_type="image/jpeg")
+    dispatcher = ModelDispatcher(
+        [{"id": 1, "name": "local", "framework": "api-based", "enabled": True, "models": [
+            {"id": 1, "model": "vision", "enabled": True,
+             "metadata": {"input_modalities": ["text", "image"]}},
+        ]}],
+        video_frame_extractor=FfmpegVideoFrameExtractor(),
+    )
+    result = asyncio.run(dispatcher._prepare_media_route(
+        selected_runtime_id="local:vision", messages=MESSAGES, files=None, audio=None,
+        images=[still], videos=[video], session_id=None,
+    ))
+    pinned = dispatcher.build_override_model("local:vision")
+    pinned_result = asyncio.run(pinned._prepare_pinned_media(
+        messages=MESSAGES, files=None, audio=None, images=[still], videos=[video], session_id="test",
+    ))
+    prepared = result.prepared
+    assert not result.fell_back and prepared.videos is None
+    assert prepared.images[0] is still and len(prepared.images) == 4
+    assert [frame.content for frame in pinned_result.prepared.images] == [frame.content for frame in prepared.images]
+    text = prompt(prepared)
+    assert '"id": "synthetic-video"' in text and "They contain no audio" in text
+    for index, timestamp in enumerate((0.0, 1.35, 2.55), start=2):
+        assert f'"image_index": {index}, "approx_seconds": {timestamp}' in text
+    for channel, frame in enumerate(prepared.images[1:]):
+        rgb = subprocess.run(
+            ["ffmpeg", "-v", "error", "-f", "image2pipe", "-i", "pipe:0", "-vf", "scale=1:1",
+             "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"],
+            input=frame.content, capture_output=True, check=True, timeout=5,
+        ).stdout
+        assert len(rgb) == 3 and rgb[channel] == max(rgb) and rgb[channel] > 100
+    assert video.content == path.read_bytes() and MESSAGES == [{"role": "user", "content": "Compare the attached documents."}]
+
+
+def test_video_frames_are_opt_in_and_only_use_bounded_inline_previews(tmp_path):
+    from openagent_core.engine import FfmpegVideoFrameExtractor
+    from openagent_core.models.video_frames import VideoFrame
+    from openagent_core.stream.media import Video
+
+    text = entry()
+    image = entry("local", "vision", ("text", "image"))
+    native = entry("local", "video", ("text", "video"))
+    inline = Video(content=b"one", mime_type="video/mp4", id="inline")
+    remote = Video(url="https://example.invalid/opaque", mime_type="video/mp4", id="remote")
+    local = Video(filepath=tmp_path / "unread.mp4", mime_type="video/mp4", id="local")
+    opts = dict(messages=MESSAGES, videos=[inline, remote, local, inline])
+    extractor = FfmpegVideoFrameExtractor()
+    with patch.object(extractor, "extract", return_value=(VideoFrame(b"jpeg", 0.0),)) as decode:
+        result = asyncio.run(media.select_media_model(text, [image, native], video_frame_extractor=extractor, **opts))
+        assert result.entry is native and result.prepared.videos == opts["videos"]
+        result = asyncio.run(media.select_media_model(text, [image], **opts))
+        assert result.entry is text and result.prepared.images is None
+        decode.assert_not_called()
+        result = asyncio.run(media.select_media_model(text, [image], video_frame_extractor=extractor, **opts))
+        decode.assert_awaited_once_with(b"one", "video/mp4")
+        assert result.entry is image and result.fell_back
+        references = prompt(result.prepared)
+        assert "video_frames_unavailable" in references and "per_turn_video_preview_limit" in references
+        assert '"id": "remote"' in references and "example.invalid" not in references
+        assert '"id": "local"' in references and result.prepared.videos is None
+    with patch.object(extractor, "_sample") as sample:
+        assert asyncio.run(extractor.extract(b"x" * (8 * 1024 * 1024 + 1), "video/mp4")) == ()
+        assert asyncio.run(extractor.extract(b"x", "video/webm")) == ()
+        sample.assert_not_called()
+    result = asyncio.run(media.select_media_model(
+        text, [image], messages=MESSAGES, videos=[remote], video_frame_extractor=extractor,
+    ))
+    assert result.entry is text and result.prepared.images is None
+    assert "video_frames_unavailable" in prompt(result.prepared)
 
 
 def test_host_image_id_remains_available_to_authorized_host_reader(tmp_path):
