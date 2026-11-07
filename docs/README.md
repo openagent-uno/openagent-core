@@ -104,6 +104,7 @@ repository remains the canonical source for Core contracts and evidence.
 - [Storage tenant checks and verified legacy projection domains](storage-tenant-domains.md)
 - [Public history after interrupted execution and canonical ancestry](session-history.md)
 - [Memory visibility and durable indexing](memory-access.md)
+- [Incremental operational maintenance and idle resource bounds](operational-maintenance.md)
 - [Derived content privacy contracts and current coverage](content-privacy.md)
 - [Authorized vault administration](vault-administration.md)
 - [Vault/tool parity evidence](migration/vault-tool-parity.md)
