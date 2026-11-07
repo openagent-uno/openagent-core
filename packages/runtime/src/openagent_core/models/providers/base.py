@@ -48,6 +48,7 @@ from openagent_core.mcp._runtime.function import (
     Function,
     FunctionCall,
     FunctionExecutionResult,
+    ToolResult,
     UserFeedbackOption,
     UserFeedbackQuestion,
     UserInputField,
@@ -2090,12 +2091,18 @@ class Model(ABC):
         audios = None
         files = None
 
+        mcp_failed = False
         if success and function_execution_result:
             # With unified classes, no conversion needed - use directly
             images = function_execution_result.images
             videos = function_execution_result.videos
             audios = function_execution_result.audios
             files = function_execution_result.files
+            tool_result = function_execution_result.result
+            if isinstance(tool_result, ToolResult):
+                # A valid MCP response can report that the requested action failed.
+                # Keep the returned content and media even when its status is an error.
+                mcp_failed = (tool_result.mcp_result or {}).get("isError") is True
 
         # Cap the result HERE, not at the display record: this is the message
         # every provider hands back to the model, and it is re-sent on every
@@ -2108,7 +2115,7 @@ class Model(ABC):
             tool_call_id=function_call.call_id,
             tool_name=function_call.function.name,
             tool_args=function_call.arguments,
-            tool_call_error=not success,
+            tool_call_error=not success or mcp_failed,
             stop_after_tool_call=function_call.function.stop_after_tool_call,
             images=images,
             videos=videos,
@@ -2230,8 +2237,6 @@ class Model(ABC):
                 ):
                     function_execution_result.updated_session_state = function_call.function._run_context.session_state
         else:
-            from openagent_core.mcp._runtime.function import ToolResult
-
             if isinstance(function_execution_result.result, ToolResult):
                 # Extract content and media from ToolResult
                 tool_result = function_execution_result.result
@@ -2908,8 +2913,6 @@ class Model(ABC):
                     (GeneratorType, collections.abc.Iterator, AsyncGeneratorType, collections.abc.AsyncIterator),
                 )
             ):
-                from openagent_core.mcp._runtime.function import ToolResult
-
                 if isinstance(function_execution_result.result, ToolResult):
                     tool_result = function_execution_result.result
                     function_call_output = tool_result.content
