@@ -3,6 +3,7 @@
 ## Architecture and use
 
 - [Beta52: lightweight configured OpenAI speech route](audio-host-contract.md).
+- [MCP transport recovery and optional per-server read deadlines](mcp-transport-recovery.md)
 
 - [Beta50: bounded optional summaries and preserved provider failures](releases/v1.1.0-beta.50.md) ([qualification](qualification/async-summary-2026-11-06-b50.json)).
 

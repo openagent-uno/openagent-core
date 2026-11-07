@@ -269,6 +269,10 @@ _TRANSIENT_TOKENS = (
     # enabled." e il turno si chiude. E' mancanza di capacita' quanto un 429,
     # e come quella va ritentata appena il catalogo torna.
     "no_enabled_model", "no model is currently enabled",
+    # A dead MCP stream is a transport failure, not a permanent event error.
+    # Replace the session and let the normal delivery retry policy apply.
+    "closedresourceerror", "brokenresourceerror", "endofstream",
+    "connection closed", "failed in transport", "transport failure",
 )
 
 

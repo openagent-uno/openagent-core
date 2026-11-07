@@ -1,0 +1,38 @@
+{
+  "kind": "source-qualification",
+  "source_commit": "ae97b58c143209f588e671bee3df38eac540870a",
+  "baseline_commit": "0286d20999d565f1950479f3d25da89d8fa658a3",
+  "environment": "Linux amd64, Python 3.12, MCP SDK 1.30, isolated evaluation container",
+  "targeted": {
+    "files": [
+      "test_mcp_transport_crash_reconnect.py",
+      "test_mcp_dead_session_reconnect.py",
+      "test_mcp_partial_entry.py",
+      "test_mcp_startup_diagnostics.py",
+      "test_mcp_app_connection_generation.py"
+    ],
+    "passed": 61,
+    "failed": 0,
+    "subtests_passed": 10
+  },
+  "full_public": {
+    "passed": 753,
+    "failed": 7,
+    "skipped": 3,
+    "subtests_passed": 112,
+    "green": false
+  },
+  "baseline_comparison": {
+    "files": ["test_mcp_catalog_refresh.py", "test_version_metadata.py"],
+    "passed": 18,
+    "failed": 7,
+    "same_failures_as_candidate": true,
+    "failure_file": "test_mcp_catalog_refresh.py",
+    "note": "The seven stdio capability-host catalogue cases also fail on the unmodified baseline in this evaluation environment. They were neither fixed nor waived by this change."
+  },
+  "limitations": [
+    "Source tests, not installed-wheel qualification.",
+    "The broad suite is not entirely green.",
+    "No package publication or consumer deployment is certified by this record."
+  ]
+}

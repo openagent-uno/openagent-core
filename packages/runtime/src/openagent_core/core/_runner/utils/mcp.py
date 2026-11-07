@@ -176,6 +176,37 @@ def _session_is_dead(exc: BaseException) -> bool:
     return False
 
 
+def _session_transport_closed(session) -> bool:
+    """Whether ``session`` can no longer reach its transport.
+
+    When a transport worker dies, the transport closes the session's write
+    stream; a request sent afterwards fails with ``ClosedResourceError`` before
+    anything leaves the process. A ping that was already waiting does not see
+    that: the session's receive loop is cancelled with the transport, so the
+    ping waits out its full read timeout (30 s on 6-Nov-2026) and reports a
+    timeout, not a dead session. Best effort over SDK internals; False when
+    the shape is unknown.
+    """
+    stream = getattr(session, "_write_stream", None)
+    if stream is None:
+        return False
+    try:
+        if getattr(stream, "_closed", False) is True:
+            return True
+        stats = stream.statistics()
+        return getattr(stats, "open_receive_streams", 1) == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _transport_closed_error(cause: BaseException | None = None) -> BaseException:
+    import anyio
+
+    error = anyio.ClosedResourceError()
+    error.__cause__ = cause
+    return error
+
+
 def _describe_error(exc: BaseException) -> str:
     # ``str(ClosedResourceError())`` is empty: "Error: " told nobody anything.
     text = str(exc)
@@ -285,9 +316,21 @@ def get_entrypoint_for_tool(
                 active_session = await _resolve_session()
 
             _check_capability_generation(mcp_tools_instance)
-            try:
-                await active_session.send_ping()
-            except Exception as e:
+            ping_error: Exception | None = None
+            if _session_transport_closed(active_session):
+                # Already known dead: do not wait for a ping that cannot return.
+                ping_error = _transport_closed_error()
+            else:
+                try:
+                    await active_session.send_ping()
+                except Exception as e:  # noqa: BLE001
+                    ping_error = e
+                    if not _session_is_dead(e) and _session_transport_closed(active_session):
+                        # The transport died while the ping waited (it then
+                        # times out instead of failing): the session is dead.
+                        ping_error = _transport_closed_error(e)
+            if ping_error is not None:
+                e = ping_error
                 if not _session_is_dead(e):
                     log_exception(e)
                 else:

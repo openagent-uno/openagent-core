@@ -28,10 +28,12 @@ import asyncio
 import importlib
 import inspect
 import logging
+import math
 import os
 import shutil
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any
 
 from openagent_core.core.logging import elog
@@ -213,6 +215,71 @@ _STARTUP_STAGGER_SECONDS = 0.25
 # Use the same recursive classifier as call-time recovery. The MCP SDK wraps
 # a closed stream as McpError("Connection closed"), including in exception
 # groups; testing only the outer exception's class misses that signal.
+
+# anyio delivers a cancel-scope cancellation on asyncio as
+# ``task.cancel("Cancelled via cancel scope <id>")`` (anyio's own
+# ``is_anyio_cancellation`` checks the same prefix). The supervisor task is the
+# host of every task group its toolkit's transport and session open, so a
+# crashed transport worker (one failed HTTP request is enough: the SDK runs
+# each POST as a child of the transport task group) cancels the supervisor with
+# that reason. A shutdown never does: ``_shutdown_supervisor`` and
+# ``_run_replacement`` set ``closing`` before they wake or cancel it.
+_ANYIO_SCOPE_CANCEL_PREFIX = "Cancelled via cancel scope "
+
+
+def _is_anyio_scope_cancel(exc: BaseException) -> bool:
+    args = getattr(exc, "args", ()) or ()
+    return bool(args) and isinstance(args[0], str) and args[0].startswith(_ANYIO_SCOPE_CANCEL_PREFIX)
+
+
+# Streamable-HTTP connect bound. The read timeout below is per server; how
+# long a TCP/TLS connect may take is not a property of the tool being called.
+_MCP_HTTP_CONNECT_TIMEOUT = 30.0
+
+
+def _env_float(name: str) -> float | None:
+    raw = (runtime_environment().get(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("Ignoring %s=%r: not a number", name, raw)
+        return None
+    return value if math.isfinite(value) and value > 0 else None
+
+
+def _mcp_read_timeout_seconds(name: str) -> int | None:
+    """Per-server MCP read timeout override, in seconds (None = default).
+
+    ``OPENAGENT_MCP_READ_TIMEOUT_<NAME>`` (name upper-cased, every other
+    character as ``_``; e.g. ``OPENAGENT_MCP_READ_TIMEOUT_REMOTE``) wins over
+    ``OPENAGENT_MCP_READ_TIMEOUT_SECONDS``. Without either, a URL server keeps
+    the SDK parameters' 30 s (``MCPTools`` takes the smaller of its own
+    ``timeout_seconds`` and the transport's ``timeout``) and a stdio server
+    keeps ``_MCP_TIMEOUT_SECONDS``.
+    """
+    suffix = "".join(ch if ch.isalnum() else "_" for ch in str(name or "").upper())
+    value = _env_float(f"OPENAGENT_MCP_READ_TIMEOUT_{suffix}") if suffix else None
+    if value is None:
+        value = _env_float("OPENAGENT_MCP_READ_TIMEOUT_SECONDS")
+    # Whole seconds: MCPTools truncates the transport timeout with int().
+    return max(1, math.ceil(value)) if value is not None else None
+
+
+def _bounded_connect_http_client(headers=None, timeout=None, auth=None):
+    """``isolated_http_client`` with the connect phase kept at 30 s even when
+    a server's read timeout is raised, so an unreachable endpoint still fails
+    fast."""
+    import httpx
+    from openagent_core.mcp._runtime.mcp.params import isolated_http_client
+
+    if isinstance(timeout, httpx.Timeout) and timeout.connect is not None:
+        timeout = httpx.Timeout(
+            connect=min(timeout.connect, _MCP_HTTP_CONNECT_TIMEOUT),
+            read=timeout.read, write=timeout.write, pool=timeout.pool,
+        )
+    return isolated_http_client(headers=headers, timeout=timeout, auth=auth)
 
 
 def _install_runtime_log_passthrough() -> None:
@@ -1136,19 +1203,42 @@ class MCPPool:
         control: dict[str, Any] = {"closing": False, "pending": None, "ready": False}
 
         def _resolve_pending(ok: bool) -> None:
+            if not ok:
+                control.pop("auto_reconnect", None)
             waiter, control["pending"] = control.get("pending"), None
             if waiter is not None and not waiter.done():
                 waiter.set_result(ok)
 
         async def _wait_for_request() -> bool:
-            """Block until shutdown or a reconnect request. True = reconnect."""
+            """Block until shutdown, a reconnect request, or a dead transport.
+            True = reconnect."""
             try:
                 await stop_event.wait()
-            except asyncio.CancelledError:
-                # close_all upgrades to cancel when the graceful wait_for
-                # times out. Let the stack unwind on this same task.
-                control["closing"] = True
-                return False
+            except asyncio.CancelledError as exc:
+                if control["closing"] or not _is_anyio_scope_cancel(exc):
+                    # close_all upgrades to cancel when the graceful wait_for
+                    # times out; anything else cancelling this task is a
+                    # shutdown too. Let the stack unwind on this same task.
+                    control["closing"] = True
+                    return False
+                # Not a shutdown: the toolkit's transport (an anyio task group
+                # entered on THIS task) lost a worker and cancelled its host.
+                # Reading this as a shutdown leaves a dead session bound and
+                # silently refuses later reconnects. Replace the session now,
+                # before a caller finds it.
+                control["transport_lost"] = True
+                stop_event.clear()
+                if control.get("pending") is None:
+                    # Publish the reconnect like a caller would, so callers
+                    # that arrive meanwhile wait for the new handshake and
+                    # join it instead of requesting (and tearing down) another.
+                    loop = asyncio.get_running_loop()
+                    control["pending"] = loop.create_future()
+                    control["pending_since"] = loop.time()
+                    control["auto_reconnect"] = True
+                elog("mcp.session_transport_lost", level="warning", name=spec.name,
+                     error=str(exc.args[0]) if exc.args else "")
+                return True
             if control["closing"]:
                 return False
             stop_event.clear()
@@ -1169,6 +1259,17 @@ class MCPPool:
                 raise
             return stack
 
+        def _own_transport_cancel(exc: BaseException) -> bool:
+            # The only anyio cancel scopes that can reach this task's own code
+            # are the task groups its toolkit's transport and session opened
+            # here (a scope absorbs the cancellations it causes itself). While
+            # the supervisor is still inside a dead transport's scope, anyio
+            # re-delivers that cancellation at every await, including during a
+            # handshake whose transport died. Those must not abort the
+            # teardown (it is what leaves the scope) nor kill the supervisor.
+            # A shutdown's cancellation still propagates.
+            return not control["closing"] and _is_anyio_scope_cancel(exc)
+
         async def _close(stack: AsyncExitStack | None) -> None:
             # Bounded: a transport that hangs while closing must not wedge the
             # supervisor (and with it every later reconnect) forever.
@@ -1176,22 +1277,33 @@ class MCPPool:
                 try:
                     async with asyncio.timeout(_MCP_CLOSE_TIMEOUT):
                         await stack.aclose()
-                except asyncio.CancelledError:
-                    raise
+                except asyncio.CancelledError as exc:
+                    if not _own_transport_cancel(exc):
+                        raise
+                    # The dead transport's scope re-delivered its cancellation
+                    # while the session closed. ``MCPTools.__aexit__`` still
+                    # released the transport; a toolkit that stops at the
+                    # session leaves that context (the cancelled scope) open.
+                    await _close_transport_context()
                 except BaseException:  # noqa: BLE001 — a dead transport may fail to close
                     # ``MCPTools.__aexit__`` skips its transport context when
                     # closing the session raised; close that one too, on this
                     # task, so the old transport's workers do not outlive it.
-                    context = getattr(toolkit, "_context", None)
-                    if context is not None:
-                        try:
-                            async with asyncio.timeout(_MCP_CLOSE_TIMEOUT):
-                                await context.__aexit__(None, None, None)
-                        except asyncio.CancelledError:
-                            raise
-                        except BaseException:  # noqa: BLE001
-                            pass
+                    await _close_transport_context()
+            control["transport_lost"] = False
             _forget_session(toolkit)
+
+        async def _close_transport_context() -> None:
+            context = getattr(toolkit, "_context", None)
+            if context is not None:
+                try:
+                    async with asyncio.timeout(_MCP_CLOSE_TIMEOUT):
+                        await context.__aexit__(None, None, None)
+                except asyncio.CancelledError as exc:
+                    if not _own_transport_cancel(exc):
+                        raise
+                except BaseException:  # noqa: BLE001
+                    pass
 
         async def _supervisor() -> None:
             # Open the stack INSIDE this task so __aenter__ and __aexit__
@@ -1215,6 +1327,7 @@ class MCPPool:
                 ready_event.set()
                 while await _wait_for_request():
                     control["ready"] = False
+                    lost = bool(control.get("transport_lost"))
                     # Close the dead session on this task. A dead transport may
                     # raise while closing; it is gone either way.
                     await _close(stack)
@@ -1225,11 +1338,26 @@ class MCPPool:
                         stack = await _enter()
                         if not _toolkit_ready(toolkit):
                             raise RuntimeError("MCP session did not initialize")
-                    except asyncio.CancelledError:
-                        raise
+                    except asyncio.CancelledError as e:
+                        if not _own_transport_cancel(e):
+                            raise
+                        # The new transport died during its handshake (one
+                        # failed initialize POST is enough now that
+                        # ``MCPTools.initialize`` re-raises cancellation).
+                        # ``MCPTools.__aenter__`` already unwound both contexts
+                        # on this task, so the supervisor has left the
+                        # cancelled scope and will not be woken again by it.
+                        elog("mcp.session_reconnect_failed", level="warning",
+                             name=spec.name, error="transport lost during the handshake",
+                             reason="transport_lost" if lost else "requested")
+                        await _close(stack)
+                        stack = None
+                        _resolve_pending(False)
+                        continue
                     except BaseException as e:  # noqa: BLE001
                         elog("mcp.session_reconnect_failed", level="warning",
-                             name=spec.name, error=f"{type(e).__name__}: {e}")
+                             name=spec.name, error=f"{type(e).__name__}: {e}",
+                             reason="transport_lost" if lost else "requested")
                         await _close(stack)
                         stack = None
                         _resolve_pending(False)
@@ -1237,6 +1365,11 @@ class MCPPool:
                     if control["closing"]:
                         return
                     control["ready"] = True
+                    if control.pop("auto_reconnect", False):
+                        # Nobody asked: no initiator will log the outcome.
+                        elog("mcp.session_reconnected", name=spec.name,
+                             tools=len(getattr(toolkit, "functions", {}) or {}),
+                             reason="transport_lost")
                     _resolve_pending(True)
             except BaseException:  # noqa: BLE001 — best-effort cleanup
                 # Any cleanup exception is logged by the caller; keep the
@@ -1468,6 +1601,12 @@ class MCPPool:
         except asyncio.TimeoutError:
             return False
 
+    @staticmethod
+    def _reconnect_skipped(name: str, why: str, reason: str = "", *,
+                           level: str = "warning", replace: bool = False) -> None:
+        elog("mcp.session_reconnect_skipped", level=level, name=name or "?",
+             why=why, reason=reason, replace=replace)
+
     def _reconnect_hook(self, toolkit: Any):
         async def _reconnect(dead_session: Any = None, *, reason: str = "") -> bool:
             return await self.reconnect_toolkit(toolkit, dead_session, reason=reason)
@@ -1491,9 +1630,25 @@ class MCPPool:
         Returns True when the toolkit has a live, re-initialized session.
         """
         sup = next((s for s in self._toolkit_supervisors if s.toolkit is toolkit), None)
-        if sup is None or sup.control is None or sup.control.get("closing"):
+        name = sup.name if sup is not None else self._toolkit_name(toolkit)
+        if sup is None or sup.control is None:
+            # Every refusal leaves an event: on 6-Nov-2026 this method
+            # returned False for 35 minutes and nothing said why.
+            self._reconnect_skipped(name, "no_supervisor" if sup is None else "no_control", reason)
             return False
         control = sup.control
+        if control.get("closing") or sup.task.done():
+            if (sup in self._toolkit_supervisors and self._connected
+                    and sup.spec is not None and control.get("replacement") is None):
+                # close_all()/reload()/a replacement unregister a supervisor
+                # before they stop it, so a registered one that is closing or
+                # gone stopped by itself and can never service a reconnect.
+                # Rebuild the toolkit (pool-owned, generation-checked): the
+                # caller's call fails, the next lookup finds the replacement.
+                self._reconnect_skipped(name, "supervisor_exited", reason, replace=True)
+                return await self._replace_wedged_toolkit(sup, reason=reason or "supervisor_exited")
+            self._reconnect_skipped(name, "closing", reason)
+            return False
         waiter = control.get("pending")
         loop = asyncio.get_running_loop()
         if (waiter is not None and not waiter.done()
@@ -1507,8 +1662,10 @@ class MCPPool:
             current = getattr(toolkit, "session", None)
             if (dead_session is not None and current is not None
                     and current is not dead_session and control.get("ready")):
-                # Another caller already replaced that session, and the new
-                # one finished its handshake.
+                # Another caller (or the supervisor itself, after a lost
+                # transport) already replaced that session, and the new one
+                # finished its handshake.
+                self._reconnect_skipped(sup.name, "already_replaced", reason, level="info")
                 return True
             waiter = loop.create_future()
             control["pending"] = waiter
@@ -1742,6 +1899,7 @@ class MCPPool:
             logger.error("Cannot build MCP toolkits — runtime or mcp SDK missing: %s", exc)
             return None
 
+        read_timeout = _mcp_read_timeout_seconds(spec.name)
         try:
             if spec.is_stdio:
                 params = StdioServerParameters(
@@ -1754,7 +1912,7 @@ class MCPPool:
                     server_params=params,
                     transport="stdio",
                     tool_name_prefix=_safe_prefix(spec.name),
-                    timeout_seconds=_MCP_TIMEOUT_SECONDS,
+                    timeout_seconds=read_timeout or _MCP_TIMEOUT_SECONDS,
                 )
             elif spec.url:
                 # Streamable HTTP is the runtime's default for URL-based servers.
@@ -1767,6 +1925,17 @@ class MCPPool:
                     url=spec.url,
                     headers=spec.headers or None,
                 )
+                if read_timeout:
+                    # ``MCPTools`` uses the smaller of ``timeout_seconds`` and
+                    # this ``timeout`` as the session read timeout, so without
+                    # an override every HTTP MCP call is cut at the params'
+                    # 30 s (not _MCP_TIMEOUT_SECONDS), which may be too short
+                    # for a server with long-running read operations.
+                    http_params.timeout = timedelta(seconds=read_timeout)
+                    sse_read = http_params.sse_read_timeout or timedelta(seconds=300)
+                    if sse_read.total_seconds() < read_timeout:
+                        http_params.sse_read_timeout = timedelta(seconds=read_timeout)
+                    http_params.httpx_client_factory = _bounded_connect_http_client
                 toolkit = MCPTools(
                     server_params=http_params,
                     transport="streamable-http",
