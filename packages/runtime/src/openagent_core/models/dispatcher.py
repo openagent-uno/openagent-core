@@ -62,6 +62,7 @@ from openagent_core.models.media_capabilities import (
     input_modalities_for,
     select_media_model,
 )
+from openagent_core.models.video_frames import FfmpegVideoFrameExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -1842,13 +1843,17 @@ class ModelDispatcher(BaseModel):
 
     history_mode = None
 
-    def __init__(self, providers_config: Any = None):
+    def __init__(
+        self, providers_config: Any = None, *,
+        video_frame_extractor: FfmpegVideoFrameExtractor | None = None,
+    ):
         # Providers_config is a flat list of provider entries (v0.12+).
         # Accept both shapes (list or legacy dict) so early-boot / tests
         # that still seed with a dict keep working.
         if providers_config is None:
             providers_config = []
         self._providers_config = providers_config
+        self._video_frame_extractor = video_frame_extractor
 
         self._budget: BudgetTracker | None = None
         # The budget enforcement gate. Created in ``set_db`` (needs the DB) and
@@ -2362,6 +2367,7 @@ class ModelDispatcher(BaseModel):
             images=images,
             audio=audio,
             videos=videos,
+            video_frame_extractor=self._video_frame_extractor,
         )
         if selection.fell_back:
             elog(

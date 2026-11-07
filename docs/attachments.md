@@ -19,9 +19,9 @@ prepares a separate provider payload:
   local path and size when available. The original bytes are not inlined or
   removed. Remote URL credentials/signatures are never copied into this block,
   and fallback extraction does not fetch URLs.
-- Image/audio/video prefer an enabled natively compatible model. When none is
-  configured, they also become original references, rather than aborting the
-  entire text conversation or sending incompatible bytes to a text provider.
+- Image/audio/video prefer an enabled natively compatible model. The optional
+  video preview described below can use a compatible image model. Other
+  unsupported inputs become original references, so the conversation can continue.
 
 A reference is untrusted input metadata and grants no access. The agent can
 inspect it only through capabilities actually registered and authorized by the
@@ -30,6 +30,40 @@ not fabricate a readable path. When a suitable reader is absent the model must
 state that limitation or request an appropriate capability, without claiming
 that it read the binary. A host must retain originals for the authorized tool's
 lifetime; this routing change does not extend a temporary file's lifetime.
+
+## Optional video frame previews
+
+An embedding host with trusted, maintained FFmpeg and FFprobe binaries can
+enable visual video previews through the public engine interface:
+
+```python
+from openagent_core.engine import FfmpegVideoFrameExtractor, ModelDispatcher
+
+dispatcher = ModelDispatcher(
+    providers_config=providers_config,
+    video_frame_extractor=FfmpegVideoFrameExtractor(
+        ffmpeg="/usr/bin/ffmpeg",
+        ffprobe="/usr/bin/ffprobe",
+    ),
+)
+```
+
+The dispatcher first considers models declared compatible with the original
+media. If none can handle the turn, an eligible image model can receive up to
+three chronological JPEG samples per video, appended after the original still
+images. References name the original attachment and identify each sample by
+image index and approximate timestamp. Sampling covers visual content only,
+with gaps between frames. Audio and dialogue in the video are unavailable to
+this fallback. The original remains in host storage and in attachment history.
+
+The preview accepts the first two video attachments per turn, each an admitted
+inline `video/mp4` of at most 8 MiB and 120 seconds. Input frames are limited to
+4,194,304 pixels and previews to 384 pixels on their longest side. Decoding is
+serialized per extractor and time-bounded. It uses a private temporary file,
+disables external data references and never follows caller-provided URLs or
+paths. Unreadable or out-of-bounds input remains available by reference. This
+setting does not admit uploads or grant new file access, and a host may enforce
+stricter limits or disable the extractor.
 
 ## XLSX safety and bounds
 
@@ -63,6 +97,11 @@ values, corrupt/hostile ZIP/XML cases, authorized original-path metadata and
 actual dispatcher generate/stream captures. The captures prove provider payload
 routing without claiming live provider or product installer acceptance. XLSX
 fixtures contain only synthetic customer labels and values.
+
+With FFmpeg and FFprobe installed, the same suite generates a synthetic MP4 and
+verifies that the dispatcher delivers the actual red, green and blue frames at
+ordered timestamps. It also checks native video priority, opt-in routing,
+size and type limits, and reference-only behavior for paths and URLs.
 
 Delegation session IDs are also independent of arbitrary model labels and
 nesting depth. A bounded root display prefix plus parent/model digest and UUID
