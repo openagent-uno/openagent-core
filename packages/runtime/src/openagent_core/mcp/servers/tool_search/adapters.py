@@ -530,48 +530,20 @@ def _compact_descriptor_wire(tool) -> dict[str, Any]:
     }
 
 
-def _discovery_search_score(tool, query: str) -> int | None:
-    """Rank a descriptor for a human-style capability query.
-
-    Matching is deliberately forgiving: any query term can select a tool, but
-    names containing all terms rank ahead of generic description matches. This
-    lets ``create adset`` find the exact write tool while still making broader
-    searches such as ``adset creative`` useful.
-    """
-    normalized_query = " ".join(query.casefold().replace("_", " ").replace("-", " ").split())
-    if not normalized_query:
-        return 0
-    terms = tuple(dict.fromkeys(normalized_query.split()))
-    name = " ".join(str(tool.name).casefold().replace("_", " ").replace("-", " ").split())
-    description = " ".join(str(tool.description or "").casefold().split())
-    combined = f"{name} {description}"
-    if not any(term in combined for term in terms):
-        return None
-    score = 0
-    if name == normalized_query:
-        score += 1_000
-    elif name.startswith(normalized_query):
-        score += 800
-    elif normalized_query in name:
-        score += 700
-    if all(term in combined for term in terms):
-        score += 300
-    for term in terms:
-        if term in name:
-            score += 100
-        elif term in description:
-            score += 20
-    return score
-
-
 async def _list_scoped_tools_impl(
     pool: Any,
-    source_ref: str,
+    source_ref: str | None = None,
     query: str | None = None,
     limit: int = _DEFAULT_DISCOVERY_PAGE_SIZE,
     offset: int = 0,
 ) -> dict[str, Any]:
     catalog, context = _authorized_catalog(pool)
+    if source_ref is not None and (not isinstance(source_ref, str) or not source_ref.strip()):
+        raise ValueError("source_ref must be an exact nonempty source reference")
+    if query is not None and (not isinstance(query, str) or len(query) > 512):
+        raise ValueError("query must be a string of at most 512 characters")
+    if source_ref is None and not (query or "").strip():
+        raise ValueError("A query is required to search across capability sources")
     if isinstance(limit, bool) or not isinstance(limit, int):
         raise TypeError("limit must be an integer")
     if isinstance(offset, bool) or not isinstance(offset, int):
@@ -581,14 +553,10 @@ async def _list_scoped_tools_impl(
     if offset < 0:
         raise ValueError("offset must be non-negative")
 
-    ranked = []
-    for tool in await catalog.discover(context):
-        if tool.source_id != source_ref:
-            continue
-        score = _discovery_search_score(tool, query or "")
-        if score is not None:
-            ranked.append((score, tool))
-    ranked.sort(key=lambda item: (-item[0], item[1].name.casefold(), item[1].name))
+    from .ranking import rank_tools
+    candidates = [tool for tool in await catalog.discover(context)
+                  if source_ref is None or tool.source_id == source_ref]
+    ranked = rank_tools(candidates, query or "")
     page = ranked[offset : offset + limit]
     return {
         "source_ref": source_ref,
@@ -597,7 +565,7 @@ async def _list_scoped_tools_impl(
         "offset": offset,
         "limit": limit,
         "has_more": offset + len(page) < len(ranked),
-        "tools": [_compact_descriptor_wire(tool) for _score, tool in page],
+        "tools": [_compact_descriptor_wire(tool) for tool in page],
     }
 
 
@@ -984,17 +952,18 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
         return await _list_scoped_servers_impl(pool)
 
     async def tool_search_list_tools(
-        source_ref: str,
+        source_ref: str | None = None,
         query: str | None = None,
         limit: int = _DEFAULT_DISCOVERY_PAGE_SIZE,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """Search a source's tools and return compact opaque references.
+        """Search authorized tools and return compact opaque references.
 
         Args:
             source_ref: Exact source reference returned by list_servers.
+                Omit to search across all authorized sources; then query is required.
             query: Optional capability words, for example ``create adset``.
-                Use a narrow query for sources with many tools.
+                Use a narrow query and limit=5 when finding an unknown capability.
             limit: Page size from 1 to 50. Defaults to 20.
             offset: Zero-based page offset. Increase it while ``has_more`` is true.
 

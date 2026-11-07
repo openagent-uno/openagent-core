@@ -1,0 +1,51 @@
+{
+  "status": "unreleased-source-candidate",
+  "core_base_commit": "7b85c96c6cc2a0543b25a840c33f80db9997b7b3",
+  "changes": [
+    "Optional source_ref with mandatory query for compact cross-source discovery; still four gateway tools",
+    "In-process BM25 over current authorized descriptors, names and argument names",
+    "Optional session_ref for sessions_read resolves only the current authenticated session",
+    "Sessions prompt revision 2 and honest lossy-compaction continuation marker"
+  ],
+  "targeted_source_tests": {
+    "command": "python -m pytest tests/public/test_discovery_ranking.py tests/public/test_mcp_catalog.py tests/public/test_session_resume_tools.py tests/prompts/test_prompt_contract.py -q",
+    "passed": 38,
+    "subtests_passed": 12,
+    "failed": 0
+  },
+  "product_routing_checks": {
+    "product_base_commit_short": "376e3c72",
+    "command": "python -m pytest tests/test_native_channel_transport.py tests/test_runtime_access.py tests/test_native_memory_access.py tests/test_channel_agent_identity.py packages/channel-bridges/tests/test_conversation.py packages/channel-bridges/tests/test_conversation_runtime.py -q",
+    "source_imports": "Product channel-bridges and this Core source candidate",
+    "passed": 62,
+    "failed": 0,
+    "product_source_fix": "Mapped-channel authorizer permits Sessions list/search/read/publication only for its current conversation and authorized child lineage; no cross-chat or administration grants",
+    "independent_core_compatibility": "The two new product history regressions also pass against unmodified Core base 7b85c96 using existing explicit session references",
+    "additional_synthetic_check": "Telegram direct-message descriptor keeps the same session_key after 3 and 4 days when proof time and event identity change; event deduplication keys remain distinct"
+  },
+  "broad_core_source_suite": {
+    "command": "python -m pytest tests/public tests/prompts -q",
+    "passed": 777,
+    "failed": 9,
+    "skipped": 2,
+    "subtests_passed": 122,
+    "baseline_check": "Unmodified Core 7b85c96 reproduces 8 of the failures in the same environment: 7 MCP catalog-refresh cases load an older ToolManifest without metadata support, and the TypeScript SDK fails compilation with TS2322",
+    "audio_case": "The ninth full-suite failure was audio worker JSON stdout contaminated by an asynchronous LiteLLM debug log. It passes separately on both the source candidate and baseline. This candidate does not modify audio; the full suite is not certified green"
+  },
+  "scope": {
+    "real_sqlite_restart": true,
+    "four_day_inactivity": "Simulated persisted timestamps, not four elapsed wall-clock days",
+    "compaction": "Real buffer rewrite with a stub summarizer intentionally omitting a detail; exact native canonical history remains readable",
+    "real_model_or_provider": false,
+    "live_telegram": false,
+    "incident_root_cause_identified": false,
+    "task_token_or_cost_savings_measured": false,
+    "published_wheels_or_production_deploy": false
+  },
+  "environment_notes": [
+    "Tests used an existing Python 3.11 development environment with repository source paths",
+    "Pytest reported the existing unset asyncio_default_fixture_loop_scope deprecation warning",
+    "The first resume-tool fixture attempt incorrectly supplied an unadmitted run ID; corrected to a host invocation scope without a durable run ID",
+    "The first product test collection selected an older installed Core; repeated successfully with explicit source paths"
+  ]
+}

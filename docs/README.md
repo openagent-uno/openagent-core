@@ -2,6 +2,9 @@
 
 ## Architecture and use
 
+- [Unreleased compact cross-source BM25 discovery](tool-catalog.md#lexical-retrieval-unreleased-source-candidate)
+  and [current-conversation history recovery](session-history.md#resuming-a-conversation-and-recovering-omitted-details).
+
 - [Beta52: lightweight configured OpenAI speech route](audio-host-contract.md).
 - [MCP transport recovery and optional per-server read deadlines](mcp-transport-recovery.md)
 

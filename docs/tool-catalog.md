@@ -12,9 +12,12 @@ description metadata without replacing adapters, schemas or invocation routing.
 The model receives four discovery functions only:
 
 - `tool_search_list_servers()` returns authorized source references and target labels.
-- `tool_search_list_tools(source_ref, query?, limit?, offset?)` returns a compact,
+- `tool_search_list_tools(source_ref?, query?, limit?, offset?)` returns a compact,
   ranked page of opaque references. It deliberately omits full JSON schemas;
   large sources should be narrowed with capability words such as `create adset`.
+  In the unreleased source candidate, omit `source_ref` and provide `query` to
+  search across all currently authorized sources. Start with `limit=5` rather
+  than listing each server. An empty query is allowed only for a selected source.
 - `tool_search_describe_tool(tool_ref)` resolves one current definition.
 - `tool_search_call_tool(tool_ref, args)` invokes that exact instance and generation.
 
@@ -24,6 +27,30 @@ cannot truncate later references inside a provider result. After selecting a
 compact entry, describe and call its exact reference in the same run. A revoked
 or replaced registration invalidates the reference immediately and requires a
 fresh discovery; pagination never creates or persists an authorization grant.
+
+### Lexical retrieval (unreleased source candidate)
+
+Discovery ranks authorized candidates in-process with dependency-free BM25,
+preferring an exact tool name or contiguous name phrase. Searchable text includes
+tool names, descriptions and top-level argument names, not argument-description
+prose or whole JSON schemas. Unicode words and camelCase argument names are
+normalized. This is lexical retrieval, not translation or semantic matching.
+Keep queries narrow; a miss is not proof that a capability is absent.
+
+The ranking corpus is rebuilt from the current authorized snapshot, never a
+cross-tenant cache of tool references. Both corpus statistics and returned counts
+therefore exclude undisclosed sources. Removing a source or revoking a device
+lease takes effect through the existing catalog, and invocation remains bound to
+the exact source, executor and registration generation. A query cannot grant
+access or authorize substitution of another target.
+
+There are still only four model-facing gateway functions. Compact results omit
+schemas and remain paginated (20 by default, 50 maximum); global searches require
+a nonblank query of at most 512 characters. Full schemas are loaded only for the
+selected reference. No embeddings, additional model calls or vector database
+are required. Dynamic replacement of the cached skills/system prefix is not part
+of this change. Token savings for complete tasks require a separate provider A/B
+measurement including cache reads, retries, discovery turns and task success.
 
 No model argument selects client/server routing. A source name is a durable
 logical binding; a tool reference is a short-lived handle and is not persisted
