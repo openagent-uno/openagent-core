@@ -29,7 +29,7 @@ or replaced registration invalidates the reference immediately and requires a
 fresh discovery; pagination never creates or persists an authorization grant.
 
 Hosts can opt into [exact named calls for selected pairs](discovery-presentation.md#opt-in-named-calls)
-with the source candidate. Each named call resolves an authorized opaque
+starting with Core `1.1.0b57`. Each named call resolves an authorized opaque
 binding and uses the same invocation and result path.
 
 ### Lexical retrieval (unreleased source candidate)

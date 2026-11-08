@@ -59,7 +59,7 @@ their existing denial behavior.
 
 ## Opt-in named calls
 
-In the source candidate, hosts with a small set of known tools can expose
+Starting with Core `1.1.0b57`, hosts with a small set of known tools can expose
 `tool_search_call_named_tool(source_ref, tool_name, args)` by passing
 `named_tools={('records', 'records_read')}` to `DiscoveryPresentation`.
 Supply at most 50 exact pairs of catalog source IDs and registered tool names.
