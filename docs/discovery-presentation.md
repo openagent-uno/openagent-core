@@ -46,7 +46,7 @@ data. Tool hints come exclusively from the same current authorized descriptors
 used for counting and discovery. Configuring a missing, denied or revoked source
 does not make it appear. Hints and descriptions are data, never access grants.
 
-`tool_descriptions` accepts only the four existing discovery function names.
+`tool_descriptions` accepts only the discovery function names.
 It changes description metadata after their normal schemas are prepared; input
 schemas and callable entrypoints stay intact. Values are nonempty strings with
 bounds of2048 characters per source summary and8192 per function description.
@@ -55,7 +55,23 @@ The preview is not a full inventory. `tool_search_list_tools` keeps its existing
 query, page-size, offset, total and `has_more` contract, and still supplies opaque
 references. Describe and call that exact reference in the same authorized run.
 Replacement, revocation, another runtime or a missing execution context retain
-their existing denial behavior. Presentation does not introduce a name fallback.
+their existing denial behavior.
+
+## Opt-in named calls
+
+In the source candidate, hosts with a small set of known tools can expose
+`tool_search_call_named_tool(source_ref, tool_name, args)` by passing
+`named_tools={('records', 'records_read')}` to `DiscoveryPresentation`.
+Supply at most 50 exact pairs of catalog source IDs and registered tool names.
+With the default empty set, the broker exposes the original four functions.
+
+Named calls resolve only the requested pair in the current authorized catalog
+and then invoke its opaque binding through the usual catalog call path. Session
+authorization, child tool-family limits, revocations and durable invocation
+records apply. Result handling uses the same MCP envelope and media projection
+as an opaque-reference call. Tools with an unknown schema can still be inspected
+with regular discovery. A missing pair or unavailable binding fails without
+substituting another tool or source.
 
 The [targeted qualification](evidence/discovery-presentation-v1-2026-11-02.json)
 uses a real built-in discovery toolkit, neutral capability sources and54 tools.

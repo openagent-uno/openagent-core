@@ -973,7 +973,7 @@ def _json_dump(value: Any) -> str:
 
 
 def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
-    """Return a runtime ``Toolkit`` with the same four tools.
+    """Return a runtime ``Toolkit`` with discovery and opt-in named calls.
 
     The runtime function names mirror the convention used by subprocess
     MCPs: ``<sanitised-server-name>_<tool>``. The pool's
@@ -985,6 +985,12 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
 
     if pool is None:
         raise RuntimeError("tool-search runtime adapter requires a pool kwarg")
+
+    async def present_result(envelope: Any) -> Any:
+        from openagent_core.runtime import current_runtime
+        service = getattr(current_runtime(), "service", None)
+        extractor = service("media.tool_video_frame_extractor") if callable(service) else None
+        return await _model_visible_result(envelope, video_frame_extractor=extractor)
 
     async def tool_search_list_servers() -> list[dict[str, Any]]:
         """List current authorized capability sources and tool counts.
@@ -1034,21 +1040,31 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
                 A JSON-encoded object string is also accepted for provider
                 compatibility.
         """
-        from openagent_core.runtime import current_runtime
         envelope = await _call_scoped_tool_impl(pool, tool_ref, args)
-        service = getattr(current_runtime(), "service", None)
-        extractor = service("media.tool_video_frame_extractor") if callable(service) else None
-        return await _model_visible_result(envelope, video_frame_extractor=extractor)
+        return await present_result(envelope)
 
-    toolkit = Toolkit(
-        name="tool-search",
-        tools=[
-            tool_search_list_servers,
-            tool_search_list_tools,
-            tool_search_describe_tool,
-            tool_search_call_tool,
-        ],
-    )
+    async def tool_search_call_named_tool(
+        source_ref: str, tool_name: str, args: dict | str | None = None,
+    ) -> Any:
+        """Invoke an exact tool by name when the host enables named calls for it.
+
+        Args:
+            source_ref: Exact capability source ID supplied by the host or discovery.
+            tool_name: Exact registered tool name, including any prefix from discovery.
+            args: Target tool arguments as an object, or as a JSON-encoded object string.
+        """
+        catalog, _ = _authorized_catalog(pool)
+        if (source_ref, tool_name) not in pool.discovery_presentation.named_tools:
+            raise PermissionError("Named calls are not enabled for this destination")
+        _require_server_allowed(source_ref)
+        result = await _call_tool_impl(catalog, source_ref, tool_name, args)
+        return await present_result(coerce_mcp_result_to_jsonable(result))
+
+    tools = [tool_search_list_servers, tool_search_list_tools,
+             tool_search_describe_tool, tool_search_call_tool]
+    if pool.discovery_presentation.named_tools:
+        tools.append(tool_search_call_named_tool)
+    toolkit = Toolkit(name="tool-search", tools=tools)
     for function in _functions_dict(toolkit).values():
         function.process_entrypoint()
         description = pool.discovery_presentation.tool_descriptions.get(function.name)

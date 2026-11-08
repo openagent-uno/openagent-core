@@ -9,7 +9,7 @@ Trusted hosts may configure [discovery presentation API v1](discovery-presentati
 before connecting an MCP pool. It adds bounded, authorized source hints and
 description metadata without replacing adapters, schemas or invocation routing.
 
-The model receives four discovery functions only:
+By default, the model receives four discovery functions:
 
 - `tool_search_list_servers()` returns authorized source references and target labels.
 - `tool_search_list_tools(source_ref?, query?, limit?, offset?)` returns a compact,
@@ -28,6 +28,10 @@ compact entry, describe and call its exact reference in the same run. A revoked
 or replaced registration invalidates the reference immediately and requires a
 fresh discovery; pagination never creates or persists an authorization grant.
 
+Hosts can opt into [exact named calls for selected pairs](discovery-presentation.md#opt-in-named-calls)
+with the source candidate. Each named call resolves an authorized opaque
+binding and uses the same invocation and result path.
+
 ### Lexical retrieval (unreleased source candidate)
 
 Discovery ranks authorized candidates in-process with dependency-free BM25,
@@ -44,7 +48,7 @@ lease takes effect through the existing catalog, and invocation remains bound to
 the exact source, executor and registration generation. A query cannot grant
 access or authorize substitution of another target.
 
-There are still only four model-facing gateway functions. Compact results omit
+The default still exposes four model-facing gateway functions. Compact results omit
 schemas and remain paginated (20 by default, 50 maximum); global searches require
 a nonblank query of at most 512 characters. Full schemas are loaded only for the
 selected reference. No embeddings, additional model calls or vector database

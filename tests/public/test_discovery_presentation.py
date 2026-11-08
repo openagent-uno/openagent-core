@@ -10,6 +10,7 @@ from openagent_core import (
 )
 from openagent_core.engine import MCPPool
 from openagent_core.contracts import require_authorized
+from openagent_core.core.tool_scope import reset_tool_allowlist, set_tool_allowlist
 from openagent_core.runtime import execution_scope
 
 
@@ -23,7 +24,7 @@ class Policy:
 
 class RecordingRuntime(SimpleNamespace):
     def __init__(self, catalog):
-        super().__init__(capabilities=catalog, services=SimpleNamespace(store=self))
+        super().__init__(capabilities=catalog, services=SimpleNamespace(store=self, executor=None))
         self.events = []
 
     async def authorize(self, context, action, resource, *, audience=()):
@@ -130,11 +131,51 @@ class DiscoveryPresentationContract(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             configured_pool.configure_discovery(DiscoveryPresentation())
 
+    async def test_named_calls_require_an_exact_grant_and_current_catalog_authority(self):
+        _, default = await self.make_pool()
+        self.assertNotIn("tool_search_call_named_tool", default)
+        _, configured = await self.make_pool(DiscoveryPresentation(named_tools={
+            ("records", "operation_00"), ("hidden-source", "private_operation"),
+        }))
+        call = configured["tool_search_call_named_tool"].entrypoint
+        with self.assertRaises(PermissionError):
+            await call(source_ref="records", tool_name="operation_00")
+        with execution_scope(self.runtime, self.context, "run-a"):
+            result = await call(source_ref="records", tool_name="operation_00", args='{"value":"exact"}')
+            self.assertEqual(result, {"selected": "operation_00"})
+            for source, name in (("records", "operation_01"), ("records", "operation-00"),
+                                 ("other-records", "operation_00")):
+                with self.assertRaises(PermissionError):
+                    await call(source_ref=source, tool_name=name)
+            with self.assertRaises(LookupError):
+                await call(source_ref="hidden-source", tool_name="private_operation")
+            token = set_tool_allowlist({"other-records"})
+            try:
+                with self.assertRaises(PermissionError):
+                    await call(source_ref="records", tool_name="operation_00")
+            finally:
+                reset_tool_allowlist(token)
+            self.policy.denied.add("records/operation_00")
+            with self.assertRaises(PermissionError):
+                await call(source_ref="records", tool_name="operation_00")
+            self.catalog.revoke("records")
+            with self.assertRaises(LookupError):
+                await call(source_ref="records", tool_name="operation_00")
+        self.assertEqual(self.calls, [("operation_00", {"value": "exact"})])
+        self.assertEqual(self.runtime.events, ["begin", "finish"])
+        other = SimpleNamespace(capabilities=CapabilityCatalog(self.policy))
+        with execution_scope(other, self.context, "run-other"):
+            with self.assertRaises(PermissionError):
+                await call(source_ref="records", tool_name="operation_00")
+
     def test_presentation_is_copied_bounded_and_rejects_unknown_tool_overrides(self):
         summaries = {"records": "Original"}
-        presentation = DiscoveryPresentation(source_summaries=summaries)
+        named_tools = {("records", "operation_00")}
+        presentation = DiscoveryPresentation(source_summaries=summaries, named_tools=named_tools)
         summaries["records"] = "Changed"
+        named_tools.clear()
         self.assertEqual(presentation.source_summaries["records"], "Original")
+        self.assertEqual(presentation.named_tools, frozenset({("records", "operation_00")}))
         with self.assertRaises(TypeError):
             presentation.source_summaries["records"] = "Changed"
         for limit in (0, 51, True):
@@ -144,3 +185,7 @@ class DiscoveryPresentationContract(unittest.IsolatedAsyncioTestCase):
             DiscoveryPresentation(tool_descriptions={"operation_00": "Cannot replace a leaf"})
         with self.assertRaises(TypeError):
             DiscoveryPresentation(capability_sources="records")
+        for invalid in ({("records", "")}, {("records",)},
+                        {("records", "x" * 257)}, {("records", f"op_{i}") for i in range(51)}):
+            with self.assertRaises(ValueError):
+                DiscoveryPresentation(named_tools=invalid)

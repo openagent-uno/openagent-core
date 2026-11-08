@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from openagent_core import DiscoveryPresentation
 from openagent_core.capabilities import CapabilityCatalog, FunctionSource, ToolDefinition
 from openagent_core.contracts import ExecutionContext, PrincipalRef
 from openagent_core.engine import FfmpegVideoFrameExtractor
@@ -164,12 +165,14 @@ class ToolSearchMediaTests(unittest.IsolatedAsyncioTestCase):
         extractor = FfmpegVideoFrameExtractor()
         runtime = SimpleNamespace(
             capabilities=catalog, settings=SimpleNamespace(environment=()),
+            services=SimpleNamespace(executor=None),
             service={"media.tool_video_frame_extractor": extractor}.get,
         )
-        pool = MCPPool([])
+        pool = MCPPool([]).configure_discovery(DiscoveryPresentation(
+            named_tools={('media-fixture', 'read')},
+        ))
         pool.bind_capability_catalog(catalog)
         toolkit = build_runtime_toolkit(pool=pool)
-        call = toolkit.async_functions["tool_search_call_tool"]
         requests = []
 
         def provider(request):
@@ -178,7 +181,7 @@ class ToolSearchMediaTests(unittest.IsolatedAsyncioTestCase):
             if len(requests) == 1:
                 message = {"role": "assistant", "content": None, "tool_calls": [{
                     "id": "call_clip", "type": "function", "function": {
-                        "name": call.name, "arguments": json.dumps({"tool_ref": descriptor.tool_ref}),
+                        "name": call.name, "arguments": json.dumps(arguments),
                     },
                 }]}
                 reason = "tool_calls"
@@ -199,8 +202,15 @@ class ToolSearchMediaTests(unittest.IsolatedAsyncioTestCase):
                 "choices": [{"index": 0, "message": message, "finish_reason": reason}],
             })
 
-        for streamed in (False, True):
-            with self.subTest(streamed=streamed):
+        reference = {"tool_ref": descriptor.tool_ref}
+        named = {"source_ref": "media-fixture", "tool_name": "read"}
+        for streamed, tool, arguments in (
+            (False, "tool_search_call_tool", reference),
+            (True, "tool_search_call_tool", reference),
+            (True, "tool_search_call_named_tool", named),
+        ):
+            with self.subTest(streamed=streamed, tool=tool):
+                call = toolkit.async_functions[tool]
                 requests.clear()
                 async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
                     client = AsyncOpenAI(base_url="https://example.invalid/v1", api_key="unused", http_client=http)
@@ -232,5 +242,10 @@ class ToolSearchMediaTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(rgb[channel], max(rgb))
                     self.assertGreater(rgb[channel], 100)
         with execution_scope(runtime, context, None):
-            projected = await call.entrypoint(tool_ref=descriptor.tool_ref)
+            projected = await toolkit.async_functions["tool_search_call_tool"].entrypoint(**reference)
+            named_projected = await toolkit.async_functions["tool_search_call_named_tool"].entrypoint(**named)
         self.assertEqual(projected.mcp_result, envelope)
+        self.assertEqual(named_projected.mcp_result, envelope)
+        self.assertEqual(named_projected.content, projected.content)
+        self.assertEqual([frame.content for frame in named_projected.images],
+                         [frame.content for frame in projected.images])
