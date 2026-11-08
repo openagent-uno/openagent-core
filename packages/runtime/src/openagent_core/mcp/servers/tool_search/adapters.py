@@ -43,6 +43,7 @@ _MAX_MCP_RESULT_NODES = 100_000
 # which expands to roughly 86 MiB as base64. Keep enough headroom for its MCP
 # envelope and derived media fields while still bounding a hostile/custom MCP.
 _MAX_MCP_RESULT_JSON_BYTES = 256 * 1024 * 1024
+_MCP_VIDEO_MAX_PREVIEWS = 2
 
 
 class MCPResultEnvelopeLimitError(ValueError):
@@ -859,8 +860,19 @@ async def _call_scoped_tool_impl(pool: Any, tool_ref: str, args: dict | str | No
     return coerce_mcp_result_to_jsonable(result)
 
 
-def _model_visible_result(envelope: Any) -> Any:
-    """Give the model MCP images as images, while retaining the wire envelope.
+def _embedded_video(block: dict) -> tuple[str, Any] | None:
+    resource = block.get("resource")
+    if block.get("type") != "resource" or not isinstance(resource, dict):
+        return None
+    mime = resource.get("mimeType")
+    if not isinstance(mime, str):
+        return None
+    mime = mime.split(";", 1)[0].strip().lower()
+    return (mime, resource.get("blob")) if mime.startswith("video/") else None
+
+
+async def _model_visible_result(envelope: Any, *, video_frame_extractor=None) -> Any:
+    """Give the model MCP images and opt-in video frames without altering the wire envelope.
 
     Tool-search is an in-process tool. Returning its JSON envelope directly
     turns an MCP screenshot into a long base64 *text* tool result. The provider
@@ -870,7 +882,9 @@ def _model_visible_result(envelope: Any) -> Any:
     if not isinstance(envelope, dict) or not isinstance(envelope.get("content"), list):
         return envelope
     blocks = envelope["content"]
-    if not any(isinstance(block, dict) and block.get("type") == "image" for block in blocks):
+    if not any(isinstance(block, dict) and (
+        block.get("type") == "image" or _embedded_video(block) is not None
+    ) for block in blocks):
         return envelope
 
     from openagent_core.mcp._runtime.function import ToolResult
@@ -881,10 +895,12 @@ def _model_visible_result(envelope: Any) -> Any:
         _bounded_mcp_text,
         _decode_mcp_base64,
     )
+    from openagent_core.models.video_frames import MAX_VIDEO_PREVIEW_BYTES
 
     text_parts: list[str] = []
     images: list[Image] = []
     media_bytes = 0
+    video_count = 0
     for block in blocks[:_MCP_CONTENT_MAX_ITEMS]:
         if not isinstance(block, dict):
             continue
@@ -904,6 +920,34 @@ def _model_visible_result(envelope: Any) -> Any:
                 continue
             media_bytes += len(data)
             images.append(Image(content=data, mime_type=block.get("mimeType") or "image/png"))
+        elif (video := _embedded_video(block)) is not None:
+            video_count += 1
+            mime, blob = video
+            if envelope.get("isError") is True or video_frame_extractor is None or mime != "video/mp4":
+                text_parts.append("[Embedded video retained without a visual preview.]")
+                continue
+            if video_count > _MCP_VIDEO_MAX_PREVIEWS:
+                text_parts.append("[Embedded video preview limit reached for this tool result.]")
+                continue
+            try:
+                data = _decode_mcp_base64(
+                    blob,
+                    label="MCP embedded video",
+                    remaining_bytes=min(MAX_VIDEO_PREVIEW_BYTES, _MCP_MEDIA_MAX_TOTAL_BYTES - media_bytes),
+                )
+            except ValueError as exc:
+                text_parts.append(f"[Rejected MCP embedded video: {exc}]")
+                continue
+            media_bytes += len(data)
+            frames = await video_frame_extractor.extract(data, mime)
+            if not frames:
+                text_parts.append("[Embedded video could not be sampled.]")
+                continue
+            stamps = []
+            for frame in frames:
+                images.append(Image(content=frame.content, mime_type="image/jpeg"))
+                stamps.append(f"image {len(images)} at {frame.timestamp_seconds:.3f}s")
+            text_parts.append("[Embedded video visual samples, without audio: " + ", ".join(stamps) + ".]")
     if len(blocks) > _MCP_CONTENT_MAX_ITEMS:
         text_parts.append(f"[Omitted {len(blocks) - _MCP_CONTENT_MAX_ITEMS} additional MCP content items]")
     if images:
@@ -990,7 +1034,11 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
                 A JSON-encoded object string is also accepted for provider
                 compatibility.
         """
-        return _model_visible_result(await _call_scoped_tool_impl(pool, tool_ref, args))
+        from openagent_core.runtime import current_runtime
+        envelope = await _call_scoped_tool_impl(pool, tool_ref, args)
+        service = getattr(current_runtime(), "service", None)
+        extractor = service("media.tool_video_frame_extractor") if callable(service) else None
+        return await _model_visible_result(envelope, video_frame_extractor=extractor)
 
     toolkit = Toolkit(
         name="tool-search",

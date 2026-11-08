@@ -65,6 +65,37 @@ paths. Unreadable or out-of-bounds input remains available by reference. This
 setting does not admit uploads or grant new file access, and a host may enforce
 stricter limits or disable the extractor.
 
+### Visual previews of MCP tool results
+
+An authenticated engine host can also opt into in-turn visual previews of
+videos returned by an authorized MCP tool. Bind the same public extractor in
+the host's `RuntimeServices` before starting the runtime:
+
+```python
+services.registry.bind("media.tool_video_frame_extractor", extractor)
+```
+
+Here `extractor` is a `FfmpegVideoFrameExtractor` configured with trusted
+local binaries, as in the previous example. Enable this binding when the
+agent's tool-use models can receive images. The binding applies to this
+runtime, and the current model handles the preview.
+
+The tool must return a standard MCP embedded `resource` with MIME type
+`video/mp4` and inline base64 `blob` bytes. The discovery tool projects up to
+two embedded videos per result using the extractor's existing bounds. It
+provides chronological JPEGs and their approximate timestamps to the current
+model conversation, without embedding the original video or audio in the
+model-facing message. The canonical MCP result envelope stays intact,
+including the embedded bytes, under the normal tool-result retention policy. An
+unsupported, unsuccessful or invalid result is reported without claiming
+that its video was seen.
+
+MCP resource links and embedded resource URIs remain references. The host
+owns tool and asset permissions, and the preview uses only bytes already
+authorized as part of the current tool result.
+The provider request test exercises a real MP4 through authorized discovery
+and the OpenAI-compatible tool loop against a local fixture transport.
+
 ## XLSX safety and bounds
 
 The local reader uses the Python standard library, with no workbook engine,

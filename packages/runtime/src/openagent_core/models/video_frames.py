@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 
 
 MAX_VIDEO_PREVIEWS_PER_TURN = 2
-_MAX_BYTES = 8 * 1024 * 1024
+MAX_VIDEO_PREVIEW_BYTES = 8 * 1024 * 1024
 _MAX_DURATION = 120
 _MAX_PIXELS = 4_194_304
 _MAX_ALLOCATION = "33554432"
@@ -69,7 +69,7 @@ class FfmpegVideoFrameExtractor:
         self._decode_lock = asyncio.Lock()
 
     async def extract(self, content: bytes, mime_type: str) -> tuple[VideoFrame, ...]:
-        if mime_type != "video/mp4" or not isinstance(content, bytes) or not 0 < len(content) <= _MAX_BYTES:
+        if mime_type != "video/mp4" or not isinstance(content, bytes) or not 0 < len(content) <= MAX_VIDEO_PREVIEW_BYTES:
             return ()
         try:
             async with asyncio.timeout(12):

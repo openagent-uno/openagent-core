@@ -101,14 +101,14 @@ def _decode_mcp_base64(
     if remaining_bytes is not None:
         limit = min(limit, max(0, int(remaining_bytes)))
     max_encoded = 4 * ((limit + 2) // 3)
+    if len(value) > max_encoded:
+        raise ValueError(
+            f"{label} exceeds the {limit}-byte remaining media limit"
+        )
     try:
         encoded = value.encode("ascii")
     except UnicodeEncodeError as exc:
         raise ValueError(f"{label} contains non-ASCII base64 data") from exc
-    if len(encoded) > max_encoded:
-        raise ValueError(
-            f"{label} exceeds the {limit}-byte remaining media limit"
-        )
     try:
         decoded = base64.b64decode(encoded, validate=True)
     except (ValueError, TypeError) as exc:
