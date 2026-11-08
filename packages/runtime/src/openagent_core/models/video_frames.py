@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,6 +19,7 @@ _MAX_ALLOCATION = "33554432"
 _MAX_FRAME_BYTES = 192 * 1024
 _FRAME_EDGE = 384
 _SAMPLE_POSITIONS = (0.0, 0.45, 0.85)
+_MAX_SAMPLE_COUNT = 12
 _LOCAL_MP4 = (
     "-protocol_whitelist", "file", "-f", "mov",
     "-enable_drefs", "0", "-use_absolute_path", "0",
@@ -63,9 +65,21 @@ class FfmpegVideoFrameExtractor:
     file, never a URL or an attachment path supplied by a caller.
     """
 
-    def __init__(self, *, ffmpeg: str = "ffmpeg", ffprobe: str = "ffprobe") -> None:
+    def __init__(
+        self, *, ffmpeg: str = "ffmpeg", ffprobe: str = "ffprobe",
+        sample_positions: Sequence[float] = _SAMPLE_POSITIONS,
+    ) -> None:
+        positions = tuple(sample_positions)
+        if not (
+            1 <= len(positions) <= _MAX_SAMPLE_COUNT
+            and all(isinstance(position, (int, float)) and not isinstance(position, bool)
+                    and 0 <= position < 1 for position in positions)
+            and all(left < right for left, right in zip(positions, positions[1:]))
+        ):
+            raise ValueError("Video sample positions must contain 1–12 increasing fractions in [0, 1).")
         self._ffmpeg = ffmpeg
         self._ffprobe = ffprobe
+        self._sample_positions = positions
         self._decode_lock = asyncio.Lock()
 
     async def extract(self, content: bytes, mime_type: str) -> tuple[VideoFrame, ...]:
@@ -102,7 +116,7 @@ class FfmpegVideoFrameExtractor:
             return ()
 
         frames = []
-        for position in _SAMPLE_POSITIONS:
+        for position in self._sample_positions:
             timestamp = duration * position
             jpeg = await _bounded_output(
                 self._ffmpeg,

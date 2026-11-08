@@ -80,6 +80,13 @@ local binaries, as in the previous example. Enable this binding when the
 agent's tool-use models can receive images. The binding applies to this
 runtime, and the current model handles the preview.
 
+The host can pass `sample_positions` to the extractor to increase temporal
+coverage for short clips. Supply one to twelve strictly increasing fractions
+of the video duration in `[0, 1)`. The default samples at 0%, 45% and 85%.
+The existing extraction deadline and byte limits still apply. Results report
+only the samples that decoded successfully. A brief event can occur between
+samples, so a preview alone does not establish that an event happened.
+
 The tool must return a standard MCP embedded `resource` with MIME type
 `video/mp4` and inline base64 `blob` bytes. The discovery tool projects up to
 two embedded videos per result using the extractor's existing bounds. It

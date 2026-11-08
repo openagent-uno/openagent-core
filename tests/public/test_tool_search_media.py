@@ -93,6 +93,35 @@ class ToolSearchMediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("preview limit reached", multiple.content)
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg not installed")
+    async def test_host_can_sample_inside_a_short_event_between_default_positions(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "event.mp4"
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=black:s=160x90:r=20:d=2",
+                 "-vf", "drawbox=color=white:t=fill:enable='between(t,0.4,0.6)'",
+                 "-c:v", "mpeg4", str(path)], check=True, timeout=15,
+            )
+            clip = path.read_bytes()
+
+        normal = await FfmpegVideoFrameExtractor().extract(clip, "video/mp4")
+        detailed = await FfmpegVideoFrameExtractor(sample_positions=(0, .25, .75)).extract(clip, "video/mp4")
+        self.assertEqual([frame.timestamp_seconds for frame in detailed], [0, .5, 1.5])
+
+        def pixel(frame):
+            return subprocess.run(
+                ["ffmpeg", "-v", "error", "-i", "pipe:0", "-vf", "scale=1:1",
+                 "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1"], input=frame.content,
+                capture_output=True, check=True, timeout=5,
+            ).stdout[0]
+
+        self.assertEqual(len(normal), 3)
+        self.assertTrue(all(pixel(frame) < 10 for frame in normal))
+        self.assertGreater(pixel(detailed[1]), 240)
+        for invalid in ((), (0, 0), (.5, .2), (0, 1), (True,), (float("nan"),)):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                FfmpegVideoFrameExtractor(sample_positions=invalid)
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg not installed")
     async def test_provider_followup_receives_ordered_frames_from_authorized_tool_result(self):
         import httpx
         from openai import AsyncOpenAI
