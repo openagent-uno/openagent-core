@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta56: optional visual previews of tool videos and speech synthesis](releases/v1.1.0-beta.56.md).
+
 - [Optional current-user notification capability](notifications.md).
 
 - [Beta54: optional video frame previews for image models](releases/v1.1.0-beta.54.md).
