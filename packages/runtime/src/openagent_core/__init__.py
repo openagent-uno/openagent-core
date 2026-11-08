@@ -12,6 +12,7 @@ from .capabilities import (CapabilityCatalog, CapabilitySource, ToolExecutor,
 from .extensions import EngineExtensions
 from .discovery import DISCOVERY_PRESENTATION_API_VERSION, DiscoveryPresentation
 from .notifications import NotificationCapability, NotificationRequest, NotificationSink
+from .speech_synthesis import SpeechSynthesisCapability
 from .modules import (MODULE_API_VERSION, MODULE_SURFACES, CapabilityContribution,
     ModuleCatalog, ModuleConfig, ModuleContext, ModuleContribution, ModuleDescriptor,
     ModuleInstance, ModuleMigration, ModuleReconfigurationError, ModuleReferenceConflict,
@@ -26,6 +27,7 @@ __all__ = ['Runtime','RuntimeSettings','RuntimeServices','PrincipalRef','Executi
     'FunctionSource','CapabilityUnavailable','IdempotencyConflict','EngineExtensions',
     'DISCOVERY_PRESENTATION_API_VERSION','DiscoveryPresentation',
     'NotificationCapability','NotificationRequest','NotificationSink',
+    'SpeechSynthesisCapability',
     'MODULE_API_VERSION','MODULE_SURFACES','CapabilityContribution','ModuleCatalog','ModuleConfig',
     'ModuleContext','ModuleContribution','ModuleDescriptor','ModuleInstance','ModuleMigration',
     'ModuleReconfigurationError','ModuleReferenceConflict','ModuleReferenceInspector',
