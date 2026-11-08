@@ -11,19 +11,21 @@ from .capabilities import (CapabilityCatalog, CapabilitySource, ToolExecutor,
     ToolDefinition, ToolDescriptor, FunctionSource, CapabilityUnavailable)
 from .extensions import EngineExtensions
 from .discovery import DISCOVERY_PRESENTATION_API_VERSION, DiscoveryPresentation
+from .notifications import NotificationCapability, NotificationRequest, NotificationSink
 from .modules import (MODULE_API_VERSION, MODULE_SURFACES, CapabilityContribution,
     ModuleCatalog, ModuleConfig, ModuleContext, ModuleContribution, ModuleDescriptor,
     ModuleInstance, ModuleMigration, ModuleReconfigurationError, ModuleReferenceConflict,
     ModuleReferenceInspector, ModuleResolutionError,
     ModuleStatus, ReconfigureReceipt, RuntimeProfile, ServiceBinding, ServiceRegistry)
 
-__version__ = '1.1.0b54'
+__version__ = '1.1.0b55'
 __all__ = ['Runtime','RuntimeSettings','RuntimeServices','PrincipalRef','ExecutionContext',
     'CapabilityLease','ResourceRef','RunRequest','AcceptedRunRequest','RunRecord','RunEvent','Authorizer',
     'IdentityDirectory','RuntimeStore','SessionRef','SessionStore','ModelCatalog','CredentialResolver','DelegationService',
     'CapabilityCatalog','CapabilitySource','ToolExecutor','ToolDefinition','ToolDescriptor',
     'FunctionSource','CapabilityUnavailable','IdempotencyConflict','EngineExtensions',
     'DISCOVERY_PRESENTATION_API_VERSION','DiscoveryPresentation',
+    'NotificationCapability','NotificationRequest','NotificationSink',
     'MODULE_API_VERSION','MODULE_SURFACES','CapabilityContribution','ModuleCatalog','ModuleConfig',
     'ModuleContext','ModuleContribution','ModuleDescriptor','ModuleInstance','ModuleMigration',
     'ModuleReconfigurationError','ModuleReferenceConflict','ModuleReferenceInspector',

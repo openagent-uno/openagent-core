@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Optional current-user notification capability](notifications.md).
+
 - [Beta54: optional video frame previews for image models](releases/v1.1.0-beta.54.md).
 
 - [Beta53: complete isolated engine qualification and current-session recovery](releases/v1.1.0-beta.53.md)
