@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Staged operations in authenticated runs](staged-operations.md).
+
 - [Beta57: opt-in named calls through the authorized tool catalog](releases/v1.1.0-beta.57.md).
 
 - [Beta56: optional visual previews of tool videos and speech synthesis](releases/v1.1.0-beta.56.md).

@@ -417,6 +417,30 @@ class SqliteRuntimeStore:
         rows=self.connection.execute('SELECT sequence,event_type,metadata_json FROM domain_events WHERE run_id=? AND sequence>? ORDER BY sequence',(run_id,after))
         return tuple(RunEvent(r[0],run_id,r[1],json.loads(r[2])) for r in rows)
 
+    def _start_operation(self, run_id: str, payload: Mapping[str, Any]) -> RunEvent:
+        from openagent_core.operations import STARTED
+
+        with self._transaction() as db:
+            self._require_run_not_quarantined(run_id)
+            run = db.execute('SELECT status FROM session_runs WHERE id=?', (run_id,)).fetchone()
+            if run is None or run['status'] != 'running':
+                raise RuntimeError('An operation checkpoint requires an active run')
+            previous = payload.get('resume_run_id')
+            conflict = db.execute('''SELECT 1 FROM domain_events WHERE event_type=?
+                AND (run_id=? OR json_extract(metadata_json,'$.resume_run_id')=?) LIMIT 1''',
+                (STARTED, run_id, previous)).fetchone()
+            if conflict is not None:
+                raise IdempotencyConflict('This operation checkpoint already has a continuation')
+            return self._event(db, run_id, STARTED, payload)
+
+    def _operation_events(self, run_id: str) -> tuple[RunEvent, ...]:
+        from openagent_core.operations import CHECKPOINT_EVENTS
+
+        self._require_run_not_quarantined(run_id)
+        rows = self.connection.execute('''SELECT sequence,event_type,metadata_json FROM domain_events
+            WHERE run_id=? AND event_type IN (?,?,?) ORDER BY sequence''', (run_id, *CHECKPOINT_EVENTS))
+        return tuple(RunEvent(r[0], run_id, r[1], json.loads(r[2])) for r in rows)
+
     def _recover(self) -> None:
         pending=self.connection.execute("SELECT t.session_run_id,t.tool_call_id FROM tool_invocations t JOIN session_runs r ON r.id=t.session_run_id WHERE json_extract(r.metadata_json,'$.runtime_contract')=1 AND t.finished_at_ms IS NULL").fetchall()
         for row in pending:
@@ -621,6 +645,8 @@ class SqliteRuntimeStore:
     begin_tool = _serialized(_begin_tool)
     finish_tool = _serialized(_finish_tool)
     events = _serialized(_events)
+    start_operation = _serialized(_start_operation)
+    operation_events = _serialized(_operation_events)
     recover = _serialized(_recover)
     children = _serialized(_children)
     accepted_request = _serialized(_accepted_request)

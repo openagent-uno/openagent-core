@@ -1800,6 +1800,10 @@ class NativeProvider(ProviderResources, BaseModel):
         from openagent_core.models.providers.message import Message
         messages = [Message(role='system',content=request.instructions)] if request.instructions else []
         messages.extend(Message(role=value['role'],content=value['content']) for value in request.messages)
+        if request.images:
+            from openagent_core.stream.media import Image
+            user_message = next(message for message in reversed(messages) if message.role == 'user')
+            user_message.images = [Image(content=image.content, mime_type=image.mime_type) for image in request.images]
         model = self._build_runtime_model()
         try:
             response = await model.aresponse(messages=messages,tools=[],tool_choice='none',tool_call_limit=0)

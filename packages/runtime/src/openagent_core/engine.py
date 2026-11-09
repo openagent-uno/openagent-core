@@ -37,7 +37,17 @@ def __getattr__(name: str):
 
 class AgentExecutor:
     def __init__(self, agent: Any, *, owns_agent: bool = True, request_scope=None,
-                 command_handler=None, require_final_answer: bool = False) -> None:
+                 command_handler=None, require_final_answer: bool = False,
+                 operations=(), resolve_operation=None, operation_inference=None) -> None:
+        from .operations import StagedOperation
+        definitions = tuple(operations)
+        if any(not isinstance(value, StagedOperation) for value in definitions):
+            raise TypeError('Expected versioned staged operation definitions')
+        self._operations = {value.name: value for value in definitions}
+        if len(self._operations) != len(definitions) or bool(definitions) != callable(resolve_operation):
+            raise ValueError('Operation names must be unique and have a host selector')
+        self._resolve_operation = resolve_operation
+        self._operation_inference = operation_inference
         self.agent = agent
         self.owns_agent = owns_agent
         self.request_scope = request_scope
@@ -93,8 +103,20 @@ class AgentExecutor:
                 return handled
         if self.request_scope is not None:
             async with self.request_scope(request, context, runtime) as resolved:
-                return await self._execute_agent(resolved, context, runtime)
-        return await self._execute_agent(request, context, runtime)
+                return await self._execute_selected(request, resolved, context, runtime)
+        return await self._execute_selected(request, request, context, runtime)
+
+    async def _execute_selected(self, request, resolved, context, runtime):
+        if self._resolve_operation is not None:
+            from .operations import resolve_operation, run_operation
+            invocation = await resolve_operation(self._resolve_operation, request, context)
+            if invocation is not None:
+                operation = self._operations.get(invocation.name)
+                if operation is None:
+                    raise ValueError('The host selected an unknown operation')
+                return await run_operation(runtime, request, context, operation, invocation,
+                                           self._resolve_operation, self._operation_inference)
+        return await self._execute_agent(resolved, context, runtime)
 
 
     async def _execute_agent(self, request, context, runtime):
