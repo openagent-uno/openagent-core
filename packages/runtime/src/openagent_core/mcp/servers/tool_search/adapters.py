@@ -869,11 +869,15 @@ def _model_visible_result(envelope: Any) -> Any:
     """
     if not isinstance(envelope, dict) or not isinstance(envelope.get("content"), list):
         return envelope
+    from openagent_core.mcp._runtime.function import ToolResult
+
     blocks = envelope["content"]
+    failed = envelope.get("isError") is True
     if not any(isinstance(block, dict) and block.get("type") == "image" for block in blocks):
+        if failed:
+            return ToolResult(content=f"Error from MCP tool: {_json_dump(envelope)}", mcp_result=envelope)
         return envelope
 
-    from openagent_core.mcp._runtime.function import ToolResult
     from openagent_core.stream.media import Image
     from openagent_core.core._runner.utils.mcp import (
         _MCP_CONTENT_MAX_ITEMS,
@@ -908,6 +912,8 @@ def _model_visible_result(envelope: Any) -> Any:
         text_parts.append(f"[Omitted {len(blocks) - _MCP_CONTENT_MAX_ITEMS} additional MCP content items]")
     if images:
         text_parts.append(f"[{len(images)} image(s) attached to this tool result; inspect the pixels before describing them.]")
+    if failed:
+        text_parts.insert(0, "Error from MCP tool.")
     summary, _ = _bounded_mcp_text(
         "\n".join(text_parts), label="MCP combined tool output",
         max_chars=200_000, max_bytes=512 * 1024,
