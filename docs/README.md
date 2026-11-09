@@ -2,6 +2,7 @@
 
 ## Architecture and use
 
+- [Beta61: image evidence in staged completions](releases/v1.1.0-beta.61.md).
 - [Beta60: desktop interaction for authorized host viewers](releases/v1.1.0-beta.60.md).
 
 - [Beta59: bounded video preview resolution for staged operations](releases/v1.1.0-beta.59.md).

@@ -56,8 +56,9 @@ version when a stage's behavior changes.
   Starting with Core `1.1.0b59`, bind `media.operation_video_frame_extractor`
   to configure resolution and sample positions independently for these steps.
   If that binding is absent, the operation uses `media.tool_video_frame_extractor`.
-  `image_tool` accepts one exact authorized catalog tool that returns between
-  one and 24 inline MCP image blocks, with optional text in the same order.
+  Starting with Core `1.1.0b61`, `image_tool` accepts one exact authorized
+  catalog tool that returns between one and 24 inline MCP image blocks, with
+  optional text in the same order.
   Evidence must be JPEG, PNG or WebP, with at most 8 MiB of decoded image data
   in total. A missing image, invalid inline data or linked resource fails the
   stage before inference. The canonical tool receipt retains the evidence and
