@@ -6,21 +6,29 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from openagent_core import CapabilityCatalog, ExecutionContext, FunctionSource, PrincipalRef
 from openagent_core import RunRequest, Runtime, RuntimeServices, RuntimeSettings, ToolDefinition
 from openagent_core.engine import AgentExecutor
 from openagent_core.inference import StatelessInference
 from openagent_core.models.video_frames import VideoFrame
-from openagent_core.operations import CompleteOperation, CompletionStep, OperationInvocation
-from openagent_core.operations import StagedOperation, ToolStep, WaitStep, STEP_COMPLETED
+from openagent_core.operations import CompleteOperation, CompletionStep, OperationError, OperationInvocation
+from openagent_core.operations import StagedOperation, ToolStep, WaitStep, STEP_COMPLETED, _image_evidence
 from openagent_storage_sqlite import SqliteRuntimeStore
 
 
 class Policy:
+    allow_tool = True
+
     async def authorize(self, context, action, resource, *, audience=()):
+        if action == 'tool.call':
+            return self.allow_tool
         return resource.kind != 'session' or resource.resource_id == context.session_id
+
+
+PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ipxkAAAAASUVORK5CYII='
+IMAGE = {'type': 'image', 'mimeType': 'image/png', 'data': PNG}
 
 
 class OperationsTests(unittest.IsolatedAsyncioTestCase):
@@ -31,8 +39,8 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
         principal = PrincipalRef('host-a', 'tenant-a', 'operator-a')
         self.context = ExecutionContext(principal, principal, principal, 'session-a', 'agent-a', (principal,))
 
-    async def runtime(self, next_step, tools, *, infer=None, extractor=None, operation_extractor=None):
-        policy = Policy()
+    async def runtime(self, next_step, tools, *, infer=None, extractor=None, operation_extractor=None, policy=None):
+        policy = policy or Policy()
         catalog = CapabilityCatalog(policy)
         source = FunctionSource(tuple(ToolDefinition(name, name, {}) for name in tools), tools)
         catalog.register('records', source, source, target_label='Records')
@@ -129,6 +137,93 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
         finished = [event.payload for event in events if event.kind == STEP_COMPLETED]
         self.assertEqual([row['key'] for row in finished], ['plan', 'submit', 'wait', 'review', 'publish'])
         self.assertNotIn(video_blob, json.dumps(finished))
+
+    async def test_image_completion_uses_exact_catalog_and_checkpoints_only_the_decision(self):
+        calls, requests = [], []
+        policy = Policy()
+
+        async def read(args, context):
+            self.assertEqual(context, self.context)
+            self.assertEqual(args, {'id': 'record-a'})
+            calls.append(args)
+            return {'content': [{'type': 'text', 'text': 'first authorized still'}, IMAGE,
+                                {'type': 'text', 'text': 'second authorized still'}, IMAGE]}
+
+        async def infer(request):
+            requests.append(request)
+            self.assertEqual([(image.content, image.mime_type) for image in request.images],
+                             [(base64.b64decode(PNG), 'image/png')] * 2)
+            prompt = request.messages[0]['content']
+            self.assertIn('first authorized still\n[Image 1]\nsecond authorized still\n[Image 2]', prompt)
+            self.assertNotIn(PNG, prompt)
+            return SimpleNamespace(content='{"accepted":true}')
+
+        def next_step(state):
+            if 'review' not in state.results:
+                return CompletionStep('review', 'Inspect the still', {'type': 'object'},
+                                      image_tool=ToolStep('preview', 'records', 'read', {'id': 'record-a'}, idempotent=True))
+            return CompleteOperation('Reviewed')
+
+        runtime = await self.runtime(next_step, {'read': read}, infer=infer, policy=policy)
+        await self.submit(runtime, 'run-a', inputs={})
+        self.assertEqual((await runtime.wait('run-a', self.context)).output, 'Reviewed')
+        checkpoints = await runtime.services.store.operation_events('run-a')
+        self.assertEqual(checkpoints[-1].payload['output'], {'accepted': True})
+        self.assertNotIn(PNG, str(checkpoints))
+        self.assertIn(PNG, str(await runtime.events('run-a', 0, self.context)))
+
+        policy.allow_tool = False
+        await self.submit(runtime, 'run-b', inputs={})
+        self.assertEqual((await runtime.wait('run-b', self.context)).status, 'failed')
+        self.assertEqual((len(calls), len(requests)), (1, 1))
+
+    def test_image_evidence_rejects_incomplete_or_out_of_bounds_results(self):
+        tool = ToolStep('preview', 'records', 'read')
+        with self.assertRaises(ValueError):
+            CompletionStep('review', 'Inspect', {}, video_tool=tool, image_tool=tool)
+        self.assertEqual(CompletionStep('review', 'Inspect', {}, tool, 25).timeout_seconds, 25)
+        for blocks in ([], [{'type': 'text', 'text': 'no image'}], [IMAGE] * 25,
+                       [IMAGE, {'type': 'resource_link', 'uri': 'https://example.invalid/'}],
+                       [IMAGE, {**IMAGE, 'data': 'invalid!'}], [{**IMAGE, 'mimeType': 'image/jpeg'}]):
+            with self.subTest(blocks=len(blocks)), self.assertRaises(OperationError):
+                _image_evidence({'content': blocks})
+        with patch('openagent_core.inference.MAX_INFERENCE_IMAGE_BYTES', len(base64.b64decode(PNG))):
+            with self.assertRaises(OperationError):
+                _image_evidence({'content': [IMAGE, IMAGE]})
+
+    async def test_interrupted_image_completion_replays_only_declared_idempotent_read(self):
+        calls, inference_count = [], 0
+
+        async def read(args, _context):
+            calls.append(args['key'])
+            return {'content': [IMAGE]}
+
+        async def infer(_request):
+            nonlocal inference_count
+            inference_count += 1
+            if inference_count <= 2:
+                raise TimeoutError
+            return SimpleNamespace(content='{}')
+
+        def next_step(state):
+            if 'review' in state.results:
+                return CompleteOperation('Reviewed')
+            return CompletionStep('review', 'Inspect', {'type': 'object'}, image_tool=ToolStep(
+                'preview', 'records', 'read', {'key': state.idempotency_key('preview')},
+                idempotent=state.inputs['idempotent'],
+            ))
+
+        runtime = await self.runtime(next_step, {'read': read}, infer=infer)
+        for run_id, idempotent in (('run-a', False), ('run-b', True)):
+            await self.submit(runtime, run_id, inputs={'idempotent': idempotent})
+            self.assertEqual((await runtime.wait(run_id, self.context)).status, 'timed_out')
+        await self.submit(runtime, 'run-c', resume_run_id='run-a')
+        self.assertEqual((await runtime.wait('run-c', self.context)).status, 'failed')
+        await self.submit(runtime, 'run-d', resume_run_id='run-b')
+        self.assertEqual((await runtime.wait('run-d', self.context)).output, 'Reviewed')
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[1], calls[2])
+        self.assertNotEqual(calls[0], calls[1])
 
     async def test_interrupt_resume_reuses_checkpoints_and_single_use_ancestry(self):
         calls, planned = [], []

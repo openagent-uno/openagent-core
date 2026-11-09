@@ -95,6 +95,11 @@ class CompletionStep:
     schema: Mapping[str, Any]
     video_tool: ToolStep | None = None
     timeout_seconds: float = 120
+    image_tool: ToolStep | None = None
+
+    def __post_init__(self):
+        if self.video_tool is not None and self.image_tool is not None:
+            raise ValueError('A completion requires at most one evidence tool')
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,14 +170,20 @@ def _step_digest(step: ToolStep | WaitStep | CompletionStep) -> str:
     if step.video_tool is not None and not isinstance(step.video_tool, ToolStep):
         raise TypeError('Completion video requires an exact tool descriptor')
     video = _step_digest(step.video_tool) if step.video_tool is not None else None
-    return _digest(['completion', step.prompt, dict(step.schema), video, step.timeout_seconds])
+    data = ['completion', step.prompt, dict(step.schema), video, step.timeout_seconds]
+    if step.image_tool is not None:
+        if not isinstance(step.image_tool, ToolStep):
+            raise TypeError('Completion images require an exact tool descriptor')
+        data.append(['image', _step_digest(step.image_tool)])
+    return _digest(data)
 
 
 def _safe_to_retry(step: ToolStep | WaitStep | CompletionStep) -> bool:
     if isinstance(step, ToolStep):
         return step.idempotent
-    if isinstance(step, CompletionStep) and step.video_tool is not None:
-        return step.video_tool.idempotent
+    if isinstance(step, CompletionStep):
+        evidence = step.video_tool or step.image_tool
+        return evidence is None or evidence.idempotent
     return True
 
 
@@ -198,6 +209,45 @@ def _json_object(pairs):
     return result
 
 
+def _image_evidence(envelope):
+    from .core._runner.utils.mcp import _MCP_CONTENT_MAX_ITEMS, _decode_mcp_base64
+    from .core._runner.utils.media import get_image_type
+    from .inference import InferenceImage, MAX_INFERENCE_IMAGES, MAX_INFERENCE_IMAGE_BYTES
+
+    blocks = envelope.get('content') if isinstance(envelope, dict) else None
+    if not isinstance(blocks, list) or len(blocks) > _MCP_CONTENT_MAX_ITEMS:
+        raise OperationError('The authorized image evidence exceeds its content limit or is unavailable')
+    text, images = [], []
+    remaining = MAX_INFERENCE_IMAGE_BYTES
+    text_bytes = 0
+    for block in blocks:
+        if not isinstance(block, dict):
+            raise OperationError('Image evidence requires inline images and text')
+        if block.get('type') == 'text' and isinstance(block.get('text'), str):
+            line = block['text']
+        elif block.get('type') == 'image' and len(images) < MAX_INFERENCE_IMAGES:
+            mime = block.get('mimeType')
+            try:
+                data = _decode_mcp_base64(block.get('data'), label='MCP image', remaining_bytes=remaining)
+                image = InferenceImage(data, mime)
+                if mime != f'image/{get_image_type(data)}':
+                    raise ValueError('Image bytes do not match the declared media type')
+            except (TypeError, ValueError):
+                raise OperationError('The authorized tool returned invalid or oversized image data') from None
+            remaining -= len(data)
+            images.append(image)
+            line = f'[Image {len(images)}]'
+        else:
+            raise OperationError('Image evidence requires a bounded list of inline images and text')
+        text_bytes += len(line.encode()) + 1
+        if text_bytes > _MAX_PROMPT_BYTES:
+            raise OperationError('Operation image evidence exceeds the prompt bound')
+        text.append(line)
+    if not images:
+        raise OperationError('The authorized tool returned no inline images')
+    return '\n'.join(text), tuple(images)
+
+
 async def _complete(runtime, inference, step: CompletionStep) -> Any:
     from jsonschema import Draft202012Validator
     from .inference import InferenceImage, InferenceRequest
@@ -207,7 +257,12 @@ async def _complete(runtime, inference, step: CompletionStep) -> Any:
     schema = dict(step.schema)
     Draft202012Validator.check_schema(schema)
     prompt, images = step.prompt, ()
-    if step.video_tool is not None:
+    if step.image_tool is not None:
+        async with asyncio.timeout(step.image_tool.timeout_seconds):
+            envelope = await _call(runtime, step.image_tool)
+        text, images = _image_evidence(envelope)
+        prompt += '\n\nAuthorized image evidence, in attachment order:\n' + text
+    elif step.video_tool is not None:
         from .mcp.servers.tool_search.adapters import _embedded_video, _model_visible_result
 
         extractor = runtime.service('media.operation_video_frame_extractor')
@@ -229,9 +284,9 @@ async def _complete(runtime, inference, step: CompletionStep) -> Any:
         if not getattr(projected, 'images', None):
             raise OperationError('The authorized video could not be sampled')
         prompt += '\n\nAuthorized video evidence:\n' + projected.content
-        if len(prompt.encode()) > _MAX_PROMPT_BYTES:
-            raise OperationError('Operation video evidence exceeds the prompt bound')
         images = tuple(InferenceImage(image.content, image.mime_type) for image in projected.images)
+    if len(prompt.encode()) > _MAX_PROMPT_BYTES:
+        raise OperationError('Operation evidence exceeds the prompt bound')
     instructions = ('Return exactly one JSON value conforming to the following JSON Schema. '
                     'Use no markdown fences or explanatory text.\n' + canonical_json(schema))
     response = await inference.complete(InferenceRequest(({'role': 'user', 'content': prompt},), instructions, images))

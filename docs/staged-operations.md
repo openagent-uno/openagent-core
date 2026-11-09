@@ -56,6 +56,13 @@ version when a stage's behavior changes.
   Starting with Core `1.1.0b59`, bind `media.operation_video_frame_extractor`
   to configure resolution and sample positions independently for these steps.
   If that binding is absent, the operation uses `media.tool_video_frame_extractor`.
+  `image_tool` accepts one exact authorized catalog tool that returns between
+  one and 24 inline MCP image blocks, with optional text in the same order.
+  Evidence must be JPEG, PNG or WebP, with at most 8 MiB of decoded image data
+  in total. A missing image, invalid inline data or linked resource fails the
+  stage before inference. The canonical tool receipt retains the evidence and
+  the stage checkpoints the validated JSON. Choose at most one evidence tool
+  per completion step.
 - `CompleteOperation` returns ordinary final answer text. The plan must only
   select publish stages after its relevant business checks, and the domain
   publish tool should revalidate them at the mutation boundary.
@@ -75,11 +82,11 @@ continuation uses current permissions. A completed stage is not replayed.
 If a tool stage has an intent without a completed result, it can be attempted
 again only when the host declared the exact stage idempotent. Supply the
 stable `state.idempotency_key(step)` to a domain tool that supports it. Mark
-read-only video tools idempotent to replay an interrupted visual stage. Manual
+read-only evidence tools idempotent to replay an interrupted visual stage. Manual
 cancellation is terminal. Restart preserves the checkpoints and leaves the
 old run interrupted until a new authorized request continues it.
 
 This interface caps operation results at 256 KiB per stage and 4 MiB in total,
 with at most 256 completed stages and eight continuation links. Individual
 step deadlines range from 0.1 to 3,600 seconds, under the enclosing run deadline.
-Stateless planning receives its explicit prompt and any declared video evidence.
+Stateless planning receives its explicit prompt and any declared visual evidence.

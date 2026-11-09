@@ -9,6 +9,10 @@ from typing import Any, Mapping, Protocol
 import copy
 
 
+MAX_INFERENCE_IMAGES = 24
+MAX_INFERENCE_IMAGE_BYTES = 8 * 1024**2
+
+
 @dataclass(frozen=True, slots=True)
 class InferenceImage:
     """An in-memory image already admitted by the trusted caller."""
@@ -17,7 +21,7 @@ class InferenceImage:
     mime_type: str = 'image/jpeg'
 
     def __post_init__(self):
-        if (not isinstance(self.content, bytes) or not 0 < len(self.content) <= 8 * 1024**2
+        if (not isinstance(self.content, bytes) or not 0 < len(self.content) <= MAX_INFERENCE_IMAGE_BYTES
                 or self.mime_type not in {'image/jpeg', 'image/png', 'image/webp'}):
             raise ValueError('Inference requires a bounded JPEG, PNG or WebP image')
 
@@ -37,9 +41,9 @@ class InferenceRequest:
             if set(message)-{'role','content'} or message.get('role') not in {'user','assistant'}:
                 raise ValueError('Only conversational text is accepted by stateless inference')
             if not isinstance(message.get('content'),str):raise ValueError('Inference content must be text')
-        if (not isinstance(self.images, tuple) or len(self.images) > 24
+        if (not isinstance(self.images, tuple) or len(self.images) > MAX_INFERENCE_IMAGES
                 or any(not isinstance(image, InferenceImage) for image in self.images)
-                or sum(len(image.content) for image in self.images) > 8 * 1024**2):
+                or sum(len(image.content) for image in self.images) > MAX_INFERENCE_IMAGE_BYTES):
             raise ValueError('Inference images exceed the media limit')
         if self.images and not any(message['role'] == 'user' for message in self.messages):
             raise ValueError('Inference images require a user message')
