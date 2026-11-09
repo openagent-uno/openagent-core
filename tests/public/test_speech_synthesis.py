@@ -1,5 +1,6 @@
 """An opt-in tool publishes host-synthesized speech as an authorized artifact."""
 from dataclasses import replace
+import asyncio
 import io
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -47,10 +48,13 @@ class LocalVoiceFixture:
         self.calls = []
         self.result = SynthesizedAudio(wav_fixture(), "audio/wav")
         self.on_call = lambda: None
+        self.wait = None
 
     async def synthesize(self, text, *, language=None):
         self.calls.append((text, language))
         self.on_call()
+        if self.wait is not None:
+            await self.wait.wait()
         return self.result
 
 
@@ -168,3 +172,27 @@ class SpeechSynthesisTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.run_tool({"text": "Hello"})).status, "failed")
         self.assertIsInstance(self.executor.error, CapabilityUnavailable)
         self.assertEqual(str(self.executor.error), "Speech synthesis is unavailable")
+
+    async def test_explicit_host_deadline_bounds_synthesis_without_retry(self):
+        voice = VoiceService(NoRemoteVoice(), fallback=self.voice)
+        for invalid in (False, None, "120", float("nan"), float("inf"), 0, 3601):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                SpeechSynthesisCapability(voice, self.artifacts, timeout_seconds=invalid)
+
+        self.catalog.revoke("speech")
+        short = SpeechSynthesisCapability(voice, self.artifacts, timeout_seconds=0.1)
+        self.catalog.register("speech", short, short, target_label="Speech")
+        self.voice.wait = asyncio.Event()
+        with patch.object(self.artifacts, "upload", wraps=self.artifacts.upload) as upload:
+            self.assertEqual((await self.run_tool({"text": "Wait for the voice."})).status, "failed")
+            self.assertIsInstance(self.executor.error, CapabilityUnavailable)
+            upload.assert_not_awaited()
+        self.assertEqual(self.voice.calls, [("Wait for the voice.", None)])
+
+        self.catalog.revoke("speech")
+        long = SpeechSynthesisCapability(voice, self.artifacts, timeout_seconds=2)
+        self.catalog.register("speech", long, long, target_label="Speech")
+        self.voice.on_call = lambda: asyncio.get_running_loop().call_later(0.2, self.voice.wait.set)
+        self.assertEqual((await self.run_tool({"text": "Wait for the voice."})).status, "success")
+        self.assertEqual(len(self.voice.calls), 2)
+        self.assertTrue(self.executor.result["structuredContent"]["artifact"]["artifact_id"])

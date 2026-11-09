@@ -46,8 +46,13 @@ repository rechecks those permissions when it stores the audio. The model
 supplies up to 2,000 characters and an optional language tag such as
 `it-IT`. Voice, provider, credentials and fallback come from the host.
 
-The call gives synthesis up to 120 seconds and accepts up to 8 MiB of WAV,
-MP3, FLAC, Ogg, AAC or MPEG-4 audio, subject to the repository's own size
+The capability gives the voice service 120 seconds by default. Hosts can set
+`SpeechSynthesisCapability(voice_service, artifact_repository, timeout_seconds=...)`
+to a finite value from 0.1 to 3600 seconds when provider preparation needs a
+longer window. The model cannot set the deadline. A surrounding run or stage
+can impose a shorter deadline. A timeout interrupts the call and produces
+no artifact. The capability accepts up to 8 MiB of WAV, MP3, FLAC, Ogg, AAC
+or MPEG-4 audio, subject to the repository's own size
 limit. The tool returns an MCP structured result with a path-free
 `structuredContent.artifact` reference. Authorized host code can retrieve
 the bytes with `ArtifactRepository.read(context, artifact_id=...)`. The
@@ -58,4 +63,5 @@ and a host must handle any operation-level retry policy separately.
 The public speech-synthesis tests use a local voice fixture through
 `VoiceService`, an admitted runtime turn, and the canonical artifact
 repository. They cover exact WAV recovery, cross-tenant denial, write
-revocation, malformed input, output bounds, and redacted backend errors.
+revocation, malformed input, output bounds, a host-selected deadline, and
+redacted backend errors.

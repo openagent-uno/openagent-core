@@ -38,9 +38,14 @@ _SYNTHESIZE = ToolDefinition(
 class SpeechSynthesisCapability:
     """A catalog source and executor using explicitly provisioned host services."""
 
-    def __init__(self, voice: VoiceService, artifacts: ArtifactRepository) -> None:
+    def __init__(
+        self, voice: VoiceService, artifacts: ArtifactRepository, *, timeout_seconds: float = 120,
+    ) -> None:
+        if type(timeout_seconds) not in (int, float) or not 0.1 <= timeout_seconds <= 3600:
+            raise ValueError("Speech synthesis timeout must be between 0.1 and 3600 seconds")
         self._voice = voice
         self._artifacts = artifacts
+        self._timeout_seconds = timeout_seconds
 
     async def discover(self, context: ExecutionContext) -> tuple[ToolDefinition, ...]:
         return (_SYNTHESIZE,)
@@ -78,7 +83,7 @@ class SpeechSynthesisCapability:
             ResourceRef("session", context.tenant_id, context.session_id), audience=context.audience,
         )
         try:
-            async with asyncio.timeout(120):
+            async with asyncio.timeout(self._timeout_seconds):
                 speech = await self._voice.synthesize(text, language=language)
         except Exception:
             raise CapabilityUnavailable("Speech synthesis is unavailable") from None
