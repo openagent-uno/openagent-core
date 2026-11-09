@@ -70,6 +70,13 @@ version when a stage's behavior changes.
   step deadline and use the same authorized evidence fetched once. The
   provider receives a formatting reminder on retry, without earlier model
   output. Provider failures and cancellation follow the enclosing run policy.
+  Starting with Core `1.1.0b65`, `InferenceRequest.response_schema` carries the
+  same schema separately from the prompt. For a verified OpenAI-compatible
+  endpoint that accepts native JSON Schema, an embedding host can configure
+  `NativeProvider(..., stateless_json_schema=True)` on its operation provider.
+  This forwards object schemas in `response_format`. The setting defaults to
+  false. The runtime continues to validate all completions locally and keeps
+  the same checkpoint and retry contracts.
 - `CompleteOperation` returns ordinary final answer text. The plan must only
   select publish stages after its relevant business checks, and the domain
   publish tool should revalidate them at the mutation boundary.

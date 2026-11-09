@@ -97,6 +97,7 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
             observations.append(request)
             self.assertEqual(len(request.messages), 1)
             self.assertIn('JSON Schema', request.instructions)
+            self.assertEqual(request.response_schema, schema)
             if request.images:
                 self.assertIn('source offset 2s', request.messages[0]['content'])
                 self.assertIn('1.200s', request.messages[0]['content'])

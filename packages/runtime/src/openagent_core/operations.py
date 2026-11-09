@@ -312,7 +312,8 @@ async def _complete(runtime, inference, step: CompletionStep) -> Any:
     messages = ({'role': 'user', 'content': prompt},)
     validator = Draft202012Validator(schema)
     for attempt in range(1, step.max_attempts + 1):
-        request = InferenceRequest(messages, instructions if attempt == 1 else retry_instructions, images)
+        request = InferenceRequest(messages, instructions if attempt == 1 else retry_instructions, images,
+                                   response_schema=schema)
         response = await inference.complete(request)
         try:
             return _structured_output(response, validator)

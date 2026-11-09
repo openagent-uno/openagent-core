@@ -850,6 +850,8 @@ class NativeProvider(ProviderResources, BaseModel):
         providers_config: dict | None = None,
         db_path: str | None = None,
         history_runs: int = FULL_SESSION_HISTORY_RUNS,
+        *,
+        stateless_json_schema: bool = False,
     ):
         self._providers_config = providers_config or {}
         self.model = normalize_runtime_model_id(model, self._providers_config)
@@ -857,6 +859,7 @@ class NativeProvider(ProviderResources, BaseModel):
         self._base_url = base_url
         self._db_path = db_path
         self._history_runs = history_runs
+        self._stateless_json_schema = stateless_json_schema
         self._fallback_config: Any = None
         # Pre-connected MCPTools instances supplied by MCPPool. Shared
         # across all NativeProvider instances under the same ModelDispatcher
@@ -1805,8 +1808,14 @@ class NativeProvider(ProviderResources, BaseModel):
             user_message = next(message for message in reversed(messages) if message.role == 'user')
             user_message.images = [Image(content=image.content, mime_type=image.mime_type) for image in request.images]
         model = self._build_runtime_model()
+        options = {}
+        schema = getattr(request, 'response_schema', None)
+        if self._stateless_json_schema and schema and schema.get('type') == 'object':
+            options['response_format'] = {'type': 'json_schema', 'json_schema': {
+                'name': 'inference_output', 'strict': True, 'schema': dict(schema),
+            }}
         try:
-            response = await model.aresponse(messages=messages,tools=[],tool_choice='none',tool_call_limit=0)
+            response = await model.aresponse(messages=messages,tools=[],tool_choice='none',tool_call_limit=0,**options)
             if any(getattr(message,'tool_calls',None) for message in messages):
                 raise RuntimeError('A stateless inference provider returned a tool call')
             usage = getattr(response,'response_usage',None)

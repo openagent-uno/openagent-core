@@ -7,10 +7,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 import copy
+import json
 
 
 MAX_INFERENCE_IMAGES = 24
 MAX_INFERENCE_IMAGE_BYTES = 8 * 1024**2
+MAX_INFERENCE_SCHEMA_BYTES = 256 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +33,7 @@ class InferenceRequest:
     messages: tuple[Mapping[str,Any],...]
     instructions: str = ''
     images: tuple[InferenceImage, ...] = ()
+    response_schema: Mapping[str, Any] | None = None
 
     def __post_init__(self):
         if not isinstance(self.instructions,str):
@@ -47,6 +50,16 @@ class InferenceRequest:
             raise ValueError('Inference images exceed the media limit')
         if self.images and not any(message['role'] == 'user' for message in self.messages):
             raise ValueError('Inference images require a user message')
+        if self.response_schema is not None:
+            if not isinstance(self.response_schema, Mapping):
+                raise ValueError('The inference response schema must be a JSON object')
+            try:
+                schema = json.dumps(dict(self.response_schema), allow_nan=False, ensure_ascii=False,
+                                    separators=(',', ':')).encode()
+            except (TypeError, ValueError, RecursionError):
+                raise ValueError('The inference response schema must be a JSON object') from None
+            if len(schema) > MAX_INFERENCE_SCHEMA_BYTES:
+                raise ValueError('The inference response schema exceeds its byte limit')
 
 
 class InferenceProvider(Protocol):
@@ -57,5 +70,6 @@ class StatelessInference:
     def __init__(self,provider: InferenceProvider):self.provider=provider
 
     async def complete(self,request: InferenceRequest):
-        snapshot = InferenceRequest(copy.deepcopy(request.messages), request.instructions, request.images)
+        schema = copy.deepcopy(dict(request.response_schema)) if request.response_schema is not None else None
+        snapshot = InferenceRequest(copy.deepcopy(request.messages), request.instructions, request.images, schema)
         return await self.provider.infer(snapshot)

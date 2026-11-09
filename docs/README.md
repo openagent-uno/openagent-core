@@ -2,6 +2,7 @@
 
 ## Architecture and use
 
+- [Beta65: opt-in native JSON Schema for staged inference](releases/v1.1.0-beta.65.md).
 - [Beta64: host-selected speech synthesis deadline](releases/v1.1.0-beta.64.md).
 - [Beta63: bounded retries for structured staged completions](releases/v1.1.0-beta.63.md).
 - [Beta61: image evidence in staged completions](releases/v1.1.0-beta.61.md).

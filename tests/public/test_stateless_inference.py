@@ -36,6 +36,21 @@ class StatelessInferenceTests(unittest.IsolatedAsyncioTestCase):
                 image = received[1]['messages'][-1]['content'][-1]
                 self.assertEqual(image['image_url']['url'], 'data:image/jpeg;base64,' + base64.b64encode(sample).decode())
                 self.assertEqual(len(received[1]['messages']), 2)
+                schema = {'type': 'object', 'properties': {'category': {'type': 'string'}},
+                          'required': ['category'], 'additionalProperties': False}
+                request = InferenceRequest(({'role':'user','content':'Classify this'},),
+                                           'Return the category', response_schema=schema)
+                await inference.complete(request)
+                self.assertNotIn('response_format', received[-1])
+                structured = NativeProvider('openai:fixture', api_key='fixture-only',
+                                            base_url=f'http://127.0.0.1:{port}/v1', stateless_json_schema=True)
+                try:
+                    await StatelessInference(structured).complete(request)
+                    self.assertEqual(received[-1]['response_format'], {'type': 'json_schema', 'json_schema': {
+                        'name': 'inference_output', 'strict': True, 'schema': schema,
+                    }})
+                finally:
+                    await structured.shutdown()
                 self.assertEqual(list(Path(temporary).iterdir()),[])
             finally:
                 await provider.shutdown();await runner.cleanup()
