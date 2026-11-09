@@ -294,9 +294,12 @@ class CapabilityCatalog:
                     copy.deepcopy(definition.input_schema), registration.target_label, copy.deepcopy(definition.metadata)))
         return tuple(result)
 
-    async def discover(self, context: ExecutionContext) -> tuple[ToolDescriptor, ...]:
+    async def discover(self, context: ExecutionContext, *, source_id: str | None = None) -> tuple[ToolDescriptor, ...]:
+        """Discover current tools, optionally limiting discovery to one host-selected source."""
         result: list[ToolDescriptor] = []
         for registration in self._registrations_for_context(context):
+            if source_id is not None and registration.source_id != source_id:
+                continue
             resource = ResourceRef("capability", context.tenant_id, registration.source_id)
             if not await self.authorizer.authorize(context, "tool.discover", resource, audience=context.audience):
                 continue

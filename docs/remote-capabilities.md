@@ -64,3 +64,34 @@ Hosts can pass explicit `unavailable_errors` classes to `ToolInventoryContext`
 for optional transport failures. Those errors produce unavailable inventory;
 other capabilities remain usable. Cancellation and arbitrary failures are not
 swallowed, and Core imports no host transport or identity implementation.
+
+## Direct desktop interaction (source candidate)
+
+`openagent_core.computer_interaction.ComputerInteraction(runtime)` is an
+optional, transport-independent service for an authenticated human desktop
+viewer. The host binds a fresh `ExecutionContext` to the current user, agent
+and session for every request. The service does not submit an agent run.
+Use the same catalog registrations and authorization that already back the
+underlying desktop tool.
+
+- `await service.targets(context, source_id=None)` checks session read
+  authorization and returns an array of `{tool_ref, label, live_media}` objects.
+  Browser tabs and model-only tools are excluded.
+- `await service.interact(context, body, source_id=None)` checks current
+  session execution authorization and invokes exactly one current target.
+  `body` contains `tool_ref`, `action` and the action's required `coordinate`
+  or `text`. Successful calls return the normal tool result. Screenshot
+  capture, pointer input, keyboard input and scrolling are supported.
+- A configured `source_id` scopes both methods to one exact catalog
+  registration identity. Pass it from host code, never from a viewer request.
+  Hosts can select a private execution environment without authorizing
+  registered personal devices, even if their tools have identical schemas.
+
+A ToolRef identifies a capability but never authorizes it. Replacement,
+revocation, and authorization changes invalidate access. The host still owns
+agent and session admission, device consent, network transport, and policy for
+a desktop whose contents may span multiple sessions. A host exposing these
+methods over HTTP should return `Cache-Control: no-store`, keep screenshot
+results out of logs, and avoid automatically retrying input after failures.
+Live media metadata is descriptive. A host with a compatible media transport
+must separately authorize and bind the exact stream.
