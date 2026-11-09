@@ -96,10 +96,13 @@ class CompletionStep:
     video_tool: ToolStep | None = None
     timeout_seconds: float = 120
     image_tool: ToolStep | None = None
+    max_attempts: int = 1
 
     def __post_init__(self):
         if self.video_tool is not None and self.image_tool is not None:
             raise ValueError('A completion requires at most one evidence tool')
+        if type(self.max_attempts) is not int or not 1 <= self.max_attempts <= 3:
+            raise ValueError('A completion requires one to three attempts')
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +178,8 @@ def _step_digest(step: ToolStep | WaitStep | CompletionStep) -> str:
         if not isinstance(step.image_tool, ToolStep):
             raise TypeError('Completion images require an exact tool descriptor')
         data.append(['image', _step_digest(step.image_tool)])
+    if step.max_attempts != 1:
+        data.append(['max_attempts', step.max_attempts])
     return _digest(data)
 
 
@@ -207,6 +212,20 @@ def _json_object(pairs):
     if len(result) != len(pairs):
         raise ValueError('Duplicate JSON properties')
     return result
+
+
+def _structured_output(response, validator):
+    content = getattr(response, 'content', None)
+    if not isinstance(content, str) or len(content.encode()) > _MAX_VALUE_BYTES:
+        raise OperationError('Structured completion exceeded its output limit')
+    try:
+        value = json.loads(content, object_pairs_hook=_json_object)
+        _encode(value)
+    except (ValueError, RecursionError):
+        raise OperationError('Structured completion did not return exact JSON') from None
+    if not validator.is_valid(value):
+        raise OperationError('Structured completion did not match its schema')
+    return value
 
 
 def _image_evidence(envelope):
@@ -289,18 +308,17 @@ async def _complete(runtime, inference, step: CompletionStep) -> Any:
         raise OperationError('Operation evidence exceeds the prompt bound')
     instructions = ('Return exactly one JSON value conforming to the following JSON Schema. '
                     'Use no markdown fences or explanatory text.\n' + canonical_json(schema))
-    response = await inference.complete(InferenceRequest(({'role': 'user', 'content': prompt},), instructions, images))
-    content = getattr(response, 'content', None)
-    if not isinstance(content, str) or len(content.encode()) > _MAX_VALUE_BYTES:
-        raise OperationError('Structured completion exceeded its output limit')
-    try:
-        value = json.loads(content, object_pairs_hook=_json_object)
-        _encode(value)
-    except (ValueError, RecursionError):
-        raise OperationError('Structured completion did not return exact JSON') from None
-    if not Draft202012Validator(schema).is_valid(value):
-        raise OperationError('Structured completion did not match its schema')
-    return value
+    retry_instructions = instructions + '\nCheck that the answer is a single JSON value and meets every schema constraint.'
+    messages = ({'role': 'user', 'content': prompt},)
+    validator = Draft202012Validator(schema)
+    for attempt in range(1, step.max_attempts + 1):
+        request = InferenceRequest(messages, instructions if attempt == 1 else retry_instructions, images)
+        response = await inference.complete(request)
+        try:
+            return _structured_output(response, validator)
+        except OperationError:
+            if attempt == step.max_attempts:
+                raise
 
 
 async def _execute_step(runtime, inference, step):

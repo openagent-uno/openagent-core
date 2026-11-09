@@ -14,7 +14,7 @@ from openagent_core.engine import AgentExecutor
 from openagent_core.inference import StatelessInference
 from openagent_core.models.video_frames import VideoFrame
 from openagent_core.operations import CompleteOperation, CompletionStep, OperationError, OperationInvocation
-from openagent_core.operations import StagedOperation, ToolStep, WaitStep, STEP_COMPLETED, _image_evidence
+from openagent_core.operations import StagedOperation, ToolStep, WaitStep, STEP_COMPLETED, _image_evidence, _step_digest
 from openagent_storage_sqlite import SqliteRuntimeStore
 
 
@@ -190,6 +190,96 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
         with patch('openagent_core.inference.MAX_INFERENCE_IMAGE_BYTES', len(base64.b64decode(PNG))):
             with self.assertRaises(OperationError):
                 _image_evidence({'content': [IMAGE, IMAGE]})
+
+    async def test_completion_retries_invalid_output_without_rereading_or_replaying_content(self):
+        evidence_calls, requests = [], []
+        invalid = ('private malformed response', '{"accepted":"private schema mismatch"}')
+        responses = iter((*invalid, '{"accepted":true}'))
+
+        async def read(args, context):
+            self.assertEqual(context, self.context)
+            evidence_calls.append(args)
+            return {'content': [IMAGE]}
+
+        async def infer(request):
+            requests.append(request)
+            return SimpleNamespace(content=next(responses))
+
+        def next_step(state):
+            if 'review' in state.results:
+                return CompleteOperation('Reviewed')
+            schema = {'type': 'object', 'properties': {'accepted': {'type': 'boolean'}},
+                      'required': ['accepted']}
+            return CompletionStep('review', 'Inspect the still', schema, max_attempts=3,
+                                  image_tool=ToolStep('preview', 'records', 'read', {'id': 'record-a'}))
+
+        runtime = await self.runtime(next_step, {'read': read}, infer=infer)
+        await self.submit(runtime, 'run-a', inputs={})
+        self.assertEqual((await runtime.wait('run-a', self.context)).output, 'Reviewed')
+        self.assertEqual(evidence_calls, [{'id': 'record-a'}])
+        self.assertEqual(len(requests), 3)
+        for request in requests[1:]:
+            self.assertEqual((request.messages, request.images), (requests[0].messages, requests[0].images))
+            self.assertIn('meets every schema constraint', request.instructions)
+        checkpoints = await runtime.services.store.operation_events('run-a')
+        self.assertEqual(checkpoints[-1].payload['output'], {'accepted': True})
+        for content in invalid:
+            self.assertNotIn(content, str(requests))
+            self.assertNotIn(content, str(checkpoints))
+
+    async def test_completion_retry_limit_default_and_provider_error(self):
+        calls = []
+        schema = {'type': 'object'}
+        default = CompletionStep('plan', 'Plan', schema)
+        tool = ToolStep('preview', 'records', 'read', {'id': 'record-a'})
+        previous = (
+            (default, '3f890a3d8aa170186c703e8f0d76a5bc046bfce67176da5e6fe561b926acfcb7'),
+            (replace(default, image_tool=tool), 'fcb8234296194e615b780456fad79deba3219e841d66fe6b9a157915ab12cccb'),
+            (replace(default, video_tool=tool), 'cafe41c69e50ab83046267925137a190541f3ab583f3547ae25bc93f8fef58df'),
+        )
+        for step, digest in previous:
+            self.assertEqual(_step_digest(step), digest)
+            self.assertEqual(_step_digest(replace(step, max_attempts=1)), digest)
+        self.assertNotEqual(_step_digest(default), _step_digest(replace(default, max_attempts=2)))
+        for count in (0, 4, True, 2.5):
+            with self.subTest(count=count), self.assertRaises(ValueError):
+                replace(default, max_attempts=count)
+
+        async def infer(request):
+            prompt = request.messages[0]['content']
+            calls.append(prompt)
+            if prompt == 'provider error':
+                raise OperationError('Provider failure')
+            return SimpleNamespace(content='invalid')
+
+        def next_step(state):
+            return replace(default, **state.inputs)
+
+        runtime = await self.runtime(next_step, {}, infer=infer)
+        cases = ({}, {'prompt': 'invalid twice', 'max_attempts': 2},
+                 {'prompt': 'provider error', 'max_attempts': 3})
+        for index, inputs in enumerate(cases):
+            run_id = f'run-{index}'
+            await self.submit(runtime, run_id, inputs=inputs)
+            self.assertEqual((await runtime.wait(run_id, self.context)).status, 'failed')
+        self.assertEqual(calls, ['Plan', 'invalid twice', 'invalid twice', 'provider error'])
+
+    async def test_completion_retry_cancels_within_the_stage_deadline(self):
+        calls = []
+
+        async def infer(request):
+            calls.append(request)
+            if len(calls) == 1:
+                return SimpleNamespace(content='invalid')
+            await asyncio.Event().wait()
+
+        runtime = await self.runtime(
+            lambda state: CompletionStep('plan', 'Plan', {'type': 'object'}, timeout_seconds=0.2, max_attempts=3),
+            {}, infer=infer,
+        )
+        await self.submit(runtime, 'run-a', inputs={})
+        self.assertEqual((await runtime.wait('run-a', self.context)).status, 'timed_out')
+        self.assertEqual(len(calls), 2)
 
     async def test_interrupted_image_completion_replays_only_declared_idempotent_read(self):
         calls, inference_count = [], 0

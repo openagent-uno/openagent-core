@@ -46,7 +46,7 @@ version when a stage's behavior changes.
 - `WaitStep` polls one exact read-only tool with fixed arguments, a deadline and
   a maximum of 128 reads. The host supplies a pure terminal predicate. Use it
   for receipts of already submitted jobs.
-- `CompletionStep` invokes the configured `StatelessInference` provider once.
+- `CompletionStep` invokes the configured `StatelessInference` provider.
   It supplies the stage prompt and JSON Schema with no chat transcript or
   tools. The engine parses and validates the output before checkpointing it.
   An optional `video_tool` must return one authorized embedded MP4. The bound
@@ -64,6 +64,11 @@ version when a stage's behavior changes.
   stage before inference. The canonical tool receipt retains the evidence and
   the stage checkpoints the validated JSON. Choose at most one evidence tool
   per completion step.
+  The default is one inference attempt. Set `max_attempts` to two or three
+  to retry output that fails JSON or schema validation. Attempts share the
+  step deadline and use the same authorized evidence fetched once. The
+  provider receives a formatting reminder on retry, without earlier model
+  output. Provider failures and cancellation follow the enclosing run policy.
 - `CompleteOperation` returns ordinary final answer text. The plan must only
   select publish stages after its relevant business checks, and the domain
   publish tool should revalidate them at the mutation boundary.
