@@ -18,6 +18,7 @@ _MAX_PIXELS = 4_194_304
 _MAX_ALLOCATION = "33554432"
 _MAX_FRAME_BYTES = 192 * 1024
 _FRAME_EDGE = 384
+_MAX_FRAME_EDGE = 768
 _SAMPLE_POSITIONS = (0.0, 0.45, 0.85)
 _MAX_SAMPLE_COUNT = 12
 _LOCAL_MP4 = (
@@ -68,6 +69,7 @@ class FfmpegVideoFrameExtractor:
     def __init__(
         self, *, ffmpeg: str = "ffmpeg", ffprobe: str = "ffprobe",
         sample_positions: Sequence[float] = _SAMPLE_POSITIONS,
+        frame_edge: int = _FRAME_EDGE,
     ) -> None:
         positions = tuple(sample_positions)
         if not (
@@ -77,9 +79,12 @@ class FfmpegVideoFrameExtractor:
             and all(left < right for left, right in zip(positions, positions[1:]))
         ):
             raise ValueError("Video sample positions must contain 1–12 increasing fractions in [0, 1).")
+        if type(frame_edge) is not int or not 2 <= frame_edge <= _MAX_FRAME_EDGE:
+            raise ValueError(f"Video frame edge must be an integer from 2 to {_MAX_FRAME_EDGE} pixels.")
         self._ffmpeg = ffmpeg
         self._ffprobe = ffprobe
         self._sample_positions = positions
+        self._frame_edge = frame_edge
         self._decode_lock = asyncio.Lock()
 
     async def extract(self, content: bytes, mime_type: str) -> tuple[VideoFrame, ...]:
@@ -124,7 +129,7 @@ class FfmpegVideoFrameExtractor:
                  "-ss", f"{timestamp:.6f}", "-threads", "1",
                  "-max_pixels", str(_MAX_PIXELS), "-i", path, "-map", "0:V:0",
                  "-filter_threads", "1", "-frames:v", "1", "-an", "-sn", "-dn",
-                 "-vf", f"scale={_FRAME_EDGE}:{_FRAME_EDGE}:force_original_aspect_ratio=decrease:force_divisible_by=2",
+                 "-vf", f"scale={self._frame_edge}:{self._frame_edge}:force_original_aspect_ratio=decrease:force_divisible_by=2",
                  "-threads", "1", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1"),
                 _MAX_FRAME_BYTES,
             )

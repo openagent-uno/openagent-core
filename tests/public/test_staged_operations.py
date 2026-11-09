@@ -31,7 +31,7 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
         principal = PrincipalRef('host-a', 'tenant-a', 'operator-a')
         self.context = ExecutionContext(principal, principal, principal, 'session-a', 'agent-a', (principal,))
 
-    async def runtime(self, next_step, tools, *, infer=None, extractor=None):
+    async def runtime(self, next_step, tools, *, infer=None, extractor=None, operation_extractor=None):
         policy = Policy()
         catalog = CapabilityCatalog(policy)
         source = FunctionSource(tuple(ToolDefinition(name, name, {}) for name in tools), tools)
@@ -47,6 +47,8 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
         services = RuntimeServices(store, executor, policy, catalog)
         if extractor:
             services.registry.bind('media.tool_video_frame_extractor', extractor)
+        if operation_extractor:
+            services.registry.bind('media.operation_video_frame_extractor', operation_extractor)
         runtime = Runtime(RuntimeSettings('agent-a', self.path), services, modules=(executor,))
         await runtime.start()
         self.addAsyncCleanup(runtime.close)
@@ -57,6 +59,12 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
         return await runtime.submit(RunRequest(run_id, context.session_id, run_id, json.dumps(invocation)), context)
 
     async def test_plan_wait_and_visual_completion_use_current_authority_and_bounded_inputs(self):
+        await self.exercise_visual_operation(dedicated_extractor=False)
+
+    async def test_visual_completion_prefers_the_operation_extractor(self):
+        await self.exercise_visual_operation(dedicated_extractor=True)
+
+    async def exercise_visual_operation(self, *, dedicated_extractor):
         calls = []
         observations = []
         video_blob = base64.b64encode(b'approved encoded video').decode()
@@ -107,8 +115,11 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
                 return ToolStep('publish', 'records', 'execute', {'kind': 'publish'})
             return CompleteOperation('Publication complete')
 
+        preview_extractor = SimpleNamespace(extract=extract)
+        fallback = SimpleNamespace(extract=AsyncMock(side_effect=AssertionError('ordinary chat extractor used')))
         runtime = await self.runtime(next_step, {'execute': tool}, infer=infer,
-                                     extractor=SimpleNamespace(extract=extract))
+                                     extractor=fallback if dedicated_extractor else preview_extractor,
+                                     operation_extractor=preview_extractor if dedicated_extractor else None)
         await self.submit(runtime, 'run-a', inputs={'brief': 'Short brief'})
         record = await runtime.wait('run-a', self.context)
         self.assertEqual((record.status, record.output), ('success', 'Publication complete'))

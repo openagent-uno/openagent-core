@@ -123,6 +123,31 @@ class ToolSearchMediaTests(unittest.IsolatedAsyncioTestCase):
                 FfmpegVideoFrameExtractor(sample_positions=invalid)
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg not installed")
+    async def test_frame_edge_changes_the_real_output_size(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "landscape.mp4"
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=blue:s=960x540:r=4:d=1",
+                 "-c:v", "mpeg4", str(path)], check=True, timeout=15,
+            )
+            clip = path.read_bytes()
+
+        for extractor, size in ((FfmpegVideoFrameExtractor(sample_positions=(0,)), (384, 216)),
+                                (FfmpegVideoFrameExtractor(sample_positions=(0,), frame_edge=768), (768, 432))):
+            frame, = await extractor.extract(clip, "video/mp4")
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "stream=width,height", "-of", "json", "pipe:0"],
+                input=frame.content, capture_output=True, check=True, timeout=5,
+            )
+            stream = json.loads(probe.stdout)["streams"][0]
+            self.assertEqual((stream["width"], stream["height"]), size)
+
+    def test_frame_edge_is_bounded(self):
+        for invalid in (True, 0, 1, 384.0, "768", 769):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                FfmpegVideoFrameExtractor(frame_edge=invalid)
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg not installed")
     async def test_provider_followup_receives_ordered_frames_from_authorized_tool_result(self):
         import httpx
         from openai import AsyncOpenAI

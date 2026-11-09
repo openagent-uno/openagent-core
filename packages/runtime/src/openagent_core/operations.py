@@ -210,7 +210,9 @@ async def _complete(runtime, inference, step: CompletionStep) -> Any:
     if step.video_tool is not None:
         from .mcp.servers.tool_search.adapters import _embedded_video, _model_visible_result
 
-        extractor = runtime.service('media.tool_video_frame_extractor')
+        extractor = runtime.service('media.operation_video_frame_extractor')
+        if extractor is None:
+            extractor = runtime.service('media.tool_video_frame_extractor')
         if extractor is None:
             raise OperationError('No authorized video extractor was configured')
         async with asyncio.timeout(step.video_tool.timeout_seconds):

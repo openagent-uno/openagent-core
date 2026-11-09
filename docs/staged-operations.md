@@ -53,6 +53,9 @@ version when a stage's behavior changes.
   FFmpeg extractor supplies chronological images and timestamps. A missing or
   unreviewable video fails the stage before inference. The video is retained
   through the canonical tool receipt. The stage stores only the validated JSON.
+  Bind `media.operation_video_frame_extractor` to configure resolution and
+  sample positions independently for these steps. If that binding is absent,
+  the operation uses `media.tool_video_frame_extractor`.
 - `CompleteOperation` returns ordinary final answer text. The plan must only
   select publish stages after its relevant business checks, and the domain
   publish tool should revalidate them at the mutation boundary.
