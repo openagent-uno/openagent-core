@@ -23,6 +23,11 @@ tests. `installed-environment.json`, `public-engine-tests.xml` and
 after all commands succeed. `--allow-dirty-source` is a development-only opt-in;
 it never records release qualification. Existing environments are never modified.
 
+If direct release-asset downloads are unavailable, fetch the test wheels from
+the GitHub Release API and pass their directory as `--test-wheelhouse`. The
+qualification runner checks each file against the same test dependency lock
+before installing it. The official release workflow uses this path.
+
 Do not mix a source checkout with an older installed Core: audio workers use
 `python -I`, deliberately ignoring source `PYTHONPATH`. Likewise, do not replace
 the SDK compiler with a global `tsc`; run `npm --prefix sdk/typescript ci`.

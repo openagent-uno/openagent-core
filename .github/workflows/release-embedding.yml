@@ -45,8 +45,20 @@ jobs:
           PY_VERIFY
           python -m pip install --no-index --no-deps --find-links "$RUNNER_TEMP/release-wheels" openagent-core
           python -m unittest discover -s tests/public -p test_private_paths.py -v
+      - name: Fetch pinned public test wheels through the release API
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v1.0.0-beta.6 --repo openagent-uno/openagent-tools \
+            --dir "$RUNNER_TEMP/qualified-test-wheels" \
+            --pattern openagent_tool_protocol-1.0.0b2-py3-none-any.whl \
+            --pattern openagent_execution-1.0.0b3-py3-none-any.whl \
+            --pattern openagent_shell-1.0.0b3-py3-none-any.whl
       - name: Qualify the complete public engine suite on the remote runner
-        run: python packaging/qualify.py --wheels "$RUNNER_TEMP/release-wheels" --environment "$RUNNER_TEMP/qualified-engine"
+        run: |
+          python packaging/qualify.py --wheels "$RUNNER_TEMP/release-wheels" \
+            --environment "$RUNNER_TEMP/qualified-engine" \
+            --test-wheelhouse "$RUNNER_TEMP/qualified-test-wheels"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: embedding-${{ github.sha }}

@@ -18,6 +18,7 @@ import sys
 import tomllib
 import venv
 import zipfile
+from urllib.parse import urlsplit
 
 
 def candidate_wheels(directory: Path, *, allow_dirty: bool = False) -> tuple[dict, list[Path]]:
@@ -52,10 +53,34 @@ def candidate_wheels(directory: Path, *, allow_dirty: bool = False) -> tuple[dic
     return manifest, paths
 
 
+def locked_test_requirements(lock: Path, wheelhouse: Path, destination: Path) -> Path:
+    """Use predownloaded test wheels only when their original lock digest matches."""
+    lines = []
+    for line in lock.read_text().splitlines():
+        if line.lstrip().startswith("#") or " @ " not in line:
+            lines.append(line)
+            continue
+        requirement, reference = line.split(" @ ", 1)
+        url, separator, expected = reference.rpartition("#sha256=")
+        name = Path(urlsplit(url).path).name
+        if not separator or not name.endswith(".whl"):
+            raise ValueError("Expected a digest-pinned test wheel URL")
+        wheel = wheelhouse / name
+        if wheel.is_symlink() or not wheel.is_file():
+            raise ValueError("A pinned test wheel is missing or symbolic: " + name)
+        if hashlib.sha256(wheel.read_bytes()).hexdigest() != expected:
+            raise ValueError("Pinned test wheel digest mismatch: " + name)
+        lines.append(f"{requirement} @ {wheel.as_uri()}#sha256={expected}")
+    destination.write_text("\n".join(lines) + "\n")
+    return destination
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wheels", required=True, type=Path)
     parser.add_argument("--environment", required=True, type=Path)
+    parser.add_argument("--test-wheelhouse", type=Path,
+                        help="Use predownloaded URL dependencies matching the test lock hashes")
     parser.add_argument("--allow-dirty-source", action="store_true",
                         help="Development only: record, but do not qualify, an uncommitted build")
     options = parser.parse_args()
@@ -80,10 +105,14 @@ def main() -> None:
     version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
     venv.EnvBuilder(with_pip=True).create(environment)
     python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    requirements = root / "packaging/requirements-test.txt"
+    if options.test_wheelhouse:
+        requirements = locked_test_requirements(requirements, options.test_wheelhouse.resolve(),
+                                                environment / "locked-test-requirements.txt")
     def run(*command, cwd=root):
         subprocess.run([str(value) for value in command], cwd=cwd, check=True)
     run(uv, "pip", "install", "--python", python, "--find-links", directory,
-        "-r", root / "packaging/requirements-test.txt", *wheels,
+        "-r", requirements, *wheels,
         f"openagent-core[engine,providers,audio,retrieval,modules]=={version}")
     run(uv, "pip", "check", "--python", python)
     # -I proves that installed entrypoints and children do not borrow source
