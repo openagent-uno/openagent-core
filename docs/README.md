@@ -2,7 +2,8 @@
 
 ## Architecture and use
 
-- [Staged operations in authenticated runs](staged-operations.md).
+- [Beta58: checkpointed staged operations](releases/v1.1.0-beta.58.md) and the
+  [embedding contract](staged-operations.md).
 
 - [Beta57: opt-in named calls through the authorized tool catalog](releases/v1.1.0-beta.57.md).
 

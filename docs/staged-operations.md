@@ -1,6 +1,7 @@
 # Staged operations in authenticated runs
 
-An embedding host can register versioned operation definitions on `AgentExecutor`.
+Starting with Core `1.1.0b58`, an embedding host can register versioned
+operation definitions on `AgentExecutor`.
 The host selects one from a verified `RunRequest` and its `ExecutionContext`.
 Ordinary requests still use the agent's chat path. Selection runs inside the
 normal request scope and cannot change the admitted run's authority or session.
