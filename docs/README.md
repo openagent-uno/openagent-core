@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta59: bounded video preview resolution for staged operations](releases/v1.1.0-beta.59.md).
+
 - [Beta58: checkpointed staged operations](releases/v1.1.0-beta.58.md) and the
   [embedding contract](staged-operations.md).
 

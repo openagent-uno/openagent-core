@@ -87,7 +87,7 @@ The existing extraction deadline and byte limits still apply. Results report
 only the samples that decoded successfully. A brief event can occur between
 samples, so a preview alone does not establish that an event happened.
 
-Hosts can set `frame_edge` to an integer from 2 to 768 pixels. The default
+Starting with Core `1.1.0b59`, hosts can set `frame_edge` from 2 to 768 pixels. The default
 longest edge is 384 pixels. FFmpeg preserves the aspect ratio and the preview
 retains its existing JPEG byte and decode-time bounds.
 
