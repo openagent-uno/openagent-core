@@ -65,7 +65,7 @@ for optional transport failures. Those errors produce unavailable inventory;
 other capabilities remain usable. Cancellation and arbitrary failures are not
 swallowed, and Core imports no host transport or identity implementation.
 
-## Direct desktop interaction (source candidate)
+## Direct desktop interaction
 
 `openagent_core.computer_interaction.ComputerInteraction(runtime)` is an
 optional, transport-independent service for an authenticated human desktop
