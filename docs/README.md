@@ -2,7 +2,7 @@
 
 ## Architecture and use
 
-- [Beta62: bounded retries for structured staged completions](releases/v1.1.0-beta.62.md).
+- [Beta63: bounded retries for structured staged completions](releases/v1.1.0-beta.63.md).
 - [Beta61: image evidence in staged completions](releases/v1.1.0-beta.61.md).
 - [Beta60: desktop interaction for authorized host viewers](releases/v1.1.0-beta.60.md).
 

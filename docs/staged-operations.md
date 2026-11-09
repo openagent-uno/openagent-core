@@ -64,7 +64,7 @@ version when a stage's behavior changes.
   stage before inference. The canonical tool receipt retains the evidence and
   the stage checkpoints the validated JSON. Choose at most one evidence tool
   per completion step.
-  The default is one inference attempt. Starting with Core `1.1.0b62`, set
+  The default is one inference attempt. Starting with Core `1.1.0b63`, set
   `max_attempts` to two or three to retry output that fails JSON or schema
   validation. Attempts share the
   step deadline and use the same authorized evidence fetched once. The
