@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta60: desktop interaction for authorized host viewers](releases/v1.1.0-beta.60.md).
+
 - [Beta59: bounded video preview resolution for staged operations](releases/v1.1.0-beta.59.md).
 
 - [Beta58: checkpointed staged operations](releases/v1.1.0-beta.58.md) and the
