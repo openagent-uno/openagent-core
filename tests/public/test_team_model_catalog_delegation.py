@@ -251,7 +251,8 @@ class TeamModelCatalogDelegation(unittest.IsolatedAsyncioTestCase):
         events = [event for event in await active.runtime.events(parent_id, 0, self.context)
                   if event.kind == "run.child"]
         self.assertEqual([event.payload for event in events],
-                         [{"child_run_id": child.run_id, "child_session_id": child.session_id}])
+                         [{"child_run_id": child.run_id, "child_session_id": child.session_id,
+                           "provider_tool_call_id": "delegate-" + parent_id}])
         parent_done = [event.payload for event in await active.runtime.events(parent_id, 0, self.context)
                        if event.kind == "run.stream" and event.payload.get("kind") == "done"]
         self.assertEqual("The delegated fixture task is complete.", parent_done[-1]["final_answer"]["text"])
