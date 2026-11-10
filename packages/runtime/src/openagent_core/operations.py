@@ -22,6 +22,10 @@ CHECKPOINT_EVENTS = (STARTED, STEP_STARTED, STEP_COMPLETED)
 _MAX_STEPS = 256
 _MAX_RESUMES = 8
 _MAX_POLLS = 128
+_MAX_STEP_SECONDS = 3600
+_MAX_RECEIPT_WAIT_SECONDS = 3 * 3600
+_MIN_EXTENDED_POLL_INTERVAL = 15
+_MAX_EXTENDED_POLLS = _MAX_RECEIPT_WAIT_SECONDS // _MIN_EXTENDED_POLL_INTERVAL
 _MAX_VALUE_BYTES = 256 * 1024
 _MAX_RESULTS_BYTES = 4 * 1024**2
 _MAX_PROMPT_BYTES = 64 * 1024
@@ -141,7 +145,7 @@ def _digest(value: Any) -> str:
     return sha256(_encode(value)).hexdigest()
 
 
-def _seconds(value: float, *, max_seconds: int = 3600) -> None:
+def _seconds(value: float, *, max_seconds: int = _MAX_STEP_SECONDS) -> None:
     if (not isinstance(value, (int, float)) or isinstance(value, bool)
             or not math.isfinite(value) or not 0.1 <= value <= max_seconds):
         raise ValueError('Operation deadlines and intervals must be bounded seconds')
@@ -156,13 +160,16 @@ def _exact_tool(step: ToolStep | WaitStep) -> list:
 
 def _step_digest(step: ToolStep | WaitStep | CompletionStep) -> str:
     _check_key(step.key)
-    _seconds(step.timeout_seconds)
+    max_seconds = _MAX_RECEIPT_WAIT_SECONDS if isinstance(step, WaitStep) else _MAX_STEP_SECONDS
+    _seconds(step.timeout_seconds, max_seconds=max_seconds)
     if isinstance(step, ToolStep):
         if type(step.idempotent) is not bool:
             raise ValueError('Tool replay must be declared explicitly')
         return _digest(['tool', *_exact_tool(step), step.idempotent, step.timeout_seconds])
     if isinstance(step, WaitStep):
         _seconds(step.interval_seconds, max_seconds=60)
+        if step.timeout_seconds > _MAX_STEP_SECONDS and step.interval_seconds < _MIN_EXTENDED_POLL_INTERVAL:
+            raise ValueError('Extended receipt waits require at least 15 seconds between reads')
         if not callable(step.until):
             raise TypeError('A wait step requires a terminal-state predicate')
         return _digest(['wait', *_exact_tool(step), step.timeout_seconds, step.interval_seconds])
@@ -328,7 +335,8 @@ async def _execute_step(runtime, inference, step):
             return await _call(runtime, step)
         if isinstance(step, CompletionStep):
             return await _complete(runtime, inference, step)
-        for _ in range(_MAX_POLLS):
+        poll_limit = _MAX_EXTENDED_POLLS if step.timeout_seconds > _MAX_STEP_SECONDS else _MAX_POLLS
+        for _ in range(poll_limit):
             result = await _call(runtime, step)
             decision = step.until(copy.deepcopy(result))
             if type(decision) is not bool:

@@ -72,6 +72,43 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
     async def test_visual_completion_prefers_the_operation_extractor(self):
         await self.exercise_visual_operation(dedicated_extractor=True)
 
+    async def test_extended_wait_polls_one_receipt_past_the_normal_read_limit(self):
+        receipt = {'id': 'record-a'}
+        reads = 0
+        sleep = asyncio.sleep
+
+        async def read(args, context):
+            nonlocal reads
+            self.assertEqual(args, receipt)
+            self.assertEqual(context, self.context)
+            reads += 1
+            return {'structuredContent': {'ready': reads == 129}}
+
+        wait = WaitStep('receipt', 'records', 'read', receipt,
+                        until=lambda result: result['structuredContent']['ready'],
+                        timeout_seconds=7200, interval_seconds=15)
+        with self.assertRaises(ValueError):
+            _step_digest(replace(wait, interval_seconds=14))
+        with self.assertRaises(ValueError):
+            _step_digest(replace(wait, timeout_seconds=10801))
+        with self.assertRaises(ValueError):
+            _step_digest(ToolStep('write', 'records', 'write', timeout_seconds=7200))
+
+        async def skip_poll_interval(seconds):
+            await sleep(0 if seconds == 15 else seconds)
+
+        def next_step(state):
+            return CompleteOperation('Receipt collected') if 'receipt' in state.results else wait
+
+        runtime = await self.runtime(next_step, {'read': read})
+        with patch('openagent_core.operations.asyncio.sleep', new=skip_poll_interval):
+            await self.submit(runtime, 'run-a', inputs={})
+            result = await runtime.wait('run-a', self.context)
+        self.assertEqual((result.status, result.output), ('success', 'Receipt collected'))
+        self.assertEqual(reads, 129)
+        events = await runtime.services.store.operation_events('run-a')
+        self.assertEqual([event.payload['key'] for event in events if event.kind == STEP_COMPLETED], ['receipt'])
+
     async def exercise_visual_operation(self, *, dedicated_extractor):
         calls = []
         observations = []
