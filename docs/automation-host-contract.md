@@ -7,6 +7,12 @@ A host composes `AutomationRuntime` with an execution service; the scheduler nev
 
 ## Interrupted execution and projection limits
 
+On startup the scheduler recalculates the next occurrence of enabled tasks.
+If a concurrent SQLite write leaves the runtime's shared reader on an older
+WAL snapshot, the task update retries on a dedicated writer using the
+configured SQLite timeout. The reader's transaction stays open and the
+scheduler can complete startup once the update commits.
+
 `SqliteRuntimeStore.recover()` settles unfinished canonical runtime runs as
 `interrupted`, with external effects unknown and automatic retry forbidden.
 It does not reconcile the separate `task_runs` or `workflow_runs` projections.

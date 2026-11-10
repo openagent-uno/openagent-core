@@ -2795,7 +2795,17 @@ class MemoryDB:
         updates["updated_at"] = time.time()
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [task_id]
-        await conn.execute(f"UPDATE scheduled_tasks SET {set_clause} WHERE id = ?", values)
+        query = f"UPDATE scheduled_tasks SET {set_clause} WHERE id = ?"
+        try:
+            await conn.execute(query, values)
+        except sqlite3.OperationalError as error:
+            if not self._owns_connection or error.sqlite_errorcode != sqlite3.SQLITE_BUSY_SNAPSHOT:
+                raise
+            # A shared reader cannot promote an older WAL snapshot. Retry only
+            # this write on a fresh connection, preserving the reader's transaction.
+            async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as writer:
+                await writer.execute(query, values)
+            return
         await conn.commit()
 
     async def delete_task(self, task_id: str) -> None:

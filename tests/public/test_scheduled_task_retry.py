@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import aiosqlite
+
 from openagent_core.core.scheduler import Scheduler
 from openagent_core.memory.db import MemoryDB
 
@@ -59,6 +61,32 @@ class ScheduledTaskRetryTests(unittest.IsolatedAsyncioTestCase):
             await conn.execute("SELECT COUNT(*) FROM task_run_requests")
         ).fetchone()
         return int(row[0])
+
+    async def test_startup_recalculates_schedule_with_an_older_read_snapshot(self):
+        async def allow_task(_kind, _task):
+            return True
+
+        self.scheduler.execution_service = SimpleNamespace(
+            definition_authorized=allow_task,
+        )
+        reader = await self.db._ensure_connected()
+        await reader.execute("BEGIN")
+        self.addAsyncCleanup(reader.rollback)
+        await self.db.get_task(self.task_id)
+
+        async with aiosqlite.connect(self.db.db_path) as writer:
+            await writer.execute(
+                "UPDATE scheduled_tasks SET name = ? WHERE id = ?",
+                ("Renamed concurrently", self.task_id),
+            )
+            await writer.commit()
+
+        await self.scheduler._recalculate_next_runs()
+        self.assertTrue(reader.in_transaction)
+        await reader.rollback()
+        task = await self.db.get_task(self.task_id)
+        self.assertEqual("Renamed concurrently", task["name"])
+        self.assertGreater(task["next_run"], time.time())
 
     async def test_delayed_request_is_not_claimed_early_and_is_deduplicated(self):
         trigger = "automatic-retry:1:root-run"
