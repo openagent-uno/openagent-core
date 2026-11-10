@@ -58,6 +58,20 @@ from openagent_core.core._runner.utils.timer import Timer
 from openagent_core.core._runner.utils.tools import get_function_call_for_tool_call, get_function_call_for_tool_execution
 
 
+def _tool_iterator_items(result, call_id):
+    """Advance a lazy tool under its own identity, without scoping caller code."""
+    from openagent_core.runtime import provider_tool_call_scope
+
+    iterator = iter(result)
+    while True:
+        with provider_tool_call_scope(call_id or None):
+            try:
+                item = next(iterator)
+            except StopIteration:
+                return
+        yield item
+
+
 @dataclass
 class MessageData:
     response_role: Optional[Literal["system", "user", "assistant", "tool"]] = None
@@ -2182,7 +2196,7 @@ class Model(ABC):
 
         if isinstance(function_execution_result.result, (GeneratorType, collections.abc.Iterator)):
             try:
-                for item in function_execution_result.result:
+                for item in _tool_iterator_items(function_execution_result.result, function_call.call_id):
                     # This function yields agent/team/workflow run events
                     if (
                         isinstance(item, tuple(get_args(RunOutputEvent)))
@@ -2723,49 +2737,54 @@ class Model(ABC):
             function_call_success, function_call_timer, function_call, function_execution_result = result
             function_call_output = ""
 
+            from openagent_core.runtime import provider_tool_call_scope
+
             try:
-                async for item in function_call.result:
-                    # This function yields agent/team/workflow run events
-                    if isinstance(
-                        item,
-                        tuple(get_args(RunOutputEvent))
-                        + tuple(get_args(TeamRunOutputEvent))
-                        + tuple(get_args(WorkflowRunOutputEvent)),
-                    ):
-                        # We only capture content events
-                        if isinstance(item, RunContentEvent) or isinstance(item, TeamRunContentEvent):
-                            if item.content is not None and isinstance(item.content, BaseModel):
-                                function_call_output += item.content.model_dump_json()
-                            else:
-                                # Capture output
-                                function_call_output += item.content or ""
+                # The call's original scope ended when it returned the lazy
+                # generator. This task owns the full asynchronous iteration.
+                with provider_tool_call_scope(function_call.call_id or None):
+                    async for item in function_call.result:
+                        # This function yields agent/team/workflow run events
+                        if isinstance(
+                            item,
+                            tuple(get_args(RunOutputEvent))
+                            + tuple(get_args(TeamRunOutputEvent))
+                            + tuple(get_args(WorkflowRunOutputEvent)),
+                        ):
+                            # We only capture content events
+                            if isinstance(item, RunContentEvent) or isinstance(item, TeamRunContentEvent):
+                                if item.content is not None and isinstance(item.content, BaseModel):
+                                    function_call_output += item.content.model_dump_json()
+                                else:
+                                    # Capture output
+                                    function_call_output += item.content or ""
 
-                            if function_call.function.show_result and item.content is not None:
-                                await event_queue.put(ModelResponse(content=item.content))
-                                continue
+                                if function_call.function.show_result and item.content is not None:
+                                    await event_queue.put(ModelResponse(content=item.content))
+                                    continue
 
-                        if isinstance(item, CustomEvent):
+                            if isinstance(item, CustomEvent):
+                                function_call_output += str(item)
+                                item.tool_call_id = function_call.call_id
+
+                                # For WorkflowCompletedEvent, extract content for final output
+                                from openagent_core.core._run_state.workflow import WorkflowCompletedEvent
+
+                                if isinstance(item, WorkflowCompletedEvent):
+                                    if item.content is not None:
+                                        if isinstance(item.content, BaseModel):
+                                            function_call_output += item.content.model_dump_json()
+                                        else:
+                                            function_call_output += str(item.content)
+
+                            # Put the event into the queue to be yielded
+                            await event_queue.put(item)
+
+                        # Yield custom events emitted by the tool
+                        else:
                             function_call_output += str(item)
-                            item.tool_call_id = function_call.call_id
-
-                            # For WorkflowCompletedEvent, extract content for final output
-                            from openagent_core.core._run_state.workflow import WorkflowCompletedEvent
-
-                            if isinstance(item, WorkflowCompletedEvent):
-                                if item.content is not None:
-                                    if isinstance(item.content, BaseModel):
-                                        function_call_output += item.content.model_dump_json()
-                                    else:
-                                        function_call_output += str(item.content)
-
-                        # Put the event into the queue to be yielded
-                        await event_queue.put(item)
-
-                    # Yield custom events emitted by the tool
-                    else:
-                        function_call_output += str(item)
-                        if function_call.function.show_result and item is not None:
-                            await event_queue.put(ModelResponse(content=str(item)))
+                            if function_call.function.show_result and item is not None:
+                                await event_queue.put(ModelResponse(content=str(item)))
 
                 # Store the final output for this generator
                 async_generator_outputs[generator_id] = (result, function_call_output, None)
@@ -2856,7 +2875,7 @@ class Model(ABC):
                 # Events from async generators were already yielded in real-time above
             elif isinstance(function_call.result, (GeneratorType, collections.abc.Iterator)):
                 try:
-                    for item in function_call.result:
+                    for item in _tool_iterator_items(function_call.result, function_call.call_id):
                         # This function yields agent/team/workflow run events
                         if isinstance(
                             item,

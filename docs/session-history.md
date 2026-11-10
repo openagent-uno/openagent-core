@@ -125,3 +125,7 @@ executing provider call after child admission. A host can correlate it with a
 tool ledger binding's `provider_call_id` or a provider status frame. Hosts
 should check the viewer's access to the child separately before sending a
 link or child stream. Observing the child does not run it again.
+
+Provider tool identities are retained while consuming lazy tool generators.
+A live delegation event therefore carries the exact calling tool ID even for a
+streamed team tool. Parallel tool generators each keep their own identity.

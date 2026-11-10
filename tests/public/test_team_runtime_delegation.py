@@ -67,6 +67,7 @@ class TeamExecutor:
         self.release_children = asyncio.Event()
         self.expected_parallel_children = 0
         self.stream = False
+        self.provider_iteration = False
         self.broadcast = False
         self.bind = True
         self.async_mode = True
@@ -193,6 +194,17 @@ class TeamRuntimeDelegation(unittest.IsolatedAsyncioTestCase):
                     with provider_tool_call_scope(call_id):
                         parts.extend([part async for part in function.entrypoint(member_id=member_id, task=task)])
                 return parts
+            if executor.provider_iteration:
+                from openagent_core.mcp._runtime.function import FunctionCall
+                from openagent_core.models.providers.openai.chat import OpenAIChat
+
+                model = OpenAIChat(id="fixture")
+                call = FunctionCall(function=function, call_id="active-delegation",
+                                    arguments={"member_id": "specialist", "task": "bounded mission"})
+                messages = []
+                async for _ in model.arun_function_calls([call], messages):
+                    pass
+                return [message.content for message in messages]
             with provider_tool_call_scope("active-delegation"):
                 if not executor.async_mode:
                     return list(function.entrypoint(member_id="specialist", task="bounded mission"))
@@ -216,6 +228,7 @@ class TeamRuntimeDelegation(unittest.IsolatedAsyncioTestCase):
         for stream in (False, True):
             with self.subTest(stream=stream):
                 self.executor.stream = stream
+                self.executor.provider_iteration = True
                 record = await self.run_parent(run_id="parent-" + str(stream))
                 self.assertEqual(record.status, "success", self.executor.errors)
                 request, child, active_runtime, active_context, active_run = self.executor.children[-1]
