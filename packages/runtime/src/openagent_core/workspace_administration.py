@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-import tempfile
-import os
 from .contracts import ResourceRef, require_authorized
 from .runtime import runtime_scope
 
@@ -40,15 +38,9 @@ class SkillsLibrary:
         if not meta.path.resolve().is_relative_to(self.root): raise PermissionError("Skill escapes its registered source")
         return meta
 
-    @staticmethod
-    def metadata(meta):
-        return {"name":meta.name,"description":meta.description,"category":meta.category,"path":str(meta.path),
-            "created_by":meta.created_by,"status":meta.status,"agent_authored":meta.is_agent_authored,
-            "archived":meta.is_archived,"from_hub":meta.is_hub}
-
     async def list(self,context,*,include_archived=False):
         await self.authorize(context,"skills.read")
-        rows=[self.metadata(self.checked(m)) for m in self.registry().skills() if include_archived or not m.is_archived]
+        rows=[self.checked(m).summary() for m in self.registry().skills() if include_archived or not m.is_archived]
         await self.authorize(context,"skills.read")
         return {"skills":sorted(rows,key=lambda r:(r["category"] or "",r["name"]))}
 
@@ -62,12 +54,12 @@ class SkillsLibrary:
         await self.authorize(context,"skills.read")
         return result
 
-    async def search(self,context,query,*,limit=20):
+    async def search(self,context,query,*,limit=20,include_archived=True):
         await self.authorize(context,"skills.read")
         if not isinstance(query,str) or not query.strip():raise ValueError("Search query is required")
         for meta in self.registry().skills():self.checked(meta)
         from .mcp.servers.skills.handlers import skill_search
-        with runtime_scope(self.runtime):result=await skill_search(query,max(1,min(int(limit),100)))
+        with runtime_scope(self.runtime):result=await skill_search(query,int(limit),include_archived=include_archived)
         await self.authorize(context,"skills.read")
         return result
 
@@ -78,39 +70,17 @@ class SkillsLibrary:
         fields=dict(fields or {})
         if set(fields)-{"body","description","category"} or any(not isinstance(v,str) for v in fields.values()):raise ValueError("Invalid skill fields")
         if action not in {"create","update"} and fields:raise ValueError("This operation has no editable fields")
-        from .mcp.servers.skills.handlers import skill_manage, _slug, _skill_markdown, _preserved_provenance
-        from .memory.vault.parser import split_frontmatter
+        from .mcp.servers.skills.handlers import skill_manage, _slug
         async with self._writes:
             await self.authorize(context,"skills.write")
             existing=self.registry().get(name)
             if existing:self.checked(existing)
             if action!="create" and existing is None:raise LookupError("Skill not found")
             if action=="create" and (existing is not None or (self.root/_slug(name)).exists()):raise ValueError("A skill already occupies this name")
-            if action=="restore":
-                _,body=split_frontmatter(existing.path.read_text())
-                extra=_preserved_provenance(existing);extra.pop("status",None)
-                content=_skill_markdown(existing.name,existing.description,existing.category,body,extra=extra)
-                self._replace(existing.path,content)
-                result={"ok":True,"action":"restore","name":name,"path":str(existing.path)}
-            else:
-                with runtime_scope(self.runtime):result=await skill_manage(action,name,**fields)
-                if action=="create" and result.get("ok") and context.authority.kind=="user":
-                    # A trusted management request is human-authored. Curators
-                    # must not treat it as an autonomous agent's editable draft.
-                    created=self.checked(self.registry().get(name))
-                    _,body=split_frontmatter(created.path.read_text())
-                    self._replace(created.path,_skill_markdown(created.name,created.description,created.category,body,extra={"created_by":"user"}))
+            with runtime_scope(self.runtime):
+                result=await skill_manage(action,name,**fields,human_authored=context.authority.kind=="user")
             result["index_refreshed"]=False
             return result
-
-    @staticmethod
-    def _replace(path,content):
-        fd,temp=tempfile.mkstemp(prefix=".skill-",dir=path.parent)
-        try:
-            with os.fdopen(fd,"w") as file:file.write(content);file.flush();os.fsync(file.fileno())
-            os.replace(temp,path)
-        finally:
-            if os.path.exists(temp):os.unlink(temp)
 
 
 class SessionInspection:

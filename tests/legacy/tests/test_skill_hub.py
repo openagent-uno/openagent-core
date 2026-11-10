@@ -223,7 +223,7 @@ async def t_disabled_by_default(_ctx: TestContext) -> None:
         cfg.load_config = lambda *a, **k: {
             "skills": {"enabled": True, "hub": {"enabled": True}}}
         on = set(adapters.build_runtime_toolkit().get_async_functions().keys())
-        assert on == base | {"skill_hub_pull", "skill_hub_list"}, on
+        assert on == base | {"skill_hub_search", "skill_hub_pull", "skill_hub_list"}, on
     finally:
         cfg.load_config = orig_load
 

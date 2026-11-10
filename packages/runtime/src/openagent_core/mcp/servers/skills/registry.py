@@ -92,6 +92,12 @@ class SkillMeta:
         only — nothing in the index render depends on it."""
         return (self.created_by or "").strip().lower() == "hub"
 
+    def summary(self) -> dict:
+        return {"name": self.name, "description": self.description, "category": self.category,
+                "path": str(self.path), "created_by": self.created_by, "status": self.status,
+                "agent_authored": self.is_agent_authored, "archived": self.is_archived,
+                "from_hub": self.is_hub}
+
 
 def parse_skill_file(md_path: Path) -> SkillMeta | None:
     """Parse one ``SKILL.md`` into a :class:`SkillMeta`, or ``None`` when it

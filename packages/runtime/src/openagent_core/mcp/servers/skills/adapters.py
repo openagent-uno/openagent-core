@@ -26,11 +26,11 @@ def build_runtime_toolkit() -> Any:
         return await handlers.skill_view(name=name)
 
     async def skill_search(query: str, limit: int = 20) -> dict:
-        """Find skills by a plain substring over name, description, and body.
+        """Find active skills by name, category, description or instructions.
         Use it when you don't know the exact skill name or want to discover
         which skill fits a task. Returns metadata per hit; follow up with
         ``skill_view`` to read the full body of the one you want."""
-        return await handlers.skill_search(query=query, limit=limit)
+        return await handlers.skill_search(query=query, limit=limit, include_archived=False)
 
     async def skill_manage(
         action: str,
@@ -48,10 +48,23 @@ def build_runtime_toolkit() -> Any:
         prompt index) without deleting the file, so it is reversible. Edits
         appear in the system-prompt skills index on the next boot/reload, not
         mid-session."""
-        return await handlers.skill_manage(
-            action=action, name=name, body=body,
-            description=description, category=category,
-        )
+        from openagent_core.runtime import current_execution_context
+        from openagent_core.mcp.servers.skills import provenance
+
+        context = current_execution_context()
+        origin = provenance.current_write_origin()
+        external = context is not None and context.initiator.kind == "external"
+        if external and action.strip().lower() == "remove":
+            return {"ok": False, "error": "External channels can archive agent-authored skills."}
+        token = provenance.set_write_origin(provenance.BACKGROUND) if external and origin == provenance.FOREGROUND else None
+        try:
+            return await handlers.skill_manage(
+                action=action, name=name, body=body,
+                description=description, category=category,
+            )
+        finally:
+            if token is not None:
+                provenance.reset_write_origin(token)
 
     tools = [skill_view, skill_search, skill_manage]
 
@@ -66,7 +79,15 @@ def build_runtime_toolkit() -> Any:
     if skills_settings(load_config()).hub_enabled:
         from openagent_core.mcp.servers.skills import hub
 
-        async def skill_hub_pull(tap: str, force: bool = False) -> dict:
+        async def skill_hub_search(query: str, limit: int = 20) -> dict:
+            """Find published skills in the configured Git catalogs. Results include
+            their tap, folder, commit and scan verdict. Pass tap, folder and commit
+            to skill_hub_pull to install just the selected revision."""
+            return await hub.skill_hub_search(query=query, limit=limit)
+
+        async def skill_hub_pull(
+            tap: str, force: bool = False, folder: str | None = None, commit: str | None = None,
+        ) -> dict:
             """Pull SKILL.md skills from a shared git *tap* into your skills
             dir. ``tap`` is any git remote (``https://``, ``git@…``, or
             ``file://…``). The remote is shallow-cloned into quarantine, every
@@ -76,7 +97,17 @@ def build_runtime_toolkit() -> Any:
             refused: ``dangerous`` always, ``caution`` unless ``force=True``.
             New/updated skills appear in the skills index on the next
             boot/reload."""
-            return await hub.skill_hub_pull(tap=tap, force=force)
+            from openagent_core.runtime import current_execution_context
+            from openagent_core.mcp.servers.skills.provenance import is_background
+
+            context = current_execution_context()
+            if is_background():
+                return {"ok": False, "error": "Importing a catalog skill requires a foreground request."}
+            if context is not None and context.initiator.kind == "external":
+                configured = skills_settings(load_config()).hub_taps
+                if force or not folder or not commit or tap not in configured:
+                    return {"ok": False, "error": "Choose one scanned skill from skill_hub_search and pass its tap, folder and commit."}
+            return await hub.skill_hub_pull(tap=tap, force=force, folder=folder, commit=commit)
 
         async def skill_hub_list() -> dict:
             """List the hub skills installed locally (``created_by: hub``),
@@ -85,6 +116,6 @@ def build_runtime_toolkit() -> Any:
             installed and exactly where they came from."""
             return await hub.skill_hub_list()
 
-        tools = tools + [skill_hub_pull, skill_hub_list]
+        tools += [skill_hub_search, skill_hub_pull, skill_hub_list]
 
     return Toolkit(name="skills", tools=tools)

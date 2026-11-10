@@ -20,12 +20,13 @@ from openagent_core.configuration import runtime_environment
 import os
 import re
 import shutil
+import tempfile
 from pathlib import Path
 
 import yaml
 
 from openagent_core.core.paths import default_skills_path
-from openagent_core.memory.vault.parser import split_frontmatter
+from openagent_core.memory.vault.parser import load_frontmatter_yaml, split_frontmatter
 from openagent_core.mcp.servers.skills.registry import SkillsRegistry, parse_skill_file
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -136,7 +137,7 @@ async def skill_view(name: str) -> dict:
 
 # ── skill_search ──────────────────────────────────────────────────────
 
-async def skill_search(query: str, limit: int = 20) -> dict:
+async def skill_search(query: str, limit: int = 20, *, include_archived: bool = True) -> dict:
     """Find skills by MEANING when an embedding model is configured, else by a
     plain substring over name, description, AND body. Use it when you don't know
     the exact skill name, or to discover which skill covers a task — the
@@ -144,6 +145,7 @@ async def skill_search(query: str, limit: int = 20) -> dict:
     Returns metadata per hit; call ``skill_view`` to read the full body of the
     one you want."""
     q = (query or "").strip()
+    limit = max(1, min(limit, 100))
     # Semantic routing: only for a non-empty query and only when an embedder is
     # active. An empty query (list-all) and the no-embedder case both fall
     # through to the substring scan below, byte-identical to the original.
@@ -165,25 +167,25 @@ async def skill_search(query: str, limit: int = 20) -> dict:
                 results: list[dict] = []
                 for h in hits:
                     meta = reg.get(h.get("name") or "")
-                    if meta is None:
+                    if meta is None or (meta.is_archived and not include_archived):
                         continue
                     results.append({
-                        "name": meta.name,
-                        "description": meta.description,
-                        "category": meta.category,
+                        **meta.summary(),
                         "matched_in": ["semantic"],
-                        "path": str(meta.path),
                         "score": h.get("score"),
                     })
                     if len(results) >= limit:
                         break
-                return {"query": query, "count": len(results), "results": results}
+                if results:
+                    return {"query": query, "count": len(results), "results": results}
             # semantic active but no hit (or endpoint down) → keyword still useful
     # ── substring scan (unchanged; the only path when no embedder) ──
     q = q.lower()
     reg = _registry()
     results = []
     for meta in reg.skills():
+        if meta.is_archived and not include_archived:
+            continue
         try:
             body = meta.path.read_text(errors="replace")
         except OSError:
@@ -191,16 +193,14 @@ async def skill_search(query: str, limit: int = 20) -> dict:
         haystacks = {
             "name": meta.name.lower(),
             "description": meta.description.lower(),
+            "category": meta.category.lower(),
             "body": body.lower(),
         }
         where = [field for field, text in haystacks.items() if q and q in text]
         if not q or where:
             results.append({
-                "name": meta.name,
-                "description": meta.description,
-                "category": meta.category,
+                **meta.summary(),
                 "matched_in": where,
-                "path": str(meta.path),
             })
         if len(results) >= limit:
             break
@@ -211,7 +211,7 @@ async def skill_search(query: str, limit: int = 20) -> dict:
 
 def _skill_markdown(
     name: str, description: str, category: str, body: str,
-    *, extra: dict[str, str] | None = None,
+    *, extra: dict | None = None,
 ) -> str:
     """Render a well-formed SKILL.md. Frontmatter is emitted via
     ``yaml.safe_dump`` so a colon / quote in a description can never produce
@@ -221,7 +221,7 @@ def _skill_markdown(
     AFTER the three core keys, so ``name`` / ``description`` / ``category``
     stay first in the file. ``None`` values are dropped — never written as a
     literal ``null``."""
-    data: dict[str, str] = {
+    data = {
         "name": name, "description": description, "category": category,
     }
     for k, v in (extra or {}).items():
@@ -232,23 +232,21 @@ def _skill_markdown(
     return f"---\n{fm}\n---\n\n{body}\n" if body else f"---\n{fm}\n---\n"
 
 
-def _preserved_provenance(existing) -> dict[str, str]:
-    """Frontmatter keys carried forward when an existing skill is rewritten:
-    its ``created_by`` provenance and any ``status``. Losing ``created_by``
-    on an update would silently strip a skill of its agent-authored mark and
-    push it out of the curator's reach — so it must survive every rewrite."""
-    out: dict[str, str] = {}
-    if existing is None:
-        return out
-    if existing.created_by:
-        out["created_by"] = existing.created_by
-    if existing.status:
-        out["status"] = existing.status
-    # The pin must survive a rewrite for the same reason ``created_by`` must:
-    # a lock that a legitimate edit silently drops is not a lock.
-    if getattr(existing, "pinned", False):
-        out["pinned"] = "true"
-    return out
+def _editable_frontmatter(raw: str | None) -> dict:
+    fields = load_frontmatter_yaml(raw) if raw else {}
+    return {key: value for key, value in fields.items() if key not in {"name", "description", "category"}}
+
+
+def _replace_skill(path: Path, content: str) -> None:
+    fd, temporary = tempfile.mkstemp(prefix=".skill-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            file.write(content)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 async def skill_manage(
@@ -257,6 +255,8 @@ async def skill_manage(
     body: str | None = None,
     description: str | None = None,
     category: str | None = None,
+    *,
+    human_authored: bool = False,
 ) -> dict:
     """Create, update, remove, or archive a skill on disk. ``action`` is one
     of ``create`` / ``update`` / ``remove`` / ``archive``. For create/update,
@@ -268,7 +268,20 @@ async def skill_manage(
     is reversible and auditable. Changes take effect in the system-prompt
     skills index on the next boot/reload, not mid-session."""
     action = (action or "").strip().lower()
-    root = _skills_root()
+    root = _skills_root().resolve()
+    if not isinstance(name, str) or not name.strip() or len(name) > 200:
+        return {"ok": False, "error": "Invalid skill name"}
+    name = name.strip()
+    existing = _registry().get(name)
+    if existing is not None and not existing.path.resolve().is_relative_to(root):
+        return {"ok": False, "error": "Skill escapes its registered source"}
+
+    from openagent_core.mcp.servers.skills.provenance import is_propose_only, mutation_refusal
+
+    if is_propose_only():
+        return {"ok": False, "action": action, "name": name,
+                "error": mutation_refusal(action, name, created_by=None, pinned=False),
+                "refused": "provenance"}
 
     # The provenance boundary, enforced HERE and not only in the curator's
     # prompt. An autonomous pass may create freely, but every mutation of an
@@ -276,40 +289,38 @@ async def skill_manage(
     # A prompt is guidance a model follows most of the time; this decides
     # whether a scheduled job can rewrite the playbook example-product-a answers
     # customers with.
-    if action in ("update", "archive", "remove"):
-        from openagent_core.mcp.servers.skills.provenance import mutation_refusal
-
-        target_skill = _registry().get(name)
-        if target_skill is not None:
+    if action in ("update", "archive", "restore", "remove"):
+        if existing is not None:
             refusal = mutation_refusal(
                 action, name,
-                created_by=getattr(target_skill, "created_by", None),
-                pinned=bool(getattr(target_skill, "pinned", False)),
+                created_by=existing.created_by,
+                pinned=existing.pinned,
             )
             if refusal:
                 return {"ok": False, "action": action, "name": name,
                         "error": refusal, "refused": "provenance"}
 
     if action == "remove":
-        existing = _registry().get(name)
-        target = existing.directory if existing else (root / _slug(name))
-        if not target.is_dir():
+        if existing is None:
             return {"ok": False, "error": f"No skill named {name!r} to remove."}
-        shutil.rmtree(target, ignore_errors=True)
+        target = existing.directory
+        shutil.rmtree(target)
         return {"ok": True, "action": "remove", "name": name, "path": str(target)}
 
-    if action == "archive":
-        existing = _registry().get(name)
+    if action in ("archive", "restore"):
         if existing is None:
             return {"ok": False, "error": f"No skill named {name!r} to archive."}
         # Retire in place: keep name/description/category/body verbatim, flip
         # status to archived, and carry provenance forward. The registry
         # drops archived skills from the index render on the next reload.
         content = existing.path.read_text(errors="replace")
-        _fm, existing_body = split_frontmatter(content)
-        extra = _preserved_provenance(existing)
-        extra["status"] = "archived"
-        existing.path.write_text(_skill_markdown(
+        frontmatter, existing_body = split_frontmatter(content)
+        extra = _editable_frontmatter(frontmatter)
+        if action == "archive":
+            extra["status"] = "archived"
+        else:
+            extra.pop("status", None)
+        _replace_skill(existing.path, _skill_markdown(
             name=existing.name,
             description=existing.description,
             category=existing.category,
@@ -319,14 +330,13 @@ async def skill_manage(
         meta = parse_skill_file(existing.path)
         return {
             "ok": meta is not None,
-            "action": "archive",
-            "name": name,
-            "status": "archived",
+            "action": action,
+            "name": existing.name,
+            "status": meta.status if meta else None,
             "path": str(existing.path),
         }
 
     if action in ("create", "update"):
-        existing = _registry().get(name)
         if action == "create" and existing is not None:
             return {
                 "ok": False,
@@ -378,38 +388,34 @@ async def skill_manage(
             }
 
         skill_dir = existing.directory if existing else (root / _slug(name))
-        skill_dir.mkdir(parents=True, exist_ok=True)
         md_path = skill_dir / "SKILL.md"
-        # Stamp provenance. A fresh create is authored by the agent; an update
-        # preserves whatever provenance/status the file already carried (so a
-        # seed skill the user asked the agent to edit is NOT re-labelled as
-        # agent-authored, and an agent skill keeps its mark).
-        if action == "create":
-            extra = {"created_by": AGENT_PROVENANCE}
+        if existing is not None:
+            frontmatter, current_body = split_frontmatter(existing.path.read_text(errors="replace"))
+            extra = _editable_frontmatter(frontmatter)
+            final_body = supplied_body if supplied_body is not None else current_body
+            final_desc = description if description is not None else existing.description
+            final_cat = category if category is not None else existing.category
+            name = existing.name
         else:
-            extra = _preserved_provenance(existing)
-
-        # On update, the fields nobody sent keep their current values instead
-        # of being overwritten with blanks — the same reason ``created_by``
-        # survives a rewrite. An edit is an edit, not a re-creation.
-        if action == "update":
-            current = existing.path.read_text(errors="replace")
-            _fm, current_body = split_frontmatter(current)
-            final_body = supplied_body if supplied_body is not None else (current_body or "")
-            final_desc = (description if description is not None else existing.description) or ""
-            final_cat = (category if category is not None else existing.category) or ""
-        else:
-            final_body = supplied_body or ""
+            extra = {"created_by": "user" if human_authored else AGENT_PROVENANCE}
+            final_body = supplied_body
             final_desc = description or ""
             final_cat = category or ""
 
-        md_path.write_text(_skill_markdown(
-            name=name,
-            description=final_desc.strip(),
-            category=final_cat.strip() or "general",
-            body=final_body,
-            extra=extra,
-        ))
+        content = _skill_markdown(name, final_desc.strip(), final_cat.strip() or "general", final_body, extra=extra)
+        if action == "create":
+            # mkdir reserves the slug even when concurrent callers pass the registry check.
+            try:
+                skill_dir.mkdir(parents=True, exist_ok=False)
+            except FileExistsError:
+                return {"ok": False, "error": "A skill already occupies this name", "refused": "conflict"}
+            try:
+                _replace_skill(md_path, content)
+            except OSError:
+                skill_dir.rmdir()
+                raise
+        else:
+            _replace_skill(md_path, content)
         # Re-parse to confirm the written file is valid, and confirm the body
         # actually landed. "ok" used to mean "the frontmatter parses", which
         # is exactly the check an empty skill passes.
@@ -426,6 +432,6 @@ async def skill_manage(
     return {
         "ok": False,
         "error": (
-            f"Unknown action {action!r}. Use create, update, remove, or archive."
+            f"Unknown action {action!r}. Use create, update, remove, archive, or restore."
         ),
     }

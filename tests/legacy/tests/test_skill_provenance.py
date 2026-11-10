@@ -72,7 +72,8 @@ async def t_pin_parses_and_survives(ctx: TestContext) -> None:
     import tempfile
     from pathlib import Path
 
-    from openagent_core.mcp.servers.skills.handlers import _preserved_provenance
+    from openagent_core.mcp.servers.skills.handlers import _editable_frontmatter
+    from openagent_core.memory.vault.parser import split_frontmatter
     from openagent_core.mcp.servers.skills.registry import parse_skill_file
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -86,8 +87,8 @@ async def t_pin_parses_and_survives(ctx: TestContext) -> None:
         assert meta.created_by == "agent"
 
         # Una riscrittura legittima non deve far cadere il lucchetto.
-        carried = _preserved_provenance(meta)
-        assert carried.get("pinned") == "true"
+        carried = _editable_frontmatter(split_frontmatter(path.read_text())[0])
+        assert carried.get("pinned") is True
         assert carried.get("created_by") == "agent"
 
         # Un pin scritto come lo scriverebbe una persona vale comunque.

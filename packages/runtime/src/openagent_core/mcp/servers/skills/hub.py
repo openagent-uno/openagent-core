@@ -25,6 +25,7 @@ perturbs the byte-stable prompt index.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import shutil
@@ -34,6 +35,7 @@ from pathlib import Path
 
 import yaml
 
+from openagent_core.configuration import runtime_environment
 from openagent_core.core.paths import default_skills_path
 from openagent_core.memory.vault.parser import (
     FrontmatterSyntaxError,
@@ -89,7 +91,8 @@ def _save_lock(root: Path, lock: dict) -> None:
 
 def _git(args: list[str], cwd: str | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, check=False,
+        [runtime_environment().get("OPENAGENT_GIT_BIN") or "git", *args],
+        cwd=cwd, capture_output=True, text=True, check=False, timeout=30,
     )
 
 
@@ -151,7 +154,52 @@ def _existing_is_hub(dest: Path) -> bool | None:
     return meta.is_hub
 
 
-async def skill_hub_pull(tap: str, force: bool = False) -> dict:
+async def skill_hub_search(query: str, limit: int = 20) -> dict:
+    """Search metadata in the host-configured Git taps without installing."""
+    from openagent_core.core.config import load_config, skills_settings
+
+    config = skills_settings(load_config())
+    if not config.hub_enabled:
+        return {"ok": False, "error": "Skill Hub is disabled"}
+    return await asyncio.to_thread(_search_taps, config.hub_taps, query, max(1, min(limit, 100)))
+
+
+def _search_taps(taps: tuple[str, ...], query: str, limit: int) -> dict:
+    words = query.casefold().split()
+    results, unavailable = [], []
+    for tap in dict.fromkeys(taps):
+        with tempfile.TemporaryDirectory(prefix="skillhub-search-") as temporary:
+            clone = Path(temporary) / "repo"
+            try:
+                cloned = _git(["clone", "--depth", "1", "--", tap, str(clone)])
+                head = _git(["rev-parse", "HEAD"], cwd=str(clone)) if cloned.returncode == 0 else cloned
+            except (OSError, subprocess.TimeoutExpired):
+                unavailable.append(tap)
+                continue
+            if head.returncode:
+                unavailable.append(tap)
+                continue
+            for md in sorted(clone.glob("*/SKILL.md")):
+                if md.is_symlink() or md.parent.is_symlink():
+                    continue
+                meta = parse_skill_file(md)
+                if meta is None or not all(
+                    word in f"{meta.name} {meta.description} {meta.category}".casefold() for word in words
+                ):
+                    continue
+                verdict = hub_guard.scan_skill(md.parent)
+                results.append({"name": meta.name, "description": meta.description,
+                                "category": meta.category, "tap": tap, "folder": md.parent.name,
+                                "commit": head.stdout.strip(), "verdict": verdict.level})
+                if len(results) == limit:
+                    return {"ok": True, "results": results, "unavailable": unavailable}
+    return {"ok": bool(results) or len(unavailable) < len(taps) or not taps,
+            "results": results, "unavailable": unavailable}
+
+
+async def skill_hub_pull(
+    tap: str, force: bool = False, *, folder: str | None = None, commit: str | None = None,
+) -> dict:
     """Pull SKILL.md skills from a shared git *tap* into the local skills dir.
 
     ``tap`` is any git remote (``https://``, ``git@…``, or ``file://…``). The
@@ -165,14 +213,16 @@ async def skill_hub_pull(tap: str, force: bool = False) -> dict:
     tap = (tap or "").strip()
     if not tap:
         return {"ok": False, "error": "no tap given"}
-    if shutil.which("git") is None:
+    if folder is not None and (not folder or folder in {".", ".."} or "/" in folder or "\\" in folder):
+        return {"ok": False, "error": "Invalid catalog folder"}
+    if not runtime_environment().get("OPENAGENT_GIT_BIN") and shutil.which("git") is None:
         return {"ok": False, "error": "git is not installed / not on PATH"}
 
     root = _skills_root()
     quarantine = Path(tempfile.mkdtemp(prefix="skillhub-"))
     clone = quarantine / "repo"
     try:
-        cloned = _git(["clone", "--depth", "1", tap, str(clone)])
+        cloned = await asyncio.to_thread(_git, ["clone", "--depth", "1", "--", tap, str(clone)])
         if cloned.returncode != 0:
             return {
                 "ok": False,
@@ -186,9 +236,13 @@ async def skill_hub_pull(tap: str, force: bool = False) -> dict:
                 "error": "could not resolve cloned HEAD commit",
                 "stderr": (head.stderr or "").strip()[-500:],
             }
-        commit = head.stdout.strip()
+        actual_commit = head.stdout.strip()
+        if commit is not None and commit != actual_commit:
+            return {"ok": False, "error": "Catalog revision changed. Search the catalog again."}
+        commit = actual_commit
 
-        skill_mds = sorted(clone.glob("*/SKILL.md"))
+        skill_mds = [md for md in sorted(clone.glob("*/SKILL.md"))
+                     if folder is None or md.parent.name == folder]
         if not skill_mds:
             return {"ok": False, "error": f"no */SKILL.md skills found in {tap!r}",
                     "commit": commit}
@@ -202,6 +256,9 @@ async def skill_hub_pull(tap: str, force: bool = False) -> dict:
             src_dir = md.parent
             folder = src_dir.name
 
+            if md.is_symlink() or src_dir.is_symlink():
+                rejected.append({"folder": folder, "verdict": "dangerous", "reasons": ["symlink"]})
+                continue
             verdict = hub_guard.scan_skill(src_dir)
             if verdict.blocks(force):
                 rejected.append({
@@ -224,11 +281,11 @@ async def skill_hub_pull(tap: str, force: bool = False) -> dict:
             dest = root / folder
             if dest.exists():
                 owned = _existing_is_hub(dest)
-                if owned is False:
-                    # Never clobber a hand-written seed/agent/user skill.
+                if owned is not True or dest.is_symlink() or lock["skills"].get(name, {}).get("repo") != tap:
+                    # A different catalog or a local skill owns this destination.
                     skipped.append({
                         "folder": folder, "name": name,
-                        "reason": "destination is a non-hub skill — not overwriting",
+                        "reason": "destination is owned by a local skill or a different catalog",
                     })
                     continue
                 shutil.rmtree(dest, ignore_errors=True)
@@ -277,6 +334,8 @@ async def skill_hub_pull(tap: str, force: bool = False) -> dict:
                 "rejected": len(rejected),
             },
         }
+    except (OSError, subprocess.TimeoutExpired):
+        return {"ok": False, "error": "Skill catalog is unavailable"}
     finally:
         shutil.rmtree(quarantine, ignore_errors=True)
 

@@ -18,6 +18,8 @@
 
 - [Beta56: optional visual previews of tool videos and speech synthesis](releases/v1.1.0-beta.56.md).
 
+- [Author and discover skills](skills.md).
+
 - [MCP marketplace in agent sessions](mcp-marketplace.md).
 
 - [Agent activation of reviewed MCP integrations](reviewed-mcp-installations.md).

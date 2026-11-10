@@ -57,6 +57,62 @@ class WorkspaceAdministration(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PermissionError):await self.skills.write(self.management,"update","User Playbook",{"body":"forged"})
         self.assertEqual(before,Path(content["path"]).read_bytes())
 
+    async def test_agent_tool_and_user_share_search_and_keep_separate_authorship(self):
+        from openagent_core.mcp.servers.skills.adapters import build_runtime_toolkit
+        from openagent_core.runtime import execution_scope
+
+        await self.skills.write(self.management, "create", "human-guide", {"body": "export ledger", "category": "finance"})
+        external = PrincipalRef("channel", "tenant", "member", "external")
+        context = replace(self.ctx, initiator=external)
+        with execution_scope(self.runtime, context, "channel-run"):
+            toolkit = build_runtime_toolkit()
+            manage = toolkit.get_async_functions()["skill_manage"].entrypoint
+            search = toolkit.get_async_functions()["skill_search"].entrypoint
+            self.assertTrue((await manage("create", "agent-guide", body="reconcile ledger"))["ok"])
+            self.assertFalse((await manage("create", "agent guide!", body="overwrite"))["ok"])
+            self.assertEqual("provenance", (await manage("update", "human-guide", body="overwrite"))["refused"])
+            self.assertTrue((await manage("update", "agent-guide", description="Reviewed"))["ok"])
+            self.assertFalse((await manage("remove", "agent-guide"))["ok"])
+            self.assertEqual(["human-guide"], [hit["name"] for hit in (await search("finance"))["results"]])
+            self.assertTrue((await manage("archive", "agent-guide"))["ok"])
+            self.assertEqual(0, (await search("reconcile"))["count"])
+        self.assertEqual(1, (await self.skills.search(self.management, "reconcile"))["count"])
+        self.assertEqual(0, (await self.skills.search(self.management, "reconcile", include_archived=False))["count"])
+        self.assertIn("created_by: agent", (await self.skills.read(self.management, "agent-guide"))["content"])
+
+    async def test_skill_catalog_search_and_install_selected_revision(self):
+        import subprocess
+        from unittest.mock import patch
+        from openagent_core.mcp.servers.skills import hub
+        from openagent_core.runtime import runtime_scope
+
+        tap = self.path / "published"
+        tap.mkdir()
+
+        def git(*args):
+            return subprocess.run(["git", "-C", str(tap), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+        git("init")
+        for name, description in (("invoice", "Review billing exports"), ("reports", "Summarize weekly numbers")):
+            directory = tap / name
+            directory.mkdir()
+            (directory / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {description}\n---\n\nRead the notes.\n")
+        git("add", ".")
+        git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "Initial catalog")
+        config = {"skills": {"hub": {"enabled": True, "taps": [str(tap)]}}}
+        with patch("openagent_core.core.config.load_config", return_value=config), runtime_scope(self.runtime):
+            result = await hub.skill_hub_search("billing review")
+            self.assertTrue(result["ok"], result)
+            [hit] = result["results"]
+            self.assertEqual("invoice", hit["name"])
+            self.assertEqual(git("rev-parse", "HEAD"), hit["commit"])
+            self.assertFalse((self.path / "skills").exists())
+            self.assertFalse((await hub.skill_hub_pull(hit["tap"], folder=hit["folder"], commit="outdated"))["ok"])
+            installed = await hub.skill_hub_pull(hit["tap"], folder=hit["folder"], commit=hit["commit"])
+            self.assertEqual(["invoice"], [entry["name"] for entry in installed["pulled"]])
+        [skill] = (await self.skills.list(self.management))["skills"]
+        self.assertTrue(skill["from_hub"])
+
     async def test_skill_source_rejects_slug_collision_and_external_symlink(self):
         await self.skills.write(self.management,"create","Collision!",{"body":"Keep me."})
         with self.assertRaises(ValueError):await self.skills.write(self.management,"create","Collision?",{"body":"Overwrite."})
