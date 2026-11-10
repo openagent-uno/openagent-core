@@ -364,6 +364,7 @@ class _ServerSpec:
     adapter_module: str | None = None
     runtime_toolkit_factory: str = "build_runtime_toolkit"
     trusted_module: str | None = None
+    public_https_only: bool = False
 
     @property
     def is_stdio(self) -> bool:
@@ -533,6 +534,7 @@ def _spec_from_kwargs(kwargs: dict[str, Any]) -> _ServerSpec:
     return _ServerSpec(
         name=kwargs.get("name", ""),
         trusted_module=kwargs.get("_trusted_module"),
+        public_https_only=kwargs.get("_public_https_only") is True,
         command=kwargs.get("command"),
         args=kwargs.get("args") or [],
         url=kwargs.get("url"),
@@ -1936,6 +1938,10 @@ class MCPPool:
                     if sse_read.total_seconds() < read_timeout:
                         http_params.sse_read_timeout = timedelta(seconds=read_timeout)
                     http_params.httpx_client_factory = _bounded_connect_http_client
+                if spec.public_https_only:
+                    from functools import partial
+                    from .public_https import public_https_client
+                    http_params.httpx_client_factory = partial(public_https_client, spec.url)
                 toolkit = MCPTools(
                     server_params=http_params,
                     transport="streamable-http",
