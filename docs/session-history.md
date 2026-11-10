@@ -13,6 +13,12 @@ session. An exact matching provider run remains the detailed presentation;
 unrelated prompts are never matched by their text. Both sources share the
 existing bounded run limit, chronological ordering and canonical run IDs.
 
+On acceptance, the SQLite runtime binds a legacy session whose agent was unset
+to the authenticated runtime agent. An exact idempotent replay can repair the
+same missing binding after validating the original request fingerprint. A
+session already bound to another agent cannot be claimed. Quarantined sessions
+continue to require the separate owner-approved adoption flow.
+
 Cancellation does not erase an already recorded user, partial answer or tool.
 Interrupted/cancelled output diagnostics are not assistant answers. A repeated
 terminal stream frame does not duplicate earlier deltas. File references still
