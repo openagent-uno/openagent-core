@@ -257,10 +257,8 @@ async def call_tool(pool_or_catalog: Any, source_ref: str, tool_name: str, argum
     current_pool=getattr(engine_agent,"capability_pool",None)
     if pool_or_catalog is not catalog and pool_or_catalog is not current_pool:
         raise PermissionError("The tool source belongs to another runtime")
-    matches=[tool for tool in await catalog.discover(context) if tool.source_id==source_ref and tool.name==tool_name]
-    if len(matches)!=1:
-        raise LookupError('The exact durable tool destination is unavailable or ambiguous')
-    return await catalog.call_tool(matches[0].tool_ref,arguments or {},context)
+    reference = await catalog.resolve_tool_ref(source_ref, tool_name, context)
+    return await catalog.call_tool(reference, arguments or {}, context)
 
 
 class AgentModelCatalog:

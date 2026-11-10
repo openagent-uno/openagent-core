@@ -84,6 +84,12 @@ class RecordingRuntime(SimpleNamespace):
     async def finish_tool(self, run_id, call_id, **payload):
         self.events.append(("finish", run_id, call_id, payload))
 
+    async def read_tool_invocation(self, reference, call_id, context):
+        assert reference.session_id == context.session_id
+        begin = next(event for event in self.events if event[0] == "begin" and event[2] == call_id)
+        finish = next(event for event in self.events if event[0] == "finish" and event[2] == call_id)
+        return {"run_id": begin[1], "binding": begin[3], **finish[3]}
+
 
 class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -148,6 +154,90 @@ class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(Exception):
                 await call.entrypoint(tool_ref=left["tool_ref"], args={"server": "right"})
             self.assertEqual(self.calls, [("left", "exact")])
+
+    async def test_shared_result_pages_reuse_the_original_authorized_invocation(self):
+        rows = [{"id": index, "description": "x" * 600} for index in range(38)]
+        original = {"data": {"files": rows}, "status": "ok"}
+
+        async def collect(arguments, context):
+            self.calls.append(arguments)
+            return original
+
+        tool = FunctionSource((ToolDefinition("collect", "Collect records", {"type": "object"}),),
+                              {"collect": collect})
+        self.catalog.register("records", tool, tool, target_label="Fixture")
+        call = build_runtime_toolkit(pool=self.pool).async_functions["tool_search_call_tool"].entrypoint
+        with execution_scope(self.runtime, self.context, "run"):
+            reference = next(tool.tool_ref for tool in await self.catalog.discover(self.context)
+                             if tool.source_id == "records")
+            first = await call(tool_ref=reference)
+            info, = first["openagent_pages"]
+            self.assertEqual(info["path"], ["data", "files"])
+            self.assertEqual(info["total"], len(rows))
+            self.assertEqual(first["result"]["status"], "ok")
+            collected = first["result"]["data"]["files"]
+            self.assertLess(len(collected), 20)
+            self.assertLess(len(json.dumps(first)), 9_000)
+            cursor = info["result_cursor"]
+            with self.assertRaises(ValueError):
+                await call(tool_ref=reference, result_cursor=cursor)
+            with self.assertRaises(ValueError):
+                await call(result_cursor=cursor[:-1] + "!")
+            with execution_scope(self.runtime, self.context, "another-run"):
+                with self.assertRaises(ValueError):
+                    await call(result_cursor=cursor)
+            for denied in ("session.read", "tool.publish"):
+                self.policy.denied.add(denied)
+                with self.assertRaises(PermissionError):
+                    await call(result_cursor=cursor)
+                self.policy.denied.clear()
+            while cursor is not None:
+                next_page = await call(result_cursor=cursor)
+                self.assertEqual(next_page["offset"], len(collected))
+                collected.extend(next_page["items"])
+                cursor = next_page["result_cursor"]
+            self.assertEqual(collected, rows)
+            self.assertEqual(self.runtime.events[-1][3]["result"], original)
+            self.catalog.revoke("records")
+            with self.assertRaises(CapabilityUnavailable):
+                await call(result_cursor=info["result_cursor"])
+        self.assertEqual(self.calls, [{}])
+
+    async def test_shared_result_pages_keep_mcp_media_and_native_cursors(self):
+        rows = [{"id": index} for index in range(31)]
+        tool_results = {
+            "structured": {
+                "structuredContent": {"result": rows},
+                "content": [{"type": "text", "text": json.dumps(rows)}],
+            },
+            "provider_page": {"results": rows, "next_cursor": "provider-next"},
+            "mixed": {
+                "structuredContent": {"result": rows},
+                "content": [{"type": "text", "text": "A separate important notice"}],
+            },
+        }
+
+        async def collect(arguments, context):
+            return tool_results[arguments["key"]]
+
+        tool = FunctionSource((ToolDefinition("collect", "Collect records", {"type": "object"}),),
+                              {"collect": collect})
+        self.catalog.register("records", tool, tool, target_label="Fixture")
+        call = build_runtime_toolkit(pool=self.pool).async_functions["tool_search_call_tool"].entrypoint
+        with execution_scope(self.runtime, self.context, "run"):
+            reference = next(tool.tool_ref for tool in await self.catalog.discover(self.context)
+                             if tool.source_id == "records")
+            first = await call(tool_ref=reference, args={"key": "structured"})
+            self.assertEqual(first["result"]["result"], rows[:20])
+            cursor = first["openagent_pages"][0]["result_cursor"]
+            last = await call(result_cursor=cursor)
+            self.assertEqual(last["items"], rows[20:])
+            self.assertIsNone(last["result_cursor"])
+            provider = await call(tool_ref=reference, args={"key": "provider_page"})
+            self.assertEqual(provider, tool_results["provider_page"])
+            mixed = await call(tool_ref=reference, args={"key": "mixed"})
+            self.assertEqual(mixed["result"]["content"], tool_results["mixed"]["content"])
+            self.assertEqual(mixed["result"]["structuredContent"]["result"], rows[:20])
 
     async def test_large_source_discovery_is_compact_searchable_and_paged(self):
         names = [
@@ -227,6 +317,11 @@ class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
         schema = functions["tool_search_list_tools"].parameters
         self.assertNotIn("source_ref", schema.get("required", []))
         with execution_scope(self.runtime, self.context, "run"):
+            sources = await functions["tool_search_list_servers"].entrypoint(limit=1)
+            remainder = await functions["tool_search_list_servers"].entrypoint(offset=sources["next_offset"])
+            self.assertEqual({source["name"] for source in sources["sources"] + remainder["sources"]},
+                             {"left", "right"})
+            self.assertIsNone(remainder["next_offset"])
             page = await functions["tool_search_list_tools"].entrypoint(query="read", limit=1)
             self.assertEqual(page["total"], 2)
             self.assertTrue(page["has_more"])

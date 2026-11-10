@@ -27,6 +27,7 @@ from typing import Any
 
 import aiosqlite
 from mcp.server.fastmcp import FastMCP
+from openagent_core.mcp.sqlite_pages import select_page
 
 from openagent_core.workflow import (
     BLOCK_CATALOG,
@@ -923,8 +924,13 @@ async def _poll_request(
 @mcp.tool()
 async def list_workflow_runs(
     id_or_name: str, limit: int = 20, status: str | None = None,
-) -> list[dict[str, Any]]:
-    """List recent runs of a workflow, newest first."""
+    *, cursor: str | None = None,
+) -> dict[str, Any]:
+    """List recent runs of a workflow, newest first.
+
+    Limit is a maximum page size from 1 to 50. Pass next_cursor as cursor
+    with the same workflow and status filter to continue.
+    """
     conn = await _get_conn()
     row = await _resolve_workflow(conn, id_or_name)
     workflow_id = row["id"]
@@ -933,14 +939,11 @@ async def list_workflow_runs(
     if status:
         clauses.append("status = ?")
         params.append(status)
-    params.append(int(limit))
-    cursor = await conn.execute(
-        f"SELECT * FROM workflow_runs WHERE {' AND '.join(clauses)} "
-        "ORDER BY started_at DESC LIMIT ?",
-        params,
+    rows, next_cursor = await select_page(
+        conn, "workflow_runs", "*", order_by="started_at", limit=limit,
+        cursor=cursor, conditions=clauses, parameters=params,
     )
-    rows = await cursor.fetchall()
-    return [_decorate_run(r) for r in rows]
+    return {"results": [_decorate_run(row) for row in rows], "next_cursor": next_cursor}
 
 
 @mcp.tool()

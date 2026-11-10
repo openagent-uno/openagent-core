@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from openagent_core.configuration import runtime_environment
 import asyncio
-import json
 import logging
 import os
 import uuid
@@ -41,6 +40,7 @@ from openagent_core.memory.schedule import (
     validate_schedule_expression,
     validate_timezone,
 )
+from openagent_core.mcp.sqlite_pages import select_page
 import time
 
 logger = logging.getLogger(__name__)
@@ -160,8 +160,6 @@ async def list_scheduled_tasks(
         limit: Results per page, from 1 to 50. Defaults to 20.
         cursor: The previous page's next_cursor. Keep the same filters.
     """
-    if type(limit) is not int or not 1 <= limit <= 50:
-        raise ValueError("Scheduled task page limit must be between 1 and 50")
     needle = (query or "").strip().casefold()
     conn = await _get_conn()
     where = []
@@ -173,45 +171,18 @@ async def list_scheduled_tasks(
         where.append("instr(openagent_casefold(name), ?) > 0")
         parameters.append(needle)
 
-    sort_key = "coalesce(next_run, -1e99)" if enabled_only else "created_at"
-    direction = "ASC" if enabled_only else "DESC"
-    if cursor is not None:
-        try:
-            active, name_filter, value, identifier = json.loads(cursor)
-            if (
-                active is not enabled_only or name_filter != needle
-                or type(value) not in (int, float) or not isinstance(identifier, str)
-            ):
-                raise ValueError()
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Invalid scheduled task cursor. Use the same filters or start again.") from exc
-        comparison = ">" if enabled_only else "<"
-        where.append(f"({sort_key} {comparison} ? OR ({sort_key} = ? AND id > ?))")
-        parameters.extend((value, value, identifier))
-
     columns = (
         "id, name, cron_expression, enabled, last_run, next_run, model, "
         "timezone, execution_policy_json, created_at, updated_at"
     )
     if include_prompt:
         columns += ", prompt"
-    condition = "WHERE " + " AND ".join(where) if where else ""
-    result = await conn.execute(
-        f"SELECT {columns}, {sort_key} AS page_key FROM scheduled_tasks {condition} "
-        f"ORDER BY page_key {direction}, id ASC LIMIT ?",
-        (*parameters, limit + 1),
+    rows, next_cursor = await select_page(
+        conn, "scheduled_tasks", columns, conditions=where, parameters=parameters,
+        order_by="coalesce(next_run, -1e99)" if enabled_only else "created_at",
+        newest_first=not enabled_only, limit=limit, cursor=cursor,
     )
-    rows = await result.fetchall()
-    tasks = []
-    for row in rows[:limit]:
-        task = dict(row)
-        del task["page_key"]
-        tasks.append(decorate_scheduled_task(task))
-    next_cursor = None
-    if len(rows) > limit:
-        last = rows[limit - 1]
-        next_cursor = json.dumps([enabled_only, needle, last["page_key"], last["id"]])
-    return {"results": tasks, "next_cursor": next_cursor}
+    return {"results": [decorate_scheduled_task(row) for row in rows], "next_cursor": next_cursor}
 
 
 @mcp.tool()

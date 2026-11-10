@@ -29,6 +29,7 @@ import difflib
 import inspect
 import json
 import os
+import secrets
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -988,9 +989,13 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
     constructor arg), so we apply the prefix manually.
     """
     from openagent_core.mcp._runtime import Toolkit
+    from openagent_core.mcp.pagination import collection_page, page_character_budget
+    from openagent_core.mcp.result_pages import ModelResultPages
 
     if pool is None:
         raise RuntimeError("tool-search runtime adapter requires a pool kwarg")
+
+    pages = ModelResultPages()
 
     async def present_result(envelope: Any) -> Any:
         from openagent_core.runtime import current_runtime
@@ -998,14 +1003,35 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
         extractor = service("media.tool_video_frame_extractor") if callable(service) else None
         return await _model_visible_result(envelope, video_frame_extractor=extractor)
 
-    async def tool_search_list_servers() -> list[dict[str, Any]]:
+    async def invoke_for_model(catalog, context, tool_ref, args):
+        invocation = secrets.token_urlsafe(24)
+        value = await catalog.call_tool(tool_ref, _decode_tool_args(args), context, call_id=invocation)
+        envelope = coerce_mcp_result_to_jsonable(value)
+        result = pages.first(envelope, context=context, tool_ref=tool_ref, invocation=invocation)
+        return await present_result(result)
+
+    async def tool_search_list_servers(
+        offset: int = 0, limit: int = _DEFAULT_DISCOVERY_PAGE_SIZE,
+    ) -> list[dict[str, Any]] | dict[str, Any]:
         """List current authorized capability sources and tool counts.
 
         Configured sources may include compact capability hints. A source
         entry is not its complete inventory: open list_tools and follow its
         pages before declaring a capability unavailable.
+
+        For long lists pass the returned next_offset as offset. Limit is a
+        maximum page size from 1 to 50.
         """
-        return await _list_scoped_servers_impl(pool)
+        if type(offset) is not int or offset < 0:
+            raise ValueError("offset must be a non-negative integer")
+        if type(limit) is not int or not 1 <= limit <= _MAX_DISCOVERY_PAGE_SIZE:
+            raise ValueError(f"limit must be between 1 and {_MAX_DISCOVERY_PAGE_SIZE}")
+        sources = await _list_scoped_servers_impl(pool)
+        page = collection_page(sources, offset, limit, page_character_budget())
+        end = offset + len(page)
+        if offset == 0 and end == len(sources):
+            return page
+        return {"sources": page, "next_offset": end if end < len(sources) else None}
 
     async def tool_search_list_tools(
         source_ref: str | None = None,
@@ -1033,7 +1059,8 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
         return await _describe_scoped_tool_impl(pool, tool_ref)
 
     async def tool_search_call_tool(
-        tool_ref: str, args: dict | str | None = None,
+        tool_ref: str | None = None, args: dict | str | None = None,
+        result_cursor: str | None = None,
     ) -> Any:
         """Invoke any tool on any connected MCP and return its result.
 
@@ -1045,9 +1072,18 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
                 properties from describe_tool's input_schema into this object.
                 A JSON-encoded object string is also accepted for provider
                 compatibility.
+            result_cursor: To read a further page from openagent_pages, pass
+                its exact result_cursor alone. This reads the existing result
+                in the same run and does not invoke the tool again.
         """
-        envelope = await _call_scoped_tool_impl(pool, tool_ref, args)
-        return await present_result(envelope)
+        catalog, context = _authorized_catalog(pool)
+        if result_cursor is not None:
+            if tool_ref is not None or args is not None:
+                raise ValueError("Pass only result_cursor to read another result page")
+            return await pages.next(result_cursor, catalog=catalog, context=context)
+        if not tool_ref:
+            raise ValueError("tool_ref is required for a new invocation")
+        return await invoke_for_model(catalog, context, tool_ref, args)
 
     async def tool_search_call_named_tool(
         source_ref: str, tool_name: str, args: dict | str | None = None,
@@ -1059,12 +1095,12 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
             tool_name: Exact registered tool name, including any prefix from discovery.
             args: Target tool arguments as an object, or as a JSON-encoded object string.
         """
-        catalog, _ = _authorized_catalog(pool)
+        catalog, context = _authorized_catalog(pool)
         if (source_ref, tool_name) not in pool.discovery_presentation.named_tools:
             raise PermissionError("Named calls are not enabled for this destination")
         _require_server_allowed(source_ref)
-        result = await _call_tool_impl(catalog, source_ref, tool_name, args)
-        return await present_result(coerce_mcp_result_to_jsonable(result))
+        reference = await catalog.resolve_tool_ref(source_ref, tool_name, context)
+        return await invoke_for_model(catalog, context, reference, args)
 
     tools = [tool_search_list_servers, tool_search_list_tools,
              tool_search_describe_tool, tool_search_call_tool]

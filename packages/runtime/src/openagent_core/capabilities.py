@@ -354,6 +354,16 @@ class CapabilityCatalog:
         registration, definition, _ = await self._current_binding(tool_ref, context)
         return self._descriptor(tool_ref, registration, definition)
 
+    async def resolve_tool_ref(self, source_id: str, name: str, context: ExecutionContext) -> str:
+        """Resolve an exact logical pair against the current authorized catalog."""
+        matches = [
+            tool.tool_ref for tool in await self.discover(context)
+            if tool.source_id == source_id and tool.name == name
+        ]
+        if len(matches) != 1:
+            raise LookupError("The exact durable tool destination is unavailable or ambiguous")
+        return matches[0]
+
     async def call_source_tool(self, origin_tool_ref: str, name: str, arguments: Mapping[str, Any],
                                context: ExecutionContext, *, call_id: str | None = None) -> Any:
         """Call a current sibling tool on the exact originating registration.

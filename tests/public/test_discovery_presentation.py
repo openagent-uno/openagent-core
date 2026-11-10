@@ -24,7 +24,8 @@ class Policy:
 
 class RecordingRuntime(SimpleNamespace):
     def __init__(self, catalog):
-        super().__init__(capabilities=catalog, services=SimpleNamespace(store=self, executor=None))
+        super().__init__(capabilities=catalog, services=SimpleNamespace(store=self, executor=None),
+                         settings=SimpleNamespace(environment=()))
         self.events = []
 
     async def authorize(self, context, action, resource, *, audience=()):

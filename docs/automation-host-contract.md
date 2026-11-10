@@ -16,6 +16,12 @@ returned ID to inspect the complete definition, or opt in with
 `include_prompt=true` for a narrow list query. The host's read authorization
 applies to both tools.
 
+Workflow run history and event delivery history return the same
+`results` and `next_cursor` fields. Reuse the cursor with the same
+definition and status filters. Pages are ordered by start time with a stable
+ID tiebreaker. The shared character budget can shorten a page before its
+item limit, so the cursor determines whether more rows are available.
+
 `AutomationRuntime.launch(kind, row, request_id=..., inputs=...)` starts a tracked manual firing without attaching its lifetime to HTTP. `cancel_runs(kind, definition_id, run_ids)` flags only the exact host-authorized projected IDs and preserves the scheduler's cancellation drain. Hosts check each execution's immutable access scope before exposing output or stopping it. Cancellation has been verified on both the workflow projection and canonical run.
 
 ## Interrupted execution and projection limits

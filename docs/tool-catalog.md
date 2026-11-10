@@ -62,6 +62,42 @@ as workflow authorization. Workflow steps call the public `engine.call_tool`
 resolver with their persisted source/tool pair. Missing, ambiguous, replaced,
 revoked or unauthorized destinations fail; there is no destination fallback.
 
+## Pages for structured tool results
+
+Tool discovery pagination controls how many tool descriptions the model sees.
+Result pagination controls the records returned after a tool executes. These
+are separate from the provider's emergency output ceiling.
+
+Discovery uses offsets for tool descriptions and long lists of capability
+sources. Session history and MCP marketplace queries use their own cursors.
+Tools can page their own data at the source. The scheduler, for example,
+filters by name before it builds a page. A result that includes an existing
+provider continuation is passed through, so the model can use the tool's own
+cursor and filters.
+
+Use the shared SQLite keyset helper for native queries that limit rows before
+returning them. Scheduled task discovery, workflow run history, event delivery
+history and skill-data browsing use it. It binds the cursor to the original
+filters, applies a stable ID tiebreaker and uses the same character budget as
+model result pages.
+
+The shared model gateway also pages structured collections returned by tools
+that have no native pagination. This applies to exact and named model calls.
+The first response contains a projection in `result` and an
+`openagent_pages` entry for each shortened collection. Entries include the
+collection path, total item count and an opaque `result_cursor`. Pass that
+cursor alone to `tool_search_call_tool` to read more of the same result.
+Pages hold up to 20 items and aim for an 8,000-character budget. Items stay
+intact and the provider ceiling still applies to an exceptionally large item
+or a response whose scalar fields already exceed the ceiling.
+
+The runtime stores the original result in its invocation ledger. Reading a
+page uses that saved result, revalidates session access and the exact live tool
+binding, and never repeats the action. Cursors belong to the originating run
+and authority and expire when it ends. Hosts without a saved-invocation
+reader keep the original response. Programmatic calls, artifacts, media and
+opaque text keep their existing wire contracts.
+
 ## Pool composition
 
 `MCPPool.bind_capability_catalog(catalog, trusted_modules=(), user_sources=())`

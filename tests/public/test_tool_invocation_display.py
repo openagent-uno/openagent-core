@@ -2,6 +2,7 @@
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from openagent_core import ExecutionContext, PrincipalRef, RunRequest
 from openagent_core.contracts import SessionRef
@@ -52,6 +53,46 @@ class InvocationDisplayTests(unittest.IsolatedAsyncioTestCase):
         await self.store.begin_tool('run-2','call',self.binding,{})
         with self.assertRaises(ValueError):await self.store.read_tool_invocation(self.reference,'call',self.context)
         self.assertEqual('run-1',(await self.store.read_tool_invocation(self.reference,original['id'],self.context))['run_id'])
+
+    async def test_model_continuation_reads_original_sqlite_result_without_a_second_invocation(self):
+        from openagent_core.capabilities import CapabilityCatalog, FunctionSource, ToolDefinition
+        from openagent_core.mcp.result_pages import ModelResultPages
+        from openagent_core.runtime import execution_scope
+
+        async def authorize(*args, **kwargs):
+            return True
+
+        runtime = SimpleNamespace(
+            services=SimpleNamespace(store=self.store), authorize=authorize,
+            settings=SimpleNamespace(environment=()),
+        )
+        catalog = CapabilityCatalog(SimpleNamespace(authorize=authorize))
+        runtime.capabilities = catalog
+        records = [{"id": index} for index in range(26)]
+        count = 0
+
+        async def invoke(arguments, context):
+            nonlocal count
+            count += 1
+            return records
+
+        source = FunctionSource((ToolDefinition("list", "List records", {"type": "object"}),),
+                                {"list": invoke})
+        catalog.register("records", source, source, target_label="Fixture")
+        pages = ModelResultPages()
+        with execution_scope(runtime, self.context, "run-1"):
+            descriptor, = await catalog.discover(self.context)
+            reference = descriptor.tool_ref
+            original = await catalog.call_tool(reference, {}, self.context, call_id="collection")
+            first = pages.first(original, context=self.context, tool_ref=reference, invocation="collection")
+            before = await self.store.events("run-1")
+            continuation = await pages.next(
+                first["openagent_pages"][0]["result_cursor"], catalog=catalog, context=self.context
+            )
+            self.assertEqual(first["result"] + continuation["items"], records)
+            self.assertIsNone(continuation["result_cursor"])
+            self.assertEqual(await self.store.events("run-1"), before)
+        self.assertEqual(count, 1)
 
     async def test_journal_rehydration_retains_exact_ui_binding(self):
         import json

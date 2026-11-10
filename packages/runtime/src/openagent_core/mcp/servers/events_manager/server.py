@@ -35,6 +35,7 @@ from openagent_core.memory.db import SCHEMA_SQL, sqlite_busy_timeout_ms, sqlite_
 from openagent_core.core.event_secret import make_secret_material, slugify, random_slug_suffix
 from openagent_core.core.event_types import EVENT_TYPES, DEFAULT_TYPE, is_valid_type, public_types
 from openagent_core.core.execution_policy import encode_execution_policy, normalize_execution_policy
+from openagent_core.mcp.sqlite_pages import select_page
 
 logger = logging.getLogger(__name__)
 
@@ -404,16 +405,20 @@ async def delete_event(id_or_slug: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def list_event_deliveries(id_or_slug: str, limit: int = 20) -> list[dict[str, Any]]:
+async def list_event_deliveries(
+    id_or_slug: str, limit: int = 20, *, cursor: str | None = None,
+) -> dict[str, Any]:
     """Recent delivery history for an event (newest first): status, source,
-    linked run/session, timing."""
+    linked run/session, timing. Pass next_cursor as cursor to continue.
+    Limit is a maximum page size from 1 to 50.
+    """
     conn = await _get_conn()
     eid = await _resolve_event_id(conn, id_or_slug)
-    cur = await conn.execute(
-        "SELECT * FROM event_deliveries WHERE event_id = ? ORDER BY started_at DESC LIMIT ?",
-        (eid, int(limit)),
+    rows, next_cursor = await select_page(
+        conn, "event_deliveries", "*", order_by="started_at", limit=limit,
+        cursor=cursor, conditions=["event_id = ?"], parameters=[eid],
     )
-    return [dict(r) for r in await cur.fetchall()]
+    return {"results": rows, "next_cursor": next_cursor}
 
 
 @mcp.tool()

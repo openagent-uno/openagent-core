@@ -25,10 +25,15 @@ from typing import Any
 
 import aiosqlite
 from mcp.server.fastmcp import FastMCP
+from openagent_core.mcp.sqlite_pages import select_page
 
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP("skill-data")
+_EVENT_FIELDS = (
+    "id, skill_id, source, external_id, entity_id, timestamp, direction, "
+    "channel, content, metadata_json, received_at"
+)
 
 
 def _db_path() -> str:
@@ -44,6 +49,19 @@ async def _connect() -> aiosqlite.Connection:
     conn = await aiosqlite.connect(_db_path(), timeout=5.0)
     conn.row_factory = aiosqlite.Row
     return conn
+
+
+async def _read_event_page(conditions, parameters, limit, cursor, max_limit):
+    conn = await _connect()
+    try:
+        rows, next_cursor = await select_page(
+            conn, "skill_events", _EVENT_FIELDS, order_by="timestamp",
+            limit=limit, cursor=cursor, conditions=conditions,
+            parameters=parameters, max_limit=max_limit,
+        )
+        return {"ok": True, "events": [_row_to_event(row) for row in rows], "next_cursor": next_cursor}
+    finally:
+        await conn.close()
 
 
 def _row_to_event(row: aiosqlite.Row) -> dict:
@@ -113,6 +131,8 @@ async def search_events(
     query: str,
     skill_id: str | None = None,
     limit: int = 20,
+    *,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
     """Full-text search across event content.
 
@@ -122,31 +142,20 @@ async def search_events(
         skill_id: Restrict to one skill (e.g. ``"telegram-ingester"``).
             ``None`` searches every skill.
         limit: Max rows to return (default 20, hard cap 200).
+        cursor: Use next_cursor with the same search filters.
     """
     if not query or not query.strip():
         return {"ok": False, "events": [], "hint": "empty query"}
     capped = max(1, min(int(limit), 200))
 
-    sql = (
-        "SELECT id, skill_id, source, external_id, entity_id, timestamp, "
-        "direction, channel, content, metadata_json, received_at "
-        "FROM skill_events WHERE content LIKE ?"
-    )
+    conditions = ["content LIKE ?"]
     params: list[Any] = [f"%{query}%"]
     if skill_id:
-        sql += " AND skill_id = ?"
+        conditions.append("skill_id = ?")
         params.append(skill_id)
-    sql += " ORDER BY timestamp DESC LIMIT ?"
-    params.append(capped)
 
     try:
-        conn = await _connect()
-        try:
-            async with conn.execute(sql, params) as cur:
-                rows = await cur.fetchall()
-            return {"ok": True, "events": [_row_to_event(r) for r in rows]}
-        finally:
-            await conn.close()
+        return await _read_event_page(conditions, params, capped, cursor, 200)
     except Exception as e:
         logger.exception("search_events failed")
         return {"ok": False, "events": [], "hint": str(e)}
@@ -156,6 +165,8 @@ async def search_events(
 async def list_events_by_entity(
     entity_id: str,
     limit: int = 50,
+    *,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
     """Recent events involving one entity (contact, group, channel).
 
@@ -164,26 +175,11 @@ async def list_events_by_entity(
             the PK of ``skill_entities``). Use ``list_entities`` first
             to look it up by name.
         limit: Max rows (default 50, hard cap 500).
+        cursor: Use next_cursor with the same entity.
     """
     capped = max(1, min(int(limit), 500))
     try:
-        conn = await _connect()
-        try:
-            async with conn.execute(
-                """
-                SELECT id, skill_id, source, external_id, entity_id, timestamp,
-                       direction, channel, content, metadata_json, received_at
-                FROM skill_events
-                WHERE entity_id = ?
-                ORDER BY timestamp DESC
-                LIMIT ?
-                """,
-                (entity_id, capped),
-            ) as cur:
-                rows = await cur.fetchall()
-            return {"ok": True, "events": [_row_to_event(r) for r in rows]}
-        finally:
-            await conn.close()
+        return await _read_event_page(["entity_id = ?"], [entity_id], capped, cursor, 500)
     except Exception as e:
         logger.exception("list_events_by_entity failed")
         return {"ok": False, "events": [], "hint": str(e)}
@@ -194,6 +190,8 @@ async def list_entities(
     name_like: str | None = None,
     skill_id: str | None = None,
     limit: int = 50,
+    *,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
     """List contacts/groups/channels resolved by skills.
 
@@ -201,28 +199,27 @@ async def list_entities(
         name_like: Substring match on ``display_name`` (e.g. "Mario").
         skill_id: Restrict to one skill.
         limit: Max rows (default 50, hard cap 500).
+        cursor: Use next_cursor with the same filters.
     """
     capped = max(1, min(int(limit), 500))
-    sql = (
-        "SELECT id, skill_id, type, display_name, identifiers_json, "
-        "metadata_json, updated_at FROM skill_entities WHERE 1=1"
-    )
+    conditions = []
     params: list[Any] = []
     if name_like:
-        sql += " AND display_name LIKE ?"
+        conditions.append("display_name LIKE ?")
         params.append(f"%{name_like}%")
     if skill_id:
-        sql += " AND skill_id = ?"
+        conditions.append("skill_id = ?")
         params.append(skill_id)
-    sql += " ORDER BY updated_at DESC LIMIT ?"
-    params.append(capped)
 
     try:
         conn = await _connect()
         try:
-            async with conn.execute(sql, params) as cur:
-                rows = await cur.fetchall()
-            return {"ok": True, "entities": [_row_to_entity(r) for r in rows]}
+            rows, next_cursor = await select_page(
+                conn, "skill_entities", "id, skill_id, type, display_name, identifiers_json, metadata_json, updated_at",
+                order_by="updated_at", limit=capped, cursor=cursor,
+                conditions=conditions, parameters=params, max_limit=500,
+            )
+            return {"ok": True, "entities": [_row_to_entity(row) for row in rows], "next_cursor": next_cursor}
         finally:
             await conn.close()
     except Exception as e:
@@ -234,31 +231,19 @@ async def list_entities(
 async def recent_events(
     skill_id: str | None = None,
     limit: int = 30,
+    *,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
     """Newest events, optionally scoped to one skill. Useful for a
     "what happened today?" lead-in to the agent's reply.
+
+    Pass next_cursor as cursor with the same skill filter to continue.
     """
     capped = max(1, min(int(limit), 200))
-    sql = (
-        "SELECT id, skill_id, source, external_id, entity_id, timestamp, "
-        "direction, channel, content, metadata_json, received_at "
-        "FROM skill_events"
-    )
-    params: list[Any] = []
-    if skill_id:
-        sql += " WHERE skill_id = ?"
-        params.append(skill_id)
-    sql += " ORDER BY timestamp DESC LIMIT ?"
-    params.append(capped)
+    conditions, params = (["skill_id = ?"], [skill_id]) if skill_id else ([], [])
 
     try:
-        conn = await _connect()
-        try:
-            async with conn.execute(sql, params) as cur:
-                rows = await cur.fetchall()
-            return {"ok": True, "events": [_row_to_event(r) for r in rows]}
-        finally:
-            await conn.close()
+        return await _read_event_page(conditions, params, capped, cursor, 200)
     except Exception as e:
         logger.exception("recent_events failed")
         return {"ok": False, "events": [], "hint": str(e)}
