@@ -5,10 +5,12 @@ A host composes `AutomationRuntime` with an execution service; the scheduler nev
 
 ## Discovering scheduled tasks in a conversation
 
-`list_scheduled_tasks` returns schedule metadata and task IDs without full
-prompts, keeping long prompts out of a model's catalog response.
+`list_scheduled_tasks` returns `results` and `next_cursor`. Each page holds
+20 task summaries by default, with a configurable `limit` from 1 to 50.
+Pass the returned cursor and the same filters to continue until the cursor is
+null. Summaries include schedule metadata and task IDs. Prompts are opt-in.
 Use `query` to match a case-insensitive substring of a task name across the
-authorized catalog, including disabled tasks by default. Use `enabled_only`
+authorized catalog before pagination, including disabled tasks by default. Use `enabled_only`
 to restrict the results to active schedules. Use `get_scheduled_task` with a
 returned ID to inspect the complete definition, or opt in with
 `include_prompt=true` for a narrow list query. The host's read authorization

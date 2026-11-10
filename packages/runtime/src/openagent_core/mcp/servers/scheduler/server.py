@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from openagent_core.configuration import runtime_environment
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -143,7 +144,9 @@ async def list_scheduled_tasks(
     *,
     query: str | None = None,
     include_prompt: bool = False,
-) -> list[dict[str, Any]]:
+    limit: int = 20,
+    cursor: str | None = None,
+) -> dict[str, Any]:
     """Find scheduled tasks by name or list their schedule and status.
 
     Pass a name query before concluding that a specific task does not exist.
@@ -154,23 +157,61 @@ async def list_scheduled_tasks(
         query: Case-insensitive name substring. Blank means all task names.
         include_prompt: Include full prompts for the matching tasks. Prefer this
             only with a narrow query because long prompts can truncate results.
+        limit: Results per page, from 1 to 50. Defaults to 20.
+        cursor: The previous page's next_cursor. Keep the same filters.
     """
+    if type(limit) is not int or not 1 <= limit <= 50:
+        raise ValueError("Scheduled task page limit must be between 1 and 50")
+    needle = (query or "").strip().casefold()
+    conn = await _get_conn()
+    where = []
+    parameters: list[Any] = []
+    if enabled_only:
+        where.append("enabled = 1")
+    if needle:
+        await conn.create_function("openagent_casefold", 1, str.casefold, deterministic=True)
+        where.append("instr(openagent_casefold(name), ?) > 0")
+        parameters.append(needle)
+
+    sort_key = "coalesce(next_run, -1e99)" if enabled_only else "created_at"
+    direction = "ASC" if enabled_only else "DESC"
+    if cursor is not None:
+        try:
+            active, name_filter, value, identifier = json.loads(cursor)
+            if (
+                active is not enabled_only or name_filter != needle
+                or type(value) not in (int, float) or not isinstance(identifier, str)
+            ):
+                raise ValueError()
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid scheduled task cursor. Use the same filters or start again.") from exc
+        comparison = ">" if enabled_only else "<"
+        where.append(f"({sort_key} {comparison} ? OR ({sort_key} = ? AND id > ?))")
+        parameters.extend((value, value, identifier))
+
     columns = (
         "id, name, cron_expression, enabled, last_run, next_run, model, "
         "timezone, execution_policy_json, created_at, updated_at"
     )
     if include_prompt:
         columns += ", prompt"
-    ordering = (
-        "WHERE enabled = 1 ORDER BY next_run ASC"
-        if enabled_only
-        else "ORDER BY created_at DESC"
+    condition = "WHERE " + " AND ".join(where) if where else ""
+    result = await conn.execute(
+        f"SELECT {columns}, {sort_key} AS page_key FROM scheduled_tasks {condition} "
+        f"ORDER BY page_key {direction}, id ASC LIMIT ?",
+        (*parameters, limit + 1),
     )
-    conn = await _get_conn()
-    cursor = await conn.execute(f"SELECT {columns} FROM scheduled_tasks {ordering}")
-    rows = await cursor.fetchall()
-    needle = (query or "").strip().casefold()
-    return [_row_to_dict(row) for row in rows if needle in row["name"].casefold()]
+    rows = await result.fetchall()
+    tasks = []
+    for row in rows[:limit]:
+        task = dict(row)
+        del task["page_key"]
+        tasks.append(decorate_scheduled_task(task))
+    next_cursor = None
+    if len(rows) > limit:
+        last = rows[limit - 1]
+        next_cursor = json.dumps([enabled_only, needle, last["page_key"], last["id"]])
+    return {"results": tasks, "next_cursor": next_cursor}
 
 
 @mcp.tool()

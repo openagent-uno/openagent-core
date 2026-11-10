@@ -226,16 +226,25 @@ class _NativeCapabilityInstance:
             arguments[self.descriptor.search_query_argument] = query
         if self.descriptor.search_accepts_limit:
             arguments["limit"] = limit
-        result = await self.call(source, operation, arguments, context)
-        if isinstance(result, Mapping):
-            key = self.descriptor.search_result_key
-            rows = result.get(key, ()) if key else result.get("results", result.get("hits", ()))
-        else:
-            rows = result
-        if not isinstance(rows, (list, tuple)):
-            rows = (rows,) if rows else ()
         needle = query.casefold().strip()
-        hits = [row for row in rows if not needle or needle in str(row).casefold()]
+        hits = []
+        seen_cursors = set()
+        while len(hits) < limit:
+            result = await self.call(source, operation, arguments, context)
+            next_cursor = None
+            if isinstance(result, Mapping):
+                key = self.descriptor.search_result_key
+                rows = result.get(key, ()) if key else result.get("results", result.get("hits", ()))
+                next_cursor = result.get("next_cursor")
+            else:
+                rows = result
+            if not isinstance(rows, (list, tuple)):
+                rows = (rows,) if rows else ()
+            hits.extend(row for row in rows if not needle or needle in str(row).casefold())
+            if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors:
+                break
+            seen_cursors.add(next_cursor)
+            arguments["cursor"] = next_cursor
         return {"hits": tuple(hits[:limit]), "next_cursor": None}
 
 
