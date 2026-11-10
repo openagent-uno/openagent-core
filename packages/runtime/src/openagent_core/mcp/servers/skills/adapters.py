@@ -74,10 +74,9 @@ def build_runtime_toolkit() -> Any:
     # With hub off the toolkit is byte-identical to the three-tool original —
     # the hub tools never enter the tool list, so the schema the model sees is
     # unchanged.
-    from openagent_core.core.config import load_config, skills_settings
+    from openagent_core.mcp.servers.skills import hub
 
-    if skills_settings(load_config()).hub_enabled:
-        from openagent_core.mcp.servers.skills import hub
+    if hub.hub_settings().hub_enabled:
 
         async def skill_hub_search(query: str, limit: int = 20) -> dict:
             """Find published skills in the configured Git catalogs. Results include
@@ -104,7 +103,8 @@ def build_runtime_toolkit() -> Any:
             if is_background():
                 return {"ok": False, "error": "Importing a catalog skill requires a foreground request."}
             if context is not None and context.initiator.kind == "external":
-                configured = skills_settings(load_config()).hub_taps
+                settings = hub.hub_settings()
+                configured = settings.hub_taps if settings.hub_enabled else ()
                 if force or not folder or not commit or tap not in configured:
                     return {"ok": False, "error": "Choose one scanned skill from skill_hub_search and pass its tap, folder and commit."}
             return await hub.skill_hub_pull(tap=tap, force=force, folder=folder, commit=commit)

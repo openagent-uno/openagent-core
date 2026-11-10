@@ -154,11 +154,34 @@ def _existing_is_hub(dest: Path) -> bool | None:
     return meta.is_hub
 
 
+def hub_settings():
+    from openagent_core.core.config import load_config, skills_settings
+    from openagent_core.runtime import current_runtime
+
+    runtime = current_runtime()
+    # An embedded runtime can have a writable current directory that is
+    # unrelated to its host-owned configuration.
+    config_path = runtime.settings.workspace / "openagent.yaml" if runtime is not None else None
+    return skills_settings(load_config(config_path))
+
+
+def _catalog_skill_files(clone: Path):
+    # Flat taps and the two common shared repository layouts. Do not recurse
+    # into arbitrary bundled folders or follow Git-controlled directory links.
+    skills = clone / "skills"
+    collections = [clone]
+    if skills.is_dir() and not skills.is_symlink():
+        collections.append(skills)
+        curated = skills / ".curated"
+        if curated.is_dir() and not curated.is_symlink():
+            collections.append(curated)
+    return sorted(md for collection in collections for md in collection.glob("*/SKILL.md")
+                  if not md.parent.is_symlink() and not md.is_symlink())
+
+
 async def skill_hub_search(query: str, limit: int = 20) -> dict:
     """Search metadata in the host-configured Git taps without installing."""
-    from openagent_core.core.config import load_config, skills_settings
-
-    config = skills_settings(load_config())
+    config = hub_settings()
     if not config.hub_enabled:
         return {"ok": False, "error": "Skill Hub is disabled"}
     return await asyncio.to_thread(_search_taps, config.hub_taps, query, max(1, min(limit, 100)))
@@ -179,9 +202,7 @@ def _search_taps(taps: tuple[str, ...], query: str, limit: int) -> dict:
             if head.returncode:
                 unavailable.append(tap)
                 continue
-            for md in sorted(clone.glob("*/SKILL.md")):
-                if md.is_symlink() or md.parent.is_symlink():
-                    continue
+            for md in _catalog_skill_files(clone):
                 meta = parse_skill_file(md)
                 if meta is None or not all(
                     word in f"{meta.name} {meta.description} {meta.category}".casefold() for word in words
@@ -189,7 +210,7 @@ def _search_taps(taps: tuple[str, ...], query: str, limit: int) -> dict:
                     continue
                 verdict = hub_guard.scan_skill(md.parent)
                 results.append({"name": meta.name, "description": meta.description,
-                                "category": meta.category, "tap": tap, "folder": md.parent.name,
+                                "category": meta.category, "tap": tap, "folder": md.parent.relative_to(clone).as_posix(),
                                 "commit": head.stdout.strip(), "verdict": verdict.level})
                 if len(results) == limit:
                     return {"ok": True, "results": results, "unavailable": unavailable}
@@ -213,7 +234,7 @@ async def skill_hub_pull(
     tap = (tap or "").strip()
     if not tap:
         return {"ok": False, "error": "no tap given"}
-    if folder is not None and (not folder or folder in {".", ".."} or "/" in folder or "\\" in folder):
+    if folder is not None and ("\\" in folder or any(part in {"", ".", ".."} for part in folder.split("/"))):
         return {"ok": False, "error": "Invalid catalog folder"}
     if not runtime_environment().get("OPENAGENT_GIT_BIN") and shutil.which("git") is None:
         return {"ok": False, "error": "git is not installed / not on PATH"}
@@ -241,10 +262,10 @@ async def skill_hub_pull(
             return {"ok": False, "error": "Catalog revision changed. Search the catalog again."}
         commit = actual_commit
 
-        skill_mds = [md for md in sorted(clone.glob("*/SKILL.md"))
-                     if folder is None or md.parent.name == folder]
+        skill_mds = [md for md in _catalog_skill_files(clone)
+                     if folder is None or md.parent.relative_to(clone).as_posix() == folder]
         if not skill_mds:
-            return {"ok": False, "error": f"no */SKILL.md skills found in {tap!r}",
+            return {"ok": False, "error": f"No matching skill found in {tap!r}",
                     "commit": commit}
 
         lock = _load_lock(root)
@@ -256,9 +277,6 @@ async def skill_hub_pull(
             src_dir = md.parent
             folder = src_dir.name
 
-            if md.is_symlink() or src_dir.is_symlink():
-                rejected.append({"folder": folder, "verdict": "dangerous", "reasons": ["symlink"]})
-                continue
             verdict = hub_guard.scan_skill(src_dir)
             if verdict.blocks(force):
                 rejected.append({
@@ -279,33 +297,36 @@ async def skill_hub_pull(
             stamped_md, name, body = stamped
 
             dest = root / folder
-            if dest.exists():
-                owned = _existing_is_hub(dest)
-                if owned is not True or dest.is_symlink() or lock["skills"].get(name, {}).get("repo") != tap:
-                    # A different catalog or a local skill owns this destination.
-                    skipped.append({
-                        "folder": folder, "name": name,
-                        "reason": "destination is owned by a local skill or a different catalog",
-                    })
-                    continue
-                shutil.rmtree(dest, ignore_errors=True)
-
-            # Copy the whole folder (bundled files included), then overwrite
-            # SKILL.md with the provenance-stamped version.
-            shutil.copytree(src_dir, dest)
-            (dest / "SKILL.md").write_text(stamped_md)
-
-            meta = parse_skill_file(dest / "SKILL.md")
-            if meta is None or not meta.is_hub:
-                # The stamped file must parse and carry the hub mark, else the
-                # curator boundary / index would be wrong — back it out.
-                shutil.rmtree(dest, ignore_errors=True)
-                rejected.append({
+            registry = SkillsRegistry(root)
+            existing = registry.get(name)
+            if (existing is not None and existing.directory != dest) or dest.is_symlink() or (
+                dest.exists() and (_existing_is_hub(dest) is not True or lock["skills"].get(name, {}).get("repo") != tap)
+            ):
+                skipped.append({
                     "folder": folder, "name": name,
-                    "verdict": "invalid",
-                    "reasons": ["stamped SKILL.md failed to re-parse as a hub skill"],
+                    "reason": "destination is owned by a local skill or a different catalog",
                 })
                 continue
+
+            # Stage and validate the whole folder before replacing an installed skill.
+            with tempfile.TemporaryDirectory(prefix=".skillhub-", dir=root) as temporary:
+                stage = Path(temporary) / "new"
+                shutil.copytree(src_dir, stage)
+                (stage / "SKILL.md").write_text(stamped_md, encoding="utf-8")
+                meta = parse_skill_file(stage / "SKILL.md")
+                if meta is None or not meta.is_hub:
+                    rejected.append({"folder": folder, "name": name, "verdict": "invalid",
+                                     "reasons": ["stamped SKILL.md failed to re-parse as a hub skill"]})
+                    continue
+                backup = Path(temporary) / "previous"
+                if dest.exists():
+                    dest.rename(backup)
+                try:
+                    stage.rename(dest)
+                except OSError:
+                    if backup.exists():
+                        backup.rename(dest)
+                    raise
 
             lock["skills"][name] = {
                 "repo": tap,

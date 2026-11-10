@@ -23,7 +23,9 @@ retirement. The embedding host controls channel access to the skill library.
 ## Published catalogs
 
 Enable `skills.hub.enabled` and set `skills.hub.taps` to the Git catalogs the
-host wants to expose. A catalog contains skill directories at its root.
+host wants to expose. Taps can place skill directories at the root, under
+\`skills/\` or under \`skills/.curated/\`. Embedded runtimes use their host-owned
+configuration file and ignore configuration in the current directory.
 `skill_hub_search` searches configured catalogs without installing anything.
 It returns the source, folder, commit and scan verdict. A foreground agent
 can pass the source, folder and commit to `skill_hub_pull` to import a

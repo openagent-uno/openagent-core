@@ -82,7 +82,8 @@ class WorkspaceAdministration(unittest.IsolatedAsyncioTestCase):
 
     async def test_skill_catalog_search_and_install_selected_revision(self):
         import subprocess
-        from unittest.mock import patch
+        import os
+        import yaml
         from openagent_core.mcp.servers.skills import hub
         from openagent_core.runtime import runtime_scope
 
@@ -94,22 +95,32 @@ class WorkspaceAdministration(unittest.IsolatedAsyncioTestCase):
 
         git("init")
         for name, description in (("invoice", "Review billing exports"), ("reports", "Summarize weekly numbers")):
-            directory = tap / name
-            directory.mkdir()
+            directory = tap / "skills" / ".curated" / name
+            directory.mkdir(parents=True)
             (directory / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {description}\n---\n\nRead the notes.\n")
         git("add", ".")
         git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "Initial catalog")
         config = {"skills": {"hub": {"enabled": True, "taps": [str(tap)]}}}
-        with patch("openagent_core.core.config.load_config", return_value=config), runtime_scope(self.runtime):
-            result = await hub.skill_hub_search("billing review")
-            self.assertTrue(result["ok"], result)
-            [hit] = result["results"]
-            self.assertEqual("invoice", hit["name"])
-            self.assertEqual(git("rev-parse", "HEAD"), hit["commit"])
-            self.assertFalse((self.path / "skills").exists())
-            self.assertFalse((await hub.skill_hub_pull(hit["tap"], folder=hit["folder"], commit="outdated"))["ok"])
-            installed = await hub.skill_hub_pull(hit["tap"], folder=hit["folder"], commit=hit["commit"])
-            self.assertEqual(["invoice"], [entry["name"] for entry in installed["pulled"]])
+        (self.path / "openagent.yaml").write_text(yaml.safe_dump(config))
+        working = self.path / "working"
+        working.mkdir()
+        (working / "openagent.yaml").write_text("skills: {hub: {enabled: false}}\n")
+        previous = Path.cwd()
+        try:
+            os.chdir(working)
+            with runtime_scope(self.runtime):
+                result = await hub.skill_hub_search("billing review")
+                self.assertTrue(result["ok"], result)
+                [hit] = result["results"]
+                self.assertEqual("invoice", hit["name"])
+                self.assertEqual(git("rev-parse", "HEAD"), hit["commit"])
+                self.assertFalse((self.path / "skills").exists())
+                self.assertFalse((await hub.skill_hub_pull(hit["tap"], folder=hit["folder"], commit="outdated"))["ok"])
+                installed = await hub.skill_hub_pull(hit["tap"], folder=hit["folder"], commit=hit["commit"])
+                self.assertEqual(["invoice"], [entry["name"] for entry in installed["pulled"]])
+                self.assertEqual("skills/.curated/invoice", hit["folder"])
+        finally:
+            os.chdir(previous)
         [skill] = (await self.skills.list(self.management))["skills"]
         self.assertTrue(skill["from_hub"])
 
