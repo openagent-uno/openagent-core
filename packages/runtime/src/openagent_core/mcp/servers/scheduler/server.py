@@ -138,27 +138,39 @@ mcp = FastMCP("scheduler")
 
 
 @mcp.tool()
-async def list_scheduled_tasks(enabled_only: bool = False) -> list[dict[str, Any]]:
-    """List scheduled tasks stored in OpenAgent's DB.
+async def list_scheduled_tasks(
+    enabled_only: bool = False,
+    *,
+    query: str | None = None,
+    include_prompt: bool = False,
+) -> list[dict[str, Any]]:
+    """Find scheduled tasks by name or list their schedule and status.
 
-    Each task has: id, name, cron_expression, prompt, enabled, last_run,
-    next_run, plus ISO-formatted companions (last_run_iso, next_run_iso,
-    created_at_iso, updated_at_iso) for readability.
+    Pass a name query before concluding that a specific task does not exist.
+    Use get_scheduled_task with the returned ID to read an individual prompt.
 
     Args:
-        enabled_only: when true, return only tasks with enabled=1.
+        enabled_only: Return only enabled tasks. By default include disabled tasks.
+        query: Case-insensitive name substring. Blank means all task names.
+        include_prompt: Include full prompts for the matching tasks. Prefer this
+            only with a narrow query because long prompts can truncate results.
     """
+    columns = (
+        "id, name, cron_expression, enabled, last_run, next_run, model, "
+        "timezone, execution_policy_json, created_at, updated_at"
+    )
+    if include_prompt:
+        columns += ", prompt"
+    ordering = (
+        "WHERE enabled = 1 ORDER BY next_run ASC"
+        if enabled_only
+        else "ORDER BY created_at DESC"
+    )
     conn = await _get_conn()
-    if enabled_only:
-        cursor = await conn.execute(
-            "SELECT * FROM scheduled_tasks WHERE enabled = 1 ORDER BY next_run ASC"
-        )
-    else:
-        cursor = await conn.execute(
-            "SELECT * FROM scheduled_tasks ORDER BY created_at DESC"
-        )
+    cursor = await conn.execute(f"SELECT {columns} FROM scheduled_tasks {ordering}")
     rows = await cursor.fetchall()
-    return [_row_to_dict(r) for r in rows]
+    needle = (query or "").strip().casefold()
+    return [_row_to_dict(row) for row in rows if needle in row["name"].casefold()]
 
 
 @mcp.tool()

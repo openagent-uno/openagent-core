@@ -3,6 +3,17 @@
 
 A host composes `AutomationRuntime` with an execution service; the scheduler never creates an identity or default delegation. Every firing is admitted using `Runtime.execute_operation`, and each model turn uses the same runtime and its canonical child relation. The automation tables are projections and durable input queues; `session_runs` remains the run authority.
 
+## Discovering scheduled tasks in a conversation
+
+`list_scheduled_tasks` returns schedule metadata and task IDs without full
+prompts, keeping long prompts out of a model's catalog response.
+Use `query` to match a case-insensitive substring of a task name across the
+authorized catalog, including disabled tasks by default. Use `enabled_only`
+to restrict the results to active schedules. Use `get_scheduled_task` with a
+returned ID to inspect the complete definition, or opt in with
+`include_prompt=true` for a narrow list query. The host's read authorization
+applies to both tools.
+
 `AutomationRuntime.launch(kind, row, request_id=..., inputs=...)` starts a tracked manual firing without attaching its lifetime to HTTP. `cancel_runs(kind, definition_id, run_ids)` flags only the exact host-authorized projected IDs and preserves the scheduler's cancellation drain. Hosts check each execution's immutable access scope before exposing output or stopping it. Cancellation has been verified on both the workflow projection and canonical run.
 
 ## Interrupted execution and projection limits
