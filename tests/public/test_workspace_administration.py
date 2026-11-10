@@ -41,6 +41,41 @@ class WorkspaceAdministration(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PermissionError): await self.inspection.participants(self.ctx, "parent")
 
 
+    async def test_fork_uses_exact_visible_message_and_seeds_provider_history(self):
+        conn = await self.db._ensure_connected()
+        from openagent_core.memory.operational.repository import _tenant_id
+        tenant = await conn._execute(_tenant_id, conn._conn)
+        alice = replace(self.alice, tenant_id=tenant)
+        ctx = replace(self.ctx, author=alice, initiator=alice, authority=alice, audience=(alice,))
+        await self.store.accept(RunRequest("fork-first", "parent", "first", "Repeated"), ctx)
+        await self.store.transition("fork-first", "running")
+        await self.store.transition("fork-first", "success", output="Keep this response[FILE:/private/example]")
+        await self.store.accept(RunRequest("fork-second", "parent", "second", "Repeated"), ctx)
+        await self.store.transition("fork-second", "running")
+        await self.store.transition("fork-second", "success", output="Leave this response in the original")
+        boundary = await (await conn.execute(
+            "SELECT id FROM session_messages WHERE run_id='fork-second' AND role='user'")).fetchone()
+        result = await self.inspection.fork_text(ctx, "parent", boundary[0])
+        fork_id = result["session_id"]
+        self.assertNotEqual("parent", fork_id)
+        fork_ctx = replace(ctx, session_id=fork_id)
+        rows = await self.inspection.transcript(fork_ctx, fork_id)
+        self.assertEqual(["Repeated", "Keep this response", "Repeated"], [m["text"] for m in rows["messages"]])
+        provider_runs = await self.db.list_session_runs(fork_id)
+        self.assertEqual(["Repeated", "Keep this response", "Repeated"],
+            [m["content"] for run in reversed(provider_runs) for m in run["messages"]])
+        from openagent_core.memory.sessions.agent import AgentSession
+        history = AgentSession.from_dict({"session_id": fork_id, "runs": list(reversed(provider_runs))})
+        self.assertEqual(["Repeated", "Keep this response", "Repeated"],
+                         [message.content for message in history.get_messages()])
+        original = await self.inspection.transcript(ctx, "parent")
+        self.assertIn("Leave this response in the original", [m["text"] for m in original["messages"]])
+        with self.assertRaises(LookupError):
+            await self.inspection.fork_text(fork_ctx, fork_id, boundary[0])
+        self.policy.denied.add("parent")
+        with self.assertRaises(PermissionError):
+            await self.inspection.fork_text(ctx, "parent", boundary[0])
+
     async def test_skill_lifecycle_preserves_body_provenance_and_user_ownership(self):
         result=await self.skills.write(self.management,"create","User Playbook",{"body":"Keep these exact instructions.","description":"Original"})
         self.assertTrue(result["ok"]);self.assertFalse(result["index_refreshed"])

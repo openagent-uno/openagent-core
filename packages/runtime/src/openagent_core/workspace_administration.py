@@ -412,6 +412,116 @@ class SessionInspection:
         await self.authorize(context,session_id)
         return {"session_id":session_id,"messages":messages}
 
+    async def fork_text(self, context, session_id: str, message_id: str) -> dict:
+        """Seed a new private session from the visible text through an exact message.
+
+        No tool is replayed. Private provider envelopes, capabilities, shares,
+        summaries and attachment grants are never inherited.
+        """
+        import re
+        from time import time
+        from uuid import uuid4
+
+        from .memory.message_parts import canonical_parts_for_messages_on_connection
+        from .memory.operational.privacy_snapshots import guard_unscoped_history_transaction
+        from .memory.operational.repository import project_legacy_session_async
+        from .configuration import sqlite_busy_timeout_ms
+        from .stream.content_parts import parse_response_content
+
+        if (context.session_id != session_id or context.authority.kind != "user"
+                or context.author != context.initiator or context.initiator != context.authority
+                or context.deferred or context.delegation_id or context.parent_run_id):
+            raise PermissionError("A fork requires a direct user context")
+
+        resource = ResourceRef("session", context.tenant_id, session_id)
+        await require_authorized(self.authorizer, context, "session.fork", resource)
+        await self.db._ensure_connected()
+        async with self.db._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            # Take the storage snapshot first; recheck authority before publishing
+            # under the same writer lock so ACL/source changes cannot race the copy.
+            await require_authorized(self.authorizer, context, "session.fork", resource)
+            source = await (await conn.execute(
+                "SELECT title,visibility,agent_id FROM sessions_v2 WHERE id=? AND tenant_id=? AND deleted_at_ms IS NULL",
+                (session_id, context.tenant_id))).fetchone()
+            if source is None or source["agent_id"] not in (None, context.agent_id):
+                raise LookupError("Session unavailable")
+            require_session_not_quarantined(source)
+            boundary = await (await conn.execute(
+                "SELECT sequence FROM session_messages WHERE id=? AND tenant_id=? AND session_id=? "
+                "AND visibility='user_visible' AND status<>'streaming' AND role IN ('user','assistant') "
+                "AND json_extract(raw_envelope_json,'$.from_history') IS NOT 1",
+                (message_id, context.tenant_id, session_id))).fetchone()
+            if boundary is None:
+                raise LookupError("Message unavailable")
+            rows = await (await conn.execute(
+                "SELECT id,run_id,role,text,author_kind,author_handle_snapshot,author_display,created_at_ms,"
+                "json_type(raw_envelope_json,'$.role') IS NULL AS canonical_input "
+                "FROM session_messages WHERE tenant_id=? AND session_id=? AND sequence<=? "
+                "AND visibility='user_visible' AND status<>'streaming' AND role IN ('user','assistant') "
+                "AND json_extract(raw_envelope_json,'$.from_history') IS NOT 1 "
+                "ORDER BY sequence,id LIMIT 5001",
+                (context.tenant_id, session_id, boundary["sequence"]))).fetchall()
+            if len(rows) > 5000 or sum(len(row["text"] or "") for row in rows) > 4_000_000:
+                raise ValueError("Conversation prefix is too large to fork")
+            # Exclude sibling rows with a tied legacy sequence beyond the
+            # selected boundary; no timestamp or text matching.
+            prefix = []
+            for row in rows:
+                prefix.append(row)
+                if row["id"] == message_id:
+                    break
+            await conn._execute(guard_unscoped_history_transaction, conn._conn, session_id, {
+                "runs": [{"run_id": rid} for rid in {row["run_id"] for row in prefix} if rid],
+            })
+            parts = await canonical_parts_for_messages_on_connection(conn, [row["id"] for row in prefix], access=None)
+            new_id = uuid4().hex
+            title = "Fork of " + (source["title"] or "conversation")[:185]
+            runs = []
+            last = None
+            for row in prefix:
+                if row["id"] in parts:
+                    text = "".join(part["text"] for part in parts[row["id"]] if part["kind"] == "text")
+                elif row["role"] == "user" and row["canonical_input"]:
+                    text = row["text"] or ""
+                else:
+                    raw = row["text"] or ""
+                    if row["role"] == "user":
+                        # A legacy provider buffer may only have the augmented
+                        # input. Its attachment payload is not authored text.
+                        raw = re.sub(r"<attachment_reference>.*?(?:</attachment_reference>|\Z)", "", raw, flags=re.S)
+                    text = parse_response_content(raw, allow_inline_ui=False).text
+                if not text:
+                    continue
+                if not runs or row["run_id"] != last:
+                    runs.append({"run_id": uuid4().hex, "session_id": new_id, "agent_id": context.agent_id,
+                                 "created_at": row["created_at_ms"] // 1000, "status": "COMPLETED", "messages": []})
+                    last = row["run_id"]
+                author = {"kind": row["author_kind"], "handle": row["author_handle_snapshot"],
+                          "display": row["author_display"]}
+                runs[-1]["messages"].append({"id": uuid4().hex, "role": row["role"], "content": text,
+                    "created_at": row["created_at_ms"] // 1000, "author": author})
+            if not runs:
+                raise ValueError("No text to fork through this message")
+
+            now = int(time())
+            metadata = {"client_id": context.authority.subject_id, "title": title, "origin": "chat"}
+            # Seed the same provider history a regular continuation loads and
+            # build the normalized transcript before exposing either copy.
+            await conn.execute(
+                "INSERT INTO sessions(session_id,session_type,agent_id,metadata,runs,created_at,updated_at) "
+                "VALUES (?,'agent',?,?,?,?,?)",
+                (new_id, context.agent_id, json.dumps(metadata), json.dumps(runs), now, now))
+            await project_legacy_session_async(conn, new_id)
+            created = await (await conn.execute(
+                "SELECT tenant_id,visibility,owner_principal_id,completeness FROM sessions_v2 WHERE id=?", (new_id,)
+            )).fetchone()
+            if (created is None or created["tenant_id"] != context.tenant_id or created["visibility"] != "private"
+                    or created["owner_principal_id"] != "user:" + context.authority.subject_id
+                    or created["completeness"] != "complete"):
+                raise PermissionError("Fork could not preserve the source tenant and private ownership")
+            await require_authorized(self.authorizer, context, "session.fork", resource)
+        return {"session_id": new_id, "title": title}
+
     async def events(self,context,session_id,*,after=0,limit=500):
         await self.authorize(context,session_id)
         if int(after)<0:raise ValueError("Invalid event cursor")

@@ -245,7 +245,8 @@ class TeamRuntimeDelegation(unittest.IsolatedAsyncioTestCase):
                 child_events = [event for event in await self.runtime.events(record.run_id, 0, self.context)
                                 if event.kind == "run.child"]
                 self.assertEqual([event.payload for event in child_events],
-                                 [{"child_session_id": request.session_id, "child_run_id": request.run_id}])
+                                 [{"child_session_id": request.session_id, "child_run_id": request.run_id,
+                                   "provider_tool_call_id": "active-delegation"}])
                 accepted = await self.runtime.accepted_request(request.run_id, child)
                 self.assertEqual(accepted.author, child.author)
                 self.assertEqual(accepted.request, request)

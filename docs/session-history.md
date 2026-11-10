@@ -106,3 +106,22 @@ Runtime adapter failures retain the provider error category even when the
 runtime has converted the exception into a terminal event. Only stable error
 codes and constant public messages should be displayed to end users; provider
 diagnostics remain private.
+
+## Branching a conversation at a message
+
+`SessionInspection.fork_text(context, session_id, message_id)` creates a
+private SQLite session with the visible user and agent text through an exact
+persisted message ID. The host must authorize `session.fork` for a direct
+authenticated user. Core checks the source tenant, agent and access inside the
+write transaction, and builds both the visible transcript and the provider's
+history in the same transaction. A fork uses new IDs; it does not copy ACLs,
+tools, execution state, summaries, files or attachment grants. It refuses
+protected history requiring a provenance-aware copy and prefixes too large to
+copy in one transaction.
+
+Canonical `run.child` events can carry `provider_tool_call_id` in addition to
+`child_run_id` and `child_session_id`. This optional field comes from the
+executing provider call after child admission. A host can correlate it with a
+tool ledger binding's `provider_call_id` or a provider status frame. Hosts
+should check the viewer's access to the child separately before sending a
+link or child stream. Observing the child does not run it again.

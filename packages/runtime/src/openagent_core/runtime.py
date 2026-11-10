@@ -929,7 +929,12 @@ class Runtime:
         author=PrincipalRef(context.authority.authority,context.tenant_id,self.settings.agent_id,"agent")
         child=context.child(session_id=request.session_id,run_id=parent_id,agent=author,deferred=deferred)
         record=await self.submit(request,child)
-        await self.services.store.append_event(parent_id,"run.child",{"child_session_id":record.session_id,"child_run_id":record.run_id})
+        link = {"child_session_id": record.session_id, "child_run_id": record.run_id}
+        # Capture the exact in-flight invocation, even when parallel tools
+        # delegate to the same member. Child admission has already committed.
+        if call_id := current_provider_tool_call_id():
+            link["provider_tool_call_id"] = call_id
+        await self.services.store.append_event(parent_id, "run.child", link)
         try:
             return await self.wait(record.run_id,child)
         except asyncio.CancelledError:
