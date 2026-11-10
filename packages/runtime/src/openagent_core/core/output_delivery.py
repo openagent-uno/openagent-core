@@ -1,7 +1,7 @@
 """Bounded repair of omitted, explicitly requested file-delivery markers.
 
 This never selects transcript media or edits a final attestation. Only the
-built-in send-file tool records a successful, normally authorized publication;
+built-in delivery tools record a successful, normally authorized preparation;
 the model must still author every marker in its terminal answer.
 """
 from __future__ import annotations
@@ -40,7 +40,7 @@ class DeliveryScope:
         self.repairs += 1
         return (
             "[Internal attachment completion check]\n"
-            "You successfully called send_file_to_user for the following files "
+            "You successfully prepared the following attachments "
             "in this turn, but your terminal reply omitted their delivery markers. "
             "The files are prepared, not yet delivered to the recipient. Produce "
             "a complete corrected final answer to the original request and include "

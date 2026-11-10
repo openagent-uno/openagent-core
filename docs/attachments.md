@@ -187,6 +187,18 @@ An unavailable file adds a static notice while retaining valid answer text;
 revoked session publication still denies the entire publication. Stream retains
 its existing canonical part persistence. Both public paths use the same reader.
 
+The built-in `attachments` tools also support originals already linked to the
+current session. `find_session_attachments(query)` returns up to twenty matches
+by filename, ordered by recent session linkage. `resend_session_attachment(artifact_id)`
+prepares a delivery marker for that same stored object. The agent includes the
+marker in its final answer, and the engine emits the existing canonical
+attachment reference. Discovery and preparation need authenticated session read
+access and preparation also needs run publication authority. Publication checks
+the tool and session policy again and links only an available artifact in the
+same tenant and session. The existing authorized content resolver serves and
+validates the original bytes. Search and preparation expose no filesystem
+paths and require no sandbox access, duplicate artifact or client upload.
+
 Deterministic regressions in `test_workspace_administration.py` and
 `test_engine_executor.py` exercise a real Stream turn with prepared provider
 text, and AgentExecutor through the standard delivery tool, an explicitly

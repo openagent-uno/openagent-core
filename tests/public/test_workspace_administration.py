@@ -239,6 +239,92 @@ class WorkspaceAdministration(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(LookupError):await repository.read(self.ctx,artifact_id=ref["artifact_id"])
         with self.assertRaises(PermissionError):await self.inspection.transcript(self.management,"parent")
 
+    async def test_resend_original_session_attachment_in_attested_final_answer(self):
+        from types import SimpleNamespace
+        from openagent_core.artifacts import ArtifactRepository
+        from openagent_core.engine import AgentExecutor
+        from openagent_core.mcp.servers.attachments.adapters import build_runtime_toolkit
+        from openagent_core.runtime import execution_scope
+
+        first = RunRequest("original-turn", "parent", "original", "Here is the PDF")
+        await self.store.accept(first, self.ctx)
+        other_context = replace(self.ctx, session_id="other")
+        await self.store.accept(RunRequest("other-turn", "other", "other", "Private"), other_context)
+        repository = ArtifactRepository(self.db, self.policy)
+        content = b"%PDF-1.7 original PDF bytes"
+        original = await repository.upload(self.ctx, content, filename="Sales Deck.pdf",
+            mime_type="application/pdf", session_id="parent")
+        await repository.upload(self.ctx, content, filename="Sales Deck.pdf",
+            mime_type="application/pdf", session_id="parent")
+        private = await repository.upload(other_context, b"Private file", filename="Other deck.pdf",
+            mime_type="application/pdf", session_id="other")
+        removed = await repository.upload(self.ctx, b"Removed file", filename="Removed deck.pdf",
+            mime_type="application/pdf", session_id="parent")
+        conn = await self.db._ensure_connected()
+        await conn.execute("UPDATE artifacts SET deleted_at_ms=created_at_ms+1 WHERE id=?",
+            (removed["artifact_id"],))
+        await conn.commit()
+
+        find, resend = build_runtime_toolkit().tools[1:]
+
+        async def run_stream(*args, **kwargs):
+            self.assertEqual([], kwargs["attachments"])
+            result = await find("DECK.PDF")
+            self.assertEqual([{
+                "artifact_id": original["artifact_id"], "filename": "Sales Deck.pdf",
+                "mime_type": "application/pdf", "size_bytes": len(content),
+            }], result["attachments"])
+            self.assertFalse(result["truncated"])
+            self.assertFalse((await resend(private["artifact_id"]))["ok"])
+            self.assertFalse((await resend(removed["artifact_id"]))["ok"])
+            self.policy.denied.add("parent")
+            with self.assertRaises(PermissionError):
+                await find("deck.pdf")
+            with self.assertRaises(PermissionError):
+                await resend(original["artifact_id"])
+            self.policy.denied.clear()
+            prepared = await resend(original["artifact_id"])
+            self.assertTrue(prepared["ok"])
+            self.assertNotIn("path", prepared["attachment"])
+            text = "Here is the original. " + prepared["marker"]
+            yield {"kind": "delta", "text": text}
+            yield {"kind": "done", "text": text, "final_answer": {"text": text}}
+
+        executor = AgentExecutor(SimpleNamespace(memory_db=self.db, run_stream=run_stream))
+        runtime = Runtime(RuntimeSettings("agent", self.path), RuntimeServices(self.store, executor, self.policy))
+        request = RunRequest("resend-turn", "parent", "resend", "Resend the PDF")
+        await self.store.accept(request, self.ctx)
+        with execution_scope(runtime, self.ctx, request.run_id):
+            self.assertEqual("Here is the original.", await executor.execute(request, self.ctx, runtime))
+
+        live = await self.inspection.live_runs(self.management, "parent")
+        run = next(run for run in live["runs"] if run["id"] == request.run_id)
+        done = next(event["payload"] for event in run["events"] if event["payload"].get("kind") == "done")
+        self.assertEqual("Here is the original.", done["final_answer"]["text"])
+        ref, = done["final_answer"]["attachments"]
+        self.assertEqual(original["artifact_id"], ref["artifact_id"])
+        self.assertEqual("Sales Deck.pdf", ref["filename"])
+        self.assertEqual(content, (await repository.read(self.ctx, artifact_id=ref["artifact_id"])).content)
+        self.assertNotIn("[FILE:", json.dumps(run))
+        self.assertNotIn(str(self.path), json.dumps(run))
+        self.assertEqual(3, (await (await conn.execute("SELECT count(*) FROM artifacts")).fetchone())[0])
+
+        # Reserved attachment markers never get resolved as sandbox paths.
+        class Publisher:
+            async def publish(self, context, path):
+                raise AssertionError("An opaque artifact marker reached the sandbox publisher")
+
+        async def foreign_marker_stream(*args, **kwargs):
+            text = f"Here is a file. [FILE:artifact:{private['artifact_id']}]"
+            yield {"kind": "done", "text": text, "final_answer": {"text": text}}
+
+        executor.agent.run_stream = foreign_marker_stream
+        runtime.services.registry.bind("attachments.publisher", Publisher())
+        request = RunRequest("foreign-resend-turn", "parent", "foreign-resend", "Resend the PDF")
+        await self.store.accept(request, self.ctx)
+        with execution_scope(runtime, self.ctx, request.run_id):
+            self.assertIn("An attachment is unavailable", await executor.execute(request, self.ctx, runtime))
+
     async def test_real_stream_turn_keeps_original_input_not_prepared_provider_text(self):
         from types import SimpleNamespace
         from openagent_core.stream.session import StreamSession

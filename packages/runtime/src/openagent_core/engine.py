@@ -172,7 +172,7 @@ class AgentExecutor:
                     from .stream.content_parts import parse_response_content
                     parsed = parse_response_content(final_text, allow_inline_ui=False)
                     if parsed.attachments:
-                        from .artifacts import session_output_reference
+                        from .artifacts import SESSION_ARTIFACT_PREFIX, session_output_reference
                         db = getattr(self.agent, "memory_db", None)
                         parts, attachments = [], []
                         unavailable = False
@@ -181,10 +181,25 @@ class AgentExecutor:
                                 parts.append(part)
                                 continue
                             value = part["attachment"]
+                            artifact_marker = value["path"].startswith(SESSION_ARTIFACT_PREFIX)
+                            if artifact_marker:
+                                from .memory.vault.privacy import require_unprotected_execution
+                                try:
+                                    await require_unprotected_execution("Session attachment delivery")
+                                    await runtime.authorize(context, "tool.call",
+                                        ResourceRef("tool", context.tenant_id, "attachments/resend_session_attachment"),
+                                        audience=context.audience)
+                                    await runtime.authorize(context, "session.read",
+                                        ResourceRef("session", context.tenant_id, context.session_id),
+                                        audience=context.audience)
+                                except PermissionError:
+                                    unavailable = True
+                                    continue
+                                value = {"artifact_id": value["path"].removeprefix(SESSION_ARTIFACT_PREFIX)}
                             ref = await session_output_reference(db, tenant_id=context.tenant_id,
                                 session_id=context.session_id, value=value, link=True) if db is not None else None
                             publisher = runtime.service("attachments.publisher") if hasattr(runtime, "service") else None
-                            if ref is None and publisher is not None and db is not None:
+                            if ref is None and not artifact_marker and publisher is not None and db is not None:
                                 try:
                                     value = await publisher.publish(context, value["path"])
                                 except (FileNotFoundError, PermissionError, ValueError):

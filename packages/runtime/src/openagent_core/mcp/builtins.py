@@ -65,8 +65,8 @@ BUILTIN_MCP_SPECS: dict[str, dict[str, Any]] = {
         "adapter_module": "openagent_core.mcp.servers.attachments.adapters",
         "runtime_toolkit_factory": "build_runtime_toolkit",
         "description": (
-            "read and write files attached to the current turn — "
-            "screenshots, images, pasted text, uploads from the chat UI"
+            "send new files and find or resend original attachments from "
+            "earlier turns in the current conversation"
         ),
     },
     # Native Skills subsystem — Hermes / Claude-Code SKILL.md progressive

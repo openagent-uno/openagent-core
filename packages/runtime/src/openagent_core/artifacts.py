@@ -18,6 +18,8 @@ from typing import Any, Protocol
 from .contracts import ResourceRef, require_authorized
 
 _DIGEST = re.compile(r"^[a-f0-9]{64}$")
+_ARTIFACT_ID = re.compile(r"art_[a-f0-9]{32}")
+SESSION_ARTIFACT_PREFIX = "artifact:"
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +204,33 @@ class AttachmentPublisher(Protocol):
     async def publish(self, context: Any, path: str) -> dict[str, Any]: ...
 
 
+async def find_session_attachments(db, *, tenant_id, session_id, query):
+    """List available files linked to the authorized session, with no local paths."""
+    from .memory.artifacts import safe_attachment_filename
+
+    conn = await db._ensure_connected()
+    rows = await (await conn.execute(
+        "WITH matches AS ("
+        "SELECT a.id, a.mime, a.size_bytes, l.display_name, l.created_at_ms, "
+        "ROW_NUMBER() OVER (PARTITION BY a.id ORDER BY l.created_at_ms DESC, l.id DESC) AS rank "
+        "FROM artifact_links l "
+        "JOIN artifacts a ON a.tenant_id=l.tenant_id AND a.id=l.artifact_id "
+        "JOIN sessions_v2 s ON s.tenant_id=l.tenant_id AND s.id=l.resource_id "
+        "WHERE l.tenant_id=? AND l.resource_type='session' AND l.resource_id=? "
+        "AND s.deleted_at_ms IS NULL AND a.deleted_at_ms IS NULL AND a.storage_state='available' "
+        "AND instr(lower(coalesce(l.display_name, a.id)), lower(?)) > 0) "
+        "SELECT * FROM matches WHERE rank=1 ORDER BY created_at_ms DESC, id DESC LIMIT 21",
+        (tenant_id, session_id, query))).fetchall()
+    return {
+        "attachments": [
+            {"artifact_id": row["id"], "filename": safe_attachment_filename(row["display_name"] or row["id"]),
+             "mime_type": row["mime"] or "application/octet-stream", "size_bytes": row["size_bytes"]}
+            for row in rows[:20]
+        ],
+        "truncated": len(rows) > 20,
+    }
+
+
 async def session_output_reference(db, *, tenant_id, session_id, value, link=False):
     """Resolve only already-published CAS bytes linked to the authorized session.
 
@@ -228,7 +257,7 @@ async def session_output_reference(db, *, tenant_id, session_id, value, link=Fal
         if not _DIGEST.fullmatch(digest) or relative.parts[1] != digest[:2]:
             return None
         storage_key = relative.as_posix()
-    elif not isinstance(artifact_id, str) or not re.fullmatch(r"art_[a-f0-9]{32}", artifact_id):
+    elif not isinstance(artifact_id, str) or not _ARTIFACT_ID.fullmatch(artifact_id):
         return None
     conn = await db._ensure_connected()
     row = await (await conn.execute(
