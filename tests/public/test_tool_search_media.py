@@ -107,6 +107,27 @@ class ToolSearchMediaTests(unittest.IsolatedAsyncioTestCase):
                     await _model_visible_result(envelope)
             self.assertEqual(1, len(published))
 
+    async def test_optional_image_publication_failure_preserves_pixels_but_never_bypasses_revocation(self):
+        allowed = True
+        async def authorize(*_args, **_kwargs): return allowed
+        async def publish(*_args, **_kwargs): raise RuntimeError("PRIVATE diagnostic")
+        publisher = SimpleNamespace(publish_content=publish)
+        runtime = SimpleNamespace(service=lambda key: publisher if key == "attachments.publisher" else None,
+            services=SimpleNamespace(authorizer=SimpleNamespace(authorize=authorize)))
+        user = PrincipalRef("host", "tenant", "alice")
+        context = ExecutionContext(user, user, user, "session", "agent", (user,))
+        envelope = {"content": [{"type": "image", "data": base64.b64encode(b"pixels").decode()}]}
+        with execution_scope(runtime, context, "run"):
+            with self.assertLogs("openagent_core.mcp.servers.tool_search.adapters", level="WARNING") as logs:
+                result = await _model_visible_result(envelope)
+            self.assertNotIn("PRIVATE", str(logs.output))
+            self.assertEqual(b"pixels", result.images[0].content)
+            self.assertNotIn("[FILE:", result.content)
+            allowed = False
+            with self.assertLogs("openagent_core.mcp.servers.tool_search.adapters", level="WARNING"):
+                with self.assertRaises(PermissionError):
+                    await _model_visible_result(envelope)
+
     async def test_text_only_result_keeps_existing_contract(self):
         envelope = {"content": [{"type": "text", "text": "ok"}], "isError": False}
         self.assertIs(await _model_visible_result(envelope), envelope)

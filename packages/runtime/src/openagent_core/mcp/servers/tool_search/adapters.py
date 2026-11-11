@@ -994,8 +994,11 @@ async def _tool_image_delivery_marker(content: bytes, mime: str, index: int) -> 
         db = getattr(getattr(runtime.services.executor, "agent", None), "memory_db", None)
         verified = await session_output_reference(db, tenant_id=context.tenant_id,
             session_id=context.session_id, value=ref) if db is not None else None
-    except (LookupError, OSError, PermissionError, ValueError):
-        pass
+    except Exception as exc:
+        # Delivery is optional; keep the admitted preview if its publisher is
+        # unavailable. Revocation still fails closed at the fresh check below.
+        import logging
+        logging.getLogger(__name__).warning("Tool image publication unavailable (%s)", type(exc).__name__)
     from openagent_core.contracts import ResourceRef, require_authorized
     await require_authorized(runtime.services.authorizer, context, "run.publish",
         ResourceRef("session", context.tenant_id, context.session_id), audience=context.audience)
