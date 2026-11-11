@@ -906,7 +906,7 @@ async def _model_visible_result(envelope: Any, *, video_frame_extractor=None) ->
     images: list[Image] = []
     media_bytes = 0
     video_count = 0
-    for block in blocks[:_MCP_CONTENT_MAX_ITEMS]:
+    for index, block in enumerate(blocks[:_MCP_CONTENT_MAX_ITEMS]):
         if not isinstance(block, dict):
             continue
         if block.get("type") == "text":
@@ -924,7 +924,13 @@ async def _model_visible_result(envelope: Any, *, video_frame_extractor=None) ->
                 text_parts.append(f"[Rejected MCP image: {exc}]")
                 continue
             media_bytes += len(data)
-            images.append(Image(content=data, mime_type=block.get("mimeType") or "image/png"))
+            mime = block.get("mimeType") or "image/png"
+            images.append(Image(content=data, mime_type=mime))
+            if not failed:
+                marker = await _tool_image_delivery_marker(data, mime, index)
+                if marker:
+                    text_parts.append("To deliver this image to the user, include this exact marker "
+                        "in the final reply: " + marker)
         elif (video := _embedded_video(block)) is not None:
             video_count += 1
             mime, blob = video
@@ -964,6 +970,38 @@ async def _model_visible_result(envelope: Any, *, video_frame_extractor=None) ->
         max_chars=200_000, max_bytes=512 * 1024,
     )
     return ToolResult(content=summary, images=images or None, mcp_result=envelope)
+
+
+async def _tool_image_delivery_marker(content: bytes, mime: str, index: int) -> str | None:
+    """Give admitted pixels an optional current-session delivery reference."""
+    from openagent_core.runtime import current_runtime, current_execution_context, current_run_id
+    runtime, context = current_runtime(), current_execution_context()
+    if runtime is None or context is None or not current_run_id():
+        return None
+    lookup = getattr(runtime, "service", None)
+    publisher = lookup("attachments.publisher") if callable(lookup) else None
+    publish = getattr(publisher, "publish_content", None)
+    if not callable(publish):
+        return None
+    from openagent_core.memory.vault.privacy import require_unprotected_execution
+    from openagent_core.artifacts import SESSION_ARTIFACT_PREFIX, session_output_reference
+    import mimetypes
+    verified = None
+    try:
+        await require_unprotected_execution("Tool result attachment delivery")
+        extension = mimetypes.guess_extension(mime) or ".bin"
+        ref = await publish(context, content, filename=f"tool-image-{index + 1}{extension}", mime_type=mime)
+        db = getattr(getattr(runtime.services.executor, "agent", None), "memory_db", None)
+        verified = await session_output_reference(db, tenant_id=context.tenant_id,
+            session_id=context.session_id, value=ref) if db is not None else None
+    except (LookupError, OSError, PermissionError, ValueError):
+        pass
+    from openagent_core.contracts import ResourceRef, require_authorized
+    await require_authorized(runtime.services.authorizer, context, "run.publish",
+        ResourceRef("session", context.tenant_id, context.session_id), audience=context.audience)
+    if verified is None:
+        return None
+    return f"[FILE:{SESSION_ARTIFACT_PREFIX}{verified['artifact_id']}]"
 
 
 async def _call_tool_impl(pool: Any, source_ref: str, tool: str, args: dict | str | None = None) -> Any:
@@ -1012,6 +1050,7 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
 
     async def tool_search_list_servers(
         offset: int = 0, limit: int = _DEFAULT_DISCOVERY_PAGE_SIZE,
+        query: str | None = None,
     ) -> list[dict[str, Any]] | dict[str, Any]:
         """List current authorized capability sources and tool counts.
 
@@ -1019,14 +1058,24 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
         entry is not its complete inventory: open list_tools and follow its
         pages before declaring a capability unavailable.
 
-        For long lists pass the returned next_offset as offset. Limit is a
-        maximum page size from 1 to 50.
+        Search query matches source names and destination labels (e.g. a device
+        name). Follow every next_offset before declaring a device absent.
+        Verify target_label before calling a tool. A permission error or retry
+        never permits substituting the agent host for a requested user device.
+        For long lists pass next_offset as offset. Limit is from 1 to 50.
         """
         if type(offset) is not int or offset < 0:
             raise ValueError("offset must be a non-negative integer")
         if type(limit) is not int or not 1 <= limit <= _MAX_DISCOVERY_PAGE_SIZE:
             raise ValueError(f"limit must be between 1 and {_MAX_DISCOVERY_PAGE_SIZE}")
         sources = await _list_scoped_servers_impl(pool)
+        if query is not None:
+            if not isinstance(query, str) or len(query) > 512:
+                raise ValueError("query must be a string of at most 512 characters")
+            terms = query.casefold().split()
+            sources = [source for source in sources if all(term in
+                (str(source["name"]) + " " + str(source["target_label"])).casefold()
+                for term in terms)]
         page = collection_page(sources, offset, limit, page_character_budget())
         end = offset + len(page)
         if offset == 0 and end == len(sources):

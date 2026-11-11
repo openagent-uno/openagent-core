@@ -64,6 +64,24 @@ revoked or unauthorized destinations fail; there is no destination fallback.
 
 ## Pages for structured tool results
 
+Source discovery accepts `tool_search_list_servers(query=...)` to filter current
+authorized source names and destination labels before paging. Use it to locate
+a connected device without walking unrelated sources. A partial page is never
+evidence that a device is absent. Permission failures and retries do not permit
+substituting another destination; retain the requested target label and rediscover
+its exact current reference after a reconnect.
+
+Image previews from successful tool results can also provide a delivery marker
+when the host's selected `attachments.publisher` implements `publish_content`.
+The publisher receives the admitted, bounded bytes, verifies the current run and
+audience, and returns a session-linked artifact. Core verifies the link and
+rechecks publication authority before showing the marker. The model must include
+that exact marker in its final answer to deliver the image. Failed tools,
+protected executions and unavailable publishers provide no delivery marker;
+image viewing retains its existing wire contract. No device-local path is read
+on the server. Unavailable aggregate previews cannot fail an otherwise valid
+text answer or become final attachments through inference.
+
 Tool discovery pagination controls how many tool descriptions the model sees.
 Result pagination controls the records returned after a tool executes. These
 are separate from the provider's emergency output ceiling.

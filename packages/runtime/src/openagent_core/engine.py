@@ -202,7 +202,7 @@ class AgentExecutor:
                             if ref is None and not artifact_marker and publisher is not None and db is not None:
                                 try:
                                     value = await publisher.publish(context, value["path"])
-                                except (FileNotFoundError, PermissionError, ValueError):
+                                except (LookupError, OSError, PermissionError, ValueError):
                                     # An unavailable file must not erase a valid
                                     # answer. Session revocation still fails closed
                                     # at the fresh publication check below.
@@ -211,7 +211,13 @@ class AgentExecutor:
                                 ref = await session_output_reference(db, tenant_id=context.tenant_id,
                                     session_id=context.session_id, value=value, link=True)
                             if ref is None:
-                                unavailable = True
+                                # Tool previews can be present in the aggregate
+                                # stream without being selected for delivery.
+                                # Their absence must not taint the final answer.
+                                answer = event.get("final_answer")
+                                selected = (parse_response_content(answer.get("text", ""),
+                                    allow_inline_ui=False).attachments if isinstance(answer, dict) else None)
+                                unavailable = unavailable or selected is None or part["attachment"] in selected
                             else:
                                 attachments.append(ref)
                                 parts.append({"kind": "attachment", "attachment": ref})

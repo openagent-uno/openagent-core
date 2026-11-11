@@ -81,7 +81,7 @@ class EngineExecutor(unittest.IsolatedAsyncioTestCase):
         self.assertIn("capability is unavailable",reply["error"])
 
     async def test_host_file_delivery_errors_preserve_answer_but_revocation_never_publishes(self):
-        for error in (FileNotFoundError, PermissionError, ValueError):
+        for error in (FileNotFoundError, PermissionError, ValueError, LookupError):
             with self.subTest(error=error.__name__):
                 async def publish(*_args):raise error("PRIVATE PATH")
                 self.runtime.service=lambda _key:SimpleNamespace(publish=publish)
@@ -103,6 +103,16 @@ class EngineExecutor(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PermissionError):
             await AgentExecutor(agent).execute(self.request,self.context,self.runtime)
         self.assertEqual([],self.store.events)
+
+    async def test_unavailable_unselected_preview_does_not_abort_or_taint_final_answer(self):
+        async def publish(*_args): raise LookupError("private preview path")
+        self.runtime.service = lambda _key: SimpleNamespace(publish=publish)
+        agent = _Agent([{"kind": "done", "text": "[IMAGE:/private/preview.png]Done.",
+            "final_answer": {"text": "Done."}}])
+        agent.memory_db = SimpleNamespace(db_path="/tmp/attachment-test/state.sqlite")
+        result = await AgentExecutor(agent).execute(self.request, self.context, self.runtime)
+        self.assertEqual("Done.", result)
+        self.assertEqual("Done.", self.store.events[-1][2]["final_answer"]["text"])
 
 
 if __name__ == "__main__":

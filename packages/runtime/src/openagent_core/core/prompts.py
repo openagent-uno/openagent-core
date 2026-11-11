@@ -109,6 +109,10 @@ def _render_catalog_summary_lines(
                 f"- ``tool-search`` ({count} tools): the deferred-tool "
                 f"discovery MCP itself. Use `list_servers` / `list_tools` "
                 f"/ `describe_tool` / `call_tool` to reach any other MCP."
+                f" Search source names and target labels with `list_servers(query=...)`. "
+                f"Follow all pages before claiming a device or capability is absent. "
+                f"On a retry keep the user's requested destination: permission errors "
+                f"never justify switching to another computer."
             )
         else:
             desc = descriptions.get(name, "") or _NPX_DEFAULTS.get(name, "")

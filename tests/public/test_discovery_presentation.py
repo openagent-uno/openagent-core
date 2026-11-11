@@ -76,6 +76,26 @@ class DiscoveryPresentationContract(unittest.IsolatedAsyncioTestCase):
             {"private_operation": implementation("private_operation")})
         self.catalog.register("hidden-source", hidden, hidden, target_label="service-hidden")
 
+    async def test_source_query_finds_later_devices_without_disclosing_hidden_sources(self):
+        for i in range(25):
+            source = FunctionSource((ToolDefinition("capture", "Capture screen", {}),),
+                {"capture": lambda args, context: None})
+            self.catalog.register(f"desktop-{i}", source, source,
+                target_label=f"User laptop {i:02d}")
+        _pool, tools = await self.make_pool()
+        list_sources = tools["tool_search_list_servers"].entrypoint
+        with execution_scope(self.runtime, self.context, "source-query"):
+            first = await list_sources(limit=20)
+            self.assertIsNotNone(first["next_offset"])
+            last = await list_sources(query="LAPTOP 24")
+            self.assertEqual(["desktop-24"], [row["source_ref"] for row in last])
+            self.assertEqual([], await list_sources(query="hidden"))
+            self.policy.denied.add("desktop-24")
+            self.assertEqual([], await list_sources(query="laptop 24"))
+            with self.assertRaises(ValueError):
+                await list_sources(query="x" * 513)
+        self.assertEqual([], self.calls)
+
     async def test_public_pool_hints_preserve_authority_references_and_paging(self):
         default_pool, default = await self.make_pool()
         configured_pool, configured = await self.make_pool(DiscoveryPresentation(

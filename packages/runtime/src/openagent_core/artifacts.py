@@ -204,6 +204,17 @@ class AttachmentPublisher(Protocol):
     async def publish(self, context: Any, path: str) -> dict[str, Any]: ...
 
 
+class ContentAttachmentPublisher(Protocol):
+    """Optional admitted-byte publication on the same host-selected publisher.
+
+    The host revalidates the current execution and recipient authority, then
+    uploads bounded bytes into the current session. This does not authorize
+    reading a path, another tool result, or a different device.
+    """
+    async def publish_content(self, context: Any, content: bytes, *, filename: str,
+                              mime_type: str) -> dict[str, Any]: ...
+
+
 async def find_session_attachments(db, *, tenant_id, session_id, query):
     """List available files linked to the authorized session, with no local paths."""
     from .memory.artifacts import safe_attachment_filename

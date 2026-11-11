@@ -52,6 +52,61 @@ class ToolSearchMediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(formatted["content"][1]["image_url"]["url"].startswith(
             "data:image/png;base64,"))
 
+    async def test_admitted_image_delivery_is_session_linked_and_requires_live_authority(self):
+        from openagent_core.engine import MemoryDB, AgentExecutor
+        from openagent_core.artifacts import ArtifactRepository, SESSION_ARTIFACT_PREFIX
+        from openagent_core.contracts import RunRequest
+        from openagent_storage_sqlite import SqliteRuntimeStore
+        allowed = True
+        async def authorize(*args, **kwargs): return allowed
+        policy = SimpleNamespace(authorize=authorize)
+        user = PrincipalRef("host", "tenant", "alice")
+        context = ExecutionContext(user, user, user, "session", "agent", (user,))
+        content = b"\x89PNG\r\n\x1a\nexact fixture pixels"
+        envelope = {"content": [{"type": "image", "mimeType": "image/png",
+            "data": base64.b64encode(content).decode()}]}
+        with TemporaryDirectory() as root:
+            db = MemoryDB(str(Path(root) / "state.sqlite")); await db.connect()
+            self.addAsyncCleanup(db.close)
+            store = SqliteRuntimeStore(Path(root) / "state.sqlite"); await store.start()
+            self.addAsyncCleanup(store.close)
+            await store.accept(RunRequest("image-run", "session", "key", "capture"), context)
+            repository = ArtifactRepository(db, policy)
+            published = []
+            async def publish(actor, data, **kwargs):
+                self.assertIs(actor, context); self.assertEqual(content, data)
+                ref = await repository.upload(actor, data, session_id=actor.session_id, **kwargs)
+                published.append(ref)
+                return ref
+            publisher = SimpleNamespace(publish_content=publish)
+            events = []
+            async def append(*event): events.append(event)
+            async def check(actor, action, resource, **kwargs):
+                from openagent_core.contracts import require_authorized
+                await require_authorized(policy, actor, action, resource, **kwargs)
+            class Agent:
+                memory_db = db
+                async def run_stream(self, *args, **kwargs):
+                    yield {"kind": "done", "text": "Screenshot " + marker,
+                        "final_answer": {"text": "Screenshot " + marker}}
+            runtime = SimpleNamespace(authorize=check,
+                service=lambda key: publisher if key == "attachments.publisher" else None,
+                services=SimpleNamespace(authorizer=policy, executor=SimpleNamespace(agent=Agent()),
+                    store=SimpleNamespace(append_event=append)))
+            with execution_scope(runtime, context, "image-run"):
+                result = await _model_visible_result(envelope)
+                self.assertEqual(envelope, result.mcp_result)
+                self.assertNotIn(root, result.content)
+                marker = f"[FILE:{SESSION_ARTIFACT_PREFIX}{published[0]['artifact_id']}]"
+                self.assertIn(marker, result.content)
+                await AgentExecutor(Agent()).execute(RunRequest("image-run", "session", "key", "capture"), context, runtime)
+                final = events[-1][-1]["final_answer"]
+                self.assertEqual([published[0]["artifact_id"]], [ref["artifact_id"] for ref in final["attachments"]])
+                allowed = False
+                with self.assertRaises(PermissionError):
+                    await _model_visible_result(envelope)
+            self.assertEqual(1, len(published))
+
     async def test_text_only_result_keeps_existing_contract(self):
         envelope = {"content": [{"type": "text", "text": "ok"}], "isError": False}
         self.assertIs(await _model_visible_result(envelope), envelope)
