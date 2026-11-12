@@ -565,6 +565,65 @@ class SqliteRuntimeStore:
         return {'session':self._session_wire(row,reference.authority),'messages':[dict(message) for message in page],
                 'next_cursor':next_cursor}
 
+    def _record_delivery(self, reference, context, delivery, *, source_run_id=None):
+        self._require_local_session(reference, context)
+        identifier = 'delivered_' + hashlib.sha256((context.tenant_id + ':' + context.session_id + ':' + delivery.key).encode()).hexdigest()
+        metadata = delivery.snapshot()
+        metadata.pop('text')
+        envelope = {'role': 'assistant', 'content': delivery.text, 'delivery': metadata}
+        now = int(time.time() * 1000)
+        sent_at = delivery.created_at_ms or now
+        with self._transaction() as db:
+            existing = db.execute('SELECT raw_envelope_json FROM session_messages WHERE id=?', (identifier,)).fetchone()
+            if existing:
+                if json.loads(existing[0]) != envelope:
+                    raise IdempotencyConflict('A provider receipt already records different delivered content')
+                return {'message_id': identifier, 'recorded': True, 'duplicate': True}
+            if source_run_id is not None:
+                source = db.execute('SELECT tenant_id,agent_id FROM session_runs WHERE id=?', (source_run_id,)).fetchone()
+                if source is None or source['tenant_id'] != context.tenant_id or source['agent_id'] != context.agent_id:
+                    raise PermissionError('Delivery provenance belongs to another runtime')
+            sequence = db.execute('SELECT coalesce(max(sequence),-1)+1 FROM session_messages WHERE session_id=?', (context.session_id,)).fetchone()[0]
+            author = PrincipalRef(context.authority.authority, context.tenant_id, context.agent_id, 'agent')
+            db.execute('''INSERT INTO session_messages(id,tenant_id,session_id,run_id,sequence,ordinal,idempotency_key,
+                role,status,author_kind,author_principal_id,text,completeness,raw_envelope_json,raw_envelope_schema,
+                created_at_ms,updated_at_ms,completed_at_ms) VALUES(?,?,?,NULL,?,0,?,'assistant','complete','agent',?,?,'complete',?,1,?,?,?)''',
+                (identifier,context.tenant_id,context.session_id,sequence,delivery.key,author.key,delivery.text,
+                 canonical_json(envelope),sent_at,now,sent_at))
+            db.execute('UPDATE sessions_v2 SET source_version=source_version+1,updated_at_ms=?,last_activity_at_ms=? WHERE id=?', (now,now,context.session_id))
+            enqueue_source(db,'message',identifier,now)
+            enqueue_source(db,'session',context.session_id,now)
+            if self._content_privacy_publication is not None and source_run_id is not None:
+                self._content_privacy_publication.generated(db,'message',identifier,source_run_id)
+        return {'message_id': identifier, 'recorded': True, 'duplicate': False}
+
+    def _delivery_context(self, reference, context, *, limit=20, max_bytes=65_536):
+        try:
+            self._require_local_session(reference, context)
+        except LookupError:
+            return ()
+        if type(limit) is not int or not 1 <= limit <= 200 or type(max_bytes) is not int or not 1024 <= max_bytes <= 262_144:
+            raise ValueError('Invalid delivered history budget')
+        rows = self.connection.execute('''SELECT id,text,raw_envelope_json FROM session_messages
+            WHERE tenant_id=? AND session_id=? AND run_id IS NULL AND visibility='user_visible'
+            AND json_extract(raw_envelope_json,'$.delivery') IS NOT NULL
+            ORDER BY sequence DESC LIMIT ?''',(context.tenant_id,context.session_id,limit)).fetchall()
+        result, used = [], 0
+        for row in rows:
+            delivery = json.loads(row['raw_envelope_json'])['delivery']
+            text = row['text']
+            available = max_bytes - used - 1024
+            if available < 1:
+                break
+            bounded = text.encode()[:available].decode('utf-8', errors='ignore')
+            message = {'message_id': row['id'], 'role': 'assistant', 'text': bounded,
+                       'delivery': delivery, 'truncated': bounded != text}
+            used += len(canonical_json(message).encode())
+            if used > max_bytes:
+                break
+            result.append(message)
+        return tuple(reversed(result))
+
     def _create_session(self,reference:SessionRef,context:ExecutionContext,*,title:str|None,parent:SessionRef|None=None):
         if reference.tenant_id!=context.tenant_id or reference.agent_id!=context.agent_id or reference.authority!=context.authority.authority:
             raise PermissionError('Session reference belongs to another runtime boundary')
@@ -662,6 +721,8 @@ class SqliteRuntimeStore:
     search_sessions = _serialized(_search_sessions)
     read_tool_invocation = _serialized(_read_saved_tool_invocation)
     read_session = _serialized(_read_session)
+    record_delivery = _serialized(_record_delivery)
+    delivery_context = _serialized(_delivery_context)
     create_session = _serialized(_create_session)
     rename_session = _serialized(_rename_session)
     archive_session = _serialized(_archive_session)

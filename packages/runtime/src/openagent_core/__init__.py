@@ -7,6 +7,7 @@ from .contracts import (PrincipalRef, ExecutionContext, CapabilityLease, Resourc
     RunRequest, AcceptedRunRequest, RunRecord, RunEvent, Authorizer, IdentityDirectory, RuntimeStore,
     ModelCatalog, CredentialResolver, DelegationService, IdempotencyConflict, SessionRef, SessionStore)
 from .runtime import Runtime, RuntimeSettings, RuntimeServices
+from .deliveries import ConfirmedDelivery
 from .capabilities import (CapabilityCatalog, CapabilitySource, ToolExecutor,
     ToolDefinition, ToolDescriptor, FunctionSource, CapabilityUnavailable)
 from .extensions import EngineExtensions
@@ -19,9 +20,9 @@ from .modules import (MODULE_API_VERSION, MODULE_SURFACES, CapabilityContributio
     ModuleReferenceInspector, ModuleResolutionError,
     ModuleStatus, ReconfigureReceipt, RuntimeProfile, ServiceBinding, ServiceRegistry)
 
-__version__ = '1.1.0b79'
+__version__ = '1.1.0b80'
 __all__ = ['Runtime','RuntimeSettings','RuntimeServices','PrincipalRef','ExecutionContext',
-    'CapabilityLease','ResourceRef','RunRequest','AcceptedRunRequest','RunRecord','RunEvent','Authorizer',
+    'CapabilityLease','ResourceRef','RunRequest','AcceptedRunRequest','RunRecord','RunEvent','Authorizer','ConfirmedDelivery',
     'IdentityDirectory','RuntimeStore','SessionRef','SessionStore','ModelCatalog','CredentialResolver','DelegationService',
     'CapabilityCatalog','CapabilitySource','ToolExecutor','ToolDefinition','ToolDescriptor',
     'FunctionSource','CapabilityUnavailable','IdempotencyConflict','EngineExtensions',

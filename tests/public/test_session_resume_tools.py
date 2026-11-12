@@ -101,6 +101,39 @@ class SessionResumeTools(unittest.IsolatedAsyncioTestCase):
             with self.subTest(value=value), self.assertRaises((TypeError, ValueError)):
                 await self.call("sessions_read", {"session_ref": value})
 
+    async def test_confirmed_deliveries_keep_authorization_pagination_and_prompt_bounds(self):
+        from openagent_core import ConfirmedDelivery
+        reference = SessionRef("fixture", "tenant", "agent", "conversation")
+        delivery = ConfirmedDelivery("telegram", "bot", "chat", "first", "Sent reminder", 1)
+        for action in ("run.submit", "run.publish"):
+            self.policy.denied.add(action)
+            with self.subTest(action=action), self.assertRaises(PermissionError):
+                await self.runtime.record_delivery(delivery, self.context)
+            self.policy.denied.clear()
+        await self.runtime.record_delivery(delivery, self.context)
+        for index in range(25):
+            await self.runtime.record_delivery(ConfirmedDelivery("telegram", "bot", "chat", str(index),
+                "bounded " + str(index) + " " + "é" * 2000, index + 2), self.context)
+        messages, cursor = [], None
+        while True:
+            page = await self.call("sessions_read", {"limit": 3, **({"cursor": cursor} if cursor else {})})
+            messages.extend(page["messages"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
+        self.assertEqual(len(messages), 26)
+        self.assertTrue(all(row["role"] == "assistant" for row in messages))
+        recent = await self.store.delivery_context(reference, self.context, max_bytes=4096)
+        self.assertTrue(recent)
+        self.assertTrue(recent[-1]["text"].startswith("bounded 24 "))
+        self.assertTrue(recent[-1]["truncated"])
+        self.assertLessEqual(len(json.dumps(recent, ensure_ascii=False).encode()), 4096)
+        foreign = replace(reference, tenant_id="other-tenant")
+        with self.assertRaises(PermissionError):
+            await self.store.delivery_context(foreign, self.context)
+        other = replace(self.context, session_id="another-chat")
+        self.assertEqual(await self.store.delivery_context(replace(reference, session_id=other.session_id), other), ())
+
     async def test_lossy_model_buffer_compaction_keeps_native_history_recoverable(self):
         from openagent_core.engine import MemoryDB
         from openagent_core.core import compaction

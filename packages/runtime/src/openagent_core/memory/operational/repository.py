@@ -504,8 +504,9 @@ def _update_row(
 def _fetch_nested_rows(
     conn: Any, table: str, columns: Sequence[str], session_id: str
 ) -> dict[str, dict[str, Any]]:
+    independent = " AND NOT (run_id IS NULL AND json_extract(raw_envelope_json,'$.delivery') IS NOT NULL)" if table == "session_messages" else ""
     cursor = conn.execute(
-        f"SELECT {','.join(columns)} FROM {table} WHERE session_id=?",  # internal names
+        f"SELECT {','.join(columns)} FROM {table} WHERE session_id=?{independent}",  # internal names
         (session_id,),
     )
     return {
@@ -526,6 +527,21 @@ def _row_changed(
         for column in columns
         if column != "source_version"
     )
+
+
+def _preserve_delivery_sequences(conn, session_id, desired, existing):
+    """Provider snapshots cannot delete or occupy independent delivery slots."""
+    present = conn.execute("SELECT 1 FROM session_messages WHERE session_id=? AND run_id IS NULL "
+        "AND json_extract(raw_envelope_json,'$.delivery') IS NOT NULL LIMIT 1", (session_id,)).fetchone()
+    if present is None:
+        return
+    next_sequence = conn.execute("SELECT coalesce(max(sequence),-1)+1 FROM session_messages WHERE session_id=?", (session_id,)).fetchone()[0]
+    for identifier, row in desired.items():
+        if identifier in existing:
+            row['sequence'] = existing[identifier]['sequence']
+        else:
+            row['sequence'] = next_sequence
+            next_sequence += 1
 
 
 def _changed_columns(
@@ -957,6 +973,7 @@ def project_legacy_session(
         )
         for row in projection.messages
     }
+    _preserve_delivery_sequences(conn, session_id, desired_messages, existing_messages)
 
     # Delete only stale or structurally moved rows.  Tool/message rows that
     # move to another run must go before the old run FK can be removed.  This
@@ -1592,6 +1609,7 @@ def verify_session_projection(
         (_fetch_nested_rows(conn, "session_messages", _MESSAGE_COLUMNS, session_id), expected_messages, _MESSAGE_COLUMNS, "message"),
         (_fetch_nested_rows(conn, "tool_invocations", _TOOL_COLUMNS, session_id), expected_tools, _TOOL_COLUMNS, "tool"),
     )
+    _preserve_delivery_sequences(conn, session_id, expected_messages, actual_sets[1][0])
     for actual, expected, columns, label in actual_sets:
         if set(actual) != set(expected):
             return ProjectionVerification(

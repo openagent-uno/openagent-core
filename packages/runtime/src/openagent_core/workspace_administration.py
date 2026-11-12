@@ -349,7 +349,16 @@ class SessionInspection:
                 await events.close()
         # Preserve provider ordering for equal timestamps. New canonical turns
         # use the admission timestamp; one run occupies one limit slot.
-        ordered = list(reversed(legacy)) + additions
+        deliveries = await (await conn.execute(
+            "SELECT id,text,created_at_ms,raw_envelope_json FROM session_messages "
+            "WHERE tenant_id=? AND session_id=? AND run_id IS NULL AND visibility='user_visible' "
+            "AND json_extract(raw_envelope_json,'$.delivery') IS NOT NULL ORDER BY sequence DESC LIMIT ?",
+            (context.tenant_id, session_id, limit))).fetchall()
+        delivered_runs = [{'run_id': row['id'], 'status': 'success', 'created_at': row['created_at_ms'] / 1000,
+                           'messages': [{'role': 'assistant', 'content': row['text']}], 'tools': [],
+                           'delivery': json.loads(row['raw_envelope_json'])['delivery']}
+                          for row in deliveries]
+        ordered = list(reversed(legacy)) + additions + delivered_runs
         ordinals = {row['id']:row['ordinal'] for row in rows}
         ordinals.update(aliases)
         ordered.sort(key=lambda run: (float(run.get('created_at') or 0), ordinals.get(str(run.get('run_id') or ''), -1)))

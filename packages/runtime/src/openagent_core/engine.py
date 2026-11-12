@@ -150,7 +150,15 @@ class AgentExecutor:
         apps = lookup("mcp_apps") if callable(lookup) else None
         read_context = getattr(apps, "prompt_context", None)
         application_context = await read_context(context) if callable(read_context) else {}
-        with application_context_scope(application_context):
+        from .deliveries import delivered_message_scope
+        from .contracts import SessionRef
+        delivery_reader = getattr(runtime.services.store, "delivery_context", None)
+        delivered = ()
+        if callable(delivery_reader):
+            reference = SessionRef(authority=context.authority.authority, tenant_id=context.tenant_id,
+                                   agent_id=context.agent_id, session_id=context.session_id)
+            delivered = await delivery_reader(reference, context, limit=20, max_bytes=65_536)
+        with application_context_scope(application_context), delivered_message_scope(delivered):
             async for event in self.agent.run_stream(request.input,session_id=request.session_id,
                     attachments=list(request.attachments),on_status=status,model_override=model,
                     author={"kind":context.author.kind,"handle":context.author.key}):

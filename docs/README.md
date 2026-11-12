@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta80: confirmed outgoing conversation history](releases/v1.1.0-beta.80.md).
+
 - [Beta79: one-level delegation and isolated fallback refresh](releases/v1.1.0-beta.79.md).
 
 - [Beta78: destination discovery and session-linked tool images](releases/v1.1.0-beta.78.md).

@@ -58,6 +58,7 @@ class ScriptedProviderIO:
         self.calls = []
         self.delegated = set()
         self.member_ids = []
+        self.prompts = []
 
     def construct(self, provider):
         # This is the sole patched boundary. Preserve the actual NativeProvider
@@ -130,9 +131,11 @@ class ProviderModel(Model):
         raise AssertionError("Unexpected synchronous provider stream")
 
     async def ainvoke(self, *args, **kwargs):
+        self.script.prompts.append(kwargs.get("messages", []))
         return self.script.response(self.runtime_ref, kwargs.get("tools"))
 
     async def ainvoke_stream(self, *args, **kwargs):
+        self.script.prompts.append(kwargs.get("messages", []))
         yield self.script.response(self.runtime_ref, kwargs.get("tools"))
 
     def _parse_provider_response(self, response, **kwargs):
@@ -226,6 +229,49 @@ class TeamModelCatalogDelegation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({row["tenant_id"] for row in rows}, {self.context.tenant_id})
         self.assertEqual({row["agent_id"] for row in rows}, {self.context.agent_id})
         self.assertEqual({row["id"] for row in rows if row["parent_session_id"] is None}, {self.context.session_id})
+
+    async def test_confirmed_delivery_survives_provider_writes_and_reaches_next_model_and_transcript(self):
+        from openagent_core.deliveries import ConfirmedDelivery
+        from openagent_core.contracts import IdempotencyConflict
+        import time
+        self.assertEqual((await self.run_turn()).status, "success")
+        delivery = ConfirmedDelivery("chat", "bot-fixture", "recipient-fixture", "event-one",
+                                     "Confirmed fixture reminder: reference violet-27.", int(time.time() * 1000))
+        first = await self.active.runtime.record_delivery(delivery, self.context)
+        again = await self.active.runtime.record_delivery(delivery, self.context)
+        self.assertEqual(first['message_id'], again['message_id'])
+        self.assertTrue(again['duplicate'])
+        with self.assertRaises(IdempotencyConflict):
+            await self.active.runtime.record_delivery(ConfirmedDelivery("chat", "bot-fixture", "recipient-fixture",
+                "event-one", "different content", delivery.created_at_ms), self.context)
+        self.io.prompts.clear()
+        self.assertEqual((await self.run_turn(run_id="reply-to-delivery")).status, "success")
+        self.assertTrue(any("violet-27" in str(message.content) for messages in self.io.prompts
+                            for message in messages if message.role == "system"))
+        transcript = await self.active.inspection.transcript(self.management, self.context.session_id)
+        delivered = [message for message in transcript['messages'] if message.get('text') == delivery.text]
+        self.assertEqual(len(delivered), 1)
+        self.assertEqual(delivered[0]['role'], 'assistant')
+        await self.active.runtime.close()
+        self.active = await self.open_runtime()
+        self.io.prompts.clear()
+        self.assertEqual((await self.run_turn(run_id="reply-after-restart")).status, "success")
+        self.assertTrue(any("violet-27" in str(message.content) for messages in self.io.prompts
+                            for message in messages if message.role == "system"))
+
+    async def test_outreach_before_first_turn_creates_no_fake_user_or_model_execution(self):
+        from openagent_core import ConfirmedDelivery
+        import time
+        delivery = ConfirmedDelivery('chat', 'fixture-account', 'fixture-recipient', 'first-outreach',
+                                     'First confirmed outreach amber-81', int(time.time() * 1000))
+        await self.active.runtime.record_delivery(delivery, self.context)
+        self.assertEqual(self.io.calls, [])
+        self.assertEqual((await self.run_turn()).status, 'success')
+        self.assertTrue(any('amber-81' in str(message.content) for messages in self.io.prompts
+                            for message in messages if message.role == 'system'))
+        transcript = await self.active.inspection.transcript(self.management, self.context.session_id)
+        self.assertEqual(len([message for message in transcript['messages']
+                              if message.get('text') == delivery.text and message['role'] == 'assistant']), 1)
 
     async def assert_child(self, active, parent_id):
         children = await active.runtime.children(parent_id, self.context)

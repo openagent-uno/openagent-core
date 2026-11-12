@@ -2651,6 +2651,10 @@ class Agent:
         ), "runtime"))
         dynamic = {"catalog": build_mcp_catalog_summary(self._mcp)}
         from openagent_core.mcp_apps import current_application_context
+        from openagent_core.deliveries import delivered_prompt
+        delivered = delivered_prompt()
+        if delivered:
+            dynamic["confirmed_conversation_deliveries"] = delivered
         external_apps = current_application_context()
         if external_apps:
             dynamic["untrusted_app_context"] = external_apps

@@ -789,6 +789,34 @@ class Runtime:
         await self._authorize(context,'run.replay',record.session_id,record.tenant_id)
         return await self.services.store.events(run_id,after)
 
+    async def record_delivery(self, delivery, context: ExecutionContext, *, source_run_id: str | None = None):
+        """File a host-verified provider receipt in the recipient's session.
+
+        This does not execute a model or synthesize a user turn. The host owns
+        provider receipt verification and exact destination/principal mapping.
+        """
+        from .deliveries import ConfirmedDelivery
+        from .contracts import SessionRef, IdempotencyConflict
+        if not isinstance(delivery, ConfirmedDelivery) or context.agent_id != self.settings.agent_id:
+            raise TypeError("Expected a delivery for this agent")
+        self._admission()
+        if source_run_id is not None and (current_runtime() is not self or source_run_id != current_run_id()):
+            raise PermissionError("Delivery provenance must be the current admitted run")
+        reference = SessionRef(authority=context.authority.authority, tenant_id=context.tenant_id,
+                               agent_id=context.agent_id, session_id=context.session_id)
+        operation = getattr(self.services.store, "record_delivery", None)
+        if not callable(operation):
+            raise RuntimeError("The host store does not support confirmed deliveries")
+        # run.submit covers creating an absent conversation. session.publish
+        # covers its existing audience and owner; neither is a new tool grant.
+        await self._authorize(context, "run.submit", context.session_id, context.tenant_id)
+        try:
+            await self.services.store.create_session(reference, context, title=None)
+        except IdempotencyConflict:
+            pass
+        await self._authorize(context, "run.publish", context.session_id, context.tenant_id)
+        return await operation(reference, context, delivery, source_run_id=source_run_id)
+
     async def accepted_request(self, run_id: str, context: ExecutionContext):
         """Read original admission facts to reconcile a reconnect or retry.
 

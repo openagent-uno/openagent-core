@@ -129,3 +129,27 @@ link or child stream. Observing the child does not run it again.
 Provider tool identities are retained while consuming lazy tool generators.
 A live delegation event therefore carries the exact calling tool ID even for a
 streamed team tool. Parallel tool generators each keep their own identity.
+
+
+## Transport-confirmed outgoing messages
+
+`Runtime.record_delivery(ConfirmedDelivery(...), context, source_run_id=...)`
+records an already accepted provider message in the recipient's canonical
+conversation. The trusted host verifies the provider receipt and maps its exact
+account, destination and currently authorized principal before calling Core.
+Core rechecks `run.submit` and `run.publish`; an optional source run must be the
+current admitted execution in the same runtime. It does not run a model or
+invent a user message. A provider/account/conversation/event key is idempotent;
+reusing that receipt with different content is refused.
+
+SQLite stores the outgoing text as an independent assistant message, includes
+it in paginated history and transcript inspection, and preserves it across
+provider history writes and restarts. The next engine prompt receives at most
+the latest 20 confirmed messages within 64 KiB, marked as quoted history rather
+than instructions. Truncation is explicit; older complete messages remain
+available through authorized paginated session history. Native provider
+snapshots cannot remove these independently recorded messages.
+
+This generic contract does not grant cross-conversation access, validate a
+provider token, or retry an external send. A host must distinguish accepted
+delivery from history-recording failure so it cannot accidentally send twice.
