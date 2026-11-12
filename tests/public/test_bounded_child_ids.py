@@ -1,6 +1,7 @@
 """Real delegation handler keeps bounded IDs and exact durable parent metadata."""
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import patch
 import re
 
 import pytest
@@ -73,4 +74,7 @@ def test_real_delegate_handler_nested_three_levels_preserves_parent_model_and_ow
             assert rows[child]['parent_session_id'] == (root if index == 0 else calls[index-1])
             assert rows[child]['client_id'] == 'authorized-owner'
             assert rows[child]['model'] == model
-    asyncio.run(run())
+    # Deeper host envelopes are an explicit opt-in; ordinary workers stop at
+    # one level. This fixture still qualifies bounded IDs at the deeper limit.
+    with patch('openagent_core.core.child_session._MAX_DEPTH', 3):
+        asyncio.run(run())
