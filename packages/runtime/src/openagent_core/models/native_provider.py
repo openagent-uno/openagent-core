@@ -1612,6 +1612,12 @@ class NativeProvider(ProviderResources, BaseModel):
         framework prompt too so when the leader synthesises their
         output the persona is preserved.
         """
+        from openagent_core.runtime import current_execution_context
+        execution = current_execution_context()
+        if execution is not None and execution.parent_run_id is not None:
+            # A delegated worker executes its own tools, without inserting
+            # another routing team beneath the admitted child.
+            return None
         from openagent_core.core.execution_profile import stateless_completion_active
         if stateless_completion_active():
             return None

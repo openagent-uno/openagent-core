@@ -155,6 +155,9 @@ class TeamModelCatalogDelegation(unittest.IsolatedAsyncioTestCase):
         self.enterContext(patch.object(
             NativeProvider, "build_runtime_model", autospec=True, side_effect=self.io.construct,
         ))
+        self.enterContext(patch.object(
+            NativeProvider, "_build_runtime_model", autospec=True, side_effect=self.io.construct,
+        ))
         actor = PrincipalRef("test-host", "host-tenant", "fixture-owner")
         self.context = ExecutionContext(actor, actor, actor, "host-parent", "host-agent", (actor,),
                                         scopes=("fixture:read", "fixture:delegate"))

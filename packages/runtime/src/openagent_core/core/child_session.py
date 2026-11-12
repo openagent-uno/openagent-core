@@ -91,7 +91,7 @@ _GLOBAL_CONCURRENCY = 16
 # delegating loop off long before it can saturate anything. A limit that trips
 # on real work would be worse than no limit at all: it converts a silent risk
 # into a live outage on someone's nightly cron.
-_MAX_DEPTH = 5
+_MAX_DEPTH = 1
 
 # Per-CHAIN fan-out cap: how many children one delegation TREE (identified by
 # its root, not by its immediate parent) may run in parallel at one depth.

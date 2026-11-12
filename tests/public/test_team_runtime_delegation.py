@@ -385,6 +385,14 @@ class TeamRuntimeDelegation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(children[0].parent_run_id, "parent")
         self.assertEqual(self.executor.outputs, [])
 
+    async def test_default_policy_refuses_a_subagent_spawning_a_subagent(self):
+        self.executor.nested_children = 1
+        self.assertEqual((await self.run_parent()).status, "failed")
+        self.assertEqual(len(self.executor.children), 1)
+        children = await self.runtime.children("parent", self.context)
+        self.assertEqual(len(children), 1)
+        self.assertEqual(await self.runtime.children(children[0].run_id, self.context), ())
+
     async def test_broadcast_admits_two_real_children_without_shared_session_or_authority_widening(self):
         self.executor.broadcast = True
         self.executor.stream = True

@@ -62,7 +62,7 @@ leases; the mission is authored by the host agent. The legacy member-session fla
 does not disable canonical child sessions in a hosted Runtime.
 
 `Runtime.spawn` derives depth and root from admitted run lineage and enforces
-instance-local depth, per-depth concurrency and per-chain concurrency limits.
+instance-local depth, per-depth concurrency and per-chain concurrency limits. The default depth is one: a main run may fan out to workers, but a worker cannot admit grandchildren. Workers use a single model with their normal authorized tools, without an implicit routing team. A host must deliberately opt into a deeper envelope.
 Separate depth tiers allow a parent to wait for its child without exhausting that
 child's slots. Authorization is rechecked after waiting for capacity, and parent
 cancellation cancels the exact admitted child. Child failures remain failures.

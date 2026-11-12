@@ -1067,7 +1067,10 @@ class TeamRouterProvider(ProviderResources, BaseModel):
         if len(member_ids) != len(set(member_ids)) or "leader" in member_ids:
             raise ValueError("Configured models have ambiguous Team member identifiers")
         from openagent_core.core.execution_profile import lean_local_event_active
-        force_solo = lean_local_event_active()
+        from openagent_core.runtime import current_execution_context
+        execution = current_execution_context()
+        delegated = execution is not None and execution.parent_run_id is not None
+        force_solo = lean_local_event_active() or delegated
         # Budget gate for MEMBERS (C1). The leader is already gated upstream
         # (``ModelDispatcher._enabled_catalog`` → ``guard.filter_catalog``), but
         # members were built straight from the catalog — so an over-cap provider
@@ -1105,7 +1108,8 @@ class TeamRouterProvider(ProviderResources, BaseModel):
                 "team_router.single_agent",
                 session_id=session_id,
                 entry=entry.runtime_id,
-                reason=("lean_local_event" if force_solo else "no_other_llm_models"),
+                reason=("delegated_worker" if delegated else
+                        "lean_local_event" if force_solo else "no_other_llm_models"),
             )
             return provider
 
@@ -1997,10 +2001,16 @@ class ModelDispatcher(BaseModel):
         sources = self._configured_fallback_refs
         if config is None or sources is None:
             return
+        # Already initialized runners retain this object while provider IO is
+        # suspended. Rebuilding its lists in place can replace their resolved
+        # Models with raw refs immediately before a fallback is selected.
+        from copy import copy
+        config = copy(config)
         if not self._providers_config:
             # Boot sequence: provider rows arrive during Agent.initialize().
             for attr, values in sources.items():
                 setattr(config, attr, list(values))
+            self._fallback_config = config
             return
 
         known = {

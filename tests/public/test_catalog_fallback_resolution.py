@@ -67,7 +67,8 @@ class CatalogFallbackResolutionTests(unittest.TestCase):
         )
 
         self.dispatcher.rebuild_routing(_catalog())
-        kimi, operator = fallback.on_rate_limit
+        effective = self.dispatcher.fallback_config
+        kimi, operator = effective.on_rate_limit
         self.assertEqual("kimi-k3", kimi.id)
         self.assertEqual("moonshot-key-one", kimi.api_key)
         self.assertEqual("https://api.moonshot.ai/v1", kimi.base_url)
@@ -77,21 +78,24 @@ class CatalogFallbackResolutionTests(unittest.TestCase):
 
         # Runtime initialization deep-copies already-built Model objects; it
         # no longer asks the small generic vendor map to parse these refs.
-        fallback.resolve_models()
+        effective.resolve_models()
         self.assertEqual(["kimi-k3", "backup-model"], [
-            model.id for model in fallback.on_rate_limit
+            model.id for model in effective.on_rate_limit
         ])
 
     def test_catalog_reload_rebuilds_fallback_with_rotated_credentials(self):
         fallback = FallbackConfig(on_rate_limit=["moonshot:kimi-k3"])
         self.dispatcher.set_fallback_config(fallback)
         self.dispatcher.rebuild_routing(_catalog("moonshot-key-one"))
-        first = fallback.on_rate_limit[0]
+        previous = self.dispatcher.fallback_config
+        first = previous.on_rate_limit[0]
 
         self.dispatcher.rebuild_routing(_catalog("moonshot-key-two"))
-        second = fallback.on_rate_limit[0]
+        second = self.dispatcher.fallback_config.on_rate_limit[0]
         self.assertIsNot(first, second)
         self.assertEqual("moonshot-key-two", second.api_key)
+        self.assertIs(first, previous.on_rate_limit[0])
+        self.assertEqual("moonshot-key-one", first.api_key)
 
 
 if __name__ == "__main__":

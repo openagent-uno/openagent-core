@@ -97,7 +97,7 @@ class RuntimeSettings:
     workspace: Path
     environment: tuple[tuple[str, str], ...] = ()
     child_concurrency: int = 16
-    child_max_depth: int = 5
+    child_max_depth: int = 1
     child_chain_concurrency: int = 8
 
     def __post_init__(self) -> None:

@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta79: one-level delegation and isolated fallback refresh](releases/v1.1.0-beta.79.md).
+
 - [Beta78: destination discovery and session-linked tool images](releases/v1.1.0-beta.78.md).
 
 - [Beta66: find and resend original session attachments](releases/v1.1.0-beta.66.md).

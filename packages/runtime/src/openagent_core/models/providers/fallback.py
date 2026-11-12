@@ -106,6 +106,15 @@ def get_fallback_models(fallback_config: Optional[FallbackConfig], error: Except
     if fallback_config is None:
         return None
 
+    # A host may replace refs after runner initialization. Resolve a private
+    # snapshot so one unsupported ref never masks the actual provider failure
+    # with AttributeError, nor mutates another in-flight runner's fallback list.
+    if any(isinstance(model, str) for attr in
+           ("on_error", "on_rate_limit", "on_context_overflow")
+           for model in getattr(fallback_config, attr)):
+        fallback_config = deepcopy(fallback_config)
+        fallback_config.resolve_models()
+
     if isinstance(error, ModelRateLimitError) and fallback_config.on_rate_limit:
         return fallback_config.on_rate_limit  # type: ignore[return-value]
     if isinstance(error, ContextWindowExceededError) and fallback_config.on_context_overflow:
