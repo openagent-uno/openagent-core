@@ -1101,7 +1101,7 @@ class StreamSession:
             return
 
         if isinstance(evt, Interrupt):
-            self._event_ingresses.pop(id(evt), None)
+            interrupted_ingress = self._event_ingresses.pop(id(evt), None) or self._current_turn_ingress
             # Lock matches ``_on_user_turn_complete`` — prevents the
             # burst-drain task from dispatching a stale turn during the
             # cancel. No completion-suppression: nothing follows.
@@ -1111,7 +1111,15 @@ class StreamSession:
                     self._event_origins.pop(id(pending), None)
                     self._event_ingresses.pop(id(pending), None)
                 self._pending_burst = []
-                await self._cancel_active_turn(reason=evt.reason)
+                # A task cancelled before its first instruction never reaches
+                # the runner's finally block. Own the explicit stop boundary
+                # here so every batched observer terminates, including that
+                # case and a provider that outlives its bounded drain.
+                await self._cancel_active_turn(reason=evt.reason, suppress_completion=True)
+                await self._publish(TurnComplete(
+                    session_id=self.session_id, seq=self.next_seq(), ts_ms=now_ms(),
+                    reason=TURN_END_CANCELLED,
+                ), ingress_identity=interrupted_ingress)
             return
 
         if isinstance(evt, SessionOpen):

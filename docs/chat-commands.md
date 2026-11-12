@@ -87,3 +87,13 @@ The engine adds the inherited critical-error and fault-error mode before startin
 MCP stdio children, preserving existing flags. This prevents modal error paths
 without modifying the MCP SDK installation. Cleanup jobs and sandbox ownership
 remain with their transport/host. See Microsoft's [process error-mode contract](https://learn.microsoft.com/en-us/windows/win32/api/errhandlingapi/nf-errhandlingapi-seterrormode).
+
+
+## Explicit stop terminal boundary
+
+A stream Interrupt owns its cancelled terminal event independently of the
+model runner. It suppresses that runner's terminal frames during cancellation
+and publishes exactly one cancelled completion after the bounded drain.
+A task cancelled before its first instruction therefore cannot leave a batched
+channel collector attached to the next turn. Typed-input burst coalescence
+keeps its existing separate completion suppression.

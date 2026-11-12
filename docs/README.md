@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta81: explicit stream stop terminal boundary](releases/v1.1.0-beta.81.md).
+
 - [Beta80: confirmed outgoing conversation history](releases/v1.1.0-beta.80.md).
 
 - [Beta79: one-level delegation and isolated fallback refresh](releases/v1.1.0-beta.79.md).
