@@ -762,7 +762,12 @@ async def _invoke_registered_tool(
     from openagent_core.mcp._runtime.function import Function, FunctionCall
 
     if isinstance(fn, Function):
-        execution = await FunctionCall(function=fn, arguments=args).aexecute()
+        from openagent_core.runtime import current_provider_tool_call_id
+        # This is an internal hop of the same provider call. A fresh FunctionCall
+        # with no ID would clear its scope and detach a live run.child link from
+        # the catalog invocation/card until the delegated tool finally returns.
+        execution = await FunctionCall(function=fn, arguments=args,
+            call_id=current_provider_tool_call_id()).aexecute()
         if execution.status != "success":
             raise RuntimeError(execution.error or f"MCP tool {tool!r} failed")
         result = execution.result

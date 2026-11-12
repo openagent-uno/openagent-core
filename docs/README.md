@@ -2,6 +2,9 @@
 
 ## Architecture and use
 
+- [Unreleased deferred-tool child-card provenance](session-history.md#branching-a-conversation-at-a-message)
+  ([source qualification](qualification/deferred-child-link-2026-11-12.json)).
+
 - [Beta81: explicit stream stop terminal boundary](releases/v1.1.0-beta.81.md).
 
 - [Beta80: confirmed outgoing conversation history](releases/v1.1.0-beta.80.md).

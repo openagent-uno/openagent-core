@@ -130,6 +130,14 @@ Provider tool identities are retained while consuming lazy tool generators.
 A live delegation event therefore carries the exact calling tool ID even for a
 streamed team tool. Parallel tool generators each keep their own identity.
 
+The unreleased deferred-dispatch fix also passes this identity into the internal
+`FunctionCall` used to execute a discovered runtime tool. That call is another
+hop of the same invocation, not a new provider call. Without it, the inner
+wrapper cleared the identity even though `tool.invoking` had already recorded
+it: `run.child` then lacked the key needed to open the still-running child from
+its card. Child execution scopes still clear the parent's identity; parallel
+delegations do not share it. See the [source qualification](qualification/deferred-child-link-2026-11-12.json).
+
 
 ## Transport-confirmed outgoing messages
 

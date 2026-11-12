@@ -1,0 +1,21 @@
+{
+  "date": "2026-11-12",
+  "status": "source-qualified-unreleased",
+  "component": "openagent-core",
+  "behavior": "Retain the current provider tool call identity across the internal FunctionCall used by deferred catalog dispatch.",
+  "regression": {
+    "file": "tests/public/test_provider_tool_provenance.py",
+    "test": "test_catalog_dispatch_links_parallel_children_before_they_complete",
+    "before": "run.child omitted provider_tool_call_id even though tool.invoking carried binding.provider_call_id",
+    "after": "Two parallel parent runs each publish their exact child link before parent or child completes; child scopes do not inherit the parent's tool identity."
+  },
+  "checks": {
+    "provider_provenance_team_runtime_and_model_catalog": {"passed": 40, "subtests_passed": 7},
+    "tool_search_media_mcp_catalog_workflow_dispatch": {"passed": 30, "subtests_passed": 23}
+  },
+  "boundaries": [
+    "Real public Runtime, catalog dispatch, FunctionCall and SQLite events; deterministic executors replace model IO.",
+    "No consumer-specific matching, timing inference, runtime overlay or installed-source mutation.",
+    "No Core wheel was published or production agent updated by this source change; consuming releases must adopt the future published Core version."
+  ]
+}

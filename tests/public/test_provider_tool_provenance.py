@@ -120,6 +120,75 @@ class ToolProvenance(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen.count('parallel'),2)
         self.assertIsNone(current_provider_tool_call_id())
 
+    async def test_catalog_dispatch_links_parallel_children_before_they_complete(self):
+        from dataclasses import replace
+        from openagent_core.mcp.servers.tool_search.adapters import _invoke_registered_tool
+        from openagent_core.runtime import current_runtime, current_execution_context, current_run_id
+        with tempfile.TemporaryDirectory() as directory:
+            principal = PrincipalRef('host', 'tenant', 'user')
+            context = ExecutionContext(principal, principal, principal, 'session-a', 'agent', (principal,))
+            class Allow:
+                async def authorize(self, *args, **kwargs): return True
+            policy = Allow()
+            store = SqliteRuntimeStore(Path(directory) / 'state.sqlite')
+            catalog = CapabilityCatalog(policy)
+            started, release = asyncio.Queue(), asyncio.Event()
+
+            async def delegate():
+                parent = current_run_id()
+                record = await current_runtime().spawn(
+                    RunRequest('child-' + parent, 'child-session-' + parent, 'child-' + parent, 'Investigate'),
+                    current_execution_context())
+                return record.output
+
+            toolkit = SimpleNamespace(functions={'delegate_task': Function.from_callable(delegate)})
+            pool = SimpleNamespace(toolkit_by_name=lambda name: toolkit if name == 'delegation' else None)
+            async def invoke(args, ctx):
+                return await _invoke_registered_tool(pool, 'delegation', 'delegate_task', args)
+            source = FunctionSource((ToolDefinition('delegate_task', 'Delegate', {}),), {'delegate_task': invoke})
+            catalog.register('delegation', source, source, target_label='Delegation')
+
+            async def execute(request, ctx, runtime):
+                if ctx.parent_run_id:
+                    self.assertIsNone(current_provider_tool_call_id())
+                    started.put_nowait(request.run_id)
+                    await release.wait()
+                    return 'Child finished'
+                ref = (await catalog.discover(ctx))[0].tool_ref
+                async def dispatch():
+                    return await catalog.call_tool(ref, {}, ctx, call_id='catalog-' + request.run_id)
+                result = await FunctionCall(function=Function.from_callable(dispatch),
+                    call_id='provider-' + request.run_id, arguments={}).aexecute()
+                self.assertEqual(result.status, 'success')
+                self.assertIsNone(current_provider_tool_call_id())
+                return result.result
+
+            runtime = Runtime(RuntimeSettings('agent', Path(directory)),
+                RuntimeServices(store, SimpleNamespace(execute=execute), policy, catalog))
+            await runtime.start()
+            contexts = [context, replace(context, session_id='session-b')]
+            try:
+                for name, ctx in zip(('a', 'b'), contexts):
+                    await runtime.submit(RunRequest(name, ctx.session_id, name, 'Delegate'), ctx)
+                await asyncio.wait_for(started.get(), 3)
+                await asyncio.wait_for(started.get(), 3)
+                for name, ctx in zip(('a', 'b'), contexts):
+                    # Admission publishes lineage while both parent and child
+                    # are still running; tool results are deliberately absent.
+                    events = await runtime.events(name, 0, ctx)
+                    child = next(event.payload for event in events if event.kind == 'run.child')
+                    self.assertEqual(child['provider_tool_call_id'], 'provider-' + name)
+                    invoking = next(event.payload for event in events if event.kind == 'tool.invoking')
+                    self.assertEqual(invoking['binding']['provider_call_id'], child['provider_tool_call_id'])
+                    self.assertEqual((await runtime.get_run(name, ctx)).status, 'running')
+                    self.assertEqual((await runtime.get_run('child-' + name, replace(ctx, session_id='child-session-' + name))).status, 'running')
+                release.set()
+                for name, ctx in zip(('a', 'b'), contexts):
+                    self.assertEqual((await runtime.wait(name, ctx)).status, 'success')
+            finally:
+                release.set()
+                await runtime.close()
+
     async def test_sync_and_failed_calls_restore_scope(self):
         def sync():
             self.assertEqual(current_provider_tool_call_id(),'sync')
