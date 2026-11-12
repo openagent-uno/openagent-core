@@ -880,6 +880,11 @@ class Runtime:
         parent_id=current_run_id()
         if parent_id is None or current_runtime() is not self or current_execution_context() != context:
             raise PermissionError("A child execution requires a live authorized parent run")
+        if context.parent_run_id is not None and self.settings.child_max_depth == 1:
+            # A conversation reset may remove an ancestor row while an old
+            # provider is still draining. Its verified worker context does not
+            # turn into a main-agent grant when a lineage FK becomes NULL.
+            raise PermissionError("Delegated workers must perform their task directly; nested delegation is disabled")
         await self._authorize(context,"run.delegate",context.session_id,context.tenant_id)
         parent = await self.get_run(parent_id, context)
         if parent.session_id != context.session_id or parent.status != "running":

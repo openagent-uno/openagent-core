@@ -62,6 +62,7 @@ class TeamExecutor:
         self.responses = []
         self.sessions = []
         self.parent_hook = None
+        self.child_hook = None
         self.child_mode = "success"
         self.child_started = asyncio.Event()
         self.release_children = asyncio.Event()
@@ -82,6 +83,8 @@ class TeamExecutor:
         if context.parent_run_id is not None:
             self.children.append((request, context, current_runtime(), current_execution_context(), current_run_id()))
             self.child_started.set()
+            if self.child_hook is not None:
+                await self.child_hook(request, context, runtime)
             if len(self.children) <= self.nested_children:
                 return await self.case.invoke_team_tool(self, request, context, runtime)
             if self.expected_parallel_children:
@@ -392,6 +395,17 @@ class TeamRuntimeDelegation(unittest.IsolatedAsyncioTestCase):
         children = await self.runtime.children("parent", self.context)
         self.assertEqual(len(children), 1)
         self.assertEqual(await self.runtime.children(children[0].run_id, self.context), ())
+
+    async def test_reset_lineage_cannot_turn_an_inflight_worker_into_a_main_run(self):
+        async def clear_lineage(request, context, runtime):
+            connection = runtime.services.store.connection
+            connection.execute("UPDATE session_runs SET delegated_parent_run_id=NULL WHERE id=?", (request.run_id,))
+            connection.commit()
+            self.assertIsNotNone(context.parent_run_id)
+        self.executor.child_hook = clear_lineage
+        self.executor.nested_children = 1
+        self.assertEqual((await self.run_parent()).status, "failed")
+        self.assertEqual(len(self.executor.children), 1)
 
     async def test_broadcast_admits_two_real_children_without_shared_session_or_authority_widening(self):
         self.executor.broadcast = True
