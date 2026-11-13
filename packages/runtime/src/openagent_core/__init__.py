@@ -20,7 +20,7 @@ from .modules import (MODULE_API_VERSION, MODULE_SURFACES, CapabilityContributio
     ModuleReferenceInspector, ModuleResolutionError,
     ModuleStatus, ReconfigureReceipt, RuntimeProfile, ServiceBinding, ServiceRegistry)
 
-__version__ = '1.1.0b83'
+__version__ = '1.1.0b84'
 __all__ = ['Runtime','RuntimeSettings','RuntimeServices','PrincipalRef','ExecutionContext',
     'CapabilityLease','ResourceRef','RunRequest','AcceptedRunRequest','RunRecord','RunEvent','Authorizer','ConfirmedDelivery',
     'IdentityDirectory','RuntimeStore','SessionRef','SessionStore','ModelCatalog','CredentialResolver','DelegationService',

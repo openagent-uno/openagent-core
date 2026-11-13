@@ -4800,6 +4800,22 @@ def scrub_run_output_for_storage(agent: Agent, run_response: RunOutput) -> None:
         scrub_history_messages_from_run_output(run_response)
 
 
+def _keep_interrupted_messages(run_response: RunOutput, run_context: Optional[RunContext]) -> None:
+    """Persist the consistent part of a failed or cancelled run's messages.
+
+    ``run_response.messages`` is normally filled only after the model stream
+    completes, so a run that fails while generating its final answer would be
+    stored without the tool calls it already executed.
+    """
+    if run_response.status not in (RunStatus.error, RunStatus.cancelled):
+        return
+    if run_response.messages or run_context is None or not run_context.messages:
+        return
+    from openagent_core.memory.sessions.interrupted import recover_interrupted_messages
+
+    run_response.messages = recover_interrupted_messages(run_context.messages)
+
+
 def cleanup_and_store(
     agent: Agent,
     run_response: RunOutput,
@@ -4811,6 +4827,8 @@ def cleanup_and_store(
 
     from openagent_core.core._runner.agent import _session
     from openagent_core.core._run_state.approval import update_approval_run_status
+
+    _keep_interrupted_messages(run_response, run_context)
 
     # Scrub a shallow copy for storage — the original run_response is never
     # mutated so the caller always sees generated media regardless of store_media.
@@ -4872,6 +4890,8 @@ async def acleanup_and_store(
 
     from openagent_core.core._runner.agent import _session
     from openagent_core.core._run_state.approval import aupdate_approval_run_status
+
+    _keep_interrupted_messages(run_response, run_context)
 
     # Scrub a shallow copy for storage — the original run_response is never
     # mutated so the caller always sees generated media regardless of store_media.

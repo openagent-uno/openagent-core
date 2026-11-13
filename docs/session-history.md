@@ -20,7 +20,14 @@ session already bound to another agent cannot be claimed. Quarantined sessions
 continue to require the separate owner-approved adoption flow.
 
 Cancellation does not erase an already recorded user, partial answer or tool.
-Interrupted/cancelled output diagnostics are not assistant answers. A repeated
+Interrupted/cancelled output diagnostics are not assistant answers. The model's
+own working history keeps a failed or cancelled run as well: its user message
+and every tool call whose results were recorded are replayed, an unanswered
+trailing tool call is dropped, and the run closes with a fixed note that it
+ended without a final answer and that the tool effects did happen. Before this,
+a run that failed while generating its final answer was stored without its
+executed tools and skipped entirely, so the next turn forgot (and could repeat)
+real side effects. Paused runs remain outside history. A repeated
 terminal stream frame does not duplicate earlier deltas. File references still
 pass through the normal fresh session/CAS validation; local paths do not become
 public file capabilities.

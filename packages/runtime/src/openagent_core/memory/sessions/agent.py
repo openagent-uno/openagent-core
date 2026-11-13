@@ -183,7 +183,18 @@ class AgentSession:
             return []
 
         if skip_statuses is None:
-            skip_statuses = [RunStatus.paused, RunStatus.cancelled, RunStatus.error]
+            # Failed and cancelled runs stay in history: their completed tool
+            # calls happened, and omitting them makes the next turn forget (and
+            # possibly repeat) real side effects. See ``interrupted``.
+            skip_statuses = [RunStatus.paused]
+
+        from openagent_core.memory.sessions.interrupted import interrupted_history
+
+        def _run_messages(run_response) -> List[Message]:
+            messages = list(run_response.messages or [])
+            if getattr(run_response, "status", None) in (RunStatus.error, RunStatus.cancelled):
+                return interrupted_history(messages)
+            return messages
 
         runs = self.runs
 
@@ -214,7 +225,7 @@ class AgentSession:
                 if not run_response or not run_response.messages:
                     continue
 
-                for message in run_response.messages or []:
+                for message in _run_messages(run_response):
                     if _should_skip_message(message, skip_roles, skip_history_messages):
                         continue
 
@@ -248,7 +259,7 @@ class AgentSession:
                 if not run_response or not run_response.messages:
                     continue
 
-                for message in run_response.messages or []:
+                for message in _run_messages(run_response):
                     if _should_skip_message(message, skip_roles, skip_history_messages):
                         continue
 
