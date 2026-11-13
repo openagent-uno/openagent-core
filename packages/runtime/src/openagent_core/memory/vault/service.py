@@ -419,10 +419,19 @@ class VaultService:
             val = getattr(note, fld)
             if val and not _is_valid_iso(val):
                 add("date_format", f"{fld} '{val}' is not YYYY-MM-DD", fixable=True)
-        # broken links — resolve against the current index
+        # broken links — resolve against the current index. A note written a
+        # moment ago through another vault writer is not in this index yet, so
+        # an unresolved target triggers one incremental sync before it counts.
+        synced = False
         for target in note.outlinks:
+            if target.strip().lower() == note.stem.lower():
+                continue
             resolved = await asyncio.to_thread(idx.resolve_link, target)
-            if not resolved and target.strip().lower() != note.stem.lower():
+            if not resolved and not synced:
+                synced = True
+                await self.sync()
+                resolved = await asyncio.to_thread(idx.resolve_link, target)
+            if not resolved:
                 add("broken_link", f"[[{target}]] does not resolve to a note")
 
         ok = not any(i["severity"] == "error" for i in issues)

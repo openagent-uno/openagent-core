@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -226,6 +227,43 @@ class VaultGit:
                 logger.warning("vault git ensure_repo failed (%s)", type(e).__name__)
                 return False
 
+    # A git process that dies mid-operation leaves ``.git/index.lock`` behind.
+    # Every later ``git add`` then fails, and because each failure here was
+    # swallowed the vault silently stopped versioning (observed: four months
+    # of edits never committed while the agent was told nothing is ever lost).
+    STALE_LOCK_SECONDS = 600
+
+    def _clear_stale_index_lock(self) -> bool:
+        """Remove an abandoned ``index.lock``; never one a live git could own."""
+        lock = self.vault_root / ".git" / "index.lock"
+        try:
+            age = time.time() - lock.stat().st_mtime
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return False
+        if age < self.STALE_LOCK_SECONDS:
+            return False
+        try:
+            lock.unlink()
+        except OSError as e:
+            logger.warning("vault git stale index.lock could not be removed (%s)", type(e).__name__)
+            return False
+        logger.warning("vault git removed a stale index.lock (%.0fs old)", age)
+        return True
+
+    def _stage(self, *paths: str) -> bool:
+        """``git add -A [paths]``; a failure is reported, never mistaken for 'no change'."""
+        args = ("add", "-A", "--", *paths) if paths else ("add", "-A")
+        r = self._git(*args)
+        if r.returncode != 0 and self._clear_stale_index_lock():
+            r = self._git(*args)
+        if r.returncode != 0:
+            logger.warning("vault git add failed: %s",
+                           _redact_url((r.stderr or r.stdout or "").strip())[:200])
+            return False
+        return True
+
     # ── commits ───────────────────────────────────────────────────────
 
     def _message(self, summary: str, trailers: list[str]) -> str:
@@ -251,7 +289,8 @@ class VaultGit:
             return None
         with self._lock:
             try:
-                self._git("add", "-A", "--", *paths)
+                if not self._stage(*paths):
+                    return None
                 # Anything staged for these paths?
                 check = self._git("diff", "--cached", "--quiet", "--", *paths)
                 if check.returncode == 0:
@@ -259,7 +298,7 @@ class VaultGit:
                 r = self._git("commit", "-m", self._message(summary, trailers),
                               "--only", "--", *paths)
                 if r.returncode != 0:
-                    logger.debug("vault git commit (paths) noop/failed: %s",
+                    logger.warning("vault git commit (paths) failed: %s",
                                  _redact_url((r.stderr or r.stdout or "").strip())[:200])
                     return None
                 return self._head()
@@ -275,13 +314,14 @@ class VaultGit:
             return None
         with self._lock:
             try:
-                self._git("add", "-A")
+                if not self._stage():
+                    return None
                 check = self._git("diff", "--cached", "--quiet")
                 if check.returncode == 0:
                     return None
                 r = self._git("commit", "-m", self._message(summary, trailers))
                 if r.returncode != 0:
-                    logger.debug("vault git commit_all noop/failed: %s",
+                    logger.warning("vault git commit_all failed: %s",
                                  _redact_url((r.stderr or r.stdout or "").strip())[:200])
                     return None
                 return self._head()
