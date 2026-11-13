@@ -109,6 +109,22 @@ def _runtime_db_path(db: Any) -> str | None:
     return str(path) if path else None
 
 
+async def _forget_persisted_runtime_session(db_path: str, session_id: str) -> None:
+    def delete() -> None:
+        from openagent_core.memory.store.sqlite import SqliteDb
+
+        runtime_db = SqliteDb(db_file=db_path)
+        try:
+            runtime_db.delete_session(session_id=session_id)
+        finally:
+            runtime_db.close()
+
+    # Another connection's commit can require this same event loop. A
+    # synchronous busy wait here prevents that writer from releasing its
+    # lock and freezes every channel for the complete SQLite timeout.
+    # Storage failure must propagate: a reset is not best-effort cleanup.
+    await asyncio.to_thread(delete)
+
 _SESSION_ID_TAG_RE = re.compile(
     r"\n*<session-id>[^<]*</session-id>\s*$"
 )
@@ -1254,20 +1270,7 @@ class TeamRouterProvider(ProviderResources, BaseModel):
         db_path = _runtime_db_path(self._db)
         if not db_path:
             return
-        def delete() -> None:
-            from openagent_core.memory.store.sqlite import SqliteDb
-
-            runtime_db = SqliteDb(db_file=db_path)
-            try:
-                runtime_db.delete_session(session_id=session_id)
-            finally:
-                runtime_db.close()
-
-        # Another connection's commit can require this same event loop. A
-        # synchronous busy wait here prevents that writer from releasing its
-        # lock and freezes every channel for the complete SQLite timeout.
-        # Storage failure must propagate: a reset is not best-effort cleanup.
-        await asyncio.to_thread(delete)
+        await _forget_persisted_runtime_session(db_path, session_id)
 
     def _drop_session_state(self, session_id: str) -> None:
         """Remove every per-session entry for ``session_id``. Without
@@ -2118,6 +2121,10 @@ class ModelDispatcher(BaseModel):
             except Exception as e:  # noqa: BLE001
                 logger.debug("delete_sdk_session %s: %s", session_id, e)
         await self._fan_out_async("forget_session", session_id, strict=True)
+        if not self._team_providers and (db_path := _runtime_db_path(self._db)):
+            # No model has run since process startup, but a durable resume row
+            # may still exist. Reset must not depend on a warm provider cache.
+            await _forget_persisted_runtime_session(db_path, session_id)
 
     async def request_cancel(self, session_id: str) -> bool:
         """Cooperatively cancel the session's in-flight runtime run so the

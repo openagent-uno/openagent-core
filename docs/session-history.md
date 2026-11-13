@@ -174,3 +174,8 @@ The regression holds a real SQLite write transaction whose commit needs the
 same event loop, then verifies that forget completes and the stored resume row
 is gone. Additional checks cover failed storage and completion of every provider
 before a dispatcher error is reported. Long-term memory is outside this operation.
+
+Beta83 also clears persisted resume state before any model has run after
+startup. Reset correctness does not depend on a populated provider cache. The
+regression starts a dispatcher with no cached model over an existing SQLite
+session, then checks that its resume row is erased.

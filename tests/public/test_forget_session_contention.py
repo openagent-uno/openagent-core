@@ -68,3 +68,21 @@ async def test_dispatcher_forget_awaits_all_providers_and_propagates_failure():
     with pytest.raises(RuntimeError, match='storage unavailable'):
         await dispatcher.forget_session('chat-a')
     assert sorted(finished) == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_reset_after_restart_forgets_durable_history_without_cached_models(tmp_path):
+    path = tmp_path / 'cold-history.db'
+    store = SqliteDb(db_file=str(path))
+    store._get_table('sessions', create_table_if_not_found=True)
+    store.close()
+    with sqlite3.connect(path) as writer:
+        writer.execute("INSERT INTO sessions(session_id,session_type,created_at,updated_at) VALUES('chat-a','agent',1,1)")
+    class Memory:
+        db_path = str(path)
+        async def delete_sdk_session(self, sid): pass
+    dispatcher = ModelDispatcher([])
+    dispatcher._db = Memory()
+    await dispatcher.forget_session('chat-a')
+    with sqlite3.connect(path) as reader:
+        assert reader.execute("SELECT COUNT(*) FROM sessions WHERE session_id='chat-a'").fetchone()[0] == 0
