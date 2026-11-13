@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from openagent_core.configuration import runtime_environment
+import asyncio
 import os
 import threading
 import time
@@ -507,6 +508,25 @@ def call_model_stream_with_fallback(
         )
 
 
+# One quick retry on the same model for a transient failure that produced no
+# output: a dropped connection, a 5xx, or a stream that errored before its first
+# event. Without it a single network blip ends a long agent turn, because the
+# default model has ``retries = 0`` and many agents configure no fallback.
+TRANSIENT_STREAM_RETRIES = 1
+TRANSIENT_STREAM_RETRY_DELAY_S = 1.0
+
+
+def _is_transient_stream_error(error: ModelProviderError) -> bool:
+    try:
+        classified = ModelProviderError.classify(error)
+    except Exception:
+        return False
+    if isinstance(classified, (ModelRateLimitError, ContextWindowExceededError)):
+        return False
+    status = getattr(classified, "status_code", None)
+    return status is None or (isinstance(status, int) and status >= 500)
+
+
 async def acall_model_stream_with_fallback(
     model: Model,
     fallback_config: Optional[FallbackConfig],
@@ -521,6 +541,27 @@ async def acall_model_stream_with_fallback(
         return
     except ModelProviderError as e:
         primary_error: ModelProviderError = e
+
+    # ── Transient zero-output retry on the same model ──
+    # Only before the first event, so nothing is ever duplicated. A retry that
+    # emits output and then fails propagates like any mid-stream failure.
+    retries_left = TRANSIENT_STREAM_RETRIES
+    while not any_event_emitted and retries_left > 0 and _is_transient_stream_error(primary_error):
+        retries_left -= 1
+        log_warning(
+            f"Transient stream failure on model '{model.id}' before any output; "
+            f"retrying once: {primary_error}"
+        )
+        await asyncio.sleep(TRANSIENT_STREAM_RETRY_DELAY_S)
+        try:
+            async for event in model.aresponse_stream(**kwargs):
+                any_event_emitted = True
+                yield event
+            return
+        except ModelProviderError as e:
+            if any_event_emitted:
+                raise
+            primary_error = e
 
     # ── Credential-pool rotation (inert unless the model carries a pool) ──
     # Only safe BEFORE the first event: a mid-stream failure has already
