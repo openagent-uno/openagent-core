@@ -17,3 +17,13 @@ output.
 Without step 1 a single network interruption ended a long agent turn, because
 models default to `retries = 0` and many installations configure no fallback.
 Regressions: `tests/public/test_transient_stream_retry.py`.
+
+## Parallel local tool calls
+
+On a connected computer, mutating tools share a single-writer lease
+(`openagent_capability_host.lease.MutatingLease`). A call from the principal
+that already holds the lease now waits up to 30 seconds for it, so a model's
+parallel calls are serialized instead of the second failing with `lease_held`
+("another local tool call is currently mutating this computer"). A different
+principal is still refused immediately. Regressions:
+`tests/public/test_capability_lease_wait.py`.

@@ -23,9 +23,14 @@ class MutatingLease:
     shared across processes; active calls renew well before the deadline.
     """
 
-    def __init__(self, path: Path, *, lease_seconds: float = 15.0):
+    def __init__(self, path: Path, *, lease_seconds: float = 15.0, wait_seconds: float = 30.0):
         self.path = path
         self.lease_seconds = max(3.0, float(lease_seconds))
+        # Models often issue tool calls in parallel. A call from the principal
+        # that already holds the lease waits a bounded time for it, so those
+        # calls are serialized instead of the second failing outright; other
+        # principals are still refused immediately.
+        self.wait_seconds = max(0.0, float(wait_seconds))
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -58,7 +63,21 @@ class MutatingLease:
             )
 
     async def enter(self, principal: str, call_id: str, tool: str) -> None:
-        await asyncio.to_thread(self._enter_sync, principal, call_id, tool)
+        deadline = time.monotonic() + self.wait_seconds
+        delay = 0.1
+        while True:
+            try:
+                await asyncio.to_thread(self._enter_sync, principal, call_id, tool)
+                return
+            except HostError as error:
+                # Only the same principal's own parallel calls are serialized;
+                # another principal still learns at once that the computer is busy.
+                holder = (getattr(error, "data", None) or {}).get("holder")
+                if (getattr(error, "code", None) != "lease_held" or holder != principal
+                        or time.monotonic() >= deadline):
+                    raise
+            await asyncio.sleep(min(delay, max(0.0, deadline - time.monotonic())))
+            delay = min(delay * 2, 1.0)
 
     def _enter_sync(self, principal: str, call_id: str, tool: str) -> None:
         now = time.time()

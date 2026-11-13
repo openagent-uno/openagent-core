@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = ["openagent-core==1.1.0b86"]
 
 [project.optional-dependencies]
-capabilities = ["openagent-capability-host==1.0.0b3"]
+capabilities = ["openagent-capability-host==1.0.0b4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
