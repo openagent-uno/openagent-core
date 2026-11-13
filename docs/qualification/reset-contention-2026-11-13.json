@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-13",
+  "version": "1.1.0b82",
+  "source_tests": "48 passed and 7 subtests, including three regressions that fail against the preceding source",
+  "behavior": "Loop-owned SQLite writer can commit while the synchronous session store waits off-thread; router and dispatcher failures are not swallowed",
+  "boundary": "Source qualification; publication and provider acceptance tracked separately"
+}

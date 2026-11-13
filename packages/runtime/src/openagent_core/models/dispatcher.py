@@ -1254,7 +1254,7 @@ class TeamRouterProvider(ProviderResources, BaseModel):
         db_path = _runtime_db_path(self._db)
         if not db_path:
             return
-        try:
+        def delete() -> None:
             from openagent_core.memory.store.sqlite import SqliteDb
 
             runtime_db = SqliteDb(db_file=db_path)
@@ -1262,8 +1262,12 @@ class TeamRouterProvider(ProviderResources, BaseModel):
                 runtime_db.delete_session(session_id=session_id)
             finally:
                 runtime_db.close()
-        except Exception as e:  # noqa: BLE001
-            logger.debug("TeamRouterProvider.forget_session %s: %s", session_id, e)
+
+        # Another connection's commit can require this same event loop. A
+        # synchronous busy wait here prevents that writer from releasing its
+        # lock and freezes every channel for the complete SQLite timeout.
+        # Storage failure must propagate: a reset is not best-effort cleanup.
+        await asyncio.to_thread(delete)
 
     def _drop_session_state(self, session_id: str) -> None:
         """Remove every per-session entry for ``session_id``. Without
@@ -2113,7 +2117,7 @@ class ModelDispatcher(BaseModel):
                 await self._db.delete_sdk_session(session_id)
             except Exception as e:  # noqa: BLE001
                 logger.debug("delete_sdk_session %s: %s", session_id, e)
-        await self._fan_out_async("forget_session", session_id)
+        await self._fan_out_async("forget_session", session_id, strict=True)
 
     async def request_cancel(self, session_id: str) -> bool:
         """Cooperatively cancel the session's in-flight runtime run so the
@@ -2144,10 +2148,11 @@ class ModelDispatcher(BaseModel):
             return None
         return self._team_providers.get(runtime_id)
 
-    async def _fan_out_async(self, method_name: str, *args: Any) -> None:
+    async def _fan_out_async(self, method_name: str, *args: Any, strict: bool = False) -> None:
         """Invoke ``method_name`` on every cached TeamRouterProvider
         concurrently, swallowing per-provider errors so one bad provider
-        can't block shutdown / cleanup of the rest.
+        can't block shutdown / cleanup of the rest. Reset uses strict failure
+        propagation after every provider has finished.
         """
         import asyncio as _asyncio
 
@@ -2162,6 +2167,10 @@ class ModelDispatcher(BaseModel):
         for result in results:
             if isinstance(result, Exception):
                 logger.debug("dispatcher.%s: %s", method_name, result)
+        if strict:
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
 
     def known_session_ids(self) -> list[str]:
         seen: set[str] = set()

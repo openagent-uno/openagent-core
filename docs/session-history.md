@@ -161,3 +161,16 @@ snapshots cannot remove these independently recorded messages.
 This generic contract does not grant cross-conversation access, validate a
 provider token, or retry an external send. A host must distinguish accepted
 delivery from history-recording failure so it cannot accidentally send twice.
+
+## Reset under SQLite contention (beta82)
+
+Team-router session erasure runs its synchronous SQLite store on a worker
+thread. This lets the runtime loop finish another connection's pending commit
+instead of blocking its own writer for the full SQLite busy timeout. Reset
+storage errors propagate through all dispatcher providers: command handlers
+report failure rather than acknowledging a reset that did not complete.
+
+The regression holds a real SQLite write transaction whose commit needs the
+same event loop, then verifies that forget completes and the stored resume row
+is gone. Additional checks cover failed storage and completion of every provider
+before a dispatcher error is reported. Long-term memory is outside this operation.
