@@ -36,6 +36,7 @@
 - [Agent activation of reviewed MCP integrations](reviewed-mcp-installations.md).
 
 - [Optional current-user notification capability](notifications.md).
+- [Optional channel message capability](channel-messages.md).
 
 - [Beta54: optional video frame previews for image models](releases/v1.1.0-beta.54.md).
 

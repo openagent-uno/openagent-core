@@ -13,6 +13,7 @@ from .capabilities import (CapabilityCatalog, CapabilitySource, ToolExecutor,
 from .extensions import EngineExtensions
 from .discovery import DISCOVERY_PRESENTATION_API_VERSION, DiscoveryPresentation
 from .notifications import NotificationCapability, NotificationRequest, NotificationSink
+from .channel_messages import ChannelDestination, ChannelMessageCapability, ChannelMessageRequest, ChannelMessageSink
 from .speech_synthesis import SpeechSynthesisCapability
 from .modules import (MODULE_API_VERSION, MODULE_SURFACES, CapabilityContribution,
     ModuleCatalog, ModuleConfig, ModuleContext, ModuleContribution, ModuleDescriptor,
@@ -20,7 +21,7 @@ from .modules import (MODULE_API_VERSION, MODULE_SURFACES, CapabilityContributio
     ModuleReferenceInspector, ModuleResolutionError,
     ModuleStatus, ReconfigureReceipt, RuntimeProfile, ServiceBinding, ServiceRegistry)
 
-__version__ = '1.1.0b87'
+__version__ = '1.1.0b88'
 __all__ = ['Runtime','RuntimeSettings','RuntimeServices','PrincipalRef','ExecutionContext',
     'CapabilityLease','ResourceRef','RunRequest','AcceptedRunRequest','RunRecord','RunEvent','Authorizer','ConfirmedDelivery',
     'IdentityDirectory','RuntimeStore','SessionRef','SessionStore','ModelCatalog','CredentialResolver','DelegationService',
@@ -28,6 +29,7 @@ __all__ = ['Runtime','RuntimeSettings','RuntimeServices','PrincipalRef','Executi
     'FunctionSource','CapabilityUnavailable','IdempotencyConflict','EngineExtensions',
     'DISCOVERY_PRESENTATION_API_VERSION','DiscoveryPresentation',
     'NotificationCapability','NotificationRequest','NotificationSink',
+    'ChannelDestination','ChannelMessageCapability','ChannelMessageRequest','ChannelMessageSink',
     'SpeechSynthesisCapability',
     'MODULE_API_VERSION','MODULE_SURFACES','CapabilityContribution','ModuleCatalog','ModuleConfig',
     'ModuleContext','ModuleContribution','ModuleDescriptor','ModuleInstance','ModuleMigration',
