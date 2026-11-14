@@ -1476,7 +1476,7 @@ class NativeProvider(ProviderResources, BaseModel):
             # Credential pool — inert unless this provider has >= 2 accounts
             # configured (metadata.accounts). When present, seed the model's
             # initial credential from the pool and stash it so the fallback
-            # chokepoint can rotate on 429/529 before spilling to DeepSeek.
+            # chokepoint can rotate on 429/529 before spilling to the secondary provider.
             pool = get_or_build_pool(provider_name, self._provider_config())
             if pool is not None:
                 selected = pool.select()

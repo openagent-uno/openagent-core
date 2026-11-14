@@ -4,7 +4,7 @@ Exposes OpenAgent's spend caps over MCP so the agent can inspect and adjust its
 own budgets at runtime — the same way the scheduler / events-manager MCPs manage
 their objects (vision §15: the agent knows and reaches for its own levers). The
 whole point of this surface is the agent being able to ask itself "am I about to
-blow my DeepSeek budget?" and act — throttle its own delegation, warn the user,
+blow my budget on this provider?" and act — throttle its own delegation, warn the user,
 or raise the cap deliberately.
 
 Transport: stdio (launched as a subprocess by MCPPool).
@@ -93,8 +93,8 @@ async def set_budget(
     """Create or update a budget rule (upsert on scope+metric+window).
 
     Args:
-        scope: what to meter — a provider name ('deepseek'), a model runtime_id
-            ('deepseek:deepseek-v4-pro'), or '' / 'global' for ALL spend.
+        scope: what to meter — a provider name ('acme'), a model runtime_id
+            ('acme:model-1'), or '' / 'global' for ALL spend.
         amount: the cap. Interpreted in dollars when metric='cost_usd', or in
             tokens (input+output) when metric='tokens'.
         scope_kind: 'global' | 'provider' | 'model' | 'task'. Inferred from

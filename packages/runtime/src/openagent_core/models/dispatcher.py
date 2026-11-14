@@ -260,7 +260,7 @@ def _run_metrics_cache_read(metrics: Any) -> int:
     cache-read counter (observed on the Team path). The per-model ``details``
     breakdown keeps a ``ModelMetrics`` per (provider, id) that DOES carry
     ``cache_read_tokens``, so we prefer the top-level value and fall back to
-    summing ``details`` — never under-count the discount that keeps the DeepSeek
+    summing ``details`` — never under-count the discount that keeps the budget
     ledger honest. Returns 0 when nothing is available (a non-caching model).
     """
     if metrics is None:
@@ -1442,7 +1442,7 @@ class TeamRouterProvider(ProviderResources, BaseModel):
         ``cache_read_tokens`` (a subset of ``input_tokens``) is priced at the
         cheap prefix-cache-read rate, so the budget ledger reflects the REAL
         spend — a tool-loop turn that re-sends a cached prefix is no longer
-        over-charged ~10x, which was silently shrinking the DeepSeek daily cap.
+        over-charged ~10x, which was silently shrinking a provider's daily cap.
         """
         if not self._budget:
             return
@@ -1939,7 +1939,7 @@ class ModelDispatcher(BaseModel):
         self._db = db
         self._budget = BudgetTracker(db, 0.0)
         # Hand the guard the providers view so it can warn when a cost_usd rule
-        # is scoped to a $0-priced provider (the sub-proxy) that it can't cap.
+        # is scoped to a $0-priced provider (e.g. a proxy row) that it can't cap.
         self._budget_guard = BudgetGuard(db, providers_config=self._providers_config)
         if self._budget_seed is not None:
             self._budget_guard.set_seed_rules(self._budget_seed)

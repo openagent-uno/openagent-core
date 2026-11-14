@@ -242,7 +242,7 @@ def build_context_report(agent: Any, session_id: str | None) -> dict[str, Any] |
     # per-turn tokens). We deliberately do NOT recompute it here: reporting the
     # recorded value keeps /context's session cost exactly consistent with the
     # daily/monthly spend the Settings screen sums, even if live pricing warmed
-    # up after the turn was billed. When pricing is unavailable (sub-proxy /
+    # up after the turn was billed. When pricing is unavailable (proxy /
     # local models absent from the catalog) both surfaces show $0 alike, and
     # ``pricing_available`` lets the UI explain why.
 

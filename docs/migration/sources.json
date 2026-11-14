@@ -3,7 +3,7 @@
   "sources": [
     {
       "name": "openagent-server",
-      "path": "/Users/alessandrogerelli/OpenAgent/openagent-server",
+      "path": "<workspace>/openagent-server",
       "head": "43200a3b4bb4edc04a4e2c43b26f565a793f466f",
       "selected_commit": "1842ce6a82f93bdf34783da3b9d10515439fb49e",
       "branch": "main",
@@ -282,12 +282,12 @@
         "v0.21.7",
         "v0.21.8"
       ],
-      "bundle": "/Users/alessandrogerelli/OpenAgent/.migration/openagent-v1/openagent-server.bundle",
+      "bundle": "<workspace>/.migration/openagent-v1/openagent-server.bundle",
       "bundle_sha256": "e9a5d08c6a5d59cb03666ecb90aad10592a21d0d5404da465161a8ba0d070dda"
     },
     {
       "name": "openagent-app",
-      "path": "/Users/alessandrogerelli/OpenAgent/openagent-app",
+      "path": "<workspace>/openagent-app",
       "head": "ce2072386fc0bb95296abf16873e17a7c9e77146",
       "selected_commit": "ce2072386fc0bb95296abf16873e17a7c9e77146",
       "branch": "main",
@@ -338,12 +338,12 @@
         "v0.18.1",
         "v0.18.2"
       ],
-      "bundle": "/Users/alessandrogerelli/OpenAgent/.migration/openagent-v1/openagent-app.bundle",
+      "bundle": "<workspace>/.migration/openagent-v1/openagent-app.bundle",
       "bundle_sha256": "e4c5e4d166086a6c0a66c1cd68820f80190f569dac3091863dea103dfd0fac8e"
     },
     {
       "name": "openagent-cli",
-      "path": "/Users/alessandrogerelli/OpenAgent/openagent-cli",
+      "path": "<workspace>/openagent-cli",
       "head": "322cc4be0eea257e9bbdeafdfc14d6add42c3149",
       "selected_commit": "322cc4be0eea257e9bbdeafdfc14d6add42c3149",
       "branch": "main",
@@ -377,12 +377,12 @@
         "v0.17.0",
         "v0.17.1"
       ],
-      "bundle": "/Users/alessandrogerelli/OpenAgent/.migration/openagent-v1/openagent-cli.bundle",
+      "bundle": "<workspace>/.migration/openagent-v1/openagent-cli.bundle",
       "bundle_sha256": "86b7c300405bc01cf88c5ac5fd3d1b8a9546378e3868c31c0ad72300363e48ae"
     },
     {
       "name": "openagent-host-tools",
-      "path": "/Users/alessandrogerelli/OpenAgent/openagent-host-tools",
+      "path": "<workspace>/openagent-host-tools",
       "head": "af6ad6871d4d1208874bf79735710d089f59b959",
       "selected_commit": "af6ad6871d4d1208874bf79735710d089f59b959",
       "branch": "main",
@@ -393,12 +393,12 @@
         "v0.1.1",
         "v0.1.2"
       ],
-      "bundle": "/Users/alessandrogerelli/OpenAgent/.migration/openagent-v1/openagent-host-tools.bundle",
+      "bundle": "<workspace>/.migration/openagent-v1/openagent-host-tools.bundle",
       "bundle_sha256": "cf02416343f1530710f710327d6707ea1d0d14e37d4f4b54a50d882f8b7d2484"
     },
     {
       "name": "openagent-mcp",
-      "path": "/Users/alessandrogerelli/OpenAgent/openagent-mcp",
+      "path": "<workspace>/openagent-mcp",
       "head": "c14cec2329d6b7ecb71c13e9cad8b4b8825a071b",
       "selected_commit": "c14cec2329d6b7ecb71c13e9cad8b4b8825a071b",
       "branch": "main",
@@ -407,19 +407,19 @@
       "tags": [
         "v0.1.0"
       ],
-      "bundle": "/Users/alessandrogerelli/OpenAgent/.migration/openagent-v1/openagent-mcp.bundle",
+      "bundle": "<workspace>/.migration/openagent-v1/openagent-mcp.bundle",
       "bundle_sha256": "1feb4ce424f9c76508a07fd46e881aed61d5beca437f453c426777702ff40099"
     },
     {
       "name": "openagent-docs",
-      "path": "/Users/alessandrogerelli/OpenAgent/openagent-docs",
+      "path": "<workspace>/openagent-docs",
       "head": "cd3788b110681fbe15dbce3e5b5ac828aa00624a",
       "selected_commit": "cd3788b110681fbe15dbce3e5b5ac828aa00624a",
       "branch": "main",
       "status": "",
       "remote": "https://github.com/openagent-uno/openagent-docs.git",
       "tags": [],
-      "bundle": "/Users/alessandrogerelli/OpenAgent/.migration/openagent-v1/openagent-docs.bundle",
+      "bundle": "<workspace>/.migration/openagent-v1/openagent-docs.bundle",
       "bundle_sha256": "f601f765cb761e875b437477b1d286dcd27faf689ebf0200ce826f08f25170c8"
     },
     {

@@ -487,9 +487,8 @@ async def t_judge_unresolved_resolves_cheap(ctx: TestContext) -> None:
     assert len(warns) <= 1, f"unresolved warning spammed {len(warns)}x (should warn once)"
 
 
-# ══ Defect 3 — the DEFAULT judge (env unset) must be deepseek:deepseek-chat,
-#    an isolated cheap model, NOT the $0 claude-sub-proxy that competes with the
-#    live agents for the shared Claude subscription ═══════════════════════════════
+# ══ Defect 3 — the DEFAULT judge (env unset) is a cheap direct row chosen by
+#    properties (self-hosted first, then cheapest enabled), never by vendor name ══
 
 
 @contextlib.contextmanager
@@ -512,45 +511,54 @@ def _primed_pricing_rows(rows):
         catalog._OPENROUTER_INDEX = saved_index
 
 
-# deepseek-chat priced ABOVE $0 so pure "cheapest enabled" would NOT pick it
-# (local:* and anthropic:* price $0 here) — the ONLY reason it wins is the
-# explicit deepseek-default preference. That's the discrimination we want.
-_DEEPSEEK_PRICED = [{"id": "deepseek/deepseek-chat",
-                     "pricing": {"prompt": "0.0000002", "completion": "0.0000002"}}]
+_VENDOR_PRICED = [
+    {"id": "openai/gpt-5-a", "pricing": {"prompt": "0.0000003", "completion": "0.0000003"}},
+    {"id": "google/gemini-b", "pricing": {"prompt": "0.0000001", "completion": "0.0000001"}},
+    {"id": "deepseek/deepseek-chat", "pricing": {"prompt": "0.0000002", "completion": "0.0000002"}},
+]
 
 
-@test("quality", "UNSET env defaults the judge to deepseek:deepseek-chat when enabled")
-async def t_default_judge_is_deepseek(ctx: TestContext) -> None:
+@test("quality", "UNSET env: default judge is the cheapest enabled row, no vendor preference")
+async def t_default_judge_is_cheapest_without_vendor_preference(ctx: TestContext) -> None:
     import openagent_core.core.quality_monitor as qm
     from openagent_core.models.dispatcher import ModelDispatcher
 
-    # local FIRST + $0 (so old cheapest-logic would pick it), an anthropic row
-    # ALSO $0 (so 'never an Anthropic key' has teeth), deepseek LAST + priced.
-    providers = _providers(("anthropic", ["claude-x"]),
-                           ("local", ["claude-sub"]),
-                           ("deepseek", ["deepseek-chat"]))
+    # Every row is priced; the vendor that the old code preferred by name sits in
+    # the middle. The cheapest row must win whatever it is called.
+    providers = _providers(("openai", ["gpt-5-a"]), ("deepseek", ["deepseek-chat"]),
+                           ("google", ["gemini-b"]))
     router = ModelDispatcher(providers)
     agent = SimpleNamespace(model=router, _providers_config=providers,
                             _db=None, system_prompt="")
     with _env(OPENAGENT_QUALITY_MONITOR_MODEL=None, OPENAGENT_COMPACTION_MODEL=None), \
-            _primed_pricing_rows(_DEEPSEEK_PRICED):
+            _primed_pricing_rows(_VENDOR_PRICED):
         judge = qm._pick_judge_model(agent)
     assert judge is not router, "default judge fell through to the null router"
     assert type(judge).__name__ == "NativeProvider", f"expected NativeProvider, got {judge!r}"
-    judge_id = getattr(judge, "model", None)
-    assert judge_id == "deepseek:deepseek-chat", (
-        f"default judge resolved to {judge_id!r}, not the isolated deepseek default"
-    )
-    # never null, never an Anthropic key.
-    assert judge_id is not None and not judge_id.startswith("anthropic:"), judge_id
+    assert getattr(judge, "model", None) == "google:gemini-b", getattr(judge, "model", None)
 
 
-@test("quality", "env override wins over the deepseek default")
+@test("quality", "UNSET env: an enabled self-hosted row is the default judge")
+async def t_default_judge_prefers_self_hosted(ctx: TestContext) -> None:
+    import openagent_core.core.quality_monitor as qm
+    from openagent_core.models.dispatcher import ModelDispatcher
+
+    providers = _providers(("vendor-b", ["gemini-b"]), ("gpu", ["qwen3-moe"]))
+    router = ModelDispatcher(providers)
+    agent = SimpleNamespace(model=router, _providers_config=providers,
+                            _db=None, system_prompt="")
+    with _env(OPENAGENT_QUALITY_MONITOR_MODEL=None, OPENAGENT_COMPACTION_MODEL=None), \
+            _primed_pricing_rows(_VENDOR_PRICED):
+        judge = qm._pick_judge_model(agent)
+    assert getattr(judge, "model", None) == "gpu:qwen3-moe", getattr(judge, "model", None)
+
+
+@test("quality", "env override wins over the default judge")
 async def t_env_override_beats_default(ctx: TestContext) -> None:
     import openagent_core.core.quality_monitor as qm
     from openagent_core.models.dispatcher import ModelDispatcher
 
-    providers = _providers(("local", ["claude-sub"]), ("deepseek", ["deepseek-chat"]))
+    providers = _providers(("local", ["claude-sub"]), ("vendor-b", ["gemini-b"]))
     router = ModelDispatcher(providers)
     agent = SimpleNamespace(model=router, _providers_config=providers,
                             _db=None, system_prompt="")
@@ -562,27 +570,6 @@ async def t_env_override_beats_default(ctx: TestContext) -> None:
     assert getattr(judge, "model", None) == "local:claude-sub", (
         f"env override ignored — got {getattr(judge, 'model', None)!r}"
     )
-
-
-@test("quality", "deepseek NOT enabled → default falls back to cheapest-enabled (never null)")
-async def t_default_falls_back_when_no_deepseek(ctx: TestContext) -> None:
-    import openagent_core.core.quality_monitor as qm
-    from openagent_core.models.dispatcher import ModelDispatcher
-
-    # No deepseek row at all — the default must fall back to the prior
-    # cheapest-enabled logic (local:claude-sub, $0), never null, never anthropic.
-    providers = _providers(("local", ["claude-sub"]), ("openai", ["gpt-x"]))
-    router = ModelDispatcher(providers)
-    agent = SimpleNamespace(model=router, _providers_config=providers,
-                            _db=None, system_prompt="")
-    with _env(OPENAGENT_QUALITY_MONITOR_MODEL=None, OPENAGENT_COMPACTION_MODEL=None), \
-            _primed_pricing_rows([]):
-        judge = qm._pick_judge_model(agent)
-    assert judge is not router, "fallback fell through to the null router"
-    assert type(judge).__name__ == "NativeProvider", judge
-    judge_id = getattr(judge, "model", None)
-    assert judge_id == "local:claude-sub", f"expected cheapest-enabled fallback, got {judge_id!r}"
-    assert judge_id is not None and not judge_id.startswith("anthropic:"), judge_id
 
 
 @test("quality", "session_scope classifies the id shapes the runtime emits")

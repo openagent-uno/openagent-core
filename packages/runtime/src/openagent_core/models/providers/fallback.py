@@ -675,7 +675,7 @@ def _notify_fallback(
 # La catena era una lista statica provata sempre nello stesso ordine. Due difetti
 # misurati in produzione il 24-ago-2026:
 #
-#  1. nessuna memoria. Il codex-sub-proxy parcheggia un modello che ha preso il
+#  1. nessuna memoria. Un proxy di abbonamento parcheggia un modello che ha preso il
 #     muro (``mark_rate_limited(..., model=...)``); finche' dura, OGNI turno
 #     pagava un viaggio a vuoto sullo stesso gradino prima di passare al
 #     successivo. L'informazione c'era gia', la riscoprivamo ogni volta a spese

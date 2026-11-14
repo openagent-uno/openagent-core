@@ -157,7 +157,7 @@ repository remains the canonical source for Core contracts and evidence.
 - [Authorized vault administration](vault-administration.md)
 - [Vault/tool parity evidence](migration/vault-tool-parity.md)
 - [Prompt rule inventory](migration/prompts.md)
-- [Source and Git provenance](migration/sources.json)
+- [Source and Git provenance](migration/sources.json) (paths are relative to the maintainers' workspace, written `<workspace>`)
 - [Historical documentation](legacy/) describes the pre-extraction standalone server.
 
 Start with the architecture, then check the acceptance ledger before using a

@@ -1552,7 +1552,7 @@ async def t_summary_fallback_picker(ctx: TestContext) -> None:
     np_mod.NativeProvider = _FakeNP
     os.environ.pop(compaction._SUMMARY_FALLBACK_MODEL_ENV, None)
     try:
-        # exclude the failed anthropic proxy → prefers deepseek (never OAuth-limited)
+        # exclude the failed provider → the only other provider is picked
         fb = compaction._summary_fallback_model(agent, exclude_provider="anthropic")
         assert fb is not None
         assert captured.get("model") == "deepseek:deepseek-chat", captured

@@ -1,4 +1,4 @@
-"""Budget enforcement — the brake that lets DeepSeek's $100 PAYG be safe.
+"""Budget enforcement — the brake that makes a metered pay-as-you-go provider safe.
 
 WHY THIS MODULE EXISTS
 ----------------------
@@ -12,10 +12,10 @@ scope from the router's enabled catalog for the rest of the window.
 
 THE BEHAVIOUR, DECIDED BY THE OPERATOR (do not re-litigate)
 ----------------------------------------------------------
-At the cap the scope is DROPPED FROM ROUTING, not hard-stopped. DeepSeek over
-its daily cap simply disappears from the enabled catalog; the agent keeps
-working on whatever stays enabled (Claude via the subscription proxy costs $0
-PAYG). The bot never stops — it stops *spending on that model*. The exclusion
+At the cap the scope is DROPPED FROM ROUTING, not hard-stopped. A metered
+provider over its daily cap simply disappears from the enabled catalog; the
+agent keeps working on whatever stays enabled (for example a $0 subscription or
+self-hosted row). The bot never stops — it stops *spending on that model*. The exclusion
 lifts automatically when the window rolls over.
 
 THE SYNC / ASYNC SPLIT (the hard architectural constraint)
@@ -82,7 +82,7 @@ ENFORCEABLE_SCOPE_KINDS = frozenset({"global", "provider", "model"})
 # leave ZERO enabled models — the agent goes OFFLINE rather than overspend. This
 # deliberately overrides the "never empty the catalog" safety for the named
 # scopes only. Set ``OPENAGENT_BUDGET_STRICT_SCOPES`` to a comma list of
-# ``kind:value`` (e.g. ``provider:deepseek``) or the bare word ``global``.
+# ``kind:value`` (e.g. ``provider:acme``) or the bare word ``global``.
 # Unset/empty (the default) → no strict scopes: the never-empty safety holds
 # exactly as before, so a deployment that never opts in is byte-identical.
 _STRICT_SCOPES_ENV = "OPENAGENT_BUDGET_STRICT_SCOPES"
@@ -194,7 +194,7 @@ class RuleState:
     ratio: float
     over: bool
     # True when this is a ``cost_usd`` rule whose scope resolves to a $0-priced
-    # provider/model (e.g. the claude-sub-proxy, absent from OpenRouter pricing):
+    # provider/model (e.g. a local or subscription-proxy row absent from OpenRouter pricing):
     # its measured spend is 0 forever, so the cap can NEVER trip. A ``tokens``
     # rule is required to constrain such a scope. See ``_scope_is_cost_ineffective``.
     cost_ineffective: bool = False
@@ -206,8 +206,8 @@ def _scope_is_cost_ineffective(
     """True when a ``cost_usd`` rule on this scope can never accrue spend because
     every model it targets prices at $0.
 
-    The ``local:`` claude-sub-proxy is absent from OpenRouter pricing, so its
-    per-token cost resolves to $0 forever; a ``cost_usd`` cap on it computes 0
+    A row served by a local or subscription proxy is absent from OpenRouter
+    pricing, so its per-token cost resolves to $0 forever; a ``cost_usd`` cap on it computes 0
     spend and never trips. This detects that so the guard can warn.
 
     Gated on :func:`openrouter_pricing_ready` — a COLD pricing cache also reads
@@ -319,8 +319,8 @@ class BudgetGuard:
     def __init__(self, db: Any, providers_config: Any = None):
         self._db = db
         # Configured providers/models, used ONLY to resolve whether a
-        # ``cost_usd`` rule's provider-scope targets a $0-priced provider (the
-        # sub-proxy) so we can warn it is un-capped by the intuitive metric.
+        # ``cost_usd`` rule's provider-scope targets a $0-priced provider (e.g. a
+        # subscription proxy) so we can warn it is un-capped by the intuitive metric.
         # Kept fresh by ``set_providers_config`` on hot-reload. Never gates
         # enforcement — the router filter operates on the entries it is handed.
         self._providers_config = providers_config
@@ -532,7 +532,7 @@ class BudgetGuard:
         The subtlety is a GLOBAL cap interacting with a scope-specific one. A
         tripped global rule targets every model, so the raw union always empties
         the catalog — a naive "if it would empty, keep everything" would then let
-        a global cap MASK a provider/model cap (the operator's DeepSeek provider
+        a global cap MASK a provider/model cap (an operator's per-provider
         brake would silently stop working the moment a global cap also tripped).
         So when nothing survives, we still exclude the models that are over their
         OWN (provider/model) cap and keep only the ones caught *solely* by the
@@ -693,7 +693,7 @@ class BudgetGuard:
 
     def _maybe_warn_cost_ineffective(self, st: RuleState) -> None:
         """A ``cost_usd`` rule scoped to a $0-priced provider/model can never
-        accrue spend, so its cap silently never trips (the sub-proxy is
+        accrue spend, so its cap silently never trips (a $0-priced proxy row is
         unprotected by the intuitive metric). Warn LOUDLY — once per rule, not
         per refresh — that a ``tokens``-metric rule is required to constrain it.
         Do NOT silently no-op. Re-arms if the scope later prices non-zero."""
@@ -712,8 +712,8 @@ class BudgetGuard:
             metric=st.metric,
             window=st.window,
             limit=st.amount,
-            note="this scope prices at $0 (e.g. the claude-sub-proxy, absent "
-            "from OpenRouter pricing), so a cost_usd cap can NEVER trip and the "
+            note="this scope prices at $0 (e.g. a local or subscription-proxy "
+            "row absent from OpenRouter pricing), so a cost_usd cap can NEVER trip and the "
             "provider is uncapped — configure a tokens-metric budget rule to "
             "constrain it",
         )
@@ -821,7 +821,7 @@ async def compute_budget_usage(
     accounting.
 
     ``cost_metric_ineffective`` surfaces the C2 hazard: a ``cost_usd`` rule
-    whose scope prices at $0 (the sub-proxy) can never trip. Detecting a
+    whose scope prices at $0 (e.g. a subscription proxy) can never trip. Detecting a
     ``provider`` scope needs ``providers_config``; a ``model`` scope is judged
     from live pricing alone, so it is flagged even when config is not passed.
     """

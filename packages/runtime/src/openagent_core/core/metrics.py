@@ -17,7 +17,7 @@ from openagent_core.core._runner.utils.timer import Timer
 # reads is right here, as they are accumulated. A ContextVar sink (same pattern
 # as ``stream_usage``) lets the dispatcher open it for a turn and read the true
 # total for cost — a re-sent, cached prefix is billed at the cheap rate instead
-# of being over-charged ~10x, which was silently shrinking the DeepSeek cap.
+# of being over-charged ~10x, which was silently shrinking budget caps.
 _TURN_CACHE_READ: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
     "openagent_turn_cache_read", default=None
 )

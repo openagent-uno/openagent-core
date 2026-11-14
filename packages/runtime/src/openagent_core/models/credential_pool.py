@@ -1,8 +1,8 @@
 """Additive multi-account credential pool with rotation for native providers.
 
-Lets a single provider (e.g. the ``local:claude`` sub-proxy) rotate across
+Lets a single provider (e.g. a subscription proxy row) rotate across
 N accounts on 429/529 *before* a turn spills to the configured secondary
-(DeepSeek). Entirely OpenAgent-native — no runtime dependency.
+provider. Entirely OpenAgent-native — no runtime dependency.
 
 INERT BY DEFAULT. A provider with no ``metadata.accounts`` (or a single
 account) yields no pool: :func:`get_or_build_pool` returns ``None`` and the

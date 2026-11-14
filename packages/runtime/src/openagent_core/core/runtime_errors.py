@@ -110,17 +110,17 @@ class ModelProviderError(OpenAgentError):
     ]
 
     # Messages that signal a TRANSIENT CAPACITY exhaustion rather than a config
-    # bug, even though the upstream returns a client status (e.g. 404). The
-    # in-pod claude-sub-proxy emits this when all its rotating Claude accounts
-    # are cooling down / rate-limited ("...Retry after about Ns"). Classified as
-    # a rate-limit so the run degrades to the fallback model instead of failing.
+    # bug, even though the upstream returns a client status (e.g. 404).
+    # Subscription proxies that rotate several OAuth accounts report this when
+    # every account is cooling down / rate-limited ("...Retry after about Ns").
+    # Classified as a rate-limit so the run degrades to the fallback model
+    # instead of failing.
     RATE_LIMIT_MESSAGE_PATTERNS = [
-        "no available claude oauth account",   # sub-proxy: all accounts exhausted
+        "no available claude oauth account",   # proxy: all accounts exhausted
         "no available oauth account",
-        # codex-sub-proxy: all ChatGPT subscription accounts are cooling down
-        # or model-limited.  It intentionally returns 429 so the configured
-        # local fallback can keep the turn alive instead of surfacing a hard
-        # provider failure.
+        # A ChatGPT-subscription proxy whose accounts are all cooling down or
+        # model-limited. It returns 429 so the configured fallback can keep
+        # the turn alive instead of surfacing a hard provider failure.
         "no available chatgpt account",
     ]
 
@@ -158,11 +158,11 @@ class ModelProviderError(OpenAgentError):
 
         error_msg = str(error.message).lower()
 
-        # Capacity-exhaustion detection by message: the in-pod claude-sub-proxy
-        # returns a client status (e.g. 404) when all its rotating Claude
-        # accounts are cooling down. That is a transient capacity signal, not a
-        # config bug — classify it as a rate-limit so ``get_fallback_models``
-        # degrades to the configured fallback (DeepSeek) instead of surfacing the
+        # Capacity-exhaustion detection by message: a subscription proxy may
+        # return a client status (e.g. 404) when all its rotating accounts are
+        # cooling down. That is a transient capacity signal, not a config bug —
+        # classify it as a rate-limit so ``get_fallback_models`` degrades to the
+        # configured fallback instead of surfacing the
         # hard failure it (correctly) raises for a genuine 4xx client error.
         if any(pattern in error_msg for pattern in cls.RATE_LIMIT_MESSAGE_PATTERNS):
             return ModelRateLimitError(

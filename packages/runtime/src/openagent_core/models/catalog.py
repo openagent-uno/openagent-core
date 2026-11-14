@@ -500,7 +500,7 @@ def openrouter_pricing_ready() -> bool:
     """True when OpenRouter's pricing catalog is loaded (non-empty, unexpired).
 
     :func:`get_model_pricing` returns ``$0`` on a COLD cache exactly as it does
-    for a model genuinely absent from OpenRouter (the $0 claude-sub-proxy). A
+    for a model genuinely absent from OpenRouter (e.g. a $0 proxy row). A
     caller that treats "$0 == unpriced" — the budget guard's cost-metric
     warning — must first confirm the catalog actually loaded, otherwise a
     boot-time miss reads like a free model and fires a false warning. Never
@@ -522,14 +522,17 @@ def openrouter_pricing_ready() -> bool:
         return False
 
 
-def cheapest_enabled_model(providers_config: Any) -> "CatalogModel | None":
+def cheapest_enabled_model(
+    providers_config: Any, *, exclude_provider: str | None = None,
+) -> "CatalogModel | None":
     """The cheapest enabled ``api-based`` model in ``providers_config``.
 
     "Cheapest" = lowest ``input + output`` cost-per-million per
     :func:`get_model_pricing` (OpenRouter-live). A model absent from OpenRouter
-    — notably the $0 claude-sub-proxy — resolves to 0 and therefore wins as
-    free. Ties resolve to configuration order (first wins). Returns ``None``
-    when no enabled api-based row exists.
+    — for example a row served by a local or subscription proxy — resolves to 0
+    and therefore wins as free. Ties resolve to configuration order (first
+    wins). Rows of *exclude_provider* are skipped. Returns ``None`` when no
+    eligible enabled api-based row exists.
 
     Used by background jobs (compaction summariser, quality judge) that want a
     throwaway single-model call at the cheapest enabled row instead of routing
@@ -541,6 +544,8 @@ def cheapest_enabled_model(providers_config: Any) -> "CatalogModel | None":
     best_key: tuple[float, int] | None = None
     for entry in iter_configured_models(providers_config):
         if entry.disabled or entry.framework != FRAMEWORK_API_BASED:
+            continue
+        if exclude_provider is not None and entry.provider == exclude_provider:
             continue
         pricing = get_model_pricing(entry.runtime_id, providers_config)
         cost = (
@@ -558,7 +563,7 @@ def cheapest_enabled_model(providers_config: Any) -> "CatalogModel | None":
 
 
 # Fallback context window used when a model is absent from OpenRouter's
-# catalog (local / sub-proxy / self-hosted ids). Kept identical to
+# catalog (local / proxy / self-hosted ids). Kept identical to
 # ``compaction._FALLBACK_MAX_CONTEXT`` so the /context gauge and the
 # compaction trigger agree on the denominator for unknown models.
 _FALLBACK_CONTEXT_WINDOW = 200_000

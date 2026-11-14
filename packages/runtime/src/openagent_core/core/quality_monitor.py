@@ -60,35 +60,26 @@ _MIN_LEN_ENV = "OPENAGENT_QUALITY_MONITOR_MIN_LEN"
 _RULES_CHARS_ENV = "OPENAGENT_QUALITY_MONITOR_RULES_CHARS"
 _SCOPES_ENV = "OPENAGENT_QUALITY_MONITOR_SCOPES"
 
-# The DEFAULT judge model when no judge/compaction model is configured.
-# ``deepseek:deepseek-chat`` is cheap-but-capable AND isolated from the Claude
-# subscription: the previous default resolved to the cheapest enabled row, which
-# is the $0 ``local`` claude-sub-proxy — grading THROUGH the same subscription
-# the live agents run on, competing with them for it. DeepSeek is a paid
-# api-based provider off that sub, so the grader runs on its own budget. It is
-# still only a DEFAULT — ``OPENAGENT_QUALITY_MONITOR_MODEL`` (and the compaction
-# model) override it — and it is NEVER an Anthropic key: when deepseek is not an
-# enabled api-based row we fall back to the existing cheapest-enabled logic.
-# 2026-08-22: the same reasoning now points at the self-hosted row FIRST. Our
-# own GPU is off every subscription and costs nothing per call, so it beats a
-# paid api-based provider on the very grounds deepseek was chosen for. Deepseek
-# stays as the second choice when no self-hosted row is enabled.
-_DEFAULT_JUDGE_MODEL = "deepseek:deepseek-chat"
+# The DEFAULT judge when no judge/compaction model is configured, chosen by
+# properties and never by vendor name: an enabled self-hosted api-based row
+# first (off every subscription and rate limit, no per-call cost), otherwise
+# the cheapest enabled api-based row (``_cheap_background_model``). An operator
+# who wants the grader isolated from the rows the live agents use sets
+# ``OPENAGENT_QUALITY_MONITOR_MODEL`` (or the compaction model) explicitly.
 
 
 def _preferred_judge_ids(providers_config: Any) -> list[str]:
-    """Self-hosted rows first, then the deepseek default."""
+    """Enabled self-hosted api-based rows, in configuration order."""
     from openagent_core.core.execution_profile import _is_cloud_model_id
     from openagent_core.models.catalog import FRAMEWORK_API_BASED, iter_configured_models
 
-    local = [
+    return [
         entry.runtime_id
         for entry in iter_configured_models(providers_config)
         if not entry.disabled
         and entry.framework == FRAMEWORK_API_BASED
         and not _is_cloud_model_id(entry.runtime_id)
     ]
-    return [*local, _DEFAULT_JUDGE_MODEL]
 
 
 def _truthy(v: str) -> bool:
@@ -305,7 +296,7 @@ def _warn_judge_unresolved_once(configured: str) -> None:
               f"{configured!r} but it matches no enabled api-based model row; "
               "falling back to the cheapest enabled row (a valid non-null judge) "
               "instead of the router. Set it to an enabled api-based id "
-              "(e.g. deepseek:deepseek-chat or a local: sub-proxy model) to "
+              "(an enabled api-based runtime id such as provider:model) to "
               "silence this."),
     )
 
@@ -313,15 +304,11 @@ def _warn_judge_unresolved_once(configured: str) -> None:
 def _default_judge_model(agent: Any) -> Any:
     """Resolve the DEFAULT judge (no judge/compaction model configured).
 
-    Prefer ``deepseek:deepseek-chat`` when it is an enabled api-based row — a
-    cheap-but-capable grader isolated from the $0 claude-sub-proxy, so the judge
-    does not compete with the live agents for the shared Claude subscription.
-    When deepseek is NOT enabled, fall back to the existing cheapest-enabled
-    default (``_cheap_background_model``). Never routes to an Anthropic key:
-    both branches build a toolkit-free ``NativeProvider`` over an api-based row,
-    and the fallback's own catalog-cheapest pick is the same $0-first path used
-    before. Only a ROUTER ``agent.model`` is rewritten — a non-router model
-    (e.g. a unit-test fake) is returned unchanged, preserving the old contract.
+    An enabled self-hosted api-based row first; otherwise the cheapest enabled
+    row (``_cheap_background_model``). Both build a toolkit-free
+    ``NativeProvider`` over an api-based row. Only a ROUTER ``agent.model`` is
+    rewritten — a non-router model (e.g. a unit-test fake) is returned
+    unchanged, preserving the old contract.
     """
     fallback = getattr(agent, "model", None)
     # Only a full Team-router fallback is worth overriding; an already-plain
@@ -355,11 +342,9 @@ def _default_judge_model(agent: Any) -> Any:
                 return provider
         except Exception as exc:  # noqa: BLE001 — a default pick must never break a turn
             elog("quality.judge_model_failed", level="warning",
-                 configured=_DEFAULT_JUDGE_MODEL,
+                 configured="self_hosted_default",
                  error_type=type(exc).__name__, error=str(exc) or repr(exc))
-    # deepseek not enabled (or a non-router model) → the prior cheapest-enabled
-    # default. Routing still only touches the local sub-proxy / deepseek, never
-    # an Anthropic key.
+    # No self-hosted row (or a non-router model) → the cheapest-enabled default.
     return _cheap_background_model(
         agent, fallback,
         picked_event="quality.judge_model",
@@ -396,13 +381,12 @@ def _pick_judge_model(agent: Any) -> Any:
             )
             if match is None:
                 # The judge model is often intentionally DISABLED in the routable
-                # catalog (e.g. local:claude-sonnet-4-6 is the $0 default but kept
-                # out of the delegation set, so only deepseek is "enabled"). A
+                # catalog (kept out of the delegation set on purpose). A
                 # judge is an explicit operator choice AND a direct throwaway call
                 # (a NativeProvider, not the router), so honour a disabled row too
                 # as long as its provider row is api-based — otherwise the judge
                 # falls back to agent.model and routes through the full router
-                # (slow → the judge timeouts we saw, and it may bill DeepSeek).
+                # (slow → judge timeouts, and it may bill a paid delegation).
                 match = next(
                     (e for e in iter_configured_models(providers_config)
                      if e.runtime_id == configured
@@ -428,10 +412,9 @@ def _pick_judge_model(agent: Any) -> Any:
         # (37x in production), and the grader silently ran through the premium
         # leader instead of a cheap judge. Resolve DETERMINISTICALLY to the
         # cheapest enabled row (a toolkit-free NativeProvider with a non-null
-        # ``.model``) instead — the same $0-first path the UNSET branch uses, so
-        # routing still only touches the local sub-proxy / deepseek, never an
-        # Anthropic key. A non-router ``agent.model`` (e.g. a unit-test fake) is
-        # returned unchanged, preserving the old contract for that caller.
+        # ``.model``) instead — the same path the UNSET branch falls back to.
+        # A non-router ``agent.model`` (e.g. a unit-test fake) is returned
+        # unchanged, preserving the old contract for that caller.
         from openagent_core.core.compaction import _cheap_background_model
         return _cheap_background_model(
             agent, getattr(agent, "model", None),
@@ -443,14 +426,11 @@ def _pick_judge_model(agent: Any) -> Any:
         )
     # UNSET (C3): no dedicated judge or compaction model configured. The old
     # behaviour returned ``agent.model`` — the full Team router — so a grader ran
-    # up to a ~150k-token judge prompt through the premium leader (and could bill
-    # a paid DeepSeek delegation) on every sampled turn. Then it defaulted to the
-    # cheapest enabled row — which is the $0 ``local`` claude-sub-proxy, i.e. the
-    # grader ran THROUGH the Claude subscription, competing with the live agents.
-    # Default instead to ``deepseek:deepseek-chat`` (isolated, cheap, capable)
-    # when it is enabled, falling back to the cheapest-enabled row otherwise —
-    # never an Anthropic key. Only a *router* ``agent.model`` is rewritten, so a
-    # non-router fake in unit tests is untouched (see ``_default_judge_model``).
+    # up to a ~150k-token judge prompt through the premium leader on every
+    # sampled turn. Default instead to a cheap direct row (self-hosted first,
+    # then cheapest enabled); see ``_default_judge_model``. Only a *router*
+    # ``agent.model`` is rewritten, so a non-router fake in unit tests is
+    # untouched.
     return _default_judge_model(agent)
 
 

@@ -1229,8 +1229,8 @@ async def _summarize_runs(
                     exc = exc_refit
         # The primary summariser failed (commonly an OAuth-limited proxy row
         # exhausted under load). Skipping compaction here is what lets the
-        # session balloon, so retry ONCE with a distinct-provider fallback
-        # (DeepSeek etc. — API-key based, never OAuth-limited) before giving up.
+        # session balloon, so retry ONCE with a fallback on a different
+        # provider (one not sharing the failed row's quota) before giving up.
         fallback_summariser = _summary_fallback_model(
             agent, exclude_provider=_provider_of(summariser),
         )
@@ -1446,14 +1446,20 @@ def _summary_fallback_model(agent: Any, *, exclude_provider: str | None) -> Any:
     """A second summariser to try when the primary summarise call fails.
 
     The primary summariser defaults to the cheapest enabled row; when a $0
-    OAuth-proxy row (e.g. a Claude subscription proxy) is the cheapest, it is
-    also the one that fails under load ("no available OAuth accounts"). Retrying
-    with a DIFFERENT provider — an API-key row such as DeepSeek, never
-    OAuth-limited — lets the compaction complete instead of being skipped (which
-    is what balloons the session). Prefers ``OPENAGENT_COMPACTION_FALLBACK_MODEL``
-    when set; otherwise picks a cheap enabled api-based row whose provider is not
-    *exclude_provider*, preferring ``deepseek``. Returns ``None`` when no
-    distinct fallback exists (the caller then gives up). Never raises."""
+    row served through a subscription or OAuth proxy is the cheapest, it is
+    also the one that fails under load ("no available OAuth accounts").
+    Retrying on a DIFFERENT provider lets the compaction complete instead of
+    being skipped (which is what balloons the session).
+
+    Selection, never by vendor name:
+      1. ``OPENAGENT_COMPACTION_FALLBACK_MODEL`` when set to an enabled row of
+         another provider (the operator's explicit choice);
+      2. otherwise a self-hosted row of another provider (off every
+         subscription and rate limit);
+      3. otherwise the cheapest enabled api-based row of another provider,
+         ties broken by configuration order.
+    Never the failed *exclude_provider*. Returns ``None`` when no distinct
+    fallback exists (the caller then gives up). Never raises."""
     try:
         from openagent_core.models.catalog import (
             FRAMEWORK_API_BASED,
@@ -1489,31 +1495,27 @@ def _summary_fallback_model(agent: Any, *, exclude_provider: str | None) -> Any:
                     reason="configured",
                 )
                 return _mk(m.runtime_id)
-        # 2) distinct-provider rows. A self-hosted row comes FIRST: it is off
-        # every subscription and every rate limit, which is the property this
-        # step was reaching for when it named DeepSeek. DeepSeek stays second.
+        # 2) a self-hosted row of another provider: off every subscription and
+        # rate limit, which is the property this fallback needs.
         from openagent_core.core.execution_profile import _is_cloud_model_id
 
         distinct = [e for e in enabled if e.provider != exclude_provider]
         if not distinct:
             return None
-        pref = next(
+        self_hosted = next(
             (e for e in distinct if not _is_cloud_model_id(e.runtime_id)), None,
         )
-        reason = "self_hosted_first"
-        if pref is None:
-            pref = next((e for e in distinct if e.provider == "deepseek"), None)
-            reason = "deepseek_default"
-        if pref is not None:
+        if self_hosted is not None:
             elog(
                 "runtime.compaction.summary_fallback_model",
-                model=pref.runtime_id,
-                reason=reason,
+                model=self_hosted.runtime_id,
+                reason="self_hosted_first",
             )
-            return _mk(pref.runtime_id)
-        # 3) cheapest distinct row otherwise
-        cheap = cheapest_enabled_model(providers_config)
-        pick = cheap if (cheap is not None and cheap.provider != exclude_provider) else distinct[0]
+            return _mk(self_hosted.runtime_id)
+        # 3) the cheapest row of another provider, configuration order on ties
+        pick = cheapest_enabled_model(
+            providers_config, exclude_provider=exclude_provider,
+        ) or distinct[0]
         elog(
             "runtime.compaction.summary_fallback_model",
             model=pick.runtime_id,

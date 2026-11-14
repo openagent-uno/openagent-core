@@ -280,9 +280,8 @@ CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_log(timestamp);
 -- seed + REST ``/api/budgets`` + the ``budget-manager`` MCP), exactly like
 -- ``events`` / ``models`` / ``mcps``.
 --
--- WHY A TABLE (not a yaml-only knob): the operator just put $100 of PAYG on
--- DeepSeek, which is disabled precisely because nothing read a budget before a
--- call. ``BudgetTracker`` only RECORDS cost to ``usage_log``; a dispatcher gate
+-- WHY A TABLE (not a yaml-only knob): a metered pay-as-you-go provider is only
+-- safe to enable when something reads a budget before a call. ``BudgetTracker`` only RECORDS cost to ``usage_log``; a dispatcher gate
 -- that would have stopped a runaway was removed with a yaml knob. A DB table is
 -- what makes a rule editable from the app at 3am without a redeploy — the same
 -- reason models/events/mcps are DB-backed and not config.
@@ -292,9 +291,9 @@ CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_log(timestamp);
 -- name contains a colon, must not collide with a model runtime_id):
 --   ``global``   → ALL spend, every model/provider (``scope_value`` = '').
 --   ``provider`` → every model of a provider (``scope_value`` = provider name,
---                  e.g. 'deepseek'; the spend query does ``model LIKE 'deepseek:%'``
+--                  e.g. 'acme'; the spend query does ``model LIKE 'acme:%'``
 --                  since runtime_ids are ``provider:model``).
---   ``model``    → one runtime_id (``scope_value`` = 'deepseek:deepseek-v4-pro').
+--   ``model``    → one runtime_id (``scope_value`` = 'acme:model-1').
 --   ``task``     → one scheduled task's whole run tree (``scope_value`` = task
 --                  name; ``session_id LIKE 'scheduler:<task>:%'``). A task is a
 --                  CALLER, not a routing target — excluding a model can't "stop

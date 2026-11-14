@@ -8,8 +8,8 @@ this expensive — inbound webhook events.
 
 So on 2026-07-13/14 two agents burned ~412M input tokens through the external service
 webhook lane and the ledger showed **zero rows** for it. The fire was not
-merely unnoticed; it was structurally invisible. It stopped when DeepSeek
-returned HTTP 402 "Insufficient Balance", which is a hell of a way to find out.
+merely unnoticed; it was structurally invisible. It stopped only when the
+metered provider returned HTTP 402 "Insufficient Balance".
 
 The runtime emits a ``RunCompletedEvent`` carrying ``metrics`` at the end of a
 streamed run. The pieces that see that event (``_arun_runtime_stream`` for the
