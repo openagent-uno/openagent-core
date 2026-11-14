@@ -6,6 +6,18 @@ supply a management service; calling these tools then fails closed.
 from __future__ import annotations
 from typing import Any
 from openagent_core.runtime import current_runtime, current_execution_context
+from openagent_core.mcp.secret_refs import redact_mapping
+
+
+def _redacted(row):
+    """Header values may hold credentials: the model sees them masked.
+
+    Reference-only values such as ``Bearer ${secret:OPENAGENT_MCP_SECRET_X}``
+    carry no secret and stay readable.
+    """
+    if isinstance(row, dict) and isinstance(row.get('headers'), dict):
+        return {**row, 'headers': redact_mapping(row['headers'])}
+    return row
 
 
 def _service():
@@ -19,44 +31,61 @@ def _service():
 async def list_mcps(enabled_only: bool = False) -> list[dict[str, Any]]:
     """List sources and their host-owned mutability policy."""
     service, context = _service()
-    rows = await service.list(context)
+    rows = [_redacted(row) for row in await service.list(context)]
     return [row for row in rows if row.get('enabled')] if enabled_only else rows
 
 
 async def get_mcp(name: str) -> dict[str, Any]:
     """Read one source's configuration using the current verified identity."""
     service, context = _service()
-    return await service.get(context, name)
+    return _redacted(await service.get(context, name))
 
 
 async def add_custom_mcp(name: str, command: list[str] | None = None,
                          args: list[str] | None = None, url: str | None = None,
-                         env: dict[str, str] | None = None, enabled: bool = True) -> dict[str, Any]:
-    """Install a user-managed source if this host and current principal permit it."""
+                         env: dict[str, str] | None = None,
+                         headers: dict[str, str] | None = None,
+                         enabled: bool = True) -> dict[str, Any]:
+    """Install a user-managed source if this host and current principal permit it.
+
+    ``headers`` are sent with every request to a ``url`` source. Never put a
+    credential in a header or env value directly: reference a host secret as
+    ``${secret:OPENAGENT_MCP_SECRET_NAME}`` (for example
+    ``{"Authorization": "Bearer ${secret:OPENAGENT_MCP_SECRET_EXAMPLE}"}``);
+    the server resolves it from its own environment when the source connects.
+    """
     service, context = _service()
-    return await service.create(context, name, command=command, args=args or [],
-                                url=url, env=env or {}, enabled=enabled)
+    values = dict(command=command, args=args or [], url=url, env=env or {}, enabled=enabled)
+    if headers:
+        values["headers"] = headers
+    return _redacted(await service.create(context, name, **values))
 
 
 async def update_mcp(name: str, command: list[str] | None = None,
                      args: list[str] | None = None, url: str | None = None,
-                     env: dict[str, str] | None = None, enabled: bool | None = None) -> dict[str, Any]:
-    """Change allowed configuration fields; product ownership cannot be changed."""
+                     env: dict[str, str] | None = None,
+                     headers: dict[str, str] | None = None,
+                     enabled: bool | None = None) -> dict[str, Any]:
+    """Change allowed configuration fields; product ownership cannot be changed.
+
+    ``headers`` replaces the whole header map; reference credentials as
+    ``${secret:OPENAGENT_MCP_SECRET_NAME}`` instead of writing them.
+    """
     service, context = _service()
-    values = {key: value for key, value in dict(command=command,args=args,url=url,env=env,enabled=enabled).items() if value is not None}
-    return await service.update(context, name, **values)
+    values = {key: value for key, value in dict(command=command,args=args,url=url,env=env,headers=headers,enabled=enabled).items() if value is not None}
+    return _redacted(await service.update(context, name, **values))
 
 
 async def enable_mcp(name: str) -> dict[str, Any]:
     """Enable one source through its host policy."""
     service, context = _service()
-    return await service.set_enabled(context, name, True)
+    return _redacted(await service.set_enabled(context, name, True))
 
 
 async def disable_mcp(name: str) -> dict[str, Any]:
     """Disable one source through its host policy."""
     service, context = _service()
-    return await service.set_enabled(context, name, False)
+    return _redacted(await service.set_enabled(context, name, False))
 
 
 async def remove_mcp(name: str) -> dict[str, Any]:

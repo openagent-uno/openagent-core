@@ -1902,12 +1902,24 @@ class MCPPool:
             return None
 
         read_timeout = _mcp_read_timeout_seconds(spec.name)
+        # ``${secret:OPENAGENT_MCP_SECRET_*}`` references are resolved only
+        # here, into the transport parameters: the spec, catalog, status and
+        # logs keep the reference, never the value (see secret_refs).
+        from .secret_refs import SecretReferenceError, resolve_mapping
+        try:
+            connect_env = resolve_mapping(spec.env) if spec.is_stdio else spec.env
+            connect_headers = None if spec.is_stdio else resolve_mapping(spec.headers)
+        except SecretReferenceError as exc:
+            self._record_connection_failure(spec.name, exc, "configure")
+            elog("mcp.error", level="warning", name=spec.name, error=str(exc), phase="configure")
+            logger.warning("MCP '%s' not started: %s", spec.name, exc)
+            return None
         try:
             if spec.is_stdio:
                 params = StdioServerParameters(
                     command=spec.command[0],
                     args=spec.command[1:] + spec.args,
-                    env=spec.env,
+                    env=connect_env,
                     cwd=spec.cwd,
                 )
                 toolkit = MCPTools(
@@ -1925,7 +1937,7 @@ class MCPPool:
                 # anyio.ClosedResourceError on session.initialize.
                 http_params = StreamableHTTPClientParams(
                     url=spec.url,
-                    headers=spec.headers or None,
+                    headers=connect_headers or None,
                 )
                 if read_timeout:
                     # ``MCPTools`` uses the smaller of ``timeout_seconds`` and
@@ -1964,7 +1976,10 @@ class MCPPool:
         # Administrative diagnostics are deliberately fixed codes. Exception
         # messages/data may contain credentials, URLs, subprocess output or PII.
         from openagent_core.core._runner.utils.mcp import _session_is_dead
-        if _session_is_dead(error):
+        from .secret_refs import SecretReferenceError
+        if isinstance(error, SecretReferenceError):
+            code = "secret_unavailable"
+        elif _session_is_dead(error):
             code = "transport_closed"
         elif isinstance(error, TimeoutError):
             code = "timeout"

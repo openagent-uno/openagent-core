@@ -17,7 +17,9 @@ of recovery propagates to the caller.
 `MCPPool.connection_status()` is a local read-only snapshot for every configured
 spec, including startup failures with no loaded toolkit. Entries contain
 `mcp_name`, `state` (`ready`, `dormant`, `unavailable`), `tool_count` and an
-optional `failure` with fixed `code` and `phase` values. The snapshot includes no
+optional `failure` with fixed `code` and `phase` values (`secret_unavailable` /
+`configure` when a `${secret:...}` reference cannot be resolved, see
+[mcp-secret-references.md](mcp-secret-references.md)). The snapshot includes no
 exception messages, command arguments, environment, endpoint, headers, stderr,
 remote error data or execution references. It never starts, pings, reconnects or
 calls a source. `ready` describes the current complete local tool catalog; it
