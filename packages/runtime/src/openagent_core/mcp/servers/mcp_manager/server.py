@@ -20,6 +20,21 @@ def _redacted(row):
     return row
 
 
+# Every run works on the capability snapshot it was admitted with; a source
+# added, edited, enabled, disabled or removed is applied to the catalog at once
+# but changes what runs can discover only from their next admission. Saying so
+# keeps an agent from searching, in vain, for a source it just installed.
+NEXT_TURN = ('Saved. Capability changes apply from the next turn: this turn keeps the '
+             'tools it started with, so this source\'s tools are not discoverable (or '
+             'still are, if removed or disabled) until a new turn starts. Other sources '
+             'are not restarted.')
+
+
+def _applied(row):
+    row = _redacted(row)
+    return {**row, 'availability': 'next_turn', 'note': NEXT_TURN} if isinstance(row, dict) else row
+
+
 def _service():
     runtime, context = current_runtime(), current_execution_context()
     service = runtime.service("catalog_management") if runtime is not None else None
@@ -58,7 +73,7 @@ async def add_custom_mcp(name: str, command: list[str] | None = None,
     values = dict(command=command, args=args or [], url=url, env=env or {}, enabled=enabled)
     if headers:
         values["headers"] = headers
-    return _redacted(await service.create(context, name, **values))
+    return _applied(await service.create(context, name, **values))
 
 
 async def update_mcp(name: str, command: list[str] | None = None,
@@ -73,25 +88,25 @@ async def update_mcp(name: str, command: list[str] | None = None,
     """
     service, context = _service()
     values = {key: value for key, value in dict(command=command,args=args,url=url,env=env,headers=headers,enabled=enabled).items() if value is not None}
-    return _redacted(await service.update(context, name, **values))
+    return _applied(await service.update(context, name, **values))
 
 
 async def enable_mcp(name: str) -> dict[str, Any]:
     """Enable one source through its host policy."""
     service, context = _service()
-    return _redacted(await service.set_enabled(context, name, True))
+    return _applied(await service.set_enabled(context, name, True))
 
 
 async def disable_mcp(name: str) -> dict[str, Any]:
     """Disable one source through its host policy."""
     service, context = _service()
-    return _redacted(await service.set_enabled(context, name, False))
+    return _applied(await service.set_enabled(context, name, False))
 
 
 async def remove_mcp(name: str) -> dict[str, Any]:
     """Remove a user source; managed product sources cannot be removed."""
     service, context = _service()
-    return await service.delete(context, name)
+    return _applied(await service.delete(context, name))
 
 
 async def list_builtin_mcps() -> list[dict[str, Any]]:

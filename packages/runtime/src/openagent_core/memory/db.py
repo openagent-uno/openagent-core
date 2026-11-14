@@ -5398,12 +5398,22 @@ class MemoryDB:
         oauth: bool = False,
         enabled: bool = True,
         source: str = "user",
-    ) -> None:
+    ) -> dict:
+        """Insert or replace one MCP row and return it as committed.
+
+        Registry writes use a dedicated short transaction, like the provider
+        registry: committing on the shared connection fails with "SQL
+        statements in progress" whenever a sibling coroutine still has a
+        cursor open, while the INSERT stays pending in the shared transaction
+        and is committed later by someone else. The caller then reports a
+        failure for a write that happened. The returned row is read inside the
+        same transaction, so it is exactly what was committed.
+        """
         if kind not in VALID_MCP_KINDS:
             raise ValueError(f"invalid kind: {kind!r}")
         if not name:
             raise ValueError("name is required")
-        conn = await self._ensure_connected()
+        await self._ensure_connected()
         now = time.time()
         cmd_text: str | None
         if command:
@@ -5414,6 +5424,14 @@ class MemoryDB:
             cmd_text = json.dumps(list(command))
         else:
             cmd_text = None
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            return await self._upsert_mcp_row(
+                conn, name, kind, builtin_name, cmd_text, args, url, env, headers,
+                oauth, enabled, source, now,
+            )
+
+    async def _upsert_mcp_row(self, conn, name, kind, builtin_name, cmd_text, args, url,
+                              env, headers, oauth, enabled, source, now) -> dict:
         await conn.execute(
             "INSERT INTO mcps (name, kind, builtin_name, command, args_json, url, "
             "env_json, headers_json, oauth, enabled, source, created_at, updated_at) "
@@ -5441,20 +5459,21 @@ class MemoryDB:
                 now,
             ),
         )
-        await conn.commit()
+        row = await (await conn.execute("SELECT * FROM mcps WHERE name = ?", (name,))).fetchone()
+        return self._row_to_mcp(row)
 
     async def set_mcp_enabled(self, name: str, enabled: bool) -> None:
-        conn = await self._ensure_connected()
-        await conn.execute(
-            "UPDATE mcps SET enabled = ?, updated_at = ? WHERE name = ?",
-            (1 if enabled else 0, time.time(), name),
-        )
-        await conn.commit()
+        await self._ensure_connected()
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            await conn.execute(
+                "UPDATE mcps SET enabled = ?, updated_at = ? WHERE name = ?",
+                (1 if enabled else 0, time.time(), name),
+            )
 
     async def delete_mcp(self, name: str) -> None:
-        conn = await self._ensure_connected()
-        await conn.execute("DELETE FROM mcps WHERE name = ?", (name,))
-        await conn.commit()
+        await self._ensure_connected()
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            await conn.execute("DELETE FROM mcps WHERE name = ?", (name,))
 
     async def mcps_max_updated(self) -> float:
         """Return the most recent ``updated_at`` across mcps rows.

@@ -148,5 +148,44 @@ class ManagerToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("plain", listed[1]["name"])
 
 
+    async def test_mutations_say_they_apply_from_the_next_turn(self):
+        from openagent_core.mcp.servers.mcp_manager import server as manager
+
+        class Service:
+            async def create(self, context, name, **values):
+                return {"name": name, **values}
+
+            async def update(self, context, name, **values):
+                return {"name": name, **values}
+
+            async def set_enabled(self, context, name, enabled):
+                return {"name": name, "enabled": enabled}
+
+            async def delete(self, context, name):
+                return {"ok": True}
+
+            async def get(self, context, name):
+                return {"name": name}
+
+        class Runtime:
+            def service(self, name):
+                return Service() if name == "catalog_management" else None
+
+        with patch.object(manager, "current_runtime", Runtime), \
+             patch.object(manager, "current_execution_context", lambda: object()):
+            answers = [
+                await manager.add_custom_mcp("remote", url="https://mcp.example.invalid/mcp"),
+                await manager.update_mcp("remote", enabled=True),
+                await manager.enable_mcp("remote"),
+                await manager.disable_mcp("remote"),
+                await manager.remove_mcp("remote"),
+            ]
+            fetched = await manager.get_mcp("remote")
+        for answer in answers:
+            self.assertEqual("next_turn", answer["availability"])
+            self.assertIn("next turn", answer["note"])
+        self.assertNotIn("availability", fetched)
+
+
 if __name__ == "__main__":
     unittest.main()

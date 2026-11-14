@@ -335,14 +335,31 @@ class ManagementAdapters(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(toolkit._closed)
         self.assertIsNone(toolkit._db)
 
-    async def test_pool_reload_replaces_and_closes_only_the_old_instance(self):
+    async def test_pool_reload_keeps_an_unchanged_instance_open(self):
         pool = MCPPool.from_config([{"builtin": "budget-manager", "in_process": True,
             "env": {"OPENAGENT_DB_PATH": str(self.path)}}], include_defaults=False)
         await pool.connect_all()
         old = pool.toolkit_by_name("budget-manager")
         await call(old, "list_budgets")
         pool._db = object()
-        with patch.object(pool, "rebuild_specs", AsyncMock(return_value=list(pool.specs))):
+        with patch.object(pool, "rebuild_specs", AsyncMock(return_value=[replace(s) for s in pool.specs])):
+            await pool.reload()
+        try:
+            self.assertIs(old, pool.toolkit_by_name("budget-manager"))
+            self.assertFalse(getattr(old, "_closed", False))
+            self.assertEqual(await call(old, "list_budgets"), [])
+        finally:
+            await pool.close_all()
+
+    async def test_pool_reload_replaces_and_closes_only_the_changed_instance(self):
+        pool = MCPPool.from_config([{"builtin": "budget-manager", "in_process": True,
+            "env": {"OPENAGENT_DB_PATH": str(self.path)}}], include_defaults=False)
+        await pool.connect_all()
+        old = pool.toolkit_by_name("budget-manager")
+        await call(old, "list_budgets")
+        pool._db = object()
+        changed = [replace(s, args=[*s.args, "--changed"]) for s in pool.specs]
+        with patch.object(pool, "rebuild_specs", AsyncMock(return_value=changed)):
             await pool.reload()
         replacement = pool.toolkit_by_name("budget-manager")
         try:

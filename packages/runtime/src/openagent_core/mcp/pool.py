@@ -828,41 +828,60 @@ class MCPPool:
 
         async with self._lock:
             self._lifecycle_generation = getattr(self, "_lifecycle_generation", 0) + 1
-            old_supervisors = list(self._toolkit_supervisors)
-            old_toolkits = list(self._runtime_toolkits)
-            old_in_proc_agno = list(self._in_process_runtime_toolkits)
-            # Clear in-place so existing references (pool.runtime_toolkits returned
-            # by value is list[Any] built on each call, so that's fine; but
-            # provider code may also have stashed ``pool``, and after reload
-            # calls pool.runtime_toolkits again it must see the new list.)
-            self._toolkit_supervisors.clear()
-            self._runtime_toolkits.clear()
-            self._in_process_runtime_toolkits.clear()
-            self._toolkit_by_name.clear()
+            # Only sources whose spec changed, appeared or disappeared are
+            # restarted. A source whose resolved spec is identical keeps its
+            # live connection and toolkit object, so the catalog binding keeps
+            # its registration: runs already in progress do not lose tools
+            # because some other source was added or edited.
+            old_specs = {spec.name: spec for spec in self.specs}
+            # A dormant source (connected, zero tools) is not kept: reload is
+            # also how it gets another connection attempt.
+            kept = {
+                spec.name for spec in new_specs
+                if old_specs.get(spec.name) == spec and spec.name in self._toolkit_by_name
+                and self._tool_counts.get(spec.name, 0) > 0
+            }
+            old_supervisors = [sup for sup in self._toolkit_supervisors if sup.name not in kept]
+            kept_toolkits = {self._toolkit_by_name[name] for name in kept}
+            old_toolkits = [tk for tk in self._runtime_toolkits if tk not in kept_toolkits]
+            old_in_proc_agno = [tk for tk in self._in_process_runtime_toolkits if tk not in kept_toolkits]
+            self._toolkit_supervisors[:] = [sup for sup in self._toolkit_supervisors if sup.name in kept]
+            self._runtime_toolkits[:] = [tk for tk in self._runtime_toolkits if tk in kept_toolkits]
+            self._in_process_runtime_toolkits[:] = [
+                tk for tk in self._in_process_runtime_toolkits if tk in kept_toolkits
+            ]
+            for name in [name for name in self._toolkit_by_name if name not in kept]:
+                del self._toolkit_by_name[name]
+            previous_counts = self._tool_counts
             self.specs = new_specs
-            self._tool_counts = {s.name: 0 for s in new_specs}
-            self._last_recovery_error_type = {}
-            self._dead_recovery_sessions.clear()
-            self._connection_failures.clear()
-            self._last_connect_error = {}
+            self._tool_counts = {
+                s.name: previous_counts.get(s.name, 0) if s.name in kept else 0 for s in new_specs
+            }
+            for state in (self._last_recovery_error_type, self._connection_failures,
+                          self._last_connect_error):
+                for name in [name for name in state if name not in kept]:
+                    del state[name]
+            for name in [name for name in self._dead_recovery_sessions if name not in kept]:
+                self._dead_recovery_sessions.discard(name)
             self._connected = False
             # Server set + tool counts changed → drop the cached catalog
             # summary; the next prompt render will rebuild it from the
             # fresh self._tool_counts / self.specs.
             self._catalog_summary_cache = None
 
-        # connect_all has its own lock; new subprocesses come up first.
+        # connect_all has its own lock; it connects only what is not kept.
         try:
             await self.connect_all()
         finally:
-            # The old set is no longer reachable, even if replacement failed
-            # or was cancelled. Its owned DB connections must not be leaked.
+            # The replaced set is no longer reachable, even if replacement
+            # failed or was cancelled. Its owned DB connections must not leak.
             for sup in reversed(old_supervisors):
                 await self._shutdown_supervisor(sup)
             await self._close_in_process(old_in_proc_agno)
         elog(
             "mcp.pool.reload",
             new_servers=len(new_specs),
+            kept=len(kept),
             old_toolkits=len(old_toolkits) + len(old_in_proc_agno),
         )
 
@@ -887,7 +906,7 @@ class MCPPool:
             # the dormant-recovery TimeoutError — see _STARTUP_STAGGER_SECONDS.
             first_subprocess = True
             for spec in self.specs:
-                if spec.in_process:
+                if spec.in_process or spec.name in self._toolkit_by_name:
                     continue
                 if not first_subprocess and _STARTUP_STAGGER_SECONDS > 0:
                     await asyncio.sleep(_STARTUP_STAGGER_SECONDS)
@@ -945,7 +964,7 @@ class MCPPool:
             # 2. In-process MCPs — loaded by importing the adapter module and
             #    calling the named factory functions. No subprocess is spawned.
             for spec in self.specs:
-                if not spec.in_process:
+                if not spec.in_process or spec.name in self._toolkit_by_name:
                     continue
                 try:
                     mod = importlib.import_module(spec.adapter_module)  # type: ignore[arg-type]

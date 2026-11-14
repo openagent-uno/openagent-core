@@ -38,6 +38,7 @@
 - [Optional current-user notification capability](notifications.md).
 - [Optional channel message capability](channel-messages.md).
 - [Host secret references in MCP sources](mcp-secret-references.md).
+- [Changing MCP sources while the agent runs](mcp-catalog-changes.md)
 
 - [Beta54: optional video frame previews for image models](releases/v1.1.0-beta.54.md).
 
