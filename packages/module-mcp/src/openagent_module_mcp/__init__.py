@@ -40,7 +40,7 @@ revocations block new calls immediately.""",
 @dataclass(frozen=True, slots=True)
 class MCPDescriptor:
     id: str = "mcp"
-    version: str = "1.1.0b1"
+    version: str = "1.1.0b2"
     api_version: str = MODULE_API_VERSION
     requires_modules: frozenset[str] = frozenset()
     optional_integrations: frozenset[str] = frozenset({"tool-discovery"})

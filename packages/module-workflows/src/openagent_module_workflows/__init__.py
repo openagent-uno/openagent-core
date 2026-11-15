@@ -11,7 +11,7 @@ and tool references it started with; if a destination is unavailable the run
 fails instead of switching to another tool.""",
 "openagent-module-workflows", section="automation", priority=20)
 
-descriptor=NativeCapabilityDescriptor(id="workflows",version="1.1.0b1",
+descriptor=NativeCapabilityDescriptor(id="workflows",version="1.1.0b2",
     native_sources=("workflow-manager",),source_names={"workflow-manager":"workflows"},
     search_operation="list_workflows",search_source="workflows",
     search_accepts_limit=False,

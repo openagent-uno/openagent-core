@@ -7,7 +7,7 @@ from openagent_core.prompts import rule_blocks
 
 @dataclass(frozen=True,slots=True)
 class ToolDiscoveryDescriptor:
-    id:str="tool-discovery";version:str="1.1.0b1";api_version:str=MODULE_API_VERSION
+    id:str="tool-discovery";version:str="1.1.0b2";api_version:str=MODULE_API_VERSION
     requires_modules:frozenset[str]=frozenset();optional_integrations:frozenset[str]=frozenset()
     required_services:frozenset[object]=frozenset({"runtime.executor"})
     provided_services:frozenset[object]=frozenset()

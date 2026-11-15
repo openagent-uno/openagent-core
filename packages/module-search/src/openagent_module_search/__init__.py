@@ -24,7 +24,7 @@ shell or database access.""",
 @dataclass(frozen=True, slots=True)
 class SearchDescriptor:
     id: str = "search"
-    version: str = "1.1.0b2"
+    version: str = "1.1.0b3"
     api_version: str = MODULE_API_VERSION
     requires_modules: frozenset[str] = frozenset()
     optional_integrations: frozenset[str] = frozenset({"sessions","vault","workflows","scheduler","events"})

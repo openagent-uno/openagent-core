@@ -14,7 +14,7 @@ those are invisible to the user and bypass identity, authorization and
 cancellation. Never promise a future action without a verified schedule.""",
 "openagent-module-scheduler", section="automation", priority=10)
 
-descriptor=NativeCapabilityDescriptor(id="scheduler",version="1.1.0b1",
+descriptor=NativeCapabilityDescriptor(id="scheduler",version="1.1.0b2",
     native_sources=("scheduler",),source_names={"scheduler":"schedules"},
     search_operation="list_scheduled_tasks",search_source="schedules",
     search_accepts_limit=False,

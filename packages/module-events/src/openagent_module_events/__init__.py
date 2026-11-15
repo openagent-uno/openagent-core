@@ -11,7 +11,7 @@ Manage definitions and secrets only through its tools, and never reveal event
 credentials.""",
 "openagent-module-events", section="automation", priority=30)
 
-descriptor=NativeCapabilityDescriptor(id="events",version="1.1.0b1",
+descriptor=NativeCapabilityDescriptor(id="events",version="1.1.0b2",
     native_sources=("events-manager",),source_names={"events-manager":"events"},
     search_operation="list_events",search_source="events",
     search_accepts_limit=False,
