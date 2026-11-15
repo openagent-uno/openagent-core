@@ -926,6 +926,58 @@ class Scheduler:
         return await self.execution_service.run_task(self, task, trigger=trigger,
             request_id=request_id, payload=context, execute=self._execute_task)
 
+    async def _run_in_session(
+        self, task: dict, session_id: str, prompt: str, *,
+        timeout: float | None, dry_run: bool, lean_local: bool,
+    ) -> tuple[str, tuple[str, str] | None]:
+        """Run one firing of a session loop as a turn of ``session_id``.
+
+        Under the public runtime the turn is a top-level run of that session,
+        admitted with the task's captured delegation (never a child: a child
+        would re-parent the user's conversation, which the store refuses). The
+        runtime serializes it behind any live turn of the same session. The
+        definition's digest covers ``target_session_id``, so the person who
+        approved the task approved this exact conversation.
+        """
+        from openagent_core.core.dry_run import dry_run_scope
+        from openagent_core.core.execution_origin import execution_origin_scope
+        from openagent_core.core.execution_profile import (
+            lean_local_event_scope, lean_local_task_scope, strict_local_only_scope,
+        )
+        from openagent_core.core.identity_context import agent_author
+        from openagent_core.runtime import current_execution_context, current_runtime
+
+        runtime, context = current_runtime(), current_execution_context()
+        with (
+            execution_origin_scope(None),
+            dry_run_scope(dry_run),
+            lean_local_event_scope(lean_local),
+            lean_local_task_scope(lean_local),
+            strict_local_only_scope(lean_local),
+        ):
+            if runtime is not None and context is not None:
+                if not context.deferred or not context.delegation_id:
+                    raise PermissionError("A session loop requires its captured delegation")
+                from dataclasses import replace
+                from openagent_core.contracts import RunRequest
+
+                loop_context = replace(context, session_id=session_id, parent_run_id=None)
+                loop_run_id = str(uuid.uuid4())
+                request = RunRequest(loop_run_id, session_id, loop_run_id, prompt,
+                                     deadline_seconds=timeout, model_ref=task.get("model") or None)
+                await runtime.submit(request, loop_context)
+                record = await runtime.wait(loop_run_id, loop_context)
+                output = record.output if isinstance(record.output, str) else ""
+                if record.status != "success":
+                    return output, (record.status, f"Loop turn ended with status {record.status}")
+                return output, None
+            run = self.agent.run(
+                message=prompt, user_id="scheduler", session_id=session_id,
+                author=agent_author(task["name"], agent_name=getattr(self.agent, "name", None)),
+            )
+            response = await (asyncio.wait_for(run, timeout=timeout) if timeout is not None else run)
+            return str(response), None
+
     async def _execute_task(
         self, task: dict, *, trigger: str = "schedule", request_id: str | None = None,
         context: dict | None = None,
@@ -1016,6 +1068,11 @@ class Scheduler:
             mint_child_session_id("scheduler", {"task_id": task["id"], "run_id": run_id})
             if durable else f"scheduler:{task['id']}"
         ))
+        # A session loop runs IN its target conversation: the firing is a turn
+        # of that session, and task_runs links to it.
+        target_session = str(task.get("target_session_id") or "").strip() or None
+        if target_session:
+            session_id = target_session
         allowed_families: list[str] | None = execution_policy.get(
             "allowed_tool_families"
         )
@@ -1080,7 +1137,7 @@ class Scheduler:
             try:
                 await self.db.add_task_run(
                     task_id=task["id"], trigger=trigger, run_id=run_id,
-                    session_id=session_id if durable else None,
+                    session_id=session_id if (durable or target_session) else None,
                 )
                 recorded = True
             except Exception as e:  # noqa: BLE001
@@ -1164,7 +1221,12 @@ class Scheduler:
                     error=None if ok else "execute block failed",
                 )
                 return
-            if durable:
+            if target_session:
+                response, child_issue = await self._run_in_session(
+                    task, target_session, effective_prompt,
+                    timeout=run_timeout_s, dry_run=task_dry_run, lean_local=use_lean_local,
+                )
+            elif durable:
                 # A scheduled firing is the agent acting on a mission it gave
                 # itself: spawn a full child session under a per-task root,
                 # authored by the agent (so the app renders the prompt as a
@@ -1586,7 +1648,9 @@ class Scheduler:
                 )
                 run_id = str(uuid.uuid4())
                 durable = _durable_child_sessions()
-                if durable:
+                if task.get("target_session_id"):
+                    session_id = str(task["target_session_id"])
+                elif durable:
                     from openagent_core.core.child_session import mint_child_session_id
 
                     session_id = mint_child_session_id(

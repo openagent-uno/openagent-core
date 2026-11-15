@@ -173,7 +173,7 @@ async def list_scheduled_tasks(
 
     columns = (
         "id, name, cron_expression, enabled, last_run, next_run, model, "
-        "timezone, execution_policy_json, created_at, updated_at"
+        "timezone, execution_policy_json, target_session_id, created_at, updated_at"
     )
     if include_prompt:
         columns += ", prompt"

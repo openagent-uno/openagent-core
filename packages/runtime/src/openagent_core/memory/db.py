@@ -168,6 +168,11 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     -- max_tool_calls, timeout_seconds, allowed_tool_families. NULL preserves
     -- the historical global defaults. Migrated additively on old DBs.
     execution_policy_json TEXT,
+    -- Optional conversation this task runs IN (a session loop): each firing
+    -- is a turn of that session instead of a fresh scheduler child session.
+    -- NULL keeps the classic one-session-per-firing behaviour. Added by
+    -- ``_migrate_scheduled_tasks_target_session_column`` on old DBs.
+    target_session_id TEXT,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -1430,6 +1435,7 @@ class MemoryDB:
         await self._migrate_scheduled_tasks_timezone_column()
         await self._migrate_workflow_schedules_timezone_column()
         await self._migrate_scheduled_tasks_execution_policy_column()
+        await self._migrate_scheduled_tasks_target_session_column()
         await self._migrate_events_session_binding()
         await self._migrate_events_precondition()
         await self._migrate_events_execution_policy_column()
@@ -1861,6 +1867,17 @@ class MemoryDB:
         if "execution_policy_json" not in cols:
             await self._conn.execute(
                 "ALTER TABLE scheduled_tasks ADD COLUMN execution_policy_json TEXT"
+            )
+            await self._conn.commit()
+
+    async def _migrate_scheduled_tasks_target_session_column(self) -> None:
+        """Add the optional session a task runs in (session loops)."""
+        assert self._conn is not None
+        cursor = await self._conn.execute("PRAGMA table_info(scheduled_tasks)")
+        cols = {row[1] for row in await cursor.fetchall()}
+        if "target_session_id" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE scheduled_tasks ADD COLUMN target_session_id TEXT"
             )
             await self._conn.commit()
 
@@ -2857,11 +2874,13 @@ class MemoryDB:
         model: str | None = None,
         timezone: str | None = None,
         execution_policy: Any = None,
+        target_session_id: str | None = None,
     ) -> str:
         """``timezone`` is an IANA name the cron is read in; None = UTC (the
         pre-timezone behaviour). Validated here so a typo can't reach the
         scheduler loop, where it would surface only as a task that mysteriously
-        stopped advancing."""
+        stopped advancing. ``target_session_id`` makes the task a session loop:
+        every firing is a turn of that conversation."""
         from openagent_core.memory.schedule import validate_timezone
 
         validate_timezone(timezone)
@@ -2872,10 +2891,10 @@ class MemoryDB:
         task_id = str(uuid.uuid4())
         now = time.time()
         await conn.execute(
-            "INSERT INTO scheduled_tasks (id, name, cron_expression, prompt, enabled, next_run, model, timezone, execution_policy_json, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO scheduled_tasks (id, name, cron_expression, prompt, enabled, next_run, model, timezone, execution_policy_json, target_session_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)",
             (task_id, name, cron_expression, prompt, next_run or now, model or None,
-             (timezone or None), execution_policy_json, now, now),
+             (timezone or None), execution_policy_json, (target_session_id or None), now, now),
         )
         await conn.commit()
         return task_id
@@ -2900,6 +2919,7 @@ class MemoryDB:
         allowed = {
             "name", "cron_expression", "prompt", "enabled", "last_run",
             "next_run", "model", "timezone", "execution_policy_json",
+            "target_session_id",
         }
         updates = {k: v for k, v in kwargs.items() if k in allowed}
         if not updates:
