@@ -536,6 +536,20 @@ def _compact_descriptor_wire(tool) -> dict[str, Any]:
     }
 
 
+def _named_miss_hint(discovered, source_ref: str, tool_name: str) -> str:
+    """Say where a mistyped named call can go, from the authorized catalog only."""
+    message = "No such tool on this source or target."
+    elsewhere = sorted({tool.source_id for tool in discovered
+                        if tool.name == tool_name and tool.source_id != source_ref})
+    if elsewhere:
+        return message + f" `{tool_name}` is on source_ref " + ", ".join(repr(s) for s in elsewhere[:5]) + "."
+    names = sorted({tool.name for tool in discovered if tool.source_id == source_ref})
+    close = difflib.get_close_matches(tool_name, names, n=3, cutoff=0.5)
+    if close:
+        return message + " Close names on this source: " + ", ".join(close) + "."
+    return message + " list_tools shows the current names."
+
+
 # A short page carries each tool's input schema, so the usual "find one tool,
 # then call it" takes one discovery call instead of two. Larger pages, or a
 # schema too big to inline, stay compact; describe_tool still returns it.
@@ -1242,12 +1256,13 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
                 and (source_ref, tool_name) not in presentation.named_tools):
             raise PermissionError("Named calls are not enabled for this destination")
         _require_server_allowed(source_ref)
-        matches = [tool for tool in await catalog.discover(context)
+        discovered = await catalog.discover(context)
+        matches = [tool for tool in discovered
                    if tool.source_id == source_ref and tool.name == tool_name]
         if target_label is not None:
             matches = [tool for tool in matches if tool.target_label == target_label]
         if not matches:
-            raise LookupError("No such tool on this source or target; list_tools shows the current names")
+            raise LookupError(_named_miss_hint(discovered, source_ref, tool_name))
         if len(matches) > 1:
             targets = sorted({str(tool.target_label) for tool in matches})
             raise LookupError("This tool runs on several targets; pass target_label, one of: "

@@ -217,6 +217,24 @@ class DiscoveryPresentationContract(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             DiscoveryPresentation(named_calls="anything")
 
+    async def test_a_named_miss_points_to_the_right_source_or_close_names(self):
+        search = FunctionSource((ToolDefinition("records_search", "Search records", {}),),
+                                {"records_search": lambda args, context: None})
+        self.catalog.register("records-gate", search, search, target_label="service-a")
+        _, tools = await self.make_pool(DiscoveryPresentation(named_calls="authorized"))
+        call = tools["tool_search_call_named_tool"].entrypoint
+        with execution_scope(self.runtime, self.context, "run-a"):
+            with self.assertRaises(LookupError) as wrong_source:
+                await call(source_ref="records", tool_name="records_search")
+            with self.assertRaises(LookupError) as typo:
+                await call(source_ref="records", tool_name="operaton_07")
+            with self.assertRaises(LookupError) as hidden:
+                await call(source_ref="records", tool_name="private_operation")
+        self.assertIn("is on source_ref 'records-gate'", str(wrong_source.exception))
+        self.assertIn("Close names on this source: operation_07", str(typo.exception))
+        self.assertNotIn("hidden-source", str(hidden.exception))
+        self.assertEqual([], self.calls)
+
     async def test_a_named_call_on_a_source_with_several_targets_names_the_target(self):
         def capture(label):
             async def execute(arguments, context):
