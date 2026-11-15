@@ -54,7 +54,7 @@ def test_catalogue_import_starts_no_engine():
 
 def test_scopes_separate_session_from_instance_commands():
     names = {spec.name for spec in cc.commands_for_scopes(["session"])}
-    assert {"new", "clear", "reset", "stop", "status", "queue", "help", "compact", "model", "context"} == names
+    assert {"new", "clear", "reset", "stop", "status", "queue", "help", "compact", "model", "context", "goal"} == names
     assert {spec.name for spec in cc.COMMAND_SPECS} - names == {"usage", "update", "restart"}
     with pytest.raises(ValueError):
         cc.commands_for_scopes(["unknown"])

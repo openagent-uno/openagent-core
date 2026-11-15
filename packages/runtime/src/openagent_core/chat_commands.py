@@ -77,6 +77,8 @@ COMMAND_SPECS = (
     ChatCommandSpec("help", "Show available commands", "show this help message"),
     ChatCommandSpec("compact", "Summarize & compress the conversation to free up context", "fold older turns into a recap to free context"),
     ChatCommandSpec("model", "Switch the model for this conversation", "list configured models or switch: /model <id>", arg_source="models"),
+    ChatCommandSpec("goal", "Give this conversation a goal the agent keeps working on until done",
+                    "/goal <objective> | status | pause | resume | done | clear | max <n>"),
 )
 
 COMMAND_MAP = {spec.name: spec for spec in COMMAND_SPECS}
@@ -259,7 +261,7 @@ class ChatCommandService:
         handler = {
             "new": self._reset, "reset": self._reset, "clear": self._reset, "stop": self._stop,
             "status": self._status, "queue": self._queue, "help": self._help, "context": self._context,
-            "model": self._model,
+            "model": self._model, "goal": self._goal,
         }.get(name)
         if name == "compact":
             handler = lambda r: self._compact(r, on_compaction_status)  # noqa: E731
@@ -386,6 +388,53 @@ class ChatCommandService:
                 return self._detail("Failed to clear model pin", exc)
             return ChatCommandResult("Model pin cleared — back to Auto (best model picked automatically).")
         return await self._pin_model(control, db, session_id, arg.strip())
+
+    async def _goal(self, request: ChatCommandRequest) -> ChatCommandResult:
+        from . import session_goal
+
+        session_id = request.session.session_id
+        if not session_id:
+            return ChatCommandResult("No active session — a goal belongs to one conversation.")
+        db = getattr(self.agent, "memory_db", None)
+        if db is None:
+            return ChatCommandResult("Memory DB not available.")
+        store = session_goal.GoalStore(db)
+        arg = (request.argument or "").strip()
+        word = arg.lower()
+        if word in ("", "status", "show"):
+            return ChatCommandResult(session_goal.describe(await store.get(session_id)))
+        if word == "pause":
+            goal = await store.pause(session_id, "Paused by the user.")
+            return ChatCommandResult(session_goal.describe(goal) if goal else "No goal to pause.")
+        if word == "resume":
+            goal = await store.resume(session_id)
+            if goal is None:
+                return ChatCommandResult("No goal to resume.")
+            if goal.status != session_goal.ACTIVE:
+                return ChatCommandResult(session_goal.describe(goal))
+            return ChatCommandResult("Goal resumed with a fresh continuation budget. Send a message to continue.\n"
+                                     + session_goal.describe(goal))
+        if word in ("done", "complete", "achieved"):
+            goal = await store.complete(session_id, "Marked done by the user.")
+            return ChatCommandResult(session_goal.describe(goal) if goal else "No goal to complete.")
+        if word in ("clear", "off", "remove", "delete"):
+            removed = await store.clear(session_id)
+            return ChatCommandResult("Goal cleared." if removed else "No goal to clear.")
+        if word.startswith("max"):
+            parts = arg.split()
+            if len(parts) != 2 or not parts[1].isdigit():
+                return ChatCommandResult("Usage: /goal max <number of automatic continuations>", FAILED)
+            try:
+                goal = await store.update(session_id, max_continuations=int(parts[1]))
+            except ValueError as exc:
+                return ChatCommandResult(str(exc), FAILED)
+            return ChatCommandResult(session_goal.describe(goal) if goal else "No goal to change.")
+        goal = await store.set(session_id, arg)
+        return ChatCommandResult(
+            f"Goal set: {goal.objective}\n"
+            "The agent will keep working on it in this conversation until it is achieved or blocked, "
+            f"for up to {goal.max_continuations} automatic continuations. Send a message to start "
+            "(for example: start). Manage it with /goal status | pause | resume | done | clear.")
 
     async def _list_models(self, control: Any, session_id: str) -> ChatCommandResult:
         # ``available_models`` is the enriched query: raw ``models`` rows carry

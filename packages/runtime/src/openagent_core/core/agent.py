@@ -1703,6 +1703,8 @@ class Agent:
         # ``session_id`` appends a ``<session-id>`` tag so the LLM can
         # call tools that operate on its own session (e.g. pin_session).
         system = await self._compose_run_prompt(session_id=session_id)
+        from openagent_core import session_goal as _session_goal
+        system = await _session_goal.decorate_system(self._db, session_id, system)
 
         # AgentOS-aligned media handling: split attachments by MIME and
         # construct typed runtime media objects (Image / Audio / Video /
@@ -1891,18 +1893,26 @@ class Agent:
 
                 events = hub.drain(session_id, context_key=job_context)
                 if not events:
-                    if not hub.has_running(
+                    if hub.has_running(
                         session_id, context_key=job_context,
-                    ):
-                        break
-                    if wake_window > 0:
+                    ) and wake_window > 0:
                         events = await hub.wait(
                             session_id,
                             timeout=wake_window,
                             context_key=job_context,
                         )
                     if not events:
-                        break
+                        # The turn would end here. An active session goal
+                        # continues it with a reminder instead (bounded by the
+                        # goal's own continuation budget, not the shell cap).
+                        goal_input = await _session_goal.after_reply(
+                            self._db, session_id, answer_text)
+                        if goal_input is None:
+                            break
+                        elog("agent.run.goal_continue", session_id=session_id, iter=iter_count)
+                        cap = max(cap, iter_count + 1)
+                        current_input = goal_input
+                        continue
 
                 elog(
                     "agent.run.autoloop_iter",
@@ -2128,6 +2138,8 @@ class Agent:
         """
         await _status("Loading context...")
         system = await self._compose_run_prompt(session_id=session_id)
+        from openagent_core import session_goal as _session_goal
+        system = await _session_goal.decorate_system(self._db, session_id, system)
 
         # AgentOS-aligned media: see ``_run_inner`` above for the full
         # rationale. Same per-MIME split + content=bytes construction.
@@ -2211,6 +2223,7 @@ class Agent:
         try:
             while True:
                 final_answer = None  # Never reuse a prior autoloop iteration.
+                iter_mark = len(accumulated)
                 iter_count += 1
                 if iter_count > cap:
                     elog("agent.run_stream.autoloop_cap_hit",
@@ -2332,18 +2345,27 @@ class Agent:
 
                 events = hub.drain(session_id, context_key=job_context)
                 if not events:
-                    if not hub.has_running(
+                    if hub.has_running(
                         session_id, context_key=job_context,
-                    ):
-                        break
-                    if wake_window > 0:
+                    ) and wake_window > 0:
                         events = await hub.wait(
                             session_id,
                             timeout=wake_window,
                             context_key=job_context,
                         )
                     if not events:
-                        break
+                        # Same session-goal continuation as ``_run_inner``.
+                        reply_text = (final_answer["text"] if final_answer is not None
+                                      else "".join(accumulated[iter_mark:]))
+                        goal_input = await _session_goal.after_reply(
+                            self._db, session_id, reply_text)
+                        if goal_input is None:
+                            break
+                        elog("agent.run_stream.goal_continue", session_id=session_id, iter=iter_count)
+                        cap = max(cap, iter_count + 1)
+                        yield {"kind": "iteration_break"}
+                        current_input = goal_input
+                        continue
 
                 # Force-flush any in-progress sentence before re-entering the
                 # model — a sentence split by a tool call must not be
