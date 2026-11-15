@@ -87,10 +87,22 @@ class CapabilityMapAndDiscovery(unittest.IsolatedAsyncioTestCase):
         groups = [{"source_ref": f"source-{i}", "target_label": "agent", "tools": ["x"], "tool_count": 1,
                    "description": "does things " * 10} for i in range(80)]
 
-        text = capability_map.render(groups, max_chars=1500)
+        text = capability_map.render(groups, max_chars=2000)
 
-        self.assertLessEqual(len(text), 1500)
-        self.assertIn("more sources: call `tool_search_list_servers`", text)
+        self.assertLessEqual(len(text), 2000)
+        self.assertIn("Also available (call `tool_search_list_servers` for details): source-", text)
+
+    def test_one_line_per_source_with_every_target_and_framework_sources_first(self):
+        tools = [SimpleNamespace(source_id=source, target_label=target, name=name, metadata={})
+                 for source, target, name in (("shell", "agent", "shell_exec"), ("shell", "Alice's Mac", "shell_exec"),
+                                              ("acme", "cloud", "list"), ("vault", "agent", "vault_search"))]
+
+        groups = capability_map.group_sources(tools)
+        text = capability_map.render(groups)
+
+        self.assertEqual(["shell", "vault", "acme"], [g["source_ref"] for g in groups])
+        self.assertEqual(1, text.count("- shell @"))
+        self.assertIn("- shell @ agent, Alice's Mac (1 tools)", text)
 
     def test_stems_and_aliases(self):
         self.assertEqual(capability_map.stem("schedule"), capability_map.stem("scheduled"))

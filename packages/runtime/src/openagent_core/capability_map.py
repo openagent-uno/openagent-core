@@ -75,9 +75,9 @@ SOURCE_ALIASES: dict[str, str] = {
 }
 
 # Sources small enough to list their tool names inline.
-_INLINE_TOOL_LIMIT = 12
-_DESCRIPTION_CHARS = 160
-_DEFAULT_MAP_CHARS = 7000
+_INLINE_TOOL_LIMIT = 8
+_DESCRIPTION_CHARS = 120
+_DEFAULT_MAP_CHARS = 9000
 
 
 def canonical_source(name: Optional[str]) -> Optional[str]:
@@ -115,18 +115,20 @@ def _clip(text: str, limit: int) -> str:
 
 
 def group_sources(tools: Iterable[Any], overrides: Optional[Mapping[str, str]] = None) -> list[dict[str, Any]]:
-    """Group discovered tool descriptors by (source, target) with descriptions."""
-    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    """Group discovered tool descriptors by source, listing every target it acts on."""
+    groups: dict[str, dict[str, Any]] = {}
     for tool in tools:
         source_id = str(getattr(tool, "source_id", "") or "")
         target = str(getattr(tool, "target_label", "") or "")
         if not source_id:
             continue
-        entry = groups.setdefault((source_id, target), {
-            "source_ref": source_id, "target_label": target, "tools": [],
+        entry = groups.setdefault(source_id, {
+            "source_ref": source_id, "targets": [], "tools": set(),
             "description": source_summary(source_id, overrides),
         })
-        entry["tools"].append(str(getattr(tool, "name", "")))
+        if target and target not in entry["targets"]:
+            entry["targets"].append(target)
+        entry["tools"].add(str(getattr(tool, "name", "")))
         if not entry["description"]:
             metadata = getattr(tool, "metadata", None) or {}
             declared = metadata.get("openagent/source-instructions") if hasattr(metadata, "get") else None
@@ -135,10 +137,14 @@ def group_sources(tools: Iterable[Any], overrides: Optional[Mapping[str, str]] =
                 entry["description"] = f"(as the server describes itself) {first}"
     out = []
     for entry in groups.values():
-        entry["tools"] = sorted(set(filter(None, entry["tools"])), key=str.casefold)
+        entry["tools"] = sorted(filter(None, entry["tools"]), key=str.casefold)
         entry["tool_count"] = len(entry["tools"])
+        entry["target_label"] = ", ".join(entry["targets"])
         out.append(entry)
-    return sorted(out, key=lambda e: (e["source_ref"] == "tool-search", e["target_label"].casefold(), e["source_ref"]))
+    # Framework sources first (the agent's own memory, history and automation),
+    # then everything else, alphabetically; discovery itself last.
+    return sorted(out, key=lambda e: (e["source_ref"] == "tool-search",
+                                      e["source_ref"] not in SOURCE_SUMMARIES, e["source_ref"]))
 
 
 def render(groups: list[dict[str, Any]], *, max_chars: int = _DEFAULT_MAP_CHARS) -> str:
@@ -152,8 +158,8 @@ def render(groups: list[dict[str, Any]], *, max_chars: int = _DEFAULT_MAP_CHARS)
         "function list: find one with `tool_search_list_tools(source_ref=..., query=...)` (or "
         "`tool_search_list_tools(query=...)` across all sources), check its schema with "
         "`tool_search_describe_tool(tool_ref)` when unsure, and call it with "
-        "`tool_search_call_tool(tool_ref, args)`. The target is the computer or account a tool acts on; "
-        "never use a tool on a different target than the one asked for.\n"
+        "`tool_search_call_tool(tool_ref, args)`. After @ is the computer or account each source acts "
+        "on; a source on several targets has a separate tool per target, so pick the target asked for.\n"
     )
     lines = []
     for group in groups:
@@ -164,7 +170,7 @@ def render(groups: list[dict[str, Any]], *, max_chars: int = _DEFAULT_MAP_CHARS)
             line += f". Tools: {', '.join(group['tools'])}"
         lines.append(line)
     tail = "</capabilities>"
-    budget = max_chars - len(head) - len(tail) - 80
+    budget = max_chars - len(head) - len(tail) - 620  # room for the "Also available" line
     kept, used = [], 0
     for line in lines:
         if used + len(line) + 1 > budget:
@@ -172,7 +178,8 @@ def render(groups: list[dict[str, Any]], *, max_chars: int = _DEFAULT_MAP_CHARS)
         kept.append(line)
         used += len(line) + 1
     if len(kept) < len(lines):
-        kept.append(f"- … {len(lines) - len(kept)} more sources: call `tool_search_list_servers` for the full list.")
+        omitted = ", ".join(g["source_ref"] for g in groups[len(kept):])
+        kept.append(_clip(f"- Also available (call `tool_search_list_servers` for details): {omitted}", 600))
     return head + "\n".join(kept) + "\n" + tail
 
 
