@@ -189,6 +189,75 @@ class DiscoveryPresentationContract(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(PermissionError):
                 await call(source_ref="records", tool_name="operation_00")
 
+    async def test_authorized_named_calls_reach_any_discoverable_tool_and_nothing_more(self):
+        _, tools = await self.make_pool(DiscoveryPresentation(named_calls="authorized"))
+        call = tools["tool_search_call_named_tool"].entrypoint
+        with self.assertRaises(PermissionError):
+            await call(source_ref="records", tool_name="operation_07")  # no execution
+        with execution_scope(self.runtime, self.context, "run-a"):
+            self.assertEqual({"selected": "operation_07"},
+                             await call(source_ref="records", tool_name="operation_07", args={"value": "x"}))
+            for source, name in (("records", "operation-07"), ("records", "missing"),
+                                 ("hidden-source", "private_operation")):
+                with self.assertRaises(LookupError):
+                    await call(source_ref=source, tool_name=name)
+            token = set_tool_allowlist({"other-records"})
+            try:
+                with self.assertRaises(PermissionError):
+                    await call(source_ref="records", tool_name="operation_07")
+            finally:
+                reset_tool_allowlist(token)
+            self.policy.denied.add("records/operation_07")
+            with self.assertRaises(PermissionError):
+                await call(source_ref="records", tool_name="operation_07")
+            self.catalog.revoke("records")
+            with self.assertRaises(LookupError):
+                await call(source_ref="records", tool_name="operation_08")
+        self.assertEqual(self.calls, [("operation_07", {"value": "x"})])
+        with self.assertRaises(ValueError):
+            DiscoveryPresentation(named_calls="anything")
+
+    async def test_a_named_call_on_a_source_with_several_targets_names_the_target(self):
+        def capture(label):
+            async def execute(arguments, context):
+                self.calls.append((label, arguments))
+                return {"on": label}
+            return execute
+        from dataclasses import replace
+
+        class OneSourceOnTwoTargets(CapabilityCatalog):
+            # A host may present one logical source on several devices.
+            async def discover(self, context):
+                return tuple(replace(tool, source_id="screens") if tool.source_id.startswith("screens-")
+                             else tool for tool in await super().discover(context))
+
+        self.catalog = OneSourceOnTwoTargets(self.policy)
+        self.runtime = RecordingRuntime(self.catalog)
+        for label in ("laptop", "desktop"):
+            source = FunctionSource((ToolDefinition("capture", "Capture screen", {}),),
+                                    {"capture": capture(label)})
+            self.catalog.register(f"screens-{label}", source, source, target_label=label)
+        _, tools = await self.make_pool(DiscoveryPresentation(named_calls="authorized"))
+        call = tools["tool_search_call_named_tool"].entrypoint
+        with execution_scope(self.runtime, self.context, "run-a"):
+            with self.assertRaises(LookupError) as ambiguous:
+                await call(source_ref="screens", tool_name="capture")
+            self.assertIn("desktop, laptop", str(ambiguous.exception))
+            self.assertEqual({"on": "desktop"},
+                             await call(source_ref="screens", tool_name="capture", target_label="desktop"))
+            with self.assertRaises(LookupError):
+                await call(source_ref="screens", tool_name="capture", target_label="phone")
+
+    async def test_a_short_tool_page_carries_schemas_and_a_long_one_stays_compact(self):
+        _, tools = await self.make_pool()
+        list_tools = tools["tool_search_list_tools"].entrypoint
+        with execution_scope(self.runtime, self.context, "run-a"):
+            short = await list_tools(source_ref="records", limit=2)
+            long = await list_tools(source_ref="records", limit=10)
+        self.assertEqual([{"type": "object", "properties": {"value": {"type": "string"}}}] * 2,
+                         [tool["input_schema"] for tool in short["tools"]])
+        self.assertTrue(all("input_schema" not in tool for tool in long["tools"]))
+
     def test_presentation_is_copied_bounded_and_rejects_unknown_tool_overrides(self):
         summaries = {"records": "Original"}
         named_tools = {("records", "operation_00")}

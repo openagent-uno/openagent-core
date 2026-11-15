@@ -536,6 +536,27 @@ def _compact_descriptor_wire(tool) -> dict[str, Any]:
     }
 
 
+# A short page carries each tool's input schema, so the usual "find one tool,
+# then call it" takes one discovery call instead of two. Larger pages, or a
+# schema too big to inline, stay compact; describe_tool still returns it.
+_INLINE_SCHEMA_PAGE = 3
+_INLINE_SCHEMA_CHARS = 4000
+
+
+def _listed_descriptor_wire(tool, page_size: int) -> dict[str, Any]:
+    compact = _compact_descriptor_wire(tool)
+    if page_size > _INLINE_SCHEMA_PAGE:
+        return compact
+    schema = dict(tool.input_schema)
+    try:
+        size = len(json.dumps(schema, default=str))
+    except (TypeError, ValueError):
+        return compact
+    if size > _INLINE_SCHEMA_CHARS:
+        return compact
+    return {**compact, "input_schema": schema}
+
+
 async def _list_scoped_tools_impl(
     pool: Any,
     source_ref: str | None = None,
@@ -585,7 +606,7 @@ async def _list_scoped_tools_impl(
         "offset": offset,
         "limit": limit,
         "has_more": offset + len(page) < len(ranked),
-        "tools": [_compact_descriptor_wire(tool) for tool in page],
+        "tools": [_listed_descriptor_wire(tool, len(page)) for tool in page],
     }
     if resolved_from is not None:
         result["resolved_from"] = resolved_from
@@ -1198,24 +1219,45 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
 
     async def tool_search_call_named_tool(
         source_ref: str, tool_name: str, args: dict | str | None = None,
+        target_label: str | None = None,
     ) -> Any:
-        """Invoke an exact tool by name when the host enables named calls for it.
+        """Call a tool by its source and exact name, without a tool_ref.
+
+        Use the source_ref and tool name shown in the <capabilities> map or
+        returned by list_tools. The name stays valid across turns and
+        restarts, unlike a tool_ref. Same tool, same target, same
+        authorization as tool_search_call_tool; read describe_tool's schema
+        first when unsure of the arguments.
 
         Args:
-            source_ref: Exact capability source ID supplied by the host or discovery.
-            tool_name: Exact registered tool name, including any prefix from discovery.
+            source_ref: Exact capability source ID, as in the map or list_tools.
+            tool_name: Exact tool name, as returned by list_tools.
             args: Target tool arguments as an object, or as a JSON-encoded object string.
+            target_label: The computer or account to act on, as after @ in the
+                map. Required only when the source runs on several targets.
         """
         catalog, context = _authorized_catalog(pool)
-        if (source_ref, tool_name) not in pool.discovery_presentation.named_tools:
+        presentation = pool.discovery_presentation
+        if (presentation.named_calls != "authorized"
+                and (source_ref, tool_name) not in presentation.named_tools):
             raise PermissionError("Named calls are not enabled for this destination")
         _require_server_allowed(source_ref)
-        reference = await catalog.resolve_tool_ref(source_ref, tool_name, context)
-        return await invoke_for_model(catalog, context, reference, args)
+        matches = [tool for tool in await catalog.discover(context)
+                   if tool.source_id == source_ref and tool.name == tool_name]
+        if target_label is not None:
+            matches = [tool for tool in matches if tool.target_label == target_label]
+        if not matches:
+            raise LookupError("No such tool on this source or target; list_tools shows the current names")
+        if len(matches) > 1:
+            targets = sorted({str(tool.target_label) for tool in matches})
+            raise LookupError("This tool runs on several targets; pass target_label, one of: "
+                              + ", ".join(targets))
+        return await invoke_for_model(catalog, context, matches[0].tool_ref, args)
 
     tools = [tool_search_list_servers, tool_search_list_tools,
              tool_search_describe_tool, tool_search_call_tool]
-    if pool.discovery_presentation.named_tools:
+    if (pool.discovery_presentation.named_tools
+            or pool.discovery_presentation.named_calls == "authorized"):
         tools.append(tool_search_call_named_tool)
     toolkit = Toolkit(name="tool-search", tools=tools)
     for function in _functions_dict(toolkit).values():

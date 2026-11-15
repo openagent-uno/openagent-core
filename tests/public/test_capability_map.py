@@ -104,6 +104,15 @@ class CapabilityMapAndDiscovery(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, text.count("- shell @"))
         self.assertIn("- shell @ agent, Alice's Mac (1 tools)", text)
 
+    def test_the_map_teaches_named_calls_only_when_the_host_enables_them(self):
+        tools = [SimpleNamespace(source_id="acme", target_label="cloud", name="list", metadata={})]
+        groups = capability_map.group_sources(tools)
+
+        self.assertNotIn("tool_search_call_named_tool", capability_map.render(groups))
+        named = capability_map.render(groups, named_calls=True)
+        self.assertIn("tool_search_call_named_tool(source_ref, tool_name, args)", named)
+        self.assertIn("target_label", named)
+
     def test_stems_and_aliases(self):
         self.assertEqual(capability_map.stem("schedule"), capability_map.stem("scheduled"))
         self.assertEqual(capability_map.stem("schedules"), capability_map.stem("scheduling"))

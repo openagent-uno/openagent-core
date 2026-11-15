@@ -14,6 +14,7 @@ _DISCOVERY_TOOLS = frozenset({
     "tool_search_list_servers", "tool_search_list_tools",
     "tool_search_describe_tool", "tool_search_call_tool", "tool_search_call_named_tool",
 })
+NAMED_CALL_MODES = frozenset({"listed", "authorized"})
 
 
 def _text_mapping(values: Mapping[str, str], *, limit: int) -> Mapping[str, str]:
@@ -38,7 +39,12 @@ class DiscoveryPresentation:
     The complete inventory still comes from paged ``list_tools``. Descriptions
     affect presentation only; schemas, references and authorization stay intact.
     ``named_tools`` enables a model-facing call by exact source and tool name
-    for the supplied pairs. The catalog still resolves and authorizes the call.
+    for the supplied pairs. ``named_calls="authorized"`` extends that call to
+    every tool the execution is authorized to discover: the name resolves
+    through the same authorized catalog as a discovered ``tool_ref`` and calls
+    it through the same path, so it grants nothing discovery would not, and it
+    stays valid when references are reissued (a reconnect or a restart). The
+    default ``"listed"`` keeps named calls to the ``named_tools`` pairs.
     """
 
     capability_sources: frozenset[str] = frozenset()
@@ -46,6 +52,7 @@ class DiscoveryPresentation:
     source_summaries: Mapping[str, str] = field(default_factory=dict)
     tool_descriptions: Mapping[str, str] = field(default_factory=dict)
     named_tools: frozenset[tuple[str, str]] = frozenset()
+    named_calls: str = "listed"
 
     def __post_init__(self) -> None:
         if not isinstance(self.capability_sources, (set, frozenset, tuple, list)):
@@ -68,6 +75,8 @@ class DiscoveryPresentation:
             ) for pair in self.named_tools
         ):
             raise ValueError("Named tools require up to 50 exact source and tool pairs")
+        if self.named_calls not in NAMED_CALL_MODES:
+            raise ValueError("Named calls must be 'listed' or 'authorized'")
         object.__setattr__(self, "capability_sources", sources)
         object.__setattr__(self, "source_summaries", summaries)
         object.__setattr__(self, "tool_descriptions", descriptions)

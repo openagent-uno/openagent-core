@@ -142,11 +142,12 @@ class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
             right = right_page["tools"][0]
             self.assertNotEqual(left["tool_ref"], right["tool_ref"])
             self.assertEqual(left["name"], right["name"])
-            self.assertNotIn("input_schema", left)
             described = await functions["tool_search_describe_tool"].entrypoint(
                 tool_ref=left["tool_ref"]
             )
             self.assertIn("value", described["input_schema"]["properties"])
+            # A short page already carries the exact schema describe_tool returns.
+            self.assertEqual(left["input_schema"], described["input_schema"])
             result = await call.entrypoint(tool_ref=left["tool_ref"], args={"value": "exact"})
             self.assertEqual(result["structuredContent"], {"value": "exact"})
             self.assertEqual(result["_meta"], {"target": "left"})
@@ -325,7 +326,7 @@ class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
             page = await functions["tool_search_list_tools"].entrypoint(query="read", limit=1)
             self.assertEqual(page["total"], 2)
             self.assertTrue(page["has_more"])
-            self.assertNotIn("input_schema", page["tools"][0])
+            self.assertIn("value", page["tools"][0]["input_schema"]["properties"])
             other = await _list_scoped_tools_impl(self.pool, query="read", limit=1, offset=1)
             self.assertNotEqual(page["tools"][0]["tool_ref"], other["tools"][0]["tool_ref"])
             self.assertEqual({page["tools"][0]["source_ref"], other["tools"][0]["source_ref"]}, {"left", "right"})

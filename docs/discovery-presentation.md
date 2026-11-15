@@ -73,6 +73,29 @@ as an opaque-reference call. Tools with an unknown schema can still be inspected
 with regular discovery. A missing pair or unavailable binding fails without
 substituting another tool or source.
 
+### Named calls for every authorized tool
+
+Starting with Core `1.1.0b103`, `DiscoveryPresentation(named_calls="authorized")`
+extends the named call to every tool the execution may discover. The name is
+matched in the same authorized `discover(context)` result a `tool_ref` comes
+from, and the call goes through the same catalog path, so it grants nothing that
+listing and calling by reference would not; tool-family allowlists, policy
+denials and revocations apply unchanged. Unlike a `tool_ref`, which is reissued
+when a source reconnects or the host restarts, `(source_ref, tool_name)` stays
+valid, so a model can reuse what it learned in earlier turns.
+
+When one source is presented on several targets, pass `target_label`; without it
+the call fails and the error lists the targets instead of picking one. The
+default, `named_calls="listed"`, keeps named calls to the `named_tools` pairs.
+With named calls on, the `<capabilities>` section tells the model to use them.
+
+### Schemas in short pages
+
+A `tool_search_list_tools` page of up to three tools includes each tool's
+`input_schema` (when it is at most 4000 characters), so finding and calling one
+tool takes one discovery call. Longer pages stay compact; `describe_tool` still
+returns the schema.
+
 The [targeted qualification](evidence/discovery-presentation-v1-2026-11-02.json)
 uses a real built-in discovery toolkit, neutral capability sources and54 tools.
 It checks summary bounds, denial and instance isolation, exact references and

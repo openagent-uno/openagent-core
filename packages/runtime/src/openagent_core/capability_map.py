@@ -161,19 +161,26 @@ def group_sources(tools: Iterable[Any], overrides: Optional[Mapping[str, str]] =
                                       e["source_ref"] not in SOURCE_SUMMARIES, e["source_ref"]))
 
 
-def render(groups: list[dict[str, Any]], *, max_chars: int = _DEFAULT_MAP_CHARS) -> str:
+def render(groups: list[dict[str, Any]], *, max_chars: int = _DEFAULT_MAP_CHARS,
+           named_calls: bool = False) -> str:
     """The plain-text ``<capabilities>`` section for the system prompt."""
     groups = [g for g in groups if g["source_ref"] != "tool-search"]
     if not groups:
         return ""
+    call = (
+        "call it with `tool_search_call_named_tool(source_ref, tool_name, args)` using the source and "
+        "tool name shown here or by list_tools, plus `target_label` for a source on several targets "
+        "(names stay valid across turns; `tool_search_call_tool(tool_ref, args)` also works)"
+        if named_calls else "call it with `tool_search_call_tool(tool_ref, args)`"
+    )
     head = (
         "<capabilities>\n"
         "These are the capability sources you can use in this turn. Their tools are not in your "
         "function list: find one with `tool_search_list_tools(source_ref=..., query=...)` (or "
         "`tool_search_list_tools(query=...)` across all sources), check its schema with "
-        "`tool_search_describe_tool(tool_ref)` when unsure, and call it with "
-        "`tool_search_call_tool(tool_ref, args)`. After @ is the computer or account each source acts "
-        "on; a source on several targets has a separate tool per target, so pick the target asked for.\n"
+        "`tool_search_describe_tool(tool_ref)` when unsure, and " + call + ". After @ is the computer "
+        "or account each source acts on; a source on several targets has a separate tool per target, "
+        "so pick the target asked for.\n"
     )
     lines = []
     for group in groups:
@@ -198,7 +205,7 @@ def render(groups: list[dict[str, Any]], *, max_chars: int = _DEFAULT_MAP_CHARS)
 
 
 async def render_for_turn(runtime: Any, context: Any, *, overrides: Optional[Mapping[str, str]] = None,
-                          max_chars: int = _DEFAULT_MAP_CHARS) -> str:
+                          max_chars: int = _DEFAULT_MAP_CHARS, named_calls: bool = False) -> str:
     """The capability map for the current execution, or ``""`` when unavailable."""
     if runtime is None or context is None:
         return ""
@@ -209,7 +216,7 @@ async def render_for_turn(runtime: Any, context: Any, *, overrides: Optional[Map
         tools = await catalog.discover(context)
     except Exception:  # noqa: BLE001 - the map is advisory; discovery stays authoritative
         return ""
-    return render(group_sources(tools, overrides), max_chars=max_chars)
+    return render(group_sources(tools, overrides), max_chars=max_chars, named_calls=named_calls)
 
 
 _STEM_SUFFIXES = ("ations", "ation", "ings", "ing", "ies", "ers", "er", "es", "ed", "s")

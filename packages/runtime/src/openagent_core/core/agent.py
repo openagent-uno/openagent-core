@@ -2755,7 +2755,8 @@ class Agent:
         from openagent_core import capability_map
         presentation = getattr(self._mcp, "discovery_presentation", None)
         capabilities = await capability_map.render_for_turn(
-            runtime, context, overrides=getattr(presentation, "source_summaries", None))
+            runtime, context, overrides=getattr(presentation, "source_summaries", None),
+            named_calls=getattr(presentation, "named_calls", "listed") == "authorized")
         if capabilities:
             text = f"{text}\n\n{capabilities}"
         if runtime is not None and context is not None and run_id:
