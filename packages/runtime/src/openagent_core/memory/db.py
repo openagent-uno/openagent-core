@@ -2816,7 +2816,19 @@ class MemoryDB:
         retrying cannot help because the snapshot stays stale.
 
         The wait is short on purpose: see ``delivery_lock_wait_ms``.
+
+        A database built with ``from_connection`` borrows a transaction its
+        host already opened with ``BEGIN IMMEDIATE`` (for example
+        ``AutomationRepository.definition_store``). That transaction already
+        holds the write lock, so a second writer would wait for it and fail
+        with "database is locked". The write joins the borrowed transaction
+        instead; committing, rolling back and closing stay with its owner.
         """
+        if not self._owns_connection:
+            if self._conn is None:
+                raise RuntimeError("A borrowed database has no transaction to write in")
+            yield self._conn
+            return
         wait_ms = delivery_lock_wait_ms() if lock_wait_ms is None else lock_wait_ms
         conn = await aiosqlite.connect(
             self.db_path, timeout=wait_ms / 1000.0,
