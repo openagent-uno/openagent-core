@@ -6,6 +6,7 @@
 - [Provider failure messages](provider-failure-messages.md): empty provider accounts (402) and oversized requests (413) reach chat users as such, with correct retry advice.
 - [Compaction summary fallback](compaction-summary-fallback.md): which fallback a failed compaction summary may use, by kind of failure.
 - [Run output previews](run-output-preview.md): stored previews of scheduled and event runs keep the conclusion, not the opening narration.
+- [Session retention](session-retention.md): what retention deletes and why interactive conversations are only bounded by `days`.
 - [Unreleased deferred-tool child-card provenance](session-history.md#branching-a-conversation-at-a-message)
   ([source qualification](qualification/deferred-child-link-2026-11-12.json)).
 

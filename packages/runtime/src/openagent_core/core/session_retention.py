@@ -6,12 +6,18 @@ new session per task run and the per-thread webhook binding keeps every
 delivery's transcript, so the DB climbed to ~2GB and every model run reloaded
 megabytes of history (the token/disk "history bloat").
 
-Two knobs, both from openagent.yaml `retention:` (safe defaults if absent):
+The knobs, all from openagent.yaml `retention:` (safe defaults if absent):
   * days      — delete sessions whose last activity is older than this
                 (conversational sessions tg:/peer:/agent-brid are EXEMPT so
                 the bot keeps its chat memory). Bounds infinite growth.
   * max_runs  — trim any session's `runs` transcript to the last N entries, so
                 one chatty thread can't balloon *within* the window.
+  * scheduler_days — legacy run-logs of scheduled runs and automations
+                (scheduler:*, automation:*) are deleted once idle this long
+                (default 7); an oversized one is trimmed to its newest run.
+                Interactive conversations are never deleted by this step: on 1.1
+                they also carry a legacy session_type='agent' row, and deleting it
+                tombstones the conversation, so only `days` governs them.
 
 The binding stays per-thread (each thread keeps its own session) — this only
 prunes OLD stuff, exactly the intended design.
@@ -74,6 +80,11 @@ DEFAULTS = {"days": 3, "max_runs": 5, "interval_hours": 6, "trim_threshold_bytes
             # days idle; their bulky domain events go this many days after
             # the tombstone.
             "automation_days": 1,
+            # Legacy run-logs of scheduled runs and automations (scheduler:*,
+            # automation:*) are deleted once idle this many days, so the next
+            # review of the run history can still read recent runs. Interactive
+            # conversations are never touched by this step; `days` governs them.
+            "scheduler_days": 7,
             # Optional hourly policy; zero preserves the legacy day setting.
             "automation_hours": 0,
             # -1 keeps the legacy extra automation_days grace period.
@@ -553,18 +564,20 @@ def prune(db_path: str, days: int, max_runs: int, trim_threshold: int,
             conn.commit()
             trimmed += 1
 
-        # 2b) scheduler short-retention (added 2026-07-14 after the WAL-lock outage):
-        # a completed cron run needs no transcript. Prune scheduler/agent run-logs
-        # hard (1 day), and drop ANY oversized run-log immediately regardless of age
-        # — a single 3-4MB `runs` blob monopolised the one WAL writer and starved
-        # add_event_delivery (busy_timeout breach) → the support pipeline stalled.
-        sched_cut = "strftime('%s','now','-1 days')"
+        # 2b) scheduled-run and automation run-logs. Only `scheduler:*` and
+        # `automation:*` rows: on OpenAgent 1.1 interactive conversations also carry
+        # a legacy row with session_type='agent', and deleting it tombstones the
+        # conversation itself, so they are governed by step 1 (`days`) alone. A
+        # run-log idle past `scheduler_days` is deleted; an oversized one (the
+        # WAL-writer starvation of 2026-07-14) is trimmed to its newest run instead
+        # of being deleted, so the latest transcript stays readable.
+        run_log = "(session_id LIKE 'scheduler:%' OR session_id LIKE 'automation:%')"
+        sched_cut = f"strftime('%s','now','-{int(opts['scheduler_days'])} days')"
         while True:
             cur.execute(
                 "DELETE FROM sessions WHERE session_id IN ("
-                "  SELECT session_id FROM sessions"
-                "  WHERE (session_id LIKE 'scheduler:%' OR session_type='agent')"
-                f"    AND (updated_at < {sched_cut} OR length(coalesce(runs,'')) > 500000)"
+                f"  SELECT session_id FROM sessions WHERE {run_log}"
+                f"    AND updated_at < {sched_cut}"
                 f"    AND {exempt} AND {inactive} LIMIT 200)"
             )
             b = cur.rowcount
@@ -572,6 +585,23 @@ def prune(db_path: str, days: int, max_runs: int, trim_threshold: int,
             deleted += b
             if b == 0:
                 break
+        cur.execute(
+            f"SELECT session_id, runs FROM sessions WHERE {run_log} "
+            f"AND length(coalesce(runs,'')) > 500000 AND {inactive}"
+        )
+        for sid, raw in cur.fetchall():
+            try:
+                runs = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(runs, list) or len(runs) <= 1:
+                continue
+            cur.execute(
+                f"UPDATE sessions SET runs=? WHERE session_id=? AND runs=? AND {inactive}",
+                (json.dumps(runs[-1:]), sid, raw),
+            )
+            conn.commit()
+            trimmed += 1
 
         reclaimed = prune_deleted_payloads(conn)
         stripped = prune_deleted_run_payloads(conn)
