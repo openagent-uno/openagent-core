@@ -97,6 +97,39 @@ class SessionLoop(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(("Check the queue and report.", "session-chat-1"), (message, session_id))
         self.assertEqual("check hourly", author.get("display") or author.get("name") or author.get("label"))
 
+    async def test_clients_with_the_conversation_open_are_told_the_turn_ended(self):
+        from openagent_core.stream.child_stream import set_child_broadcast_sink
+
+        frames = []
+
+        async def sink(frame):
+            frames.append(frame)
+
+        for runtime in (FakeRuntime(), FakeRuntime(status="failed")):
+            with execution_scope(runtime, self.context(), "automation-run"):
+                set_child_broadcast_sink(sink)
+                await self.scheduler._execute_task(self.task)
+
+        self.assertEqual(
+            [("turn_complete", "session-chat-1", "completed"), ("turn_complete", "session-chat-1", "error")],
+            [(f["kind"], f["session_id"], f["reason"]) for f in frames],
+        )
+        # The frame carries no content: clients reload through the history API.
+        self.assertNotIn("text", frames[0])
+
+    async def test_a_failing_sink_does_not_fail_the_firing(self):
+        from openagent_core.stream.child_stream import set_child_broadcast_sink
+
+        async def broken(frame):
+            raise RuntimeError("socket gone")
+
+        with execution_scope(FakeRuntime(), self.context(), "automation-run"):
+            set_child_broadcast_sink(broken)
+            await self.scheduler._execute_task(self.task)
+
+        runs = await self.db.list_task_runs(self.task["id"])
+        self.assertEqual("success", runs[0]["status"])
+
     async def test_classic_tasks_are_unchanged(self):
         task_id = await self.db.add_task("plain", "0 * * * *", "Do it.")
         task = await self.db.get_task(task_id)

@@ -28,6 +28,12 @@ firing is a turn of that chat, sees its history and answers there.
 - Hosts without the public runtime run a plain `agent.run` in the session.
 - `task_runs.session_id` links each firing to the conversation; a non-successful
   turn is recorded with its status.
+- When the turn ends, a `turn_complete` frame for the session goes out through
+  the host's broadcast sink for detached runs (`set_child_broadcast_sink`),
+  with the outcome (`completed`, `empty`, `error`, `cancelled`) and no content.
+  A client that has the conversation open reloads it through its history API,
+  so the loop's turn appears without reopening the chat; other clients ignore
+  it. Hosts without a sink stay silent.
 
 The task definition's digest covers `target_session_id`, so the person who
 approved the task approved that conversation. Hosts that digest definitions

@@ -179,6 +179,32 @@ def _no_broadcast(resource: str, action: str, id: str | None = None) -> None:
     return None
 
 
+async def _announce_loop_turn_end(session_id: str, reason: str, error: str = "") -> None:
+    """Tell connected clients that a session loop's turn has ended.
+
+    A loop turn runs in the user's conversation without a streaming client, so
+    a client that has that conversation open would not know a turn was added.
+    One ``turn_complete`` frame, tagged with the session id and carrying no
+    content, makes such a client reload the conversation through the
+    authorized history API; a client that does not have it open ignores it.
+    It goes through the host's broadcast sink for detached runs (the one
+    scheduled firings stream through); a host without one stays silent.
+    Best effort: it never fails the firing.
+    """
+    from openagent_core.stream.child_stream import broadcast_child_emitter
+
+    emitter = broadcast_child_emitter()
+    if emitter is None or not session_id:
+        return
+    frame = {"kind": "turn_complete", "session_id": session_id, "reason": reason}
+    if error:
+        frame["error"] = error[:500]
+    try:
+        await emitter(frame)
+    except Exception as exc:  # noqa: BLE001 - a notification must never fail the firing
+        elog("scheduler.loop_notify_failed", level="warning", session_id=session_id, error=str(exc))
+
+
 # Cap the stored task-run output preview. The full transcript still lives
 # in the agent's session history; ``task_runs.output`` is only a preview
 # for the run list, so a chatty turn can't bloat the DB. The preview keeps the
@@ -965,17 +991,30 @@ class Scheduler:
                 loop_run_id = str(uuid.uuid4())
                 request = RunRequest(loop_run_id, session_id, loop_run_id, prompt,
                                      deadline_seconds=timeout, model_ref=task.get("model") or None)
-                await runtime.submit(request, loop_context)
-                record = await runtime.wait(loop_run_id, loop_context)
+                try:
+                    await runtime.submit(request, loop_context)
+                    record = await runtime.wait(loop_run_id, loop_context)
+                except BaseException as exc:
+                    await _announce_loop_turn_end(session_id, "error", str(exc) or type(exc).__name__)
+                    raise
                 output = record.output if isinstance(record.output, str) else ""
                 if record.status != "success":
-                    return output, (record.status, f"Loop turn ended with status {record.status}")
+                    reason = "cancelled" if record.status == "cancelled" else "error"
+                    issue = f"Loop turn ended with status {record.status}"
+                    await _announce_loop_turn_end(session_id, reason, issue)
+                    return output, (record.status, issue)
+                await _announce_loop_turn_end(session_id, "completed" if output else "empty")
                 return output, None
             run = self.agent.run(
                 message=prompt, user_id="scheduler", session_id=session_id,
                 author=agent_author(task["name"], agent_name=getattr(self.agent, "name", None)),
             )
-            response = await (asyncio.wait_for(run, timeout=timeout) if timeout is not None else run)
+            try:
+                response = await (asyncio.wait_for(run, timeout=timeout) if timeout is not None else run)
+            except BaseException as exc:
+                await _announce_loop_turn_end(session_id, "error", str(exc) or type(exc).__name__)
+                raise
+            await _announce_loop_turn_end(session_id, "completed" if response else "empty")
             return str(response), None
 
     async def _execute_task(
