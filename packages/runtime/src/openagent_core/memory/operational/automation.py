@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import sqlite3
 import time
 from typing import Any
 
@@ -193,6 +194,19 @@ def _activity(resource_type: str, row: Any, now_ms: int) -> dict[str, Any] | Non
     return None
 
 
+async def _is_session_loop_run(conn: Any, row: Any) -> bool:
+    """True when the run is a firing of a task bound to a conversation."""
+    try:
+        task = await (
+            await conn.execute(
+                "SELECT target_session_id FROM scheduled_tasks WHERE id=?", (row["task_id"],)
+            )
+        ).fetchone()
+    except sqlite3.OperationalError:  # a store without session loops has no such column
+        return False
+    return task is not None and task[0] is not None
+
+
 async def _upsert_activity(
     conn: Any,
     *,
@@ -301,6 +315,17 @@ async def _project_one(
         return 0
     source_version = int(ledger[1]) + 1 if ledger else 1
     activity = _activity(resource_type, row, effective_now)
+    if activity is not None and resource_type == "scheduled_run" and await _is_session_loop_run(conn, row):
+        # A session loop's firing is a turn of its conversation, which already
+        # surfaces in the feed through the conversation's own activity. A row
+        # per firing would only repeat it, once per interval.
+        activity = None
+        revision = await _allocate_revision(conn, effective_now)
+        await conn.execute(
+            "UPDATE activity_items SET deleted_revision=?, deleted_at_ms=?, updated_revision=? "
+            "WHERE resource_type=? AND resource_id=? AND deleted_at_ms IS NULL",
+            (revision, effective_now, revision, resource_type, resource_id),
+        )
     if activity is not None:
         await _upsert_activity(
             conn,

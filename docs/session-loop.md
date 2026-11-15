@@ -34,6 +34,10 @@ firing is a turn of that chat, sees its history and answers there.
   A client that has the conversation open reloads it through its history API,
   so the loop's turn appears without reopening the chat; other clients ignore
   it. Hosts without a sink stay silent.
+- Loop firings get no `scheduled_run` row in the activity feed: the turn
+  surfaces through the conversation's own activity, and a row per firing
+  would repeat it once per interval. The runs stay in `task_runs` (the
+  task's run history) and in search.
 
 The task definition's digest covers `target_session_id`, so the person who
 approved the task approved that conversation. Hosts that digest definitions

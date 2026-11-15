@@ -130,6 +130,26 @@ class SessionLoop(unittest.IsolatedAsyncioTestCase):
         runs = await self.db.list_task_runs(self.task["id"])
         self.assertEqual("success", runs[0]["status"])
 
+    async def test_loop_firings_stay_out_of_the_activity_feed(self):
+        from openagent_core.memory.operational.automation import project_automation_pending
+
+        plain_id = await self.db.add_task("plain", "0 * * * *", "Do it.")
+        loop_run = await self.db.add_task_run(task_id=self.task["id"])
+        plain_run = await self.db.add_task_run(task_id=plain_id, session_id="scheduler:plain:1")
+        conn = await self.db._ensure_connected()
+        while not (await project_automation_pending(conn))[1]:
+            pass
+        await conn.commit()
+        await self.db.update_task_run(loop_run, status="success", session_id="session-chat-1")
+        while not (await project_automation_pending(conn))[1]:
+            pass
+        await conn.commit()
+
+        rows = await (await conn.execute(
+            "SELECT resource_id FROM activity_items WHERE kind='scheduled_run' AND deleted_at_ms IS NULL"
+        )).fetchall()
+        self.assertEqual([plain_run], [row[0] for row in rows])
+
     async def test_classic_tasks_are_unchanged(self):
         task_id = await self.db.add_task("plain", "0 * * * *", "Do it.")
         task = await self.db.get_task(task_id)
