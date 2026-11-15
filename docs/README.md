@@ -2,6 +2,7 @@
 
 ## Architecture and use
 
+- [Compaction summary fallback](compaction-summary-fallback.md): which fallback a failed compaction summary may use, by kind of failure.
 - [Unreleased deferred-tool child-card provenance](session-history.md#branching-a-conversation-at-a-message)
   ([source qualification](qualification/deferred-child-link-2026-11-12.json)).
 

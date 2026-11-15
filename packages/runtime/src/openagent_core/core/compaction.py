@@ -1227,41 +1227,46 @@ async def _summarize_runs(
                     return summary
                 except Exception as exc_refit:  # noqa: BLE001
                     exc = exc_refit
-        # The primary summariser failed (commonly an OAuth-limited proxy row
-        # exhausted under load). Skipping compaction here is what lets the
-        # session balloon, so retry ONCE with a fallback on a different
-        # provider (one not sharing the failed row's quota) before giving up.
-        fallback_summariser = _summary_fallback_model(
-            agent, exclude_provider=_provider_of(summariser),
-        )
-        if fallback_summariser is None:
+        # The primary summariser failed. Skipping compaction here is what lets
+        # the session balloon, so try a bounded list of fallbacks first. WHICH
+        # fallbacks depends on the failure: a quota, rate-limit or auth failure
+        # is shared by every model of that provider, so only another provider
+        # can help; a timeout or another transient failure belongs to that one
+        # call, so a different model of the SAME provider is a valid second try
+        # (on a single-provider install it is the only one). The operator's
+        # explicit OPENAGENT_COMPACTION_FALLBACK_MODEL always comes first.
+        response = None
+        attempts = 0
+        for reason, fallback_summariser in _summary_fallback_candidates(
+            agent, summariser, exc,
+        ):
+            attempts += 1
+            elog(
+                "runtime.compaction.summary_fallback",
+                level="warning",
+                error_type=type(exc).__name__,
+                error=(str(exc) or repr(exc))[:200],
+                reason=reason,
+                fallback_model=_resolve_model_id(fallback_summariser),
+            )
+            try:
+                response = await _generate_summary(
+                    fallback_summariser,
+                    [{"role": "user", "content": user_prompt}],
+                    system_prompt=system_prompt,
+                )
+                break
+            except Exception as exc2:  # noqa: BLE001 — never crash the turn
+                exc = exc2
+                response = None
+        if response is None:
             elog(
                 "runtime.compaction.summary_failed",
                 level="warning",
                 error_type=type(exc).__name__,
                 error=str(exc) or repr(exc),
-                fallback="none_available",
-            )
-            return ""
-        elog(
-            "runtime.compaction.summary_fallback",
-            level="warning",
-            error_type=type(exc).__name__,
-            error=(str(exc) or repr(exc))[:200],
-        )
-        try:
-            response = await _generate_summary(
-                fallback_summariser,
-                [{"role": "user", "content": user_prompt}],
-                system_prompt=system_prompt,
-            )
-        except Exception as exc2:  # noqa: BLE001 — never crash the turn
-            elog(
-                "runtime.compaction.summary_failed",
-                level="warning",
-                error_type=type(exc2).__name__,
-                error=str(exc2) or repr(exc2),
-                fallback="also_failed",
+                fallback="also_failed" if attempts else "none_available",
+                attempts=attempts,
             )
             return ""
     summary = (getattr(response, "content", "") or "").strip()
@@ -1440,6 +1445,169 @@ def _provider_of(model_obj: Any) -> str | None:
         if isinstance(v, str) and ":" in v:
             return v.split(":", 1)[0]
     return None
+
+
+# Failures that every model of the same provider shares: retrying on a sibling
+# model of that provider cannot help, only another provider can.
+_PROVIDER_WIDE_FAILURES = frozenset({
+    "quota_exhausted", "rate_limit", "auth", "auth_expired",
+    "provider_not_configured", "budget_exhausted",
+})
+# Pool-exhaustion wording of subscription/OAuth proxies ("no available ...
+# accounts") is provider-wide too, but carries no status code.
+_PROVIDER_WIDE_MARKERS = ("no available", "accounts available", "account pool")
+
+# At most this many fallback summarise calls after the primary fails: the fold
+# runs on the turn's maintenance path and every attempt can take the full
+# summary timeout.
+_MAX_SUMMARY_FALLBACKS = 2
+
+
+def _failure_is_provider_wide(exc: BaseException) -> bool:
+    """True when *exc* is a failure every model of the provider shares
+    (quota, rate limit, authentication). A timeout or a generic transient
+    error is specific to that call and is NOT provider-wide. Never raises."""
+    try:
+        from openagent_core.core.public_errors import classify_run_error
+
+        if classify_run_error(exc).code in _PROVIDER_WIDE_FAILURES:
+            return True
+        text = f"{type(exc).__name__}: {exc}".lower()
+        return any(marker in text for marker in _PROVIDER_WIDE_MARKERS)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _configured_summary_fallback(agent: Any) -> Any:
+    """The operator's ``OPENAGENT_COMPACTION_FALLBACK_MODEL`` as a summariser,
+    whatever its provider (an explicit choice), or ``None`` when it is unset or
+    not an enabled api-based row. Never raises."""
+    configured = runtime_environment().get(_SUMMARY_FALLBACK_MODEL_ENV, "").strip()
+    if not configured:
+        return None
+    try:
+        from openagent_core.models.catalog import FRAMEWORK_API_BASED, iter_configured_models
+        from openagent_core.models.native_provider import NativeProvider
+
+        providers_config = getattr(agent, "_providers_config", None) or []
+        match = next(
+            (e for e in iter_configured_models(providers_config)
+             if e.runtime_id == configured and not e.disabled
+             and e.framework == FRAMEWORK_API_BASED),
+            None,
+        )
+        if match is None:
+            elog(
+                "runtime.compaction.summary_fallback_unresolved",
+                level="warning",
+                configured=configured,
+                reason="no_enabled_api_based_row",
+            )
+            return None
+        db_path = getattr(getattr(agent, "_db", None), "db_path", None)
+        return NativeProvider(
+            model=match.runtime_id,
+            providers_config=providers_config,
+            db_path=str(db_path) if db_path else None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        elog(
+            "runtime.compaction.summary_fallback_unresolved",
+            level="warning",
+            error_type=type(exc).__name__,
+            error=str(exc) or repr(exc),
+        )
+        return None
+
+
+def _same_provider_summary_fallback(
+    agent: Any, *, provider: str | None, exclude_models: set[str],
+) -> Any:
+    """Another enabled api-based model of *provider* to retry a summary that
+    failed for a call-specific reason (timeout, transient error).
+
+    Cheapest by :func:`get_model_pricing`, ties broken by configuration order;
+    never one of *exclude_models*. ``None`` when the provider has no other
+    enabled row. Never raises."""
+    if not provider:
+        return None
+    try:
+        from openagent_core.models import catalog
+        from openagent_core.models.native_provider import NativeProvider
+
+        providers_config = getattr(agent, "_providers_config", None) or []
+        candidates = [
+            e for e in catalog.iter_configured_models(providers_config)
+            if not e.disabled and e.framework == catalog.FRAMEWORK_API_BASED
+            and e.provider == provider and e.runtime_id not in exclude_models
+        ]
+        if not candidates:
+            return None
+
+        def _cost(entry: Any) -> float:
+            pricing = catalog.get_model_pricing(entry.runtime_id, providers_config)
+            return (
+                float(pricing.get("input_cost_per_million", 0.0) or 0.0)
+                + float(pricing.get("output_cost_per_million", 0.0) or 0.0)
+            )
+
+        pick = min(enumerate(candidates), key=lambda ie: (_cost(ie[1]), ie[0]))[1]
+        db_path = getattr(getattr(agent, "_db", None), "db_path", None)
+        return NativeProvider(
+            model=pick.runtime_id,
+            providers_config=providers_config,
+            db_path=str(db_path) if db_path else None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        elog(
+            "runtime.compaction.summary_fallback_unresolved",
+            level="warning",
+            error_type=type(exc).__name__,
+            error=str(exc) or repr(exc),
+        )
+        return None
+
+
+def _summary_fallback_candidates(agent: Any, summariser: Any, exc: BaseException):
+    """Yield ``(reason, summariser)`` fallbacks for a failed summary call, in
+    order, at most ``_MAX_SUMMARY_FALLBACKS``, never repeating a model:
+
+      1. ``configured`` — ``OPENAGENT_COMPACTION_FALLBACK_MODEL`` (any provider);
+      2. ``same_provider`` — only for a call-specific failure (timeout,
+         transient): another model of the failed summariser's provider;
+      3. ``other_provider`` — :func:`_summary_fallback_model` (never the
+         failed provider).
+    """
+    failed_provider = _provider_of(summariser)
+    attempted = {_resolve_model_id(summariser)}
+    provider_wide = _failure_is_provider_wide(exc)
+    yielded = 0
+
+    def _fresh(candidate: Any) -> bool:
+        if candidate is None:
+            return False
+        model_id = _resolve_model_id(candidate)
+        if model_id is None:
+            return True  # unidentifiable: cannot be a repeat we can detect
+        if model_id in attempted:
+            return False
+        attempted.add(model_id)
+        return True
+
+    steps = (
+        ("configured", lambda: _configured_summary_fallback(agent)),
+        ("same_provider", lambda: None if provider_wide else _same_provider_summary_fallback(
+            agent, provider=failed_provider, exclude_models=set(attempted))),
+        ("other_provider", lambda: _summary_fallback_model(
+            agent, exclude_provider=failed_provider)),
+    )
+    for reason, make in steps:
+        if yielded >= _MAX_SUMMARY_FALLBACKS:
+            return
+        candidate = make()
+        if _fresh(candidate):
+            yielded += 1
+            yield reason, candidate
 
 
 def _summary_fallback_model(agent: Any, *, exclude_provider: str | None) -> Any:
