@@ -199,6 +199,24 @@ async def get_scheduled_task(task_id: str) -> dict[str, Any]:
     return _row_to_dict(row)
 
 
+def _current_conversation() -> str:
+    """The conversation the calling turn belongs to (never a model-supplied id)."""
+    from openagent_core.runtime import current_execution_context
+
+    context = current_execution_context()
+    session_id = getattr(context, "session_id", None)
+    if not session_id:
+        try:
+            from openagent_core.mcp.servers.delegation.handlers import current_parent_session_id
+            session_id = current_parent_session_id()
+        except Exception:  # noqa: BLE001
+            session_id = None
+    if not session_id or str(session_id).startswith(("automation:", "scheduler:")):
+        raise ValueError("There is no current conversation to run this task in; "
+                         "create it as a standalone task instead.")
+    return str(session_id)
+
+
 @mcp.tool()
 async def create_scheduled_task(
     name: str,
@@ -207,6 +225,7 @@ async def create_scheduled_task(
     model: str | None = None,
     timezone: str | None = None,
     execution_policy: dict[str, Any] | None = None,
+    in_this_conversation: bool = False,
 ) -> dict[str, Any]:
     """Create a new recurring task.
 
@@ -233,6 +252,12 @@ async def create_scheduled_task(
     ``execution_policy`` (optional) is an enforced, provider-neutral envelope:
     ``max_tool_calls``, ``timeout_seconds``, and ``allowed_tool_families``.
     These are runtime constraints, not prompt advice.
+
+    ``in_this_conversation`` (optional) makes the task a loop of the current
+    conversation: every firing runs as a turn of this chat, sees its history
+    and answers here, instead of in a separate run session. Use it when the
+    user asks to repeat something "here" or "in this chat" (e.g. "check the
+    queue every hour and tell me here"). Leave it false for standalone jobs.
     """
     if not name or not name.strip():
         raise ValueError("name is required")
@@ -240,6 +265,7 @@ async def create_scheduled_task(
         raise ValueError("prompt is required")
     tz = _resolve_new_task_tz(timezone)
     _validate_cron(cron_expression, tz)
+    target_session_id = _current_conversation() if in_this_conversation else None
 
     conn = await _get_conn()
     task_id = str(uuid.uuid4())
@@ -249,10 +275,10 @@ async def create_scheduled_task(
 
     await conn.execute(
         "INSERT INTO scheduled_tasks "
-        "(id, name, cron_expression, prompt, enabled, next_run, model, timezone, execution_policy_json, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)",
+        "(id, name, cron_expression, prompt, enabled, next_run, model, timezone, execution_policy_json, target_session_id, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)",
         (task_id, name, cron_expression, prompt, nr, (model or None), tz,
-         policy_json, now, now),
+         policy_json, target_session_id, now, now),
     )
     await conn.commit()
 

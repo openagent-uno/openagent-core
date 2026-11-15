@@ -102,3 +102,50 @@ class SessionLoop(unittest.IsolatedAsyncioTestCase):
         task = await self.db.get_task(task_id)
 
         self.assertIsNone(task["target_session_id"])
+
+
+def test_the_agent_can_create_a_loop_of_its_current_conversation(tmp_path):
+    import asyncio
+
+    from openagent_core.automation import AutomationRepository, build_automation_toolkit
+    from openagent_core.memory.db import SCHEMA_SQL
+
+    repository = AutomationRepository(tmp_path / "agent.db")
+    toolkit = build_automation_toolkit("scheduled_task")
+    user = PrincipalRef("openagent", "network", "alice")
+
+    class Management:
+        async def call(self, kind, operation, arguments, scope):
+            return await repository.call(kind, operation, arguments, scope)
+
+    async def exercise():
+        async with repository.session() as connection:
+            await connection.executescript(SCHEMA_SQL)
+            await connection.commit()
+        runtime = SimpleNamespace(services=SimpleNamespace(automation_management=Management()),
+                                  settings=SimpleNamespace(environment=()))
+        create = toolkit.async_functions["create_scheduled_task"].entrypoint
+        chat = ExecutionContext(user, user, user, "session-chat-7", "agent", (user,), ingress_id="verified")
+        with execution_scope(runtime, chat, "run"):
+            loop = await create(name="hourly here", cron_expression="0 * * * *", prompt="Check.",
+                                in_this_conversation=True)
+            plain = await create(name="standalone", cron_expression="0 * * * *", prompt="Check.")
+        automation = ExecutionContext(user, user, user, "automation:task:x:1", "agent", (user,),
+                                      ingress_id="verified")
+        with execution_scope(runtime, automation, "run2"):
+            try:
+                await create(name="nested", cron_expression="0 * * * *", prompt="x", in_this_conversation=True)
+                refused = False
+            except ValueError:
+                refused = True
+        return loop, plain, refused
+
+    loop, plain, refused = asyncio.run(exercise())
+
+    def target(result):
+        task = result.get("task", result)
+        return task.get("target_session_id")
+
+    assert target(loop) == "session-chat-7"
+    assert target(plain) is None
+    assert refused
