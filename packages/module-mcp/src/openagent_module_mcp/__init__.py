@@ -32,6 +32,8 @@ manage MCP servers only; it cannot install or activate OpenAgent modules.
 Changes to a server catalog are visible to the next run, while removals and
 revocations prevent new calls immediately.""",
     "openagent-module-mcp",
+    section="tools",
+    priority=30,
 )
 
 

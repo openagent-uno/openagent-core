@@ -7,12 +7,13 @@ _discipline=rule_blocks("module.vault.discipline")[0]
 _start=_discipline.text.index("- **Curated memory is not conversation history.**")
 _end=_discipline.text.index("- **AFTER any learning**",_start)
 VAULT_DISCIPLINE=PromptBlock("module.vault.discipline","1.1",
-    _discipline.text[:_start]+_discipline.text[_end:],"openagent-module-vault")
+    _discipline.text[:_start]+_discipline.text[_end:],"openagent-module-vault",
+    section=_discipline.section,priority=_discipline.priority)
 
 _history=rule_blocks("module.vault.history")[0]
 _isolation_start=_history.text.index("CRITICAL —")
 VAULT_BACKEND_ISOLATION=PromptBlock("module.vault.backend-isolation","1.1",
-    _history.text[_isolation_start:],"openagent-module-vault")
+    _history.text[_isolation_start:],"openagent-module-vault",section="memory",priority=50)
 
 def module_assets(name: str = "vault") -> Path:
     if name != "vault":

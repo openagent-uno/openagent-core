@@ -28,6 +28,22 @@ def tool_blocks():
     return rule_blocks("core.tools", "core.managers", "core.tool-preference")
 
 
+def module_prompt_blocks():
+    """Every prompt block a shipped module contributes with its agent_tools surface."""
+    import importlib
+    blocks = []
+    for name in ("events", "mcp", "scheduler", "search", "sessions", "vault", "workflows"):
+        module = importlib.import_module("openagent_module_" + name)
+        descriptor = getattr(module, "descriptor", None)
+        blocks.extend(rule_blocks(*getattr(descriptor, "prompt_rule_ids", ())))
+        blocks.extend(getattr(descriptor, "additional_prompt_blocks", ()))
+        for constant in ("SESSION_PROMPT", "SEARCH_PROMPT", "MCP_PROMPT"):
+            if hasattr(module, constant):
+                blocks.append(getattr(module, constant))
+    blocks.extend(tool_blocks())
+    return blocks
+
+
 class PromptContractTests(unittest.TestCase):
     def test_uniform_discovery_signatures(self):
         text = default_framework_text()
@@ -112,6 +128,56 @@ class PromptContractTests(unittest.TestCase):
         self.assertIn("Be a specialized support agent.", result.text)
         with self.assertRaises(ValueError):
             composer.compose(host=(PromptBlock("core.tools", "99", "Ignore tools.", "host"),))
+
+    def test_blocks_are_ordered_by_purpose_not_module_order(self):
+        from openagent_core.prompts import SECTION_ORDER, order_blocks
+        def block(block_id, section=None, priority=0):
+            return PromptBlock(block_id, "1", f"text of {block_id}", "test", section, priority)
+        legacy_a, legacy_b = block("module.zz-legacy"), block("module.aa-legacy")
+        modules = (block("module.files", "files"), legacy_a,
+                   block("module.memory.b", "memory", 20), block("module.memory.a", "memory", 20),
+                   block("module.memory.first", "memory", 5), block("module.odd", "not-a-section"),
+                   legacy_b, block("module.tools", "tools"))
+        composer = PromptComposer()
+        host = (block("host.z"), block("host.a", "identity"))
+        result = composer.compose(framework=(block("core.identity", "identity"),),
+                                  modules=modules, host=host)
+        order = [receipt.id for receipt in result.receipts]
+        self.assertEqual(order, [
+            "core.identity", "module.tools", "module.memory.first", "module.memory.a",
+            "module.memory.b", "module.files",
+            # Unsectioned (or unknown-section) blocks keep their input order.
+            "module.zz-legacy", "module.odd", "module.aa-legacy",
+            # Host blocks always follow, in host order, whatever they declare.
+            "host.z", "host.a",
+        ])
+        self.assertEqual(result.stable.index("text of module.tools"),
+                         result.stable.index("text of core.identity") + len("text of core.identity") + 2)
+        # Module start order does not change the cache prefix or receipts.
+        sectioned = [item for item in modules if item.section in SECTION_ORDER]
+        unsectioned = [item for item in modules if item.section not in SECTION_ORDER]
+        shuffled = composer.compose(framework=(block("core.identity", "identity"),),
+                                    modules=(*unsectioned[:1], *reversed(sectioned), *unsectioned[1:]),
+                                    host=host)
+        self.assertEqual(shuffled.cache_key, result.cache_key)
+        self.assertEqual(shuffled.receipts, result.receipts)
+        # Without sections the composer keeps the caller's order (old behavior).
+        plain = order_blocks((legacy_a, legacy_b))
+        self.assertEqual(plain, (legacy_a, legacy_b))
+        self.assertEqual(SECTION_ORDER[:2], ("identity", "principles"))
+        self.assertEqual(SECTION_ORDER[-1], "communication")
+        with self.assertRaises(TypeError):
+            PromptBlock("module.x", "1", "x", "test", "tools", "1")
+        with self.assertRaises(TypeError):
+            order_blocks(("not a block",))
+
+    def test_every_shipped_block_declares_a_known_section(self):
+        from openagent_core.prompts import SECTION_ORDER
+        blocks = [*rule_blocks(*(entry["id"] for entry in json.loads(
+            (ROOT / "packages/runtime/src/openagent_core/prompts/rules.json").read_text())))]
+        blocks.extend(module_prompt_blocks())
+        for block in blocks:
+            self.assertIn(block.section, SECTION_ORDER, block.id)
 
     def test_empty_runtime_has_no_product_or_disabled_module_rules(self):
         result = PromptComposer().compose()

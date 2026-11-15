@@ -18,7 +18,7 @@ open the corresponding domain resource before using consequential details. An
 absent domain means its module or search surface is not active and must not be
 recreated through shell or database access. Unavailable or unauthorized domains
 are reported separately and never discard results from other domains.""",
-"openagent-module-search")
+"openagent-module-search", section="routing", priority=20)
 
 
 @dataclass(frozen=True, slots=True)

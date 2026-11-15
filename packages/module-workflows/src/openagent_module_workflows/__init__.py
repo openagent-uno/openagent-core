@@ -8,7 +8,7 @@ conditionals and data flowing between distinct stages. Use its canonical
 management operations instead of editing definitions or database rows. A
 workflow run keeps the exact authorized definition revision and tool references;
 an unavailable destination must fail rather than fall back to another tool.""",
-"openagent-module-workflows")
+"openagent-module-workflows", section="automation", priority=20)
 
 descriptor=NativeCapabilityDescriptor(id="workflows",version="1.1.0b1",
     native_sources=("workflow-manager",),source_names={"workflow-manager":"workflows"},

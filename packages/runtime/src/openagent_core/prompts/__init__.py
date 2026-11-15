@@ -2,6 +2,13 @@
 
 Host blocks are supplied by trusted application assembly, never parsed from a
 chat message or an MCP description. They cannot replace framework/module blocks.
+
+Framework and module blocks are ordered by purpose, not by module id: each block
+may name a ``section`` from :data:`SECTION_ORDER` and a ``priority`` inside it.
+The composer sorts them by ``(section, priority, id)``, so the order is
+deterministic and the stable provider-cache prefix does not depend on module
+start order. Blocks without a known section keep their input order after the
+sectioned ones; host blocks always follow, in the order the host supplied.
 """
 from __future__ import annotations
 
@@ -20,6 +27,14 @@ _LEGACY_TAIL = re.compile(
 )
 _RESERVED = ("<openagent-turn-context>", "</openagent-turn-context>")
 
+# Purpose order of framework and module blocks. Host blocks come after all of
+# them. Append new sections deliberately: the order is part of the cache prefix.
+SECTION_ORDER: tuple[str, ...] = (
+    "identity", "principles", "tools", "routing", "memory", "history",
+    "automation", "delegation", "files", "skills", "communication",
+)
+_SECTION_RANK = {name: rank for rank, name in enumerate(SECTION_ORDER)}
+
 
 @dataclass(frozen=True, slots=True)
 class PromptBlock:
@@ -27,6 +42,10 @@ class PromptBlock:
     revision: str
     text: str
     provenance: str
+    # Optional purpose placement (see SECTION_ORDER). ``None`` or an unknown
+    # section keeps the block's input position after the sectioned blocks.
+    section: str | None = None
+    priority: int = 0
 
     def __post_init__(self) -> None:
         if not all(isinstance(v, str) and v.strip() for v in
@@ -34,6 +53,10 @@ class PromptBlock:
             raise ValueError("prompt block identity, revision and provenance are required")
         if not isinstance(self.text, str) or any(tag in self.text for tag in _RESERVED):
             raise ValueError("prompt text contains a reserved runtime boundary")
+        if self.section is not None and (not isinstance(self.section, str) or not self.section.strip()):
+            raise ValueError("prompt block section must be a non-empty string or None")
+        if type(self.priority) is not int:
+            raise TypeError("prompt block priority must be an integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +108,24 @@ def _rules() -> tuple[PromptBlock, ...]:
     ))
 
 
+def order_blocks(blocks: Iterable[PromptBlock]) -> tuple[PromptBlock, ...]:
+    """Sort framework/module blocks by ``(section, priority, id)``.
+
+    Blocks with no section, or a section this runtime does not know, keep their
+    relative input order and follow every sectioned block. The sort is total
+    and deterministic, so equal inputs always compose to the same prefix.
+    """
+    indexed = []
+    for index, block in enumerate(blocks):
+        if not isinstance(block, PromptBlock):
+            raise TypeError("prompt contributions must be PromptBlock values")
+        rank = _SECTION_RANK.get(block.section) if block.section is not None else None
+        key = ((len(SECTION_ORDER), 0, "", index) if rank is None
+               else (rank, block.priority, block.id, index))
+        indexed.append((key, block))
+    return tuple(block for _key, block in sorted(indexed, key=lambda item: item[0]))
+
+
 def core_framework_blocks() -> tuple[PromptBlock, ...]:
     """Prompt rules that apply even when the runtime has no optional module."""
     return tuple(block for block in _rules() if block.id == "core.identity")
@@ -102,7 +143,7 @@ def rule_blocks(*ids: str) -> tuple[PromptBlock, ...]:
 
 def default_framework_text() -> str:
     """Full optional-module baseline for legacy introspection and contract tests."""
-    return "\n\n".join(block.text for block in _rules())
+    return "\n\n".join(block.text for block in order_blocks(_rules()))
 
 
 def split_prompt(system: str) -> tuple[str, str]:
@@ -141,12 +182,14 @@ class PromptComposer:
     ) -> ComposedPrompt:
         values = substitutions or {}
         mandatory = core_framework_blocks() if framework is None else tuple(framework)
-        module_blocks = tuple(modules)
+        # Framework and module blocks are ordered by purpose; host blocks keep
+        # the host's order and always follow them.
+        ordered = order_blocks((*mandatory, *tuple(modules)))
         host_blocks = tuple(host)
         seen: set[str] = set()
         rendered: list[str] = []
         receipts: list[PromptReceipt] = []
-        for block in (*mandatory, *module_blocks, *host_blocks):
+        for block in (*ordered, *host_blocks):
             if not isinstance(block, PromptBlock):
                 raise TypeError("prompt contributions must be PromptBlock values")
             if block.id in seen:
@@ -178,4 +221,5 @@ class PromptComposer:
 
 
 __all__ = ["ComposedPrompt", "HostContextProvider", "HostPromptProvider", "PromptBlock", "PromptComposer",
-           "PromptReceipt", "core_framework_blocks", "default_framework_text", "rule_blocks", "split_prompt"]
+           "PromptReceipt", "SECTION_ORDER", "core_framework_blocks", "default_framework_text",
+           "order_blocks", "rule_blocks", "split_prompt"]

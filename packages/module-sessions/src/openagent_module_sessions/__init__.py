@@ -42,6 +42,8 @@ Use exact run IDs returned by the runtime to inspect status, replay events,
 find children or request cancellation. A cancellation request is not a terminal
 outcome; check the run again before reporting that it stopped.""",
     "openagent-module-sessions",
+    section="history",
+    priority=10,
 )
 
 

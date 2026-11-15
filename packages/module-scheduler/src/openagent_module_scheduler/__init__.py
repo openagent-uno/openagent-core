@@ -9,7 +9,7 @@ management operations. Do not create recurring work through shell background
 processes, crontab, launchd or systemd: such jobs bypass the product's identity,
 authorization, visibility, cancellation and migration lifecycle. Never claim a
 future action unless a schedule was durably created and its result verified.""",
-"openagent-module-scheduler")
+"openagent-module-scheduler", section="automation", priority=10)
 
 descriptor=NativeCapabilityDescriptor(id="scheduler",version="1.1.0b1",
     native_sources=("scheduler",),source_names={"scheduler":"schedules"},

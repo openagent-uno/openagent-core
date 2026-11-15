@@ -8,7 +8,7 @@ Choose explicitly whether each delivery creates a fresh session or resumes one
 through a stable external binding key. External payload identifiers are lookup
 keys, never OpenAgent session IDs. Manage definitions and secrets through the
 module service; never expose event credentials or edit its storage directly.""",
-"openagent-module-events")
+"openagent-module-events", section="automation", priority=30)
 
 descriptor=NativeCapabilityDescriptor(id="events",version="1.1.0b1",
     native_sources=("events-manager",),source_names={"events-manager":"events"},
