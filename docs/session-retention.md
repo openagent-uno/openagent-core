@@ -22,3 +22,22 @@ An oversized run-log (more than 500 KB of `runs`) is trimmed to its newest run
 instead of being deleted, so a large run still frees the writer without losing
 the latest transcript; the run's full messages stay in the session for
 `scheduler_days`, which lets a nightly review of the run history read recent runs.
+
+## Restoring a conversation deleted by mistake
+
+A tombstone keeps the conversation's messages and tool calls until payload
+pruning reclaims them (pruning runs only for tombstoned sessions that have no
+legacy `sessions` row). Until then
+`openagent_core.memory.operational.repository.restore_tombstoned_session(conn, session_id)`
+brings the conversation back unchanged: it clears the tombstone, restores the
+real last-activity time, revives the activity row, queues search upserts and
+records a `session.restored` event. It runs inside the caller's transaction and
+never rebuilds history from the legacy row, whose runs may already be compacted.
+
+It refuses with `SessionRestoreError` when the payloads were pruned
+(`payloads_pruned`) or when a legacy-projected session has lost its `sessions`
+row (`legacy_source_missing`), because the next reconciliation would tombstone
+it again. For a runtime-owned conversation the legacy row is the provider's
+conversation buffer: putting it back, for example from a database backup,
+after the restore lets the model resume with its earlier context. Stop the
+retention job first, and back up the database before writing to it.

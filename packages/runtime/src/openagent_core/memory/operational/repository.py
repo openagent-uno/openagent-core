@@ -1318,6 +1318,128 @@ def tombstone_session(
     )
 
 
+
+class SessionRestoreError(RuntimeError):
+    """A tombstoned session cannot be restored without inventing history."""
+
+    def __init__(self, session_id: str, reason: str) -> None:
+        super().__init__(f"cannot restore session {session_id!r}: {reason}")
+        self.session_id = session_id
+        self.reason = reason
+
+
+def restore_tombstoned_session(
+    conn: Any,
+    session_id: str,
+    *,
+    now_ms: int | None = None,
+) -> ProjectionWrite:
+    """Undo ``tombstone_session`` for a session whose history was retained.
+
+    A tombstone keeps the normalized messages and tool calls until payload
+    pruning reclaims them, so a session deleted by mistake (for example by a
+    retention policy that matched the wrong rows) can come back unchanged. The
+    restore clears the tombstone, gives the session back its real last-activity
+    time (the tombstone moved it to the deletion time), revives its activity
+    row and queues search upserts for the session, its messages and its tool
+    calls, plus a ``session.restored`` event. It never rewrites history.
+
+    It refuses, with :class:`SessionRestoreError`, when the payloads were
+    already pruned (``payloads_pruned``), or when the session is a legacy
+    projection whose ``sessions`` source row is gone (``legacy_source_missing``):
+    the next reconciliation would tombstone such a session again. Restoring a
+    live session is a no-op. Runs inside the caller's transaction.
+    """
+
+    effective_now = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    if not operational_storage_available(conn):
+        raise SessionRestoreError(session_id, "operational_storage_unavailable")
+    cursor = conn.execute(
+        f"SELECT {','.join(_SESSION_COLUMNS)} FROM sessions_v2 WHERE id=?",
+        (session_id,),
+    )
+    raw = cursor.fetchone()
+    if raw is None:
+        raise SessionRestoreError(session_id, "session_missing")
+    row = _row_dict(cursor, raw)
+    if row.get("deleted_at_ms") is None and str(row.get("status") or "") != "deleted":
+        return ProjectionWrite(
+            session_id,
+            False,
+            False,
+            int(row["source_version"]),
+            row.get("completeness"),
+            None,
+        )
+    messages, tools = _old_resource_ids(conn, session_id)
+    if not messages:
+        raise SessionRestoreError(session_id, "payloads_pruned")
+    metadata = json.loads(row.get("metadata_json") or "{}")
+    runtime_owned = metadata.get("runtime_contract") == 1
+    if not runtime_owned and _fetch_legacy(conn, session_id) is None:
+        raise SessionRestoreError(session_id, "legacy_source_missing")
+
+    last_activity = int(row["created_at_ms"])
+    for (value,) in conn.execute(
+        "SELECT MAX(created_at_ms) FROM session_messages WHERE session_id=? "
+        "UNION ALL SELECT MAX(COALESCE(finished_at_ms, created_at_ms)) "
+        "FROM session_runs WHERE session_id=?",
+        (session_id, session_id),
+    ).fetchall():
+        if value is not None:
+            last_activity = max(last_activity, int(value))
+    source_version = int(row["source_version"]) + 1
+    revision = _allocate_revision(conn, effective_now)
+    conn.execute(
+        "UPDATE sessions_v2 SET status='active', deleted_at_ms=NULL, "
+        "source_version=?, last_activity_at_ms=?, "
+        "updated_at_ms=MAX(updated_at_ms, ?) WHERE id=?",
+        (source_version, last_activity, effective_now, session_id),
+    )
+    cursor = conn.execute(
+        f"SELECT {','.join(_SESSION_COLUMNS)} FROM sessions_v2 WHERE id=?",
+        (session_id,),
+    )
+    restored = _row_dict(cursor, cursor.fetchone())
+    _upsert_activity(
+        conn, session=restored, source_version=source_version, revision=revision
+    )
+    tenant_id = str(restored["tenant_id"])
+    for kind, resource_ids in (
+        ("session", {session_id}),
+        ("message", messages),
+        ("tool_invocation", tools),
+    ):
+        for resource_id in sorted(resource_ids):
+            _insert_outbox(
+                conn,
+                tenant_id=tenant_id,
+                source_kind=kind,
+                source_id=resource_id,
+                operation="upsert",
+                source_version=source_version,
+                acl_version=int(restored["acl_version"]),
+                now_ms=effective_now,
+            )
+    _insert_domain_event(
+        conn,
+        session_id=session_id,
+        tenant_id=tenant_id,
+        owner_principal_id=restored.get("owner_principal_id"),
+        event_type="session.restored",
+        source_version=source_version,
+        now_ms=effective_now,
+        metadata={"source_version": source_version},
+    )
+    return ProjectionWrite(
+        session_id,
+        True,
+        False,
+        source_version,
+        restored.get("completeness"),
+        revision,
+    )
+
 def reconcile_pending(
     conn: Any,
     *,
