@@ -217,21 +217,23 @@ class ContentAttachmentPublisher(Protocol):
 
 async def find_session_attachments(db, *, tenant_id, session_id, query):
     """List available files linked to the authorized session, with no local paths."""
-    from .memory.artifacts import safe_attachment_filename
+    from .memory.artifacts import _connection, safe_attachment_filename
 
-    conn = await db._ensure_connected()
-    rows = await (await conn.execute(
-        "WITH matches AS ("
-        "SELECT a.id, a.mime, a.size_bytes, l.display_name, l.created_at_ms, "
-        "ROW_NUMBER() OVER (PARTITION BY a.id ORDER BY l.created_at_ms DESC, l.id DESC) AS rank "
-        "FROM artifact_links l "
-        "JOIN artifacts a ON a.tenant_id=l.tenant_id AND a.id=l.artifact_id "
-        "JOIN sessions_v2 s ON s.tenant_id=l.tenant_id AND s.id=l.resource_id "
-        "WHERE l.tenant_id=? AND l.resource_type='session' AND l.resource_id=? "
-        "AND s.deleted_at_ms IS NULL AND a.deleted_at_ms IS NULL AND a.storage_state='available' "
-        "AND instr(lower(coalesce(l.display_name, a.id)), lower(?)) > 0) "
-        "SELECT * FROM matches WHERE rank=1 ORDER BY created_at_ms DESC, id DESC LIMIT 21",
-        (tenant_id, session_id, query))).fetchall()
+    # A dedicated connection: the shared one may hold a snapshot taken before
+    # an attachment this run just published (see session_output_reference).
+    async with _connection(db) as conn:
+        rows = await (await conn.execute(
+            "WITH matches AS ("
+            "SELECT a.id, a.mime, a.size_bytes, l.display_name, l.created_at_ms, "
+            "ROW_NUMBER() OVER (PARTITION BY a.id ORDER BY l.created_at_ms DESC, l.id DESC) AS rank "
+            "FROM artifact_links l "
+            "JOIN artifacts a ON a.tenant_id=l.tenant_id AND a.id=l.artifact_id "
+            "JOIN sessions_v2 s ON s.tenant_id=l.tenant_id AND s.id=l.resource_id "
+            "WHERE l.tenant_id=? AND l.resource_type='session' AND l.resource_id=? "
+            "AND s.deleted_at_ms IS NULL AND a.deleted_at_ms IS NULL AND a.storage_state='available' "
+            "AND instr(lower(coalesce(l.display_name, a.id)), lower(?)) > 0) "
+            "SELECT * FROM matches WHERE rank=1 ORDER BY created_at_ms DESC, id DESC LIMIT 21",
+            (tenant_id, session_id, query))).fetchall()
     return {
         "attachments": [
             {"artifact_id": row["id"], "filename": safe_attachment_filename(row["display_name"] or row["id"]),
@@ -248,7 +250,7 @@ async def session_output_reference(db, *, tenant_id, session_id, value, link=Fal
     The caller checks session publication/read authorization before and after
     use. This lookup never opens a model-supplied path or confers a new scope.
     """
-    from .memory.artifacts import (artifact_store_root, _ensure_link,
+    from .memory.artifacts import (artifact_store_root, _connection, _ensure_link,
         _attachment_ref, public_attachment_ref, safe_attachment_filename, attachment_kind)
     if not isinstance(value, dict):
         return None
@@ -270,26 +272,29 @@ async def session_output_reference(db, *, tenant_id, session_id, value, link=Fal
         storage_key = relative.as_posix()
     elif not isinstance(artifact_id, str) or not _ARTIFACT_ID.fullmatch(artifact_id):
         return None
-    conn = await db._ensure_connected()
-    row = await (await conn.execute(
-        "SELECT a.*,l.display_name,l.id AS link_id FROM artifacts a "
-        "JOIN artifact_links l ON l.tenant_id=a.tenant_id AND l.artifact_id=a.id "
-        "JOIN sessions_v2 s ON s.id=l.resource_id AND s.tenant_id=l.tenant_id "
-        "WHERE a.tenant_id=? AND l.resource_type='session' AND l.resource_id=? "
-        "AND s.deleted_at_ms IS NULL AND a.deleted_at_ms IS NULL AND a.storage_state='available' "
-        "AND a." + ("id" if artifact_id else "storage_key") + "=? ORDER BY CASE WHEN l.id=? THEN 0 ELSE 1 END,l.created_at_ms,l.id LIMIT 1",
-        (tenant_id, session_id, artifact_id or storage_key, value.get("artifact_link_id", "")))).fetchone()
-    if row is None:
-        return None
-    filename = safe_attachment_filename(row["display_name"] or row["id"])
-    link_id = row["link_id"]
-    if link:
-        existing = await (await conn.execute(
-            "SELECT id FROM artifact_links WHERE tenant_id=? AND artifact_id=? AND resource_type='session' "
-            "AND resource_id=? AND relation='output_attachment' LIMIT 1",
-            (tenant_id,row["id"],session_id))).fetchone()
-        link_id = await _ensure_link(conn,artifact=row,session_id=session_id,relation="output_attachment",
-            display_name=filename,existing_link_id=existing[0] if existing else None)
-        await conn.commit()
-    return public_attachment_ref(_attachment_ref(row,path=Path(),filename=filename,
-        kind=attachment_kind(row["mime"]),link_id=link_id))
+    # A dedicated connection, like the upload that wrote the link: during a run
+    # the shared connection can sit inside an implicit transaction whose
+    # snapshot predates that commit and would not see the artifact.
+    async with _connection(db) as conn:
+        row = await (await conn.execute(
+            "SELECT a.*,l.display_name,l.id AS link_id FROM artifacts a "
+            "JOIN artifact_links l ON l.tenant_id=a.tenant_id AND l.artifact_id=a.id "
+            "JOIN sessions_v2 s ON s.id=l.resource_id AND s.tenant_id=l.tenant_id "
+            "WHERE a.tenant_id=? AND l.resource_type='session' AND l.resource_id=? "
+            "AND s.deleted_at_ms IS NULL AND a.deleted_at_ms IS NULL AND a.storage_state='available' "
+            "AND a." + ("id" if artifact_id else "storage_key") + "=? ORDER BY CASE WHEN l.id=? THEN 0 ELSE 1 END,l.created_at_ms,l.id LIMIT 1",
+            (tenant_id, session_id, artifact_id or storage_key, value.get("artifact_link_id", "")))).fetchone()
+        if row is None:
+            return None
+        filename = safe_attachment_filename(row["display_name"] or row["id"])
+        link_id = row["link_id"]
+        if link:
+            existing = await (await conn.execute(
+                "SELECT id FROM artifact_links WHERE tenant_id=? AND artifact_id=? AND resource_type='session' "
+                "AND resource_id=? AND relation='output_attachment' LIMIT 1",
+                (tenant_id,row["id"],session_id))).fetchone()
+            link_id = await _ensure_link(conn,artifact=row,session_id=session_id,relation="output_attachment",
+                display_name=filename,existing_link_id=existing[0] if existing else None)
+            await conn.commit()
+        return public_attachment_ref(_attachment_ref(row,path=Path(),filename=filename,
+            kind=attachment_kind(row["mime"]),link_id=link_id))
