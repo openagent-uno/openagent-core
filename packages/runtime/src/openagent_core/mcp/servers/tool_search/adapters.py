@@ -490,7 +490,9 @@ async def _list_scoped_servers_impl(pool: Any) -> list[dict[str, Any]]:
                 "name": tool.name,
                 "description": " ".join(str(tool.description or "").split())[:160],
             })
-    from openagent_core.capability_map import source_summary
+    from openagent_core.capability_map import hide_aliases, source_summary
+    for hidden in hide_aliases(groups):
+        groups.pop(hidden, None)
     for source_id, entry in groups.items():
         summary = source_summary(source_id, presentation.source_summaries)
         if summary:
@@ -568,7 +570,12 @@ async def _list_scoped_tools_impl(
         else:
             known = sorted({tool.source_id for tool in discovered})
             raise LookupError(f"No authorized source {source_ref!r}. Current sources: {', '.join(known)}")
-    candidates = [tool for tool in discovered if source_ref is None or tool.source_id == source_ref]
+    if source_ref is None:
+        from openagent_core.capability_map import hide_aliases
+        hidden = hide_aliases(tool.source_id for tool in discovered)
+        candidates = [tool for tool in discovered if tool.source_id not in hidden]
+    else:
+        candidates = [tool for tool in discovered if tool.source_id == source_ref]
     ranked = rank_tools(candidates, query or "")
     page = ranked[offset : offset + limit]
     result = {

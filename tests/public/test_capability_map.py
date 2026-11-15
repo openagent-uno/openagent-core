@@ -161,3 +161,34 @@ class ServerInstructions(unittest.TestCase):
                                metadata={"openagent/source-instructions": "Something else."})
 
         self.assertTrue(capability_map.group_sources([tool])[0]["description"].startswith("cron-scheduled"))
+
+
+class CompatibilityAliases(unittest.IsolatedAsyncioTestCase):
+    async def test_an_alias_registration_is_hidden_but_still_callable(self):
+        policy = Policy()
+        catalog = CapabilityCatalog(policy)
+        principal = PrincipalRef("host", "tenant", "person")
+        context = ExecutionContext(principal, principal, principal, "session", "agent", (principal,))
+        runtime = Runtime(catalog)
+        for name in ("schedules", "scheduler"):
+            tools = source(("create_task", "Create a cron task."))
+            catalog.register(name, tools, tools, target_label="agent")
+        pool = MCPPool.from_config([{"builtin": "tool-search"}], include_defaults=False)
+        await pool.connect_all()
+        self.addAsyncCleanup(pool.close_all)
+        pool.bind_capability_catalog(catalog)
+        toolkit = pool.runtime_toolkits_tool_search_only()[0]
+        functions = {**toolkit.functions, **toolkit.async_functions}
+
+        text = await capability_map.render_for_turn(runtime, context)
+        with execution_scope(runtime, context, "aliases"):
+            servers = await functions["tool_search_list_servers"].entrypoint()
+            found = await functions["tool_search_list_tools"].entrypoint(query="create cron task")
+            legacy = await functions["tool_search_list_tools"].entrypoint(source_ref="scheduler")
+
+        self.assertIn("- schedules @ agent", text)
+        self.assertNotIn("- scheduler", text)
+        self.assertEqual(["schedules"], [row["source_ref"] for row in servers])
+        self.assertEqual(["schedules"], [tool["source_ref"] for tool in found["tools"]])
+        self.assertEqual("scheduler", legacy["source_ref"])
+        self.assertEqual(1, legacy["total"])

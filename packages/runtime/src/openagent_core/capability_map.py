@@ -63,6 +63,7 @@ SOURCE_ALIASES: dict[str, str] = {
     "webhook": "events",
     "model-manager": "models",
     "budget-manager": "budget",
+    "mcp-manager": "mcp",
     "memory-search": "sessions",
     "history": "sessions",
     "memory": "vault",
@@ -104,6 +105,17 @@ def source_summary(source_id: str, overrides: Optional[Mapping[str, str]] = None
     return " ".join(str(description).split()) if description else None
 
 
+def hide_aliases(source_ids: Iterable[str]) -> set[str]:
+    """Source ids that only duplicate a present canonical source under an older name.
+
+    Modules may register a source twice for compatibility (``scheduler`` and
+    ``schedules`` are the same tools). Both stay callable; presentation shows
+    only the canonical one so the model does not see two sources for one job.
+    """
+    present = set(source_ids)
+    return {name for name in present if canonical_source(name) != name and canonical_source(name) in present}
+
+
 def alias_terms(source_id: str) -> list[str]:
     """The aliases that point at ``source_id`` (used to make search forgiving)."""
     return [alias for alias, target in SOURCE_ALIASES.items() if target == source_id]
@@ -135,6 +147,8 @@ def group_sources(tools: Iterable[Any], overrides: Optional[Mapping[str, str]] =
             if isinstance(declared, str) and declared.strip():
                 first = re.split(r"(?<=[.!?])\s", " ".join(declared.split()), maxsplit=1)[0]
                 entry["description"] = f"(as the server describes itself) {first}"
+    for hidden in hide_aliases(groups):
+        groups.pop(hidden, None)
     out = []
     for entry in groups.values():
         entry["tools"] = sorted(filter(None, entry["tools"]), key=str.casefold)
