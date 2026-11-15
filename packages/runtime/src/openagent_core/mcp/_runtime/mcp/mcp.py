@@ -156,6 +156,10 @@ class MCPTools(Toolkit):
 
         self.timeout_seconds = timeout_seconds
         self.session: Optional[ClientSession] = session
+        # The server's own usage instructions from ``initialize`` (MCP spec
+        # ``InitializeResult.instructions``). Untrusted text; surfaced only as a
+        # clipped source description.
+        self.server_instructions: Optional[str] = None
         self.server_params: Optional[Union[StdioServerParameters, SSEClientParams, StreamableHTTPClientParams]] = (
             server_params
         )
@@ -405,7 +409,8 @@ class MCPTools(Toolkit):
                 session = await session_context.__aenter__()  # type: ignore
 
                 # Initialize the session
-                await session.initialize()
+                initialized = await session.initialize()
+                self._record_server_instructions(initialized)
             except Exception:
                 # Exit partially-entered context managers to avoid resource leaks
                 if session_context is not None:
@@ -737,6 +742,11 @@ class MCPTools(Toolkit):
                 log_error(f"Failed to get tools for {str(self)}")
                 raise
 
+    def _record_server_instructions(self, initialized: Any) -> None:
+        instructions = getattr(initialized, "instructions", None)
+        if isinstance(instructions, str) and instructions.strip():
+            self.server_instructions = " ".join(instructions.split())[:600]
+
     async def initialize(self) -> None:
         """Initialize the MCP toolkit by getting available tools from the MCP server"""
         if self._initialized:
@@ -747,7 +757,8 @@ class MCPTools(Toolkit):
                 raise ValueError("Session is not initialized")
 
             # Initialize the session if not already initialized
-            await self.session.initialize()
+            initialized = await self.session.initialize()
+            self._record_server_instructions(initialized)
 
             await self.build_tools()
 

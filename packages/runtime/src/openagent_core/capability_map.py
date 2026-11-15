@@ -127,6 +127,12 @@ def group_sources(tools: Iterable[Any], overrides: Optional[Mapping[str, str]] =
             "description": source_summary(source_id, overrides),
         })
         entry["tools"].append(str(getattr(tool, "name", "")))
+        if not entry["description"]:
+            metadata = getattr(tool, "metadata", None) or {}
+            declared = metadata.get("openagent/source-instructions") if hasattr(metadata, "get") else None
+            if isinstance(declared, str) and declared.strip():
+                first = re.split(r"(?<=[.!?])\s", " ".join(declared.split()), maxsplit=1)[0]
+                entry["description"] = f"(as the server describes itself) {first}"
     out = []
     for entry in groups.values():
         entry["tools"] = sorted(set(filter(None, entry["tools"])), key=str.casefold)

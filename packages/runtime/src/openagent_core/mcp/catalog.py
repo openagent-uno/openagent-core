@@ -48,6 +48,10 @@ class PoolCapabilitySource:
             metadata["openagent/resource-generation"] = generation
         if self.media is not None:
             metadata.update(self.media.metadata(getattr(function,"mcp_name",None) or getattr(function,"name","")))
+        instructions = getattr(self.toolkit, "server_instructions", None)
+        if isinstance(instructions, str) and instructions:
+            # The server's self-description, for the capability map. Untrusted.
+            metadata["openagent/source-instructions"] = instructions
         return metadata
 
 
