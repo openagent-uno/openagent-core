@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openagent-core"
-version = "1.1.0b101"
+version = "1.1.0b102"
 description = "Embeddable OpenAgent runtime and public host contracts"
 readme = "README.md"
 requires-python = ">=3.11"
