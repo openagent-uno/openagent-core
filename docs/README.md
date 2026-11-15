@@ -3,6 +3,7 @@
 ## Architecture and use
 
 - [Compaction summary fallback](compaction-summary-fallback.md): which fallback a failed compaction summary may use, by kind of failure.
+- [Run output previews](run-output-preview.md): stored previews of scheduled and event runs keep the conclusion, not the opening narration.
 - [Unreleased deferred-tool child-card provenance](session-history.md#branching-a-conversation-at-a-message)
   ([source qualification](qualification/deferred-child-link-2026-11-12.json)).
 

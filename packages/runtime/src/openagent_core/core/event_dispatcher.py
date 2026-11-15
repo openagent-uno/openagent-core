@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from openagent_core.core.output_preview import RUN_PREVIEW_CHARS, tail_preview
 from openagent_core.configuration import runtime_environment
 from typing import Any, Optional
 
@@ -44,7 +45,7 @@ MAX_PAYLOAD_BLOCK_BYTES = 8 * 1024
 # Preserve a complete compact answer/JSON in the delivery row. 500 chars cut a
 # valid support payload mid-string even though the child session held the full
 # answer; 4 KB matches scheduled-task output retention and remains bounded.
-MAX_EVENT_OUTPUT_CHARS = 4_000
+MAX_EVENT_OUTPUT_CHARS = RUN_PREVIEW_CHARS
 
 # Wall-clock cap on a single event turn (see _dispatch_prompt). A support turn
 # is normally 1-3 min; anything past this is a stuck/jammed run (a rate-limited
@@ -374,7 +375,7 @@ def _start_lease_heartbeat(db: Any, delivery_id: str) -> Optional[asyncio.Task]:
 
 def _retained_output(text: str, agent=None) -> str:
     retain = getattr(getattr(agent, "extensions", None), "output_retainer", None)
-    return retain(text, MAX_EVENT_OUTPUT_CHARS) if retain else text[:MAX_EVENT_OUTPUT_CHARS]
+    return retain(text, MAX_EVENT_OUTPUT_CHARS) if retain else (tail_preview(text, MAX_EVENT_OUTPUT_CHARS) or "")
 
 
 async def _stop_lease_heartbeat(task: Optional[asyncio.Task]) -> None:

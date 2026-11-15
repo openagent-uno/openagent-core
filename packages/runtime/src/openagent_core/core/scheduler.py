@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from openagent_core.core.output_preview import RUN_PREVIEW_CHARS, tail_preview
 from openagent_core.configuration import runtime_environment
 import uuid
 from typing import Callable, TYPE_CHECKING
@@ -180,8 +181,9 @@ def _no_broadcast(resource: str, action: str, id: str | None = None) -> None:
 
 # Cap the stored task-run output preview. The full transcript still lives
 # in the agent's session history; ``task_runs.output`` is only a preview
-# for the dashboard's run list, so a chatty turn can't bloat the DB.
-_MAX_TASK_RUN_OUTPUT = 4000
+# for the run list, so a chatty turn can't bloat the DB. The preview keeps the
+# END of the text (the run's conclusion), not its opening narration.
+_MAX_TASK_RUN_OUTPUT = RUN_PREVIEW_CHARS
 
 _CHILD_FAILURE_STATUSES = {"ERROR", "FAILED"}
 _CHILD_CANCELLED_STATUSES = {"CANCELLED"}
@@ -217,9 +219,9 @@ def _string_preview(value: object) -> str | None:
     if isinstance(value, str):
         return value.strip() or None
     try:
-        return json.dumps(value, ensure_ascii=False)[:_MAX_TASK_RUN_OUTPUT]
+        return tail_preview(json.dumps(value, ensure_ascii=False), _MAX_TASK_RUN_OUTPUT)
     except Exception:  # noqa: BLE001
-        return str(value)[:_MAX_TASK_RUN_OUTPUT]
+        return tail_preview(str(value), _MAX_TASK_RUN_OUTPUT)
 
 
 def _child_run_error_preview(run: dict, *, fallback: str) -> str:
@@ -1419,9 +1421,9 @@ class Scheduler:
         try:
             updates: dict = {"status": status, "finished_at": time.time()}
             if output is not None:
-                updates["output"] = output[:_MAX_TASK_RUN_OUTPUT]
+                updates["output"] = tail_preview(output, _MAX_TASK_RUN_OUTPUT)
             if error is not None:
-                updates["error"] = error[:_MAX_TASK_RUN_OUTPUT]
+                updates["error"] = tail_preview(error, _MAX_TASK_RUN_OUTPUT)
             await self.db.update_task_run(run_id, **updates)
             # Keep the per-task history bounded.
             await self.db.prune_task_runs(task["id"])
