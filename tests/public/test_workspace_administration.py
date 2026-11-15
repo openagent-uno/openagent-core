@@ -76,6 +76,30 @@ class WorkspaceAdministration(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PermissionError):
             await self.inspection.fork_text(ctx, "parent", boundary[0])
 
+    async def test_transcript_names_the_message_a_fork_starts_from(self):
+        conn = await self.db._ensure_connected()
+        from openagent_core.memory.operational.repository import _tenant_id
+        tenant = await conn._execute(_tenant_id, conn._conn)
+        alice = replace(self.alice, tenant_id=tenant)
+        ctx = replace(self.ctx, author=alice, initiator=alice, authority=alice, audience=(alice,))
+        for run_id, prompt, answer in (("ids-first", "First question", "First answer"),
+                                       ("ids-second", "Second question", "Second answer")):
+            await self.store.accept(RunRequest(run_id, "parent", run_id, prompt), ctx)
+            await self.store.transition(run_id, "running")
+            await self.store.transition(run_id, "success", output=answer)
+        rows = (await self.inspection.transcript(ctx, "parent"))["messages"]
+        visible = [m for m in rows if m["role"] in {"user", "assistant"}]
+        self.assertEqual(["First question", "First answer", "Second question", "Second answer"], [m["text"] for m in visible])
+        stored = {row[0]: row[1] for row in await (await conn.execute(
+            "SELECT id,text FROM session_messages WHERE session_id='parent' AND role IN ('user','assistant')")).fetchall()}
+        # Each one is the durable row a fork accepts, not a presentation ordinal.
+        for message in visible:
+            self.assertIn(message["message_id"], stored)
+        self.assertEqual(len(visible), len({m["message_id"] for m in visible}))
+        fork = await self.inspection.fork_text(ctx, "parent", visible[1]["message_id"])
+        branch = (await self.inspection.transcript(replace(ctx, session_id=fork["session_id"]), fork["session_id"]))["messages"]
+        self.assertEqual(["First question", "First answer"], [m["text"] for m in branch])
+
     async def test_skill_lifecycle_preserves_body_provenance_and_user_ownership(self):
         result=await self.skills.write(self.management,"create","User Playbook",{"body":"Keep these exact instructions.","description":"Original"})
         self.assertTrue(result["ok"]);self.assertFalse(result["index_refreshed"])

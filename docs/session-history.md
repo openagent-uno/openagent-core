@@ -126,6 +126,12 @@ tools, execution state, summaries, files or attachment grants. It refuses
 protected history requiring a provenance-aware copy and prefixes too large to
 copy in one transaction.
 
+`SessionInspection.transcript` gives each finished visible prompt and answer
+a `message_id`: the durable row `fork_text` accepts as its boundary. The
+entry `id` stays a presentation ordinal (`run-msg-N`). Streaming rows, history
+imported into the run and non-text rows carry no `message_id`, because a fork
+cannot start there.
+
 Canonical `run.child` events can carry `provider_tool_call_id` in addition to
 `child_run_id` and `child_session_id`. This optional field comes from the
 executing provider call after child admission. A host can correlate it with a

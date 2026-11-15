@@ -233,7 +233,7 @@ class SessionInspection:
                         inputs[run_id] = {"text": original, "runId": run_id,
                             "attachments": await self._public_input_refs(context,session_id,metadata.get("attachments", ()))}
             normalized = await (await conn.execute(
-                "SELECT id,ordinal,role,raw_envelope_json FROM session_messages WHERE run_id=? AND tenant_id=? AND session_id=? AND visibility='user_visible' ORDER BY ordinal",
+                "SELECT id,ordinal,role,raw_envelope_json,status FROM session_messages WHERE run_id=? AND tenant_id=? AND session_id=? AND visibility='user_visible' ORDER BY ordinal",
                 ((row["id"] if row is not None else run_id), context.tenant_id, session_id))).fetchall()
             # Projection ordinal is run-local (projection.py enumerates the
             # original raw list), including system/history/tool slots. Verify
@@ -262,6 +262,12 @@ class SessionInspection:
                 verified.append(message)
                 targets[message["id"]] = ordinal
             normalized = verified
+            # The durable identity of each finished visible prompt and answer,
+            # exactly the rows ``fork_text`` accepts as a boundary, so a client
+            # can branch a conversation at the message it shows.
+            forkable = {(run_id, targets[m["id"]], m["role"]): m["id"] for m in normalized
+                        if m["role"] in {"user", "assistant"} and m["status"] != "streaming"
+                        and json.loads(m["raw_envelope_json"]).get("from_history") is not True}
             identifiers = [m["id"] for m in normalized]
             refs = await attachment_refs_for_messages_on_connection(conn, identifiers)
             # The host authorizer has checked this exact session. CAS parts
@@ -303,6 +309,8 @@ class SessionInspection:
                                       'parts':([{'kind':'text','text':text}] if text else []) +
                                       [p for p in frame['parts'] if p['kind']=='attachment']}
                         messages[(run_id,final,"assistant")] = public
+            for key, message_id in forkable.items():
+                messages[key] = {**messages.get(key, {}), "message_id": message_id}
 
         return inputs, messages
 
