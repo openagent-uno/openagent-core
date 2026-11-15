@@ -490,9 +490,11 @@ async def _list_scoped_servers_impl(pool: Any) -> list[dict[str, Any]]:
                 "name": tool.name,
                 "description": " ".join(str(tool.description or "").split())[:160],
             })
+    from openagent_core.capability_map import source_summary
     for source_id, entry in groups.items():
-        if source_id in presentation.source_summaries:
-            entry["description"] = presentation.source_summaries[source_id]
+        summary = source_summary(source_id, presentation.source_summaries)
+        if summary:
+            entry["description"] = summary
         if "capabilities" in entry:
             capabilities = sorted(entry["capabilities"], key=lambda item: (item["name"].casefold(), item["name"]))
             entry["capabilities"] = capabilities[:presentation.capability_limit]
@@ -555,12 +557,21 @@ async def _list_scoped_tools_impl(
     if offset < 0:
         raise ValueError("offset must be non-negative")
 
-    from .ranking import rank_tools
-    candidates = [tool for tool in await catalog.discover(context)
-                  if source_ref is None or tool.source_id == source_ref]
+    from .ranking import rank_tools, rank_sources
+    from openagent_core.capability_map import canonical_source
+    discovered = await catalog.discover(context)
+    resolved_from = None
+    if source_ref is not None and not any(tool.source_id == source_ref for tool in discovered):
+        canonical = canonical_source(source_ref)
+        if canonical != source_ref and any(tool.source_id == canonical for tool in discovered):
+            resolved_from, source_ref = source_ref, canonical
+        else:
+            known = sorted({tool.source_id for tool in discovered})
+            raise LookupError(f"No authorized source {source_ref!r}. Current sources: {', '.join(known)}")
+    candidates = [tool for tool in discovered if source_ref is None or tool.source_id == source_ref]
     ranked = rank_tools(candidates, query or "")
     page = ranked[offset : offset + limit]
-    return {
+    result = {
         "source_ref": source_ref,
         "query": query or "",
         "total": len(ranked),
@@ -569,6 +580,16 @@ async def _list_scoped_tools_impl(
         "has_more": offset + len(page) < len(ranked),
         "tools": [_compact_descriptor_wire(tool) for tool in page],
     }
+    if resolved_from is not None:
+        result["resolved_from"] = resolved_from
+    if not ranked and (query or "").strip():
+        presentation = getattr(pool, "discovery_presentation", None)
+        overrides = getattr(presentation, "source_summaries", None)
+        suggestions = rank_sources(discovered, query or "", overrides)[:3]
+        result["suggestions"] = suggestions
+        result["hint"] = ("No tool matched these words. Try other words for the same action, or list a "
+                          "likely source with tool_search_list_tools(source_ref=...) and no query.")
+    return result
 
 
 async def _describe_scoped_tool_impl(pool: Any, tool_ref: str) -> dict[str, Any]:
@@ -1066,8 +1087,9 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
         entry is not its complete inventory: open list_tools and follow its
         pages before declaring a capability unavailable.
 
-        Search query matches source names and destination labels (e.g. a device
-        name). Follow every next_offset before declaring a device absent.
+        Search query matches source names, descriptions, older source names
+        and destination labels (e.g. a device name); every word must match.
+        Follow every next_offset before declaring a device absent.
         Verify target_label before calling a tool. A permission error or retry
         never permits substituting the agent host for a requested user device.
         For long lists pass next_offset as offset. Limit is from 1 to 50.
@@ -1080,10 +1102,8 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
         if query is not None:
             if not isinstance(query, str) or len(query) > 512:
                 raise ValueError("query must be a string of at most 512 characters")
-            terms = query.casefold().split()
-            sources = [source for source in sources if all(term in
-                (str(source["name"]) + " " + str(source["target_label"])).casefold()
-                for term in terms)]
+            from .ranking import filter_sources
+            sources = filter_sources(sources, query)
         page = collection_page(sources, offset, limit, page_character_budget())
         end = offset + len(page)
         if offset == 0 and end == len(sources):
@@ -1099,7 +1119,8 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
         """Search authorized tools and return compact opaque references.
 
         Args:
-            source_ref: Exact source reference returned by list_servers.
+            source_ref: Source reference from list_servers or the capabilities list
+                (an older source name such as ``scheduler`` also resolves).
                 Omit to search across all authorized sources; then query is required.
             query: Optional capability words, for example ``create adset``.
                 Use a narrow query and limit=5 when finding an unknown capability.
@@ -1119,9 +1140,9 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
         tool_ref: str | None = None, args: dict | str | None = None,
         result_cursor: str | None = None,
     ) -> Any:
-        """Invoke any tool on any connected MCP and return its result.
+        """Invoke a discovered tool (from list_tools or describe_tool) and return its result.
 
-        Use this when the tool you need was trimmed from the upfront list.
+        Every tool except discovery itself is called this way.
 
         Args:
             tool_ref: Exact opaque reference returned by discovery. It fixes the target and tool.

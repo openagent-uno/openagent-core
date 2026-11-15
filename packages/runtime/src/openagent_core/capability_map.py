@@ -1,0 +1,210 @@
+"""What the model can do this turn, in one readable map.
+
+Tools are deferred behind discovery, so without a map the model sees one tool
+(``tool-search``) and has to guess which source owns a job. This module turns
+the turn's *authorized* catalog into a short plain-text ``<capabilities>``
+section: every source with a use-case description, its target (which computer
+or account it acts on), its tool count and, for small sources, the tool names.
+It also owns the source descriptions and the alias table discovery uses, so a
+renamed source ("scheduler" → "schedules") still resolves.
+
+Nothing here grants anything: the map is rendered from ``catalog.discover``
+for the current execution context, so it never names a tool the model cannot
+call in this turn.
+"""
+from __future__ import annotations
+
+import re
+from typing import Any, Iterable, Mapping, Optional
+
+# Use-case descriptions for the framework's own sources, keyed by the source id
+# discovery reports. A host may override any of them (DiscoveryPresentation
+# ``source_summaries``); third-party MCP servers describe themselves through
+# their own tool descriptions.
+SOURCE_SUMMARIES: dict[str, str] = {
+    "vault": "long-term memory notes: search, read, write and patch durable facts, decisions and procedures",
+    "vault-gate": "check and repair the memory vault's quality (links, orphans, duplicates, frontmatter)",
+    "sessions": "conversation history: search and read earlier sessions, runs and their events",
+    "attachments": "send files to the user in this conversation, or find and resend files already exchanged",
+    "schedules": "cron-scheduled and one-shot tasks: create, list, update, run now and inspect their runs",
+    "workflows": "multi-step automated workflows: define, run and inspect them",
+    "events": "inbound webhook triggers: create endpoints that start the agent when an external service calls",
+    "models": "LLM models and providers: list, add, enable, and pin a model to a conversation",
+    "budget": "spending limits and usage: read and set budgets",
+    "search": "search across authorized history and memory in one query",
+    "skills": "your skills (SKILL.md playbooks): view, search, create and update them",
+    "skill-data": "files and data that belong to a skill",
+    "logs": "your own event log: recent errors, summaries and the context around an event",
+    "messaging": "send messages to the user's connected channels",
+    "delegation": "delegate a self-contained task to a sub-agent and get its result",
+    "mcp": "MCP servers: list, add, configure and remove external tool servers",
+    "mcp-manager": "MCP servers: list, add, configure and remove external tool servers",
+    "shell": "run shell commands on the target computer; long jobs can run in the background",
+    "filesystem": "read, write, move and search files and directories on the target computer",
+    "editor": "precise code editing on the target computer: view, edit, apply patches, glob and grep",
+    "computer-control": "see and operate the target computer's screen: screenshots, mouse and keyboard",
+    "agent-in-chrome": "drive a dedicated Chromium browser on the target computer",
+    "media-gen": "generate images, audio or video",
+    "web": "search the web and fetch pages",
+    "tool-search": "find and call every other tool (discovery)",
+}
+
+# Older or alternative names, mapped to the source id discovery uses now. Both
+# the prompt and the model's habits still use some of these.
+SOURCE_ALIASES: dict[str, str] = {
+    "scheduler": "schedules",
+    "schedule": "schedules",
+    "scheduled-tasks": "schedules",
+    "cron": "schedules",
+    "workflow-manager": "workflows",
+    "workflow": "workflows",
+    "events-manager": "events",
+    "webhooks": "events",
+    "webhook": "events",
+    "model-manager": "models",
+    "budget-manager": "budget",
+    "memory-search": "sessions",
+    "history": "sessions",
+    "memory": "vault",
+    "notes": "vault",
+    "files": "filesystem",
+    "terminal": "shell",
+    "bash": "shell",
+    "browser": "agent-in-chrome",
+    "skill": "skills",
+}
+
+# Sources small enough to list their tool names inline.
+_INLINE_TOOL_LIMIT = 12
+_DESCRIPTION_CHARS = 160
+_DEFAULT_MAP_CHARS = 7000
+
+
+def canonical_source(name: Optional[str]) -> Optional[str]:
+    """The current source id for ``name`` (itself when it is not an alias)."""
+    if name is None:
+        return None
+    key = str(name).strip()
+    return SOURCE_ALIASES.get(key.casefold(), key)
+
+
+def source_summary(source_id: str, overrides: Optional[Mapping[str, str]] = None) -> Optional[str]:
+    """The use-case description of a source: host override, then framework default."""
+    if overrides and source_id in overrides and overrides[source_id]:
+        return str(overrides[source_id])
+    summary = SOURCE_SUMMARIES.get(source_id)
+    if summary:
+        return summary
+    try:
+        from openagent_core.mcp.builtins import BUILTIN_MCP_SPECS
+    except Exception:  # noqa: BLE001 - descriptions are a convenience
+        return None
+    spec = BUILTIN_MCP_SPECS.get(source_id) or {}
+    description = spec.get("description")
+    return " ".join(str(description).split()) if description else None
+
+
+def alias_terms(source_id: str) -> list[str]:
+    """The aliases that point at ``source_id`` (used to make search forgiving)."""
+    return [alias for alias, target in SOURCE_ALIASES.items() if target == source_id]
+
+
+def _clip(text: str, limit: int) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def group_sources(tools: Iterable[Any], overrides: Optional[Mapping[str, str]] = None) -> list[dict[str, Any]]:
+    """Group discovered tool descriptors by (source, target) with descriptions."""
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for tool in tools:
+        source_id = str(getattr(tool, "source_id", "") or "")
+        target = str(getattr(tool, "target_label", "") or "")
+        if not source_id:
+            continue
+        entry = groups.setdefault((source_id, target), {
+            "source_ref": source_id, "target_label": target, "tools": [],
+            "description": source_summary(source_id, overrides),
+        })
+        entry["tools"].append(str(getattr(tool, "name", "")))
+    out = []
+    for entry in groups.values():
+        entry["tools"] = sorted(set(filter(None, entry["tools"])), key=str.casefold)
+        entry["tool_count"] = len(entry["tools"])
+        out.append(entry)
+    return sorted(out, key=lambda e: (e["source_ref"] == "tool-search", e["target_label"].casefold(), e["source_ref"]))
+
+
+def render(groups: list[dict[str, Any]], *, max_chars: int = _DEFAULT_MAP_CHARS) -> str:
+    """The plain-text ``<capabilities>`` section for the system prompt."""
+    groups = [g for g in groups if g["source_ref"] != "tool-search"]
+    if not groups:
+        return ""
+    head = (
+        "<capabilities>\n"
+        "These are the capability sources you can use in this turn. Their tools are not in your "
+        "function list: find one with `tool_search_list_tools(source_ref=..., query=...)` (or "
+        "`tool_search_list_tools(query=...)` across all sources), check its schema with "
+        "`tool_search_describe_tool(tool_ref)` when unsure, and call it with "
+        "`tool_search_call_tool(tool_ref, args)`. The target is the computer or account a tool acts on; "
+        "never use a tool on a different target than the one asked for.\n"
+    )
+    lines = []
+    for group in groups:
+        target = f" @ {group['target_label']}" if group["target_label"] else ""
+        description = f": {_clip(group['description'], _DESCRIPTION_CHARS)}" if group["description"] else ""
+        line = f"- {group['source_ref']}{target} ({group['tool_count']} tools){description}"
+        if group["tool_count"] <= _INLINE_TOOL_LIMIT:
+            line += f". Tools: {', '.join(group['tools'])}"
+        lines.append(line)
+    tail = "</capabilities>"
+    budget = max_chars - len(head) - len(tail) - 80
+    kept, used = [], 0
+    for line in lines:
+        if used + len(line) + 1 > budget:
+            break
+        kept.append(line)
+        used += len(line) + 1
+    if len(kept) < len(lines):
+        kept.append(f"- … {len(lines) - len(kept)} more sources: call `tool_search_list_servers` for the full list.")
+    return head + "\n".join(kept) + "\n" + tail
+
+
+async def render_for_turn(runtime: Any, context: Any, *, overrides: Optional[Mapping[str, str]] = None,
+                          max_chars: int = _DEFAULT_MAP_CHARS) -> str:
+    """The capability map for the current execution, or ``""`` when unavailable."""
+    if runtime is None or context is None:
+        return ""
+    catalog = getattr(runtime, "capabilities", None)
+    if catalog is None:
+        return ""
+    try:
+        tools = await catalog.discover(context)
+    except Exception:  # noqa: BLE001 - the map is advisory; discovery stays authoritative
+        return ""
+    return render(group_sources(tools, overrides), max_chars=max_chars)
+
+
+_STEM_SUFFIXES = ("ations", "ation", "ings", "ing", "ies", "ers", "er", "es", "ed", "s")
+
+
+STOPWORDS = frozenset({"a", "an", "the", "to", "for", "of", "and", "or", "in", "on", "with", "my",
+                       "me", "i", "it", "this", "that", "from", "by", "at", "is", "be", "do"})
+
+
+def stem(term: str) -> str:
+    """A light, deterministic stem so 'schedule' matches 'scheduled'/'schedules'."""
+    term = term.casefold()
+    for suffix in _STEM_SUFFIXES:
+        if len(term) > len(suffix) + 2 and term.endswith(suffix):
+            term = term[: -len(suffix)] + ("y" if suffix == "ies" else "")
+            break
+    if len(term) > 4 and term.endswith("e"):
+        term = term[:-1]
+    return term
+
+
+def terms(text: str) -> list[str]:
+    """Lowercased word terms, splitting camelCase, snake_case and kebab-case."""
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", str(text or ""))
+    return re.findall(r"[^\W_]+", text.casefold())

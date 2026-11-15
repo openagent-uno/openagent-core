@@ -2749,6 +2749,15 @@ class Agent:
         from openagent_core.runtime import current_runtime, current_execution_context, current_run_id
         text = self._combined_system_prompt(session_id=session_id)
         runtime, context, run_id = current_runtime(), current_execution_context(), current_run_id()
+        # The map of what this turn can use: every authorized capability source
+        # with its use case, target and (for small sources) tool names. Without
+        # it the deferred catalog shows the model only the discovery tools.
+        from openagent_core import capability_map
+        presentation = getattr(self._mcp, "discovery_presentation", None)
+        capabilities = await capability_map.render_for_turn(
+            runtime, context, overrides=getattr(presentation, "source_summaries", None))
+        if capabilities:
+            text = f"{text}\n\n{capabilities}"
         if runtime is not None and context is not None and run_id:
             if context.session_id != session_id:
                 raise PermissionError("Prompt composition belongs to another session")
