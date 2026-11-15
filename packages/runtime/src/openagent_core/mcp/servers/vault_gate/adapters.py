@@ -50,7 +50,13 @@ def build_runtime_toolkit() -> Any:
     async def vault_search(query: str, limit: int = 20,
                            search_type: str = "content",
                            file_path: str | None = None) -> dict:
-        """Search the vault. ``search_type`` controls what is searched:
+        """Search memory: the first tool to call before acting on anything
+        that depends on the user, their projects or past decisions. Plain
+        words are ranked (title and filename count most); ``+term`` requires
+        a word, a quoted phrase must match and ``-term`` excludes one. Use
+        the vault source's ``vault_search_notes`` only to scope by folder or
+        match frontmatter such as tags. ``search_type`` controls what is
+        searched:
 
         - ``"content"`` (default) — full-text search over title/summary/body (FTS5).
         - ``"filename"`` — search only note file names/paths.
@@ -79,9 +85,15 @@ def build_runtime_toolkit() -> Any:
         return await handlers.vault_dream()
 
     async def vault_init() -> dict:
-        """Scaffold the Company-Brain folder system: the eleven folders, the
-        journal sub-tree, the canon workspace, and note/session/daily
-        templates. Idempotent."""
+        """Scaffold the vault's folder system: the eleven folders (self,
+        areas, projects, sources, concepts, docs, entities, data, code,
+        outputs, workspace), the journal sub-tree, the canon workspace and
+        note/session/daily templates. Idempotent. Conventions: a thing that
+        fits two folders gets a tag (for example channel/<name>), not a
+        copy; source documents go in sources/ and their hard facts are first
+        distilled into workspace/_canon/canon.md, inventing nothing, before
+        becoming atomic notes; journal notes link at least one real entity.
+        sources/ and workspace/ are raw material the gate skips."""
         return await handlers.vault_init()
 
     async def vault_regenerate_derived() -> dict:
@@ -109,9 +121,8 @@ def build_runtime_toolkit() -> Any:
                                              sync: bool = True) -> dict:
         """Note pairs that LOOK like they disagree about one technical subject.
 
-        Vision §5 requires contradictions to be "flagged and reconciled rather
-        than silently overwritten"; nothing did the flagging. This is CANDIDATE
-        GENERATION, NOT DETECTION — code matched opposing wording (one note
+        Contradictions should be flagged and reconciled rather than silently
+        overwritten. This is CANDIDATE GENERATION, NOT DETECTION — code matched opposing wording (one note
         calls a subject deprecated/forbidden/absent, another uses it
         affirmatively) about a shared identifier. It never read either note.
 

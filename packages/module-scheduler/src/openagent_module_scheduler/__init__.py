@@ -1,14 +1,17 @@
 from openagent_core.module_adapters import NativeCapabilityDescriptor
 from openagent_core.prompts import PromptBlock
 
-PROMPT=PromptBlock("module.scheduler","1", """## Scheduled work
+PROMPT=PromptBlock("module.scheduler","2", """## Scheduled work
 
-Use the `schedules` capability for prompts or registered targets that fire at a
-time or recurrence. Store timezone explicitly and use the module's preview and
-management operations. Do not create recurring work through shell background
-processes, crontab, launchd or systemd: such jobs bypass the product's identity,
-authorization, visibility, cancellation and migration lifecycle. Never claim a
-future action unless a schedule was durably created and its result verified.""",
+Use `schedules` for a prompt or registered target that should run at a time
+or on a recurrence. Each firing starts a fresh session, unless the task is
+created with `in_this_conversation=true` to run inside this conversation (a
+loop that sees and answers in this chat). Set the timezone explicitly, preview
+before creating, and verify the created task before saying it exists. Never
+create recurring work with crontab, launchd, systemd, at jobs, self-restarting
+shell commands, the model backend's own scheduler or a third-party scheduler:
+those are invisible to the user and bypass identity, authorization and
+cancellation. Never promise a future action without a verified schedule.""",
 "openagent-module-scheduler", section="automation", priority=10)
 
 descriptor=NativeCapabilityDescriptor(id="scheduler",version="1.1.0b1",

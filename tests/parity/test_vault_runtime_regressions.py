@@ -177,10 +177,10 @@ class ManualDream(unittest.IsolatedAsyncioTestCase):
                     from openagent_module_vault import descriptor as vault_descriptor
                     from openagent_core.prompts import rule_blocks
                     prompt = PromptComposer().compose(modules=(
-                        *rule_blocks("module.vault.storage", "module.vault.quality", "module.vault.checklist"),
+                        *rule_blocks(*vault_descriptor.prompt_rule_ids),
                         *vault_descriptor.additional_prompt_blocks,
                     )).text
-                    assert "### Default = SAVE." in prompt
+                    assert "Save by default." in prompt
                     service = VaultService(path / "vault")
                     try:
                         await service.init_taxonomy()

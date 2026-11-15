@@ -126,9 +126,14 @@ def order_blocks(blocks: Iterable[PromptBlock]) -> tuple[PromptBlock, ...]:
     return tuple(block for _key, block in sorted(indexed, key=lambda item: item[0]))
 
 
+# Framework rules every run receives, whichever modules are installed. Every
+# other rule in rules.json is selected by a module descriptor.
+_ALWAYS_ON = frozenset({"core.identity", "core.principles", "core.reporting"})
+
+
 def core_framework_blocks() -> tuple[PromptBlock, ...]:
     """Prompt rules that apply even when the runtime has no optional module."""
-    return tuple(block for block in _rules() if block.id == "core.identity")
+    return order_blocks(block for block in _rules() if block.id in _ALWAYS_ON)
 
 
 def rule_blocks(*ids: str) -> tuple[PromptBlock, ...]:

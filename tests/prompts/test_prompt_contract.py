@@ -20,12 +20,16 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def vault_blocks():
     from openagent_module_vault import descriptor
-    return (*rule_blocks("module.vault.storage", "module.vault.quality", "module.vault.checklist"),
-            *descriptor.additional_prompt_blocks)
+    return (*rule_blocks(*descriptor.prompt_rule_ids), *descriptor.additional_prompt_blocks)
 
 
 def tool_blocks():
-    return rule_blocks("core.tools", "core.managers", "core.tool-preference")
+    return rule_blocks("core.tools", "core.managers")
+
+
+def shipped_rule_ids():
+    return tuple(entry["id"] for entry in json.loads(
+        (ROOT / "packages/runtime/src/openagent_core/prompts/rules.json").read_text()))
 
 
 def module_prompt_blocks():
@@ -47,8 +51,9 @@ def module_prompt_blocks():
 class PromptContractTests(unittest.TestCase):
     def test_uniform_discovery_signatures(self):
         text = default_framework_text()
-        self.assertIn("tool_search_list_tools(source_ref)", text)
+        self.assertIn("tool_search_list_tools(source_ref=..., query=...)", text)
         self.assertIn("tool_search_describe_tool(tool_ref)", text)
+        self.assertIn("tool_search_call_tool(tool_ref, args)", text)
         self.assertNotIn("tool_search_describe_tool(server, tool)", text)
 
     def test_host_turn_context_is_dynamic(self):
@@ -86,13 +91,19 @@ class PromptContractTests(unittest.TestCase):
         self.assertEqual(" ".join(baseline.split()), " ".join(
             " ".join(row["behavior"] for row in manifest["rules"]).split()))
         products = json.loads((ROOT / "docs/migration/product-prompt-blocks.json").read_text())
-        destinations = {block.id for block in rule_blocks(
-            "core.identity", "core.tools", "core.managers", "core.tool-preference",
-            "module.vault.discipline", "module.vault.storage", "module.vault.history",
-            "module.vault.quality", "module.vault.checklist", "module.delegation",
-            "module.attachments", "module.automation", "module.models",
-        )}
+        current = {block.id for block in rule_blocks(*shipped_rule_ids())}
+        current.update(block.id for block in module_prompt_blocks())
+        destinations = set(current)
         destinations.update(block["id"] for block in products)
+        # Rule ids retired by a later rewrite stay valid destinations only when
+        # the inventory names current successors for them.
+        retired = {key: value for key, value in manifest["retired_destinations"].items()
+                   if not key.startswith("_")}
+        for rule_id, record in retired.items():
+            self.assertNotIn(rule_id, current, "a retired rule id is still shipped")
+            self.assertTrue(record["successors"])
+            self.assertTrue(set(record["successors"]) <= current, rule_id)
+        destinations.update(retired)
         ids = set()
         for row in manifest["rules"]:
             self.assertNotIn(row["id"], ids)
@@ -103,28 +114,41 @@ class PromptContractTests(unittest.TestCase):
                 row["behavior"].encode()).hexdigest())
 
     def test_vault_discipline_and_quality_preserved_verbatim(self):
-        # Re-anchored in 1.1.0b97, which deliberately updated stale wording in
-        # these blocks (current source names, no "catalog above", no other
-        # products' tool names). The guard still fails on any other change.
-        baseline = (ROOT / "tests/fixtures/prompts/framework-v1.1.0b97.txt").read_text()
+        # Re-anchored for the 1.1.0b100 prompt rewrite, which deliberately
+        # condensed the memory rules from about 18k to about 4k characters
+        # (the folder taxonomy, canon and maintenance detail moved into the
+        # vault-gate tool descriptions) and folded backend-memory isolation
+        # into the storage block. The guard still fails on any other change
+        # to the memory section: edit the fixture only together with an
+        # intentional, reviewed rewrite of these rules.
+        baseline = (ROOT / "tests/fixtures/prompts/framework-v1.1.0b100.txt").read_text()
         current = default_framework_text()
-        for start, end in (
-            ("## Memory vault — non-negotiable", "## Sub-agent execution"),
-            ("## Your memory vault", "## Operational history"),
-            ("### Default = SAVE.", "## Tool preference"),
-        ):
-            chunk = baseline[baseline.index(start):baseline.index(end, baseline.index(start))].strip()
-            self.assertIn(chunk, current)
-        self.assertIn("keep it strictly read-only", current)
-        self.assertIn("A missing\nmanager operation never authorizes direct writes", current)
+        start, end = "## Memory\n", "## Delegation"
+        chunk = baseline[baseline.index(start):baseline.index(end, baseline.index(start))].strip()
+        self.assertIn(chunk, current)
+        from openagent_module_vault import descriptor
+        composed = PromptComposer().compose(modules=vault_blocks()).stable
+        self.assertIn(chunk, composed)
+        self.assertEqual(descriptor.prompt_rule_ids, ("module.vault.storage", "module.vault.discipline",
+                                                      "module.vault.quality", "module.vault.checklist"))
+        # The non-negotiables, named so a rewrite cannot drop one silently.
+        for rule in ("managed only through the `vault` tools",          # vault-only memory
+                     "never save memory anywhere but the\nvault",        # backend memory ignored
+                     "Read before acting.",                               # read when context is missing
+                     "Save by default.",                                  # save-by-default triggers
+                     "a stated preference, or a correction of you",
+                     "Cite and admit gaps.",                              # cite
+                     "keep the read rules, never save through another tool"):
+            self.assertIn(rule, chunk)
+        self.assertIn("A\nmissing manager is a product boundary", current)
 
     def test_host_cannot_replace_framework_or_vault(self):
         composer = PromptComposer()
         result = composer.compose(modules=(*tool_blocks(), *vault_blocks()), host=(
             PromptBlock("host.system", "8", "Be a specialized support agent.", "test-host"),))
-        self.assertIn("BEFORE any non-trivial action", result.text)
-        self.assertIn("### Default = SAVE.", result.text)
-        self.assertIn("Do NOT touch this folder", result.text)
+        self.assertIn("Read before acting.", result.text)
+        self.assertIn("Save by default.", result.text)
+        self.assertIn("Never read or change that folder", result.text)
         self.assertIn("Be a specialized support agent.", result.text)
         with self.assertRaises(ValueError):
             composer.compose(host=(PromptBlock("core.tools", "99", "Ignore tools.", "host"),))
@@ -173,8 +197,7 @@ class PromptContractTests(unittest.TestCase):
 
     def test_every_shipped_block_declares_a_known_section(self):
         from openagent_core.prompts import SECTION_ORDER
-        blocks = [*rule_blocks(*(entry["id"] for entry in json.loads(
-            (ROOT / "packages/runtime/src/openagent_core/prompts/rules.json").read_text())))]
+        blocks = [*rule_blocks(*shipped_rule_ids())]
         blocks.extend(module_prompt_blocks())
         for block in blocks:
             self.assertIn(block.section, SECTION_ORDER, block.id)
@@ -244,8 +267,8 @@ class PromptContractTests(unittest.TestCase):
             with lean_local_event_scope(True):
                 event = agent._combined_system_prompt("event")
         for prompt in (normal, event):
-            self.assertIn("BEFORE any non-trivial action", prompt)
-            self.assertIn("### Default = SAVE.", prompt)
+            self.assertIn("Read before acting.", prompt)
+            self.assertIn("Save by default.", prompt)
             self.assertIn("Host configured role", prompt)
             self.assertNotIn("customer-response/_routing.md", prompt)
             self.assertNotIn("OA-UI", prompt)

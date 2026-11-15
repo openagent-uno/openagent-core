@@ -68,7 +68,8 @@ class SessionResumeTools(unittest.IsolatedAsyncioTestCase):
         tail = await self.call("sessions_read", {"limit": 1, "cursor": result["next_cursor"]})
         self.assertEqual(tail["messages"][0]["text"], "Recorded outcome")
         self.assertIsNone(tail["next_cursor"])
-        self.assertIn("before claiming you cannot remember", SESSION_PROMPT.text)
+        self.assertIn("call `sessions_read` without\n`session_ref` to read the current session", SESSION_PROMPT.text)
+        self.assertIn("before saying you\ncannot remember", SESSION_PROMPT.text)
 
     async def test_four_day_gap_and_runtime_restart_preserve_canonical_history(self):
         await self.record("before", "Resume the CEDAR launch plan after comparing budgets.")

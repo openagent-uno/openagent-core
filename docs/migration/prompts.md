@@ -10,7 +10,10 @@ module instructions. The original v0.21.8 framework and lean prompt are retained
 as test fixtures. `prompt-rule-inventory.json` accounts for every source paragraph
 with an immutable ID, source revision/line/hash, behavior, destination and test.
 Its coverage test compares the entire normalized baseline with the inventory;
-vault discipline, storage and quality sections also have verbatim parity tests.
+rule ids retired by a later rewrite are listed under `retired_destinations`
+with their current successors. The memory section has a verbatim guard against
+`tests/fixtures/prompts/framework-v1.1.0b100.txt`, the condensed wording of the
+1.1.0b100 rewrite; see [the system prompt guide](../system-prompt.md).
 
 `product-prompt-blocks.json` is a migration export for the OpenAgent product. The
 product copies these into its own package: persona, delegation preference,

@@ -205,9 +205,8 @@ def build_skills_index(registry) -> str:
     tokens), and this wrapper adds only static prose.
 
     Returns "" when ``registry`` is None — i.e. skills disabled. Because
-    the placeholder sits flush against the next header
-    (``{{SKILLS_INDEX}}## Builtin management MCPs``), an empty render leaves
-    the framework prompt BYTE-IDENTICAL to a build without this feature.
+    the index is carried in the turn context only when it is non-empty, an
+    empty render leaves the prompt BYTE-IDENTICAL to a build without skills.
     Defensive: never raises (a broken registry degrades to "").
     """
     if registry is None:
@@ -219,16 +218,13 @@ def build_skills_index(registry) -> str:
 
     return (
         "## Skills\n\n"
-        "You have a library of SKILLS — SKILL.md playbooks for recurring "
-        "tasks. Only the INDEX below is loaded up front (progressive "
-        "disclosure): each entry is ``name``: a one-line description, grouped "
-        "by category. When a task matches one, load its full body ON DEMAND "
-        "with ``skill_view`` (reached via "
-        "``tool_search_call_tool(tool_ref=<discovered skill_view reference>, "
-        "args={\"name\": \"...\"})``) BEFORE acting, then follow it. Use "
-        "``skill_search`` to find a skill you can't see, and ``skill_manage`` "
-        "to create/update/remove one. Do not guess a skill's contents from "
-        "its description — open it.\n\n"
+        "Skills are SKILL.md playbooks for recurring tasks. Only this index "
+        "is loaded up front: each entry is ``name``: when to use it, grouped "
+        "by category. When a task matches one, load its full body with "
+        "``skill_view`` (from the ``skills`` source) BEFORE acting, then "
+        "follow it. Use ``skill_search`` to find a skill that is not listed "
+        "and ``skill_manage`` to create, update or remove one. Do not guess "
+        "a skill's contents from its description: open it.\n\n"
         f"{index}\n\n"
     )
 
@@ -251,8 +247,8 @@ def build_ptc_note(enabled: bool) -> str:
         "## Programmatic tool calling\n\n"
         "You have ``run_python(code)`` — write a Python script that reaches "
         "your OWN tools via ``call_tool(tool_ref, args)`` (already in "
-        "scope, no import needed; the exact opaque reference discovered through "
-        "``tool_search_call_tool``). The script runs in a sandbox and ONLY its "
+        "scope, no import needed; pass the exact ``tool_ref`` returned by "
+        "``tool_search_list_tools``). The script runs in a sandbox and ONLY its "
         "stdout is returned to you. Reach for it to collapse a multi-step tool "
         "pipeline into ONE turn — fan out over many items, filter/aggregate in "
         "code, or join results from several tools — instead of paying a model "

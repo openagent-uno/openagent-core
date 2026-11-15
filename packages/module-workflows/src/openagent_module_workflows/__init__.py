@@ -1,13 +1,14 @@
 from openagent_core.module_adapters import NativeCapabilityDescriptor
 from openagent_core.prompts import PromptBlock
 
-PROMPT=PromptBlock("module.workflows","1", """## Workflows
+PROMPT=PromptBlock("module.workflows","2", """## Workflows
 
-Use the `workflows` capability for durable multi-step pipelines, branching,
-conditionals and data flowing between distinct stages. Use its canonical
-management operations instead of editing definitions or database rows. A
-workflow run keeps the exact authorized definition revision and tool references;
-an unavailable destination must fail rather than fall back to another tool.""",
+Use `workflows` for multi-step pipelines: distinct stages, branching,
+conditions and data passed between steps. Work a single timed prompt can do
+belongs in `schedules` when that source is listed. Create and change
+definitions only through its tools. A run keeps the exact definition revision
+and tool references it started with; if a destination is unavailable the run
+fails instead of switching to another tool.""",
 "openagent-module-workflows", section="automation", priority=20)
 
 descriptor=NativeCapabilityDescriptor(id="workflows",version="1.1.0b1",

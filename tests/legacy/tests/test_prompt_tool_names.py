@@ -65,7 +65,10 @@ class _StubPool:
     _toolkit_by_name: dict = {}
 
     def __init__(self) -> None:
+        from openagent_core.discovery import DiscoveryPresentation
         self._db = _StubCanonicalDB()
+        # The tool-search factory reads the host's presentation settings.
+        self.discovery_presentation = DiscoveryPresentation()
 
     def toolkit_by_name(self, _name):  # noqa: D102
         return None
@@ -212,7 +215,7 @@ _NON_TOOL_TOKENS: frozenset[str] = frozenset({
     "logs",
     # -- tool PARAMETERS / result fields --
     "model_id", "runtime_id", "top_k", "session_binding_path", "task",
-    "query", "path", "tool", "tool_ref", "marker", "shell_id", "open_suggestions",
+    "query", "path", "tool", "tool_ref", "source_ref", "marker", "shell_id", "open_suggestions",
     "child_session_id", "id",
     # ``search_past_conversations`` params, and the ``index`` field of its
     # reply — the prompt names that field because an empty result must be
@@ -366,13 +369,14 @@ async def t_prominent_memory_rules_name_both_layers(_ctx: TestContext) -> None:
     from openagent_core.core.prompts import FRAMEWORK_SYSTEM_PROMPT
 
     memory_rules = FRAMEWORK_SYSTEM_PROMPT.split(
-        "## Memory vault — non-negotiable", 1,
-    )[1].split("## Sub-agents", 1)[0]
+        "### Memory rules (non-negotiable)", 1,
+    )[1].split("### What not to save", 1)[0]
 
+    # History is reached through the sessions module's own block; the memory
+    # rules only have to keep the two stores apart.
     assert "vault_search" in memory_rules
-    assert "search_past_conversations" in memory_rules
-    assert "Curated memory is not conversation history" in memory_rules
-    assert "search BOTH stores" in memory_rules
+    assert "Memory is not history" in memory_rules
+    assert "search both" in memory_rules
 
 
 @test("prompt_tool_names", "every tool named in DREAM_MODE_PROMPT is registered")
@@ -507,12 +511,12 @@ async def t_counter_examples_still_wrong(_ctx: TestContext) -> None:
     marked = _counter_example_names(FRAMEWORK_SYSTEM_PROMPT)
     marked.update(_counter_example_names(DREAM_MODE_PROMPT))
 
+    # The rewritten framework prompt no longer teaches these slips: tools are
+    # invoked through the exact reference discovery returns, never a typed
+    # name. Wherever a prompt still names one, it must stay genuinely wrong.
     for name in ("vault_list_notes", "shell_shell_exec"):
-        assert name in marked, (
-            f"{name!r} is no longer presented as a counter-example. It is "
-            "among the most plausible keys for the model to hallucinate — "
-            "keep the 'Two slips waste a turn' block, or update this test."
-        )
+        if name not in marked:
+            continue
         assert not _resolves(name, keys), (
             f"the prompt teaches {name!r} as a mistake, but it now resolves "
             "to a real registered tool. Steering the model away from a "

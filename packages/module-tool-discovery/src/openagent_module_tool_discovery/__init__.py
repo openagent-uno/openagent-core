@@ -29,7 +29,7 @@ class ToolDiscoveryModule:
             from openagent_core.mcp.pool import MCPPool
             agent.set_capability_pool(MCPPool.from_config([{"builtin":"tool-search"}],include_defaults=False))
         self._contribution=ModuleContribution(prompt_blocks=rule_blocks(
-            "core.tools","core.managers","core.tool-preference"))
+            "core.tools","core.managers"))
         return self._contribution
     async def reconfigure(self,config):return self._contribution
     async def drain(self):return None

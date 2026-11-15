@@ -116,7 +116,7 @@ class FederatedSearch(unittest.IsolatedAsyncioTestCase):
             {"domain": "mcp", "reason": "unavailable", "error_type": "RuntimeError"},
             {"domain": "scheduler", "reason": "unauthorized", "error_type": "RuntimeError"},
         ])
-        self.assertIn("does not search the public Internet", SEARCH_PROMPT.text)
+        self.assertIn("It does not search\nthe public web", SEARCH_PROMPT.text)
 
 
 class ModularRuntime(unittest.IsolatedAsyncioTestCase):

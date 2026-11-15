@@ -65,19 +65,16 @@ class VaultReminderSettings:
         return cls(enabled=values.get("enabled", True) is not False,
                    every_n_turns=interval)
 
+# Uses the same tool names and rules as the vault module's prompt blocks.
 _REMINDER_TEMPLATE = (
-    "[Memory checkpoint (turn {n}) — ALWAYS save what matters. Before "
-    "replying, review this conversation and SAVE to the memory vault "
-    "(vault_write_note / vault_patch_note) EVERYTHING relevant that isn't "
-    "already there: preferences, decisions, facts, names, paths, deadlines, "
-    "gotchas, completed tasks. Saving is the DEFAULT — only skip when truly "
-    "nothing was learned this turn. Notes must be ATOMIC (one idea), "
-    "STRUCTURED (complete frontmatter: title, summary, tags, status, "
-    "created/updated as YYYY-MM-DD) and densely linked with >=3 real "
-    "[[wikilinks]] to existing notes — search first with vault_search_notes "
-    "to avoid duplicates and connect related notes; never leave a broken "
-    "link or an orphan. Every change is version-controlled automatically, so "
-    "write freely. After a burst of writes, run vault_gate to check them.]"
+    "[Memory checkpoint (turn {n}): ALWAYS save what matters. Before "
+    "replying, save to the memory vault (vault_patch_note for an existing "
+    "note, vault_write_note for a new one) anything this conversation taught "
+    "you that is not there yet: preferences, corrections, decisions, facts, "
+    "names, deadlines, gotchas, completed tasks. Search first with "
+    "vault_search to avoid duplicates, and link related notes with real "
+    "[[wikilinks]]. Saving is the default and every change is "
+    "version-controlled, so write freely.]"
 )
 
 

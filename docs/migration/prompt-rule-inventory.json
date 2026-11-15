@@ -2290,5 +2290,33 @@
       "destination": "memory.vault.prompts.DREAM_MODE_PROMPT",
       "test": "tests/prompts/test_prompt_contract.py::test_dream_instructions_preserved"
     }
-  ]
+  ],
+  "retired_destinations": {
+    "_note": "The 1.1.0b100 prompt rewrite condensed the framework and module rules and retired these rule ids. Rows that name them now live in the listed successors; their wording was shortened, so 'unchanged' adaptations no longer apply to them.",
+    "core.tool-preference": {
+      "since": "1.1.0b100",
+      "successors": [
+        "core.tools"
+      ],
+      "reason": "Tool preference and background-shell guidance merged into the tools section."
+    },
+    "module.automation": {
+      "since": "1.1.0b100",
+      "successors": [
+        "core.principles",
+        "module.scheduler",
+        "module.workflows",
+        "module.events"
+      ],
+      "reason": "No module selected this rule; its routing and no-outside-scheduler rules live in the automation module blocks and principles."
+    },
+    "module.vault.history": {
+      "since": "1.1.0b100",
+      "successors": [
+        "module.vault.storage",
+        "module.sessions.history"
+      ],
+      "reason": "No module selected the SQLite guidance; backend-memory isolation moved into module.vault.storage and history retrieval into module.sessions.history."
+    }
+  }
 }
