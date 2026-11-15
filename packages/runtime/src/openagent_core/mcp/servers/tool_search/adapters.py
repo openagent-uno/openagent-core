@@ -1088,18 +1088,22 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
         offset: int = 0, limit: int = _DEFAULT_DISCOVERY_PAGE_SIZE,
         query: str | None = None,
     ) -> list[dict[str, Any]] | dict[str, Any]:
-        """List current authorized capability sources and tool counts.
+        """List the capability sources you can use this turn: what each is
+        for, the computer or account it acts on (target_label) and how many
+        tools it has.
 
-        Configured sources may include compact capability hints. A source
-        entry is not its complete inventory: open list_tools and follow its
-        pages before declaring a capability unavailable.
+        Use it when the <capabilities> map in your prompt is truncated, when
+        you need to page through many sources, or to find the source for a
+        named device. Do not use it to find a tool: call list_tools with
+        words for the action instead. The query matches source names,
+        descriptions, older source names and target labels; every word must
+        match. Follow every next_offset before declaring a source or device
+        absent, and never substitute another computer for one the user named.
 
-        Search query matches source names, descriptions, older source names
-        and destination labels (e.g. a device name); every word must match.
-        Follow every next_offset before declaring a device absent.
-        Verify target_label before calling a tool. A permission error or retry
-        never permits substituting the agent host for a requested user device.
-        For long lists pass next_offset as offset. Limit is from 1 to 50.
+        Args:
+            offset: Zero-based position; pass the previous next_offset to continue.
+            limit: Page size from 1 to 50.
+            query: Optional words from a source's name, purpose or target.
         """
         if type(offset) is not int or offset < 0:
             raise ValueError("offset must be a non-negative integer")
@@ -1123,33 +1127,55 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
         limit: int = _DEFAULT_DISCOVERY_PAGE_SIZE,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """Search authorized tools and return compact opaque references.
+        """Find the tool for a job and return its exact tool_ref.
+
+        Use it first for any action: pass the source_ref from <capabilities>
+        and a few words for the action, or omit source_ref to search every
+        source. It ranks tool names, descriptions and parameter names, so use
+        verbs and nouns ("create recurring task"), not sentences; with no
+        query it lists the source's tools. Results are compact (no schemas):
+        call describe_tool on the one you pick, then call_tool. When nothing
+        matches, the result suggests likely sources; retry with other words
+        or list a suggested source before concluding the tool is missing.
 
         Args:
-            source_ref: Source reference from list_servers or the capabilities list
-                (an older source name such as ``scheduler`` also resolves).
-                Omit to search across all authorized sources; then query is required.
-            query: Optional capability words, for example ``create adset``.
-                Use a narrow query and limit=5 when finding an unknown capability.
+            source_ref: Source from <capabilities> or list_servers (an older
+                name such as ``scheduler`` also resolves). Omit to search
+                every source; a query is then required.
+            query: Words for the action, for example ``create adset``. Use a
+                narrow query and limit=5 to find an unknown capability.
             limit: Page size from 1 to 50. Defaults to 20.
             offset: Zero-based page offset. Increase it while ``has_more`` is true.
-
-        The compact list intentionally omits JSON schemas. Call describe_tool
-        with a returned reference before invoking the selected tool.
         """
         return await _list_scoped_tools_impl(pool, source_ref, query, limit, offset)
 
     async def tool_search_describe_tool(tool_ref: str) -> dict[str, Any]:
-        """Return the current description and JSON schema for an exact tool reference."""
+        """Return a tool's full description and JSON input schema.
+
+        Call it on a tool_ref from list_tools before the first call_tool, so
+        you pass the required arguments with the right names and types. Use
+        the description's guidance on when to use the tool and what it
+        returns. The reference must be copied exactly; a stale or revoked one
+        fails, and you should run list_tools again.
+
+        Args:
+            tool_ref: Exact reference returned by list_tools.
+        """
         return await _describe_scoped_tool_impl(pool, tool_ref)
 
     async def tool_search_call_tool(
         tool_ref: str | None = None, args: dict | str | None = None,
         result_cursor: str | None = None,
     ) -> Any:
-        """Invoke a discovered tool (from list_tools or describe_tool) and return its result.
+        """Call a discovered tool and return its result.
 
-        Every tool except discovery itself is called this way.
+        Every tool except discovery itself is called this way, with the exact
+        tool_ref from list_tools and the arguments its describe_tool schema
+        requires. The reference fixes the tool and the computer it runs on: on
+        failure, read the error and fix the arguments (describe_tool shows
+        the schema) rather than calling a similar tool on another target. A
+        long result arrives in pages under openagent_pages; read further
+        pages with result_cursor alone instead of calling the tool again.
 
         Args:
             tool_ref: Exact opaque reference returned by discovery. It fixes the target and tool.
