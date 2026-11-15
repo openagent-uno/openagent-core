@@ -121,6 +121,8 @@ class PromptContractTests(unittest.TestCase):
         # into the storage block. The guard still fails on any other change
         # to the memory section: edit the fixture only together with an
         # intentional, reviewed rewrite of these rules.
+        # 1.1.0b105 names the source of vault_search and vault_search_notes:
+        # a live eval showed the model calling vault_search on `vault`.
         baseline = (ROOT / "tests/fixtures/prompts/framework-v1.1.0b100.txt").read_text()
         current = default_framework_text()
         start, end = "## Memory\n", "## Delegation"

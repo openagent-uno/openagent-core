@@ -162,7 +162,7 @@ def group_sources(tools: Iterable[Any], overrides: Optional[Mapping[str, str]] =
 
 
 def render(groups: list[dict[str, Any]], *, max_chars: int = _DEFAULT_MAP_CHARS,
-           named_calls: bool = False) -> str:
+           named_calls: bool = False, ready: Iterable[Any] = ()) -> str:
     """The plain-text ``<capabilities>`` section for the system prompt."""
     groups = [g for g in groups if g["source_ref"] != "tool-search"]
     if not groups:
@@ -191,7 +191,11 @@ def render(groups: list[dict[str, Any]], *, max_chars: int = _DEFAULT_MAP_CHARS,
             line += f". Tools: {', '.join(group['tools'])}"
         lines.append(line)
     tail = "</capabilities>"
-    budget = max_chars - len(head) - len(tail) - 620  # room for the "Also available" line
+    ready_lines = _ready_lines(ready) if named_calls else []
+    if ready_lines:
+        ready_lines.insert(0, "Ready to call by name, no search needed (source/tool(arguments, * required)):")
+    ready_size = sum(len(line) + 1 for line in ready_lines)
+    budget = max_chars - len(head) - len(tail) - 620 - ready_size  # room for "Also available"
     kept, used = [], 0
     for line in lines:
         if used + len(line) + 1 > budget:
@@ -201,11 +205,34 @@ def render(groups: list[dict[str, Any]], *, max_chars: int = _DEFAULT_MAP_CHARS,
     if len(kept) < len(lines):
         omitted = ", ".join(g["source_ref"] for g in groups[len(kept):])
         kept.append(_clip(f"- Also available (call `tool_search_list_servers` for details): {omitted}", 600))
+    kept.extend(ready_lines)
     return head + "\n".join(kept) + "\n" + tail
 
 
+_READY_LIMIT = 12
+_READY_LINE_CHARS = 260
+
+
+def _ready_lines(tools: Iterable[Any]) -> list[str]:
+    """One line per host-chosen hot tool the turn may call: its exact name and arguments."""
+    lines = []
+    for tool in list(tools)[:_READY_LIMIT]:
+        schema = getattr(tool, "input_schema", None) or {}
+        properties = schema.get("properties") if isinstance(schema, Mapping) else None
+        required = set(schema.get("required") or ()) if isinstance(schema, Mapping) else set()
+        names = [f"{name}*" if name in required else str(name) for name in (properties or {})]
+        target = f" @ {tool.target_label}" if getattr(tool, "target_label", None) else ""
+        first = re.split(r"(?<=[.!?])\s", " ".join(str(getattr(tool, "description", "") or "").split()), maxsplit=1)[0]
+        line = f"- {tool.source_id}/{tool.name}({', '.join(names)}){target}"
+        if first:
+            line += f": {first}"
+        lines.append(_clip(line, _READY_LINE_CHARS))
+    return lines
+
+
 async def render_for_turn(runtime: Any, context: Any, *, overrides: Optional[Mapping[str, str]] = None,
-                          max_chars: int = _DEFAULT_MAP_CHARS, named_calls: bool = False) -> str:
+                          max_chars: int = _DEFAULT_MAP_CHARS, named_calls: bool = False,
+                          hot_tools: Iterable[tuple[str, str]] = ()) -> str:
     """The capability map for the current execution, or ``""`` when unavailable."""
     if runtime is None or context is None:
         return ""
@@ -216,7 +243,10 @@ async def render_for_turn(runtime: Any, context: Any, *, overrides: Optional[Map
         tools = await catalog.discover(context)
     except Exception:  # noqa: BLE001 - the map is advisory; discovery stays authoritative
         return ""
-    return render(group_sources(tools, overrides), max_chars=max_chars, named_calls=named_calls)
+    wanted = list(hot_tools)
+    ready = [tool for pair in wanted for tool in tools
+             if (getattr(tool, "source_id", None), getattr(tool, "name", None)) == pair]
+    return render(group_sources(tools, overrides), max_chars=max_chars, named_calls=named_calls, ready=ready)
 
 
 _STEM_SUFFIXES = ("ations", "ation", "ings", "ing", "ies", "ers", "er", "es", "ed", "s")

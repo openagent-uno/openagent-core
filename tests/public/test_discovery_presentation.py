@@ -276,6 +276,17 @@ class DiscoveryPresentationContract(unittest.IsolatedAsyncioTestCase):
                          [tool["input_schema"] for tool in short["tools"]])
         self.assertTrue(all("input_schema" not in tool for tool in long["tools"]))
 
+    def test_hot_tools_are_bounded_exact_pairs_that_need_named_calls(self):
+        presentation = DiscoveryPresentation(named_calls="authorized",
+                                             hot_tools=[("vault-gate", "vault_search"), ("vault-gate", "vault_search")])
+        self.assertEqual((("vault-gate", "vault_search"),), presentation.hot_tools)
+        with self.assertRaises(ValueError):
+            DiscoveryPresentation(hot_tools=[("vault-gate", "vault_search")])
+        with self.assertRaises(ValueError):
+            DiscoveryPresentation(named_calls="authorized", hot_tools=[(f"s{i}", "t") for i in range(13)])
+        with self.assertRaises(ValueError):
+            DiscoveryPresentation(named_calls="authorized", hot_tools=[("vault-gate",)])
+
     def test_presentation_is_copied_bounded_and_rejects_unknown_tool_overrides(self):
         summaries = {"records": "Original"}
         named_tools = {("records", "operation_00")}

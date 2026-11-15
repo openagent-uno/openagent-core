@@ -119,10 +119,11 @@ nothing was saved.
 
 - Read before acting. Before anything that depends on the user, their
   projects, systems, people or past decisions, search memory with
-  `vault_search` (plain words, ranked; `+term` requires a word, a quoted
-  phrase must match, `-term` excludes) and read the notes you rely on. Use
-  `vault_search_notes` only to scope by folder or match frontmatter such as
-  tags. For a memory request, call the vault before reporting any result.
+  `vault_search` from `vault-gate` (plain words, ranked; `+term` requires a
+  word, a quoted phrase must match, `-term` excludes) and read the notes you
+  rely on. Use `vault_search_notes` from `vault` only to scope by folder or
+  match frontmatter such as tags. For a memory request, call the vault before
+  reporting any result.
 - Save by default. Before your final message, save what this turn taught you
   that the vault does not have yet; patch the existing note or write a new
   atomic one:

@@ -45,6 +45,10 @@ class DiscoveryPresentation:
     it through the same path, so it grants nothing discovery would not, and it
     stays valid when references are reissued (a reconnect or a restart). The
     default ``"listed"`` keeps named calls to the ``named_tools`` pairs.
+    ``hot_tools`` lists up to 12 exact (source, tool) pairs the host expects
+    in most turns. Those the turn is authorized to discover appear in the
+    ``<capabilities>`` section with their exact name and arguments, so the
+    model calls them by name without searching; others are left out.
     """
 
     capability_sources: frozenset[str] = frozenset()
@@ -53,6 +57,7 @@ class DiscoveryPresentation:
     tool_descriptions: Mapping[str, str] = field(default_factory=dict)
     named_tools: frozenset[tuple[str, str]] = frozenset()
     named_calls: str = "listed"
+    hot_tools: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.capability_sources, (set, frozenset, tuple, list)):
@@ -77,7 +82,18 @@ class DiscoveryPresentation:
             raise ValueError("Named tools require up to 50 exact source and tool pairs")
         if self.named_calls not in NAMED_CALL_MODES:
             raise ValueError("Named calls must be 'listed' or 'authorized'")
+        hot = tuple(self.hot_tools)
+        if len(hot) > 12 or any(
+            not isinstance(pair, tuple) or len(pair) != 2 or any(
+                not isinstance(name, str) or not 0 < len(name) <= 256 or name != name.strip()
+                for name in pair
+            ) for pair in hot
+        ):
+            raise ValueError("Hot tools require up to 12 exact source and tool pairs")
+        if hot and self.named_calls != "authorized":
+            raise ValueError("Hot tools are called by name; set named_calls='authorized'")
         object.__setattr__(self, "capability_sources", sources)
         object.__setattr__(self, "source_summaries", summaries)
         object.__setattr__(self, "tool_descriptions", descriptions)
         object.__setattr__(self, "named_tools", frozenset(self.named_tools))
+        object.__setattr__(self, "hot_tools", tuple(dict.fromkeys(hot)))

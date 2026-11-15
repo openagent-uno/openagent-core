@@ -12,6 +12,10 @@ from openagent_core.engine import MCPPool
 from openagent_core.runtime import execution_scope
 
 
+async def _awaitable(value):
+    return value
+
+
 class Policy:
     def __init__(self):
         self.denied = {"hidden-source"}
@@ -112,6 +116,31 @@ class CapabilityMapAndDiscovery(unittest.IsolatedAsyncioTestCase):
         named = capability_map.render(groups, named_calls=True)
         self.assertIn("tool_search_call_named_tool(source_ref, tool_name, args)", named)
         self.assertIn("target_label", named)
+
+    def test_hot_tools_are_ready_to_call_with_their_arguments_and_only_when_authorized(self):
+        search = SimpleNamespace(source_id="vault-gate", target_label="agent", name="vault_search", metadata={},
+                                 description="Ranked search over notes. Extra detail.",
+                                 input_schema={"type": "object", "properties": {"query": {}, "limit": {}},
+                                               "required": ["query"]})
+        other = SimpleNamespace(source_id="acme", target_label="cloud", name="list", metadata={},
+                                description="List.", input_schema={})
+        groups = capability_map.group_sources([search, other])
+
+        text = capability_map.render(groups, named_calls=True, ready=[search])
+        self.assertIn("Ready to call by name", text)
+        self.assertIn("- vault-gate/vault_search(query*, limit) @ agent: Ranked search over notes.", text)
+        self.assertNotIn("acme/list(", text)
+        self.assertNotIn("Ready to call", capability_map.render(groups, ready=[search]))
+
+    async def test_only_authorized_hot_tools_reach_the_turn_map(self):
+        tools = [SimpleNamespace(source_id="vault-gate", target_label="agent", name="vault_search",
+                                 metadata={}, description="Search.", input_schema={})]
+        runtime = SimpleNamespace(capabilities=SimpleNamespace(discover=lambda context: _awaitable(tools)))
+        text = await capability_map.render_for_turn(
+            runtime, object(), named_calls=True,
+            hot_tools=[("vault-gate", "vault_search"), ("secret", "private_tool")])
+        self.assertIn("vault-gate/vault_search(", text)
+        self.assertNotIn("private_tool", text)
 
     def test_stems_and_aliases(self):
         self.assertEqual(capability_map.stem("schedule"), capability_map.stem("scheduled"))

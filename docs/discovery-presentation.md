@@ -89,6 +89,15 @@ the call fails and the error lists the targets instead of picking one. The
 default, `named_calls="listed"`, keeps named calls to the `named_tools` pairs.
 With named calls on, the `<capabilities>` section tells the model to use them.
 
+### Hot tools
+
+Starting with Core `1.1.0b105`, `hot_tools` (up to 12 exact `(source, tool)`
+pairs, with `named_calls="authorized"`) names the tools a host expects in most
+turns. Each one the turn may discover appears at the end of `<capabilities>`
+as `source/tool(arguments, * required) @ target: first sentence`, built from
+the authorized descriptor of that turn, so the model calls it by name without
+searching. A pair the turn may not use is left out; nothing grants access.
+
 ### Schemas in short pages
 
 A `tool_search_list_tools` page of up to three tools includes each tool's
