@@ -87,10 +87,13 @@ class PromptContractTests(unittest.TestCase):
                 row["behavior"].encode()).hexdigest())
 
     def test_vault_discipline_and_quality_preserved_verbatim(self):
-        baseline = (ROOT / "tests/fixtures/prompts/framework-v0.21.8.txt").read_text()
+        # Re-anchored in 1.1.0b97, which deliberately updated stale wording in
+        # these blocks (current source names, no "catalog above", no other
+        # products' tool names). The guard still fails on any other change.
+        baseline = (ROOT / "tests/fixtures/prompts/framework-v1.1.0b97.txt").read_text()
         current = default_framework_text()
         for start, end in (
-            ("## Memory vault — non-negotiable", "## Sub-agents"),
+            ("## Memory vault — non-negotiable", "## Sub-agent execution"),
             ("## Your memory vault", "## Operational history"),
             ("### Default = SAVE.", "## Tool preference"),
         ):
