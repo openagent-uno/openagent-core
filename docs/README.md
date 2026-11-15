@@ -2,6 +2,7 @@
 
 ## Architecture and use
 
+- [System prompt](system-prompt.md): structure, purpose-ordered sections, the size budget and how to add a block.
 - [Default router model](default-router-model.md): one default router at most, only an enabled model of an enabled provider, repaired on open.
 - [Provider failure messages](provider-failure-messages.md): empty provider accounts (402) and oversized requests (413) reach chat users as such, with correct retry advice.
 - [Compaction summary fallback](compaction-summary-fallback.md): which fallback a failed compaction summary may use, by kind of failure.
