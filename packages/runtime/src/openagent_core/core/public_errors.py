@@ -59,8 +59,13 @@ PUBLIC_MESSAGES: dict[str, str] = {
         "account's access in Models and Providers, or select another enabled model."
     ),
     "quota_exhausted": (
-        "The AI account's usage allowance or credits are exhausted. Check usage "
-        "and billing; wait for the quota reset, add credits or select another account."
+        "The AI account's usage allowance is exhausted. Check usage and billing; "
+        "wait for the quota reset or select another account. Retrying now will not help."
+    ),
+    "credit_exhausted": (
+        "The AI provider account has no credit left. Recharge the provider "
+        "account or choose another model in Models and Providers; retrying "
+        "the message will not help."
     ),
     "budget_exhausted": (
         "This agent's configured AI spending budget has been reached. Review "
@@ -70,11 +75,45 @@ PUBLIC_MESSAGES: dict[str, str] = {
         "This conversation exceeds the AI model's context limit. Start a new "
         "conversation or use a model with a larger context window."
     ),
+    "request_too_large": (
+        "The conversation is too large for this model endpoint's request size "
+        "limit. Start a new conversation, remove large attachments or choose "
+        "another model; retrying the same message will not help."
+    ),
     "rate_limit": (
         "The AI provider temporarily limited the request rate. Wait for the "
         "retry interval or quota reset shown by the provider, then retry."
     ),
 }
+
+# Codes whose cause a plain retry of the same message cannot clear: the
+# account, the configuration or the conversation itself has to change first.
+# Hosts use this to decide whether to offer "retry" at all; the messages of
+# these codes already say so in words.
+NON_RETRYABLE_CODES: frozenset[str] = frozenset({
+    "auth",
+    "auth_expired",
+    "provider_not_configured",
+    "model_not_configured",
+    "model_unavailable",
+    "quota_exhausted",
+    "credit_exhausted",
+    "budget_exhausted",
+    "context_length",
+    "request_too_large",
+})
+
+
+def is_retryable(code: str | None) -> bool:
+    """Whether retrying the same message may succeed for this public code."""
+    return (code if code in PUBLIC_MESSAGES else GENERIC) not in NON_RETRYABLE_CODES
+
+
+# HTTP statuses that name a failure unambiguously, whatever exception class
+# the runtime wrapped them in: a 402 re-raised as a rate-limit error is still
+# an empty account, and a 413 is the endpoint's request size limit, not a
+# transient failure. Checked before message text for that reason.
+_UNAMBIGUOUS_STATUS = {402: "credit_exhausted", 413: "request_too_large"}
 
 _DNS_MARKERS = (
     "could not resolve host",
@@ -115,6 +154,10 @@ class RunErrorClass:
     def public_message(self) -> str:
         return PUBLIC_MESSAGES[self.code]
 
+    @property
+    def retryable(self) -> bool:
+        return is_retryable(self.code)
+
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"RunErrorClass({self.code!r})"
 
@@ -136,6 +179,10 @@ def classify_run_error(error: BaseException | None) -> RunErrorClass:
         if isinstance(error, RunTurnError) and error.code != GENERIC:
             return RunErrorClass(error.code)
 
+        status = _status_code(error)
+        if status in _UNAMBIGUOUS_STATUS:
+            return RunErrorClass(_UNAMBIGUOUS_STATUS[status])
+
         diagnostic = ""
         if isinstance(error, BaseException):
             diagnostic = f"{type(error).__name__}: {error}".lower()
@@ -151,13 +198,6 @@ def classify_run_error(error: BaseException | None) -> RunErrorClass:
         if "connection refused" in diagnostic or "failed to connect" in diagnostic:
             return RunErrorClass("connection")
 
-        status = getattr(error, "status_code", None)
-        if status is None:
-            data = getattr(error, "additional_data", None)
-            if isinstance(data, dict):
-                status = data.get("status_code")
-        if status == 402:
-            return RunErrorClass("quota_exhausted")
         if status in (401, 403):
             return RunErrorClass("auth")
         if status == 429:
@@ -168,6 +208,21 @@ def classify_run_error(error: BaseException | None) -> RunErrorClass:
     return RunErrorClass()
 
 
+def _status_code(error: BaseException) -> int | None:
+    status = getattr(error, "status_code", None)
+    if status is None:
+        data = getattr(error, "additional_data", None)
+        if isinstance(data, dict):
+            status = data.get("status_code")
+    if status is None:
+        response = getattr(error, "response", None)
+        status = getattr(response, "status_code", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 # Diagnostics are inspected locally; only an allowlisted code and constant
 # message are published. Never return provider JSON, keys or request bodies.
 def _model_diagnostic_code(text: str) -> str | None:
@@ -175,7 +230,9 @@ def _model_diagnostic_code(text: str) -> str | None:
         ("auth_expired", ("invalid_grant", "refresh token expired", "refresh_token expired", "token has expired", "token is expired", "token expired", "authentication expired", "authentication has expired", "credentials have expired", "credentials expired", "token was revoked")),
         ("provider_not_configured", ("provider_not_configured", "no ai account is configured", "no claude ai account", "no provider configured", "provider is not configured", "api key is required", "no api key", "api_key must be set", "missing api key", "missing api_key")),
         ("model_not_configured", ("no_enabled_model", "no models are enabled", "no model is currently enabled", "no models configured", "no model configured")),
-        ("quota_exhausted", ("insufficient_quota", "exceeded_current_quota_error", "quota_exhausted", "quota exceeded", "quota has been exceeded", "exceeded your current quota", "credit balance is too low", "insufficient credits", "out of credits", "credits exhausted", "usage allowance", "usage limit reached", "usage limit exceeded", "spending limit reached", "billing hard limit", "billing_hard_limit")),
+        ("credit_exhausted", ("insufficient balance", "insufficient_balance", "insufficient account balance", "account balance is insufficient", "credit balance is too low", "insufficient credits", "insufficient_credits", "out of credits", "credits exhausted", "no credit", "payment required", "payment_required", "http 402", "error code: 402", "status code 402", "status_code=402", "status 402")),
+        ("quota_exhausted", ("insufficient_quota", "exceeded_current_quota_error", "quota_exhausted", "quota exceeded", "quota has been exceeded", "exceeded your current quota", "usage allowance", "usage limit reached", "usage limit exceeded", "spending limit reached", "billing hard limit", "billing_hard_limit")),
+        ("request_too_large", ("maximum request body size", "request body size", "request body too large", "request entity too large", "request_entity_too_large", "payload too large", "content_too_large", "request too large", "request_too_large", "http 413", "error code: 413", "status code 413", "status_code=413", "status 413")),
         ("context_length", ("context_length_exceeded", "maximum context length", "context window exceeded", "prompt is too long", "input is too long")),
         ("budget_exhausted", ("budget exceeded", "budget exhausted", "budget has been reached", "excluded by its budget")),
         ("auth", ("authentication_error", "modelauthenticationerror", "invalid_api_key", "invalid api key", "incorrect api key", "invalid bearer token", "unauthorized", "authentication is invalid")),

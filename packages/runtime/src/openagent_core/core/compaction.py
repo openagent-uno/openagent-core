@@ -1450,7 +1450,7 @@ def _provider_of(model_obj: Any) -> str | None:
 # Failures that every model of the same provider shares: retrying on a sibling
 # model of that provider cannot help, only another provider can.
 _PROVIDER_WIDE_FAILURES = frozenset({
-    "quota_exhausted", "rate_limit", "auth", "auth_expired",
+    "quota_exhausted", "credit_exhausted", "rate_limit", "auth", "auth_expired",
     "provider_not_configured", "budget_exhausted",
 })
 # Pool-exhaustion wording of subscription/OAuth proxies ("no available ...

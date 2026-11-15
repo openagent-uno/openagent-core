@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Default router model](default-router-model.md): one default router at most, only an enabled model of an enabled provider, repaired on open.
+- [Provider failure messages](provider-failure-messages.md): empty provider accounts (402) and oversized requests (413) reach chat users as such, with correct retry advice.
 - [Compaction summary fallback](compaction-summary-fallback.md): which fallback a failed compaction summary may use, by kind of failure.
 - [Run output previews](run-output-preview.md): stored previews of scheduled and event runs keep the conclusion, not the opening narration.
 - [Unreleased deferred-tool child-card provenance](session-history.md#branching-a-conversation-at-a-message)

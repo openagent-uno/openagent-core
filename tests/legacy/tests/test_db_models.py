@@ -215,16 +215,14 @@ async def t_reject_orphan(ctx: TestContext) -> None:
         await db.close()
 
 
-@test("db_models", "is_classifier flag is narrow per-row — multiple rows may carry it")
+@test("db_models", "is_classifier flag is exclusive — one default router at most")
 async def t_is_classifier_roundtrip(ctx: TestContext) -> None:
-    """Multi-classifier semantics.
+    """Exclusive default-router semantics.
 
-    ``set_model_is_classifier`` is a narrow UPDATE on a single row; it
-    does NOT clear the flag on other rows. Multiple rows can be flagged
-    simultaneously. Despite the flag's name no classifier runs:
-    ``ModelDispatcher._resolve_entry_model`` picks the FIRST flagged
-    entry in deterministic catalog order and the rest act as a fallback
-    chain, taking over only when an earlier one is disabled.
+    Setting ``is_classifier`` on one row clears it on every other row in
+    the same write, so the stored state always names the single model
+    ``ModelDispatcher._resolve_entry_model`` uses. Despite the flag's
+    name no classifier runs.
     """
     from openagent_core.memory.db import MemoryDB
 
@@ -249,23 +247,23 @@ async def t_is_classifier_roundtrip(ctx: TestContext) -> None:
         }
         assert flagged == {"gpt-cls-a": False, "gpt-cls-b": True}
 
-        # Flag mid1 too — BOTH rows stay flagged (multi-classifier pool).
+        # Flag mid1 — it replaces mid2 as the single default.
         await db.set_model_is_classifier(mid1, True)
         cfg = await db.materialise_providers_config(enabled_only=True)
         flagged = {
             m["model"]: m["is_classifier"]
             for entry in cfg for m in entry["models"]
         }
-        assert flagged == {"gpt-cls-a": True, "gpt-cls-b": True}
+        assert flagged == {"gpt-cls-a": True, "gpt-cls-b": False}
 
-        # Clearing mid1 leaves mid2 flagged — narrow update.
+        # Clearing mid1 leaves no default router.
         await db.set_model_is_classifier(mid1, False)
         cfg = await db.materialise_providers_config(enabled_only=True)
         flagged = {
             m["model"]: m["is_classifier"]
             for entry in cfg for m in entry["models"]
         }
-        assert flagged == {"gpt-cls-a": False, "gpt-cls-b": True}
+        assert flagged == {"gpt-cls-a": False, "gpt-cls-b": False}
 
         await db.delete_provider(pid)
     finally:

@@ -1402,6 +1402,10 @@ class MemoryDB:
         # well-known multimodal one). Idempotent and tiny: this table contains
         # configured models, not conversation/event data.
         await self._migrate_model_input_modalities_metadata()
+        # After every migration that may rebuild ``models`` (a rebuild drops
+        # its triggers): at most one effective default router, enforced by
+        # the database for every writer, and existing duplicates repaired.
+        await self._ensure_default_router_invariant()
         await self._migrate_legacy_tables_to_sessions()
         await self._migrate_peer_networks_join_type()
         # v0.14+: fold any legacy ``session_bindings`` rows (which used
@@ -1433,6 +1437,128 @@ class MemoryDB:
         await self._migrate_event_deliveries_lease()
         await self._migrate_events_breaker()
         await self._migrate_guarded_changes()
+
+    # ── Default router invariant ──
+    #
+    # ``models.is_classifier`` is the persistent "default router" choice (the
+    # column name predates that meaning). Only one row may carry it, and only
+    # a row the runner can actually use: an enabled language model of an
+    # enabled provider. Triggers enforce it in the same statement as the
+    # write, so every writer -- this class, the model-manager MCP, a host's
+    # own SQL -- gets the same atomic, exclusive behaviour.
+    _DEFAULT_ROUTER_TRIGGERS: dict[str, str] = {
+        "oa_models_default_router_insert": "AFTER INSERT ON models",
+        "oa_models_default_router_update": "AFTER UPDATE OF is_classifier, enabled, kind, provider_id ON models",
+    }
+    _DEFAULT_ROUTER_NOW = "((julianday('now') - 2440587.5) * 86400.0)"
+    _DEFAULT_ROUTER_ELIGIBLE_NEW = (
+        "NEW.kind = 'llm' AND NEW.enabled = 1 AND EXISTS ("
+        "SELECT 1 FROM providers p WHERE p.id = NEW.provider_id AND p.enabled = 1)"
+    )
+
+    def _default_router_trigger_sql(self) -> dict[str, str]:
+        now, eligible = self._DEFAULT_ROUTER_NOW, self._DEFAULT_ROUTER_ELIGIBLE_NEW
+        body = (
+            f"UPDATE models SET is_classifier = 0, updated_at = {now} "
+            f"WHERE id = NEW.id AND NOT ({eligible}); "
+            f"UPDATE models SET is_classifier = 0, updated_at = {now} "
+            f"WHERE is_classifier = 1 AND id != NEW.id AND ({eligible}); "
+        )
+        out = {
+            name: f"CREATE TRIGGER IF NOT EXISTS {name} {event} "
+                  f"WHEN NEW.is_classifier = 1 BEGIN {body}END"
+            for name, event in self._DEFAULT_ROUTER_TRIGGERS.items()
+        }
+        out["oa_providers_default_router_disable"] = (
+            "CREATE TRIGGER IF NOT EXISTS oa_providers_default_router_disable "
+            "AFTER UPDATE OF enabled ON providers WHEN NEW.enabled = 0 BEGIN "
+            f"UPDATE models SET is_classifier = 0, updated_at = {now} "
+            "WHERE provider_id = NEW.id AND is_classifier = 1; END"
+        )
+        return out
+
+    async def _drop_default_router_triggers(self) -> None:
+        """Drop the triggers before a migration rebuilds ``models`` or
+        ``providers``: each references both tables, and SQLite refuses the
+        rename that completes a rebuild while a trigger names a missing table.
+        ``_ensure_default_router_invariant`` reinstalls them afterwards."""
+        assert self._conn is not None
+        for name in self._default_router_trigger_sql():
+            await self._conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+
+    async def _default_router_violations(self, conn: aiosqlite.Connection) -> tuple[list[int], int | None]:
+        """Flagged rows to clear, and the flagged row that stays default.
+
+        The row kept is the one the dispatcher already routes to: the first
+        eligible flagged row in catalog order (provider name, framework,
+        model). Repair therefore never changes which model a running
+        deployment uses; it only makes the stored state say so.
+        """
+        rows = await (await conn.execute(
+            "SELECT m.id AS id, (m.kind = 'llm' AND m.enabled = 1 AND p.enabled = 1) AS eligible "
+            "FROM models m JOIN providers p ON p.id = m.provider_id "
+            "WHERE m.is_classifier = 1 "
+            "ORDER BY p.name ASC, p.framework ASC, m.model ASC, m.id ASC"
+        )).fetchall()
+        keep = next((int(r["id"]) for r in rows if r["eligible"]), None)
+        orphans = await (await conn.execute(
+            "SELECT m.id FROM models m LEFT JOIN providers p ON p.id = m.provider_id "
+            "WHERE m.is_classifier = 1 AND p.id IS NULL"
+        )).fetchall()
+        clear = [int(r["id"]) for r in rows if int(r["id"]) != keep] + [int(r[0]) for r in orphans]
+        return clear, keep
+
+    async def _ensure_default_router_invariant(self) -> None:
+        """Install the default-router triggers and repair duplicate flags.
+
+        Idempotent and read-only when nothing is wrong, because every process
+        that opens the database runs it.
+        """
+        assert self._conn is not None
+        wanted = self._default_router_trigger_sql()
+        present = {
+            r[0] for r in await (await self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN (%s)"
+                % ",".join("?" * len(wanted)), tuple(wanted),
+            )).fetchall()
+        }
+        clear, keep = await self._default_router_violations(self._conn)
+        if present == set(wanted) and not clear:
+            return
+        await self._conn.commit()
+        try:
+            await self._conn.execute("BEGIN IMMEDIATE")
+            for name, sql in wanted.items():
+                if name not in present:
+                    await self._conn.execute(sql)
+            clear, keep = await self._default_router_violations(self._conn)
+            if clear:
+                await self._conn.execute(
+                    "UPDATE models SET is_classifier = 0, updated_at = ? WHERE id IN (%s)"
+                    % ",".join("?" * len(clear)), (time.time(), *clear),
+                )
+                logger.warning(
+                    "Repaired default router: kept model id %s, cleared %s", keep, clear,
+                )
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+    async def get_default_router(self) -> dict | None:
+        """The model the runner uses when a session has no pin, or ``None``.
+
+        ``reason`` is ``"router_flag"`` for the stored default and
+        ``"first_enabled"`` when none is set and the first enabled language
+        model in catalog order is used instead -- the same order
+        ``ModelDispatcher._resolve_entry_model`` applies.
+        """
+        rows = await self.list_models_enriched(enabled_only=True, kind="llm")
+        flagged = next((r for r in rows if r.get("is_classifier")), None)
+        chosen = flagged or (rows[0] if rows else None)
+        if chosen is None:
+            return None
+        return {**chosen, "reason": "router_flag" if flagged is not None else "first_enabled"}
 
     async def _add_columns_if_missing(
         self, table: str, columns: dict[str, str],
@@ -2048,6 +2174,7 @@ class MemoryDB:
             await self._conn.execute(
                 f"INSERT INTO models_image_new ({columns}) SELECT {columns} FROM models"
             )
+            await self._drop_default_router_triggers()
             await self._conn.execute("DROP TABLE models")
             await self._conn.execute("ALTER TABLE models_image_new RENAME TO models")
             for name, column in (("provider", "provider_id"), ("enabled", "enabled"),
@@ -2317,6 +2444,7 @@ class MemoryDB:
                     "SELECT id, name, framework, api_key, base_url, enabled, "
                     " metadata_json, 'llm', created_at, updated_at FROM providers"
                 )
+            await self._drop_default_router_triggers()
             await self._conn.execute("DROP TABLE providers")
             await self._conn.execute("ALTER TABLE providers_new RENAME TO providers")
             await self._conn.execute(
@@ -5687,6 +5815,12 @@ class MemoryDB:
             metadata = merged.get("metadata") or {}
             if not isinstance(metadata, dict): raise ValueError("metadata must be an object")
             if not isinstance(merged["enabled"], bool) or not isinstance(merged["is_classifier"], bool): raise ValueError("Model flags must be boolean")
+            if merged["is_classifier"] and (not merged["enabled"] or not before.get("provider_enabled", True) or before["kind"] != "llm"):
+                if changes.get("is_classifier") is True:
+                    raise ValueError("A disabled model or a model of a disabled provider cannot be the default router")
+                # Disabling the default router (or editing it while its
+                # provider is off) drops the flag rather than failing.
+                merged["is_classifier"] = False
             if before["kind"] == "llm": metadata = normalize_model_metadata(metadata, provider=before["provider_name"], model=model.strip())
             await conn.execute("UPDATE models SET model=?,display_name=?,tier_hint=?,enabled=?,is_classifier=?,metadata_json=?,updated_at=? WHERE id=?",
                 (model.strip(), merged.get("display_name"), merged.get("tier_hint"), int(merged["enabled"]), int(merged["is_classifier"]), json.dumps(metadata), time.time(), int(model_id)))
@@ -6120,18 +6254,33 @@ class MemoryDB:
         ``ModelDispatcher._resolve_entry_model`` (session pin → flagged
         row → first enabled). See ``models.catalog.CatalogModel``.
 
-        Multiple rows are allowed to carry the flag simultaneously —
-        this is a narrow UPDATE that only touches ``model_id``. The
-        resolver takes the first flagged row it sees in deterministic
-        catalog order, so with several flagged rows the first simply
-        wins and the others are inert.
+        The flag is exclusive: setting it clears it on every other row in
+        the same statement (see ``_default_router_trigger_sql``). Only an
+        enabled language model of an enabled provider can be the default;
+        asking for anything else raises ``ValueError`` and changes nothing.
         """
         await self._ensure_connected()
         async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            if flag:
+                await self._require_default_router_eligible(conn, int(model_id))
             await conn.execute(
                 "UPDATE models SET is_classifier = ?, updated_at = ? WHERE id = ?",
                 (1 if flag else 0, time.time(), int(model_id)),
             )
+
+    @staticmethod
+    async def _require_default_router_eligible(conn: aiosqlite.Connection, model_id: int) -> None:
+        row = await (await conn.execute(
+            "SELECT m.kind AS kind, m.enabled AS enabled, p.enabled AS provider_enabled "
+            "FROM models m JOIN providers p ON p.id = m.provider_id WHERE m.id = ?",
+            (model_id,),
+        )).fetchone()
+        if row is None:
+            raise LookupError("Model not found")
+        if row["kind"] != "llm":
+            raise ValueError("Only a language model can be the default router")
+        if not row["enabled"] or not row["provider_enabled"]:
+            raise ValueError("A disabled model or a model of a disabled provider cannot be the default router")
 
     async def delete_model(self, model_id: int) -> None:
         await self._ensure_connected()

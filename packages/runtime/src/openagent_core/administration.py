@@ -81,6 +81,20 @@ class ProviderModelAdmin:
         if row is None: raise LookupError("Model not found")
         with self.scope(): return public_model(row)
 
+    async def default_model(self, context):
+        """The language model unpinned sessions start on, or ``None``.
+
+        At most one model is ever stored as the default router (its
+        ``is_classifier`` flag), and only an enabled model of an enabled
+        provider can hold it. ``reason`` says whether that stored default
+        applies (``"router_flag"``) or, with none set, the first enabled
+        language model in catalog order (``"first_enabled"``).
+        """
+        await self.authorize(context, "model.read")
+        row = await self.db.get_default_router()
+        if row is None: return None
+        with self.scope(): return {**public_model(row), "reason": row["reason"]}
+
     async def create_model(self, context, fields: dict):
         await self.authorize(context, "model.write")
         if set(fields) - {"provider_id","model","display_name","tier_hint","enabled","is_classifier","metadata","kind"}: raise ValueError("Unknown model fields")

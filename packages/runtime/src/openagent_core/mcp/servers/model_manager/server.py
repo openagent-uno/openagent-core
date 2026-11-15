@@ -315,8 +315,9 @@ async def add_model(
     - ``is_classifier`` (optional) is misnamed: no per-turn classifier
       call exists. It marks this row as the default **entry model** —
       the team leader. Entry resolution per turn is: session pin →
-      first flagged row in catalog order → first enabled. Multiple
-      rows may carry the flag; the first in catalog order wins.
+      flagged row → first enabled. The flag is exclusive: setting it
+      clears it on every other row. A disabled model, or a model of a
+      disabled provider, never keeps it.
     - ``input_modalities`` declares what the provider accepts natively:
       ``text``, ``image``, ``audio``, ``video`` and/or ``file``. Text is
       required. If omitted, OpenAgent stores a conservative provider/model
@@ -358,9 +359,9 @@ async def update_model(
     Pass ``is_classifier=True`` to make this row the default entry
     model (the team leader), ``False`` to clear it; omit to leave the
     flag intact. Despite the name it selects no per-turn classifier —
-    it is a persistent "lead by default" hint. Multiple rows may carry
-    the flag; the first in the catalog's deterministic order (provider
-    name, framework, model) wins.
+    it is a persistent "lead by default" hint. The flag is exclusive:
+    setting it clears it on every other row, and disabling this model
+    clears it here.
 
     Pricing isn't editable — it's resolved live on every billing event.
     """
@@ -395,13 +396,14 @@ async def update_model(
 async def set_classifier_model(model_id: int) -> dict[str, Any]:
     """Mark one model as the default entry model (the team leader).
 
-    Idempotent narrow UPDATE — this row's ``is_classifier`` flag flips
-    to 1, other rows are untouched. Despite the column name this opts
-    the row into no classifier call: it is the persistent "lead the
-    team by default" hint, read as step 2 of entry resolution (session
-    pin → flagged row → first enabled). Multiple rows can carry the
-    flag at once; the first in catalog order wins. To clear a row,
-    call ``update_model(model_id, is_classifier=False)``.
+    Idempotent and exclusive — this row's ``is_classifier`` flag flips
+    to 1 and every other row's flag is cleared in the same write.
+    Despite the column name this opts the row into no classifier call:
+    it is the persistent "lead the team by default" hint, read as step 2
+    of entry resolution (session pin → flagged row → first enabled).
+    Only an enabled language model of an enabled provider can be the
+    default; anything else is refused. To clear it, call
+    ``update_model(model_id, is_classifier=False)``.
 
     The flag is honoured on the next message (hot-reload loop picks up
     ``models.updated_at``).

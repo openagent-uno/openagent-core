@@ -13,7 +13,7 @@ from openagent_storage_sqlite import SqliteRuntimeStore
  (RuntimeError('no_enabled_model'),'model_not_configured'),
  (RuntimeError('provider_not_configured'),'provider_not_configured'),
  (RuntimeError('api_key must be set'),'provider_not_configured'),
- (RuntimeError('credit balance is too low'),'quota_exhausted'),
+ (RuntimeError('credit balance is too low'),'credit_exhausted'),
  (RuntimeError('context_length_exceeded'),'context_length'),
  (RunTurnError('invalid_grant PRIVATE-TOKEN'),'auth_expired'),
  (RunTurnError('provider rate limit'),'rate_limit'),

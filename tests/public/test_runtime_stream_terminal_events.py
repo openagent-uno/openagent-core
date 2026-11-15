@@ -68,6 +68,8 @@ async def test_terminal_cancellation_propagates_without_fallback(team: bool) -> 
 @pytest.mark.parametrize("error_type,content,code", [
     ("ModelRateLimitError", "No account available PRIVATE-KEY", "rate_limit"),
     ("ModelRateLimitError", "exceeded_current_quota_error PRIVATE-KEY", "quota_exhausted"),
+    ("ModelRateLimitError", "Error code: 402 - {'error': 'Insufficient balance PRIVATE-KEY'}", "credit_exhausted"),
+    ("ModelProviderError", "Maximum request body size 524288 exceeded PRIVATE-BODY", "request_too_large"),
     ("ModelAuthenticationError", "PRIVATE-KEY", "auth"),
     ("UnknownProviderError", "PRIVATE-KEY", "generic"),
 ])

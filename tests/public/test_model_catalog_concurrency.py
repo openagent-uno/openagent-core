@@ -36,8 +36,8 @@ class ModelCatalogConcurrency(unittest.IsolatedAsyncioTestCase):
     async def test_catalog_mutations_do_not_promote_stale_shared_snapshot(self):
         other = await self.db.upsert_provider(name='temporary', framework='api-based')
         await self.stale_reader()
-        await self.db.set_model_enabled(self.mid, False)
         await self.db.set_model_is_classifier(self.mid, True)
+        await self.db.set_model_enabled(self.mid, False)
         await self.db.set_provider_enabled(self.pid, False)
         await self.db.upsert_provider(name='added', framework='api-based')
         await self.db.delete_provider(other)
