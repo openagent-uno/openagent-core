@@ -368,17 +368,20 @@ class SqliteRuntimeStore:
 
     def _request_cancel(self, run_id: str) -> RunRecord:
         with self._transaction() as db:
-            self._require_run_not_quarantined(run_id)
-            row=db.execute('SELECT * FROM session_runs WHERE id=?',(run_id,)).fetchone()
-            if row is None:
-                raise LookupError(run_id)
-            current=self._record(row)
-            if current.terminal or current.cancel_requested:
-                return current
-            metadata=json.loads(row['metadata_json']); metadata['cancel_requested']=True
-            db.execute('UPDATE session_runs SET metadata_json=? WHERE id=?',(canonical_json(metadata),run_id))
-            self._event(db,run_id,'run.cancel_requested',{})
-            return self._record(db.execute('SELECT * FROM session_runs WHERE id=?',(run_id,)).fetchone())
+            return self._request_cancel_in(db,run_id)
+
+    def _request_cancel_in(self,db,run_id):
+        self._require_run_not_quarantined(run_id)
+        row=db.execute('SELECT * FROM session_runs WHERE id=?',(run_id,)).fetchone()
+        if row is None:
+            raise LookupError(run_id)
+        current=self._record(row)
+        if current.terminal or current.cancel_requested:
+            return current
+        metadata=json.loads(row['metadata_json']); metadata['cancel_requested']=True
+        db.execute('UPDATE session_runs SET metadata_json=? WHERE id=?',(canonical_json(metadata),run_id))
+        self._event(db,run_id,'run.cancel_requested',{})
+        return self._record(db.execute('SELECT * FROM session_runs WHERE id=?',(run_id,)).fetchone())
 
     def _reserve_cancel(self,run_id: str,context: ExecutionContext) -> RunRecord:
         """Cancel a delayed request through the existing immutable event log.
@@ -547,6 +550,9 @@ class SqliteRuntimeStore:
         with self._transaction() as db:
             self._require_run_not_quarantined(origin_run_id)
             changed=db.execute("UPDATE durable_operations SET state=? WHERE origin_run_id=? AND state='active'",(state,origin_run_id)).rowcount
+            if changed and state=='cancelled':
+                current=db.execute('SELECT current_run_id FROM durable_operations WHERE origin_run_id=?',(origin_run_id,)).fetchone()
+                self._request_cancel_in(db,current[0])
             if changed and state in {'cancelled','expired','exhausted','revoked'}:
                 self._event(db,origin_run_id,'run.operation.finished',
                             {'status':'cancelled' if state=='cancelled' else 'failed',

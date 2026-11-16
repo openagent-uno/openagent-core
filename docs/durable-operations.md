@@ -76,6 +76,12 @@ to belong to the runtime run ledger. Session deletion cascades to its cursor.
 the runtime leaves work interrupted for authorized recovery. It does not mark
 it cancelled. An operation cancellation is persisted before stopping the current
 segment, and prevents a later restart from creating another segment.
+From beta125, the logical stop and the current segment's cancellation intent
+are persisted in the same transaction. Once authorized cancellation begins,
+Core drains that critical section and stops the local segment even if the
+requesting caller disconnects. Provider-side cancellation remains the domain
+adapter's responsibility; the runtime does not infer that an external job was
+cancelled from a local task's terminal status.
 
 ## Gateway and SDK
 
@@ -152,8 +158,10 @@ Live provider and consumer acceptance are separate qualification steps.
 
 ## Release and adoption
 
-The beta124 cohort contains the kernel, SQLite, gateway and Python SDK changes
-together. Publication requires the official Core release qualification gates.
+Use the beta125 or later cohort for durable operations; it includes cancellation
+draining in addition to the beta124 contract. The kernel, SQLite, gateway and
+Python SDK changes ship together. Publication requires the official Core release
+qualification gates.
 Build the clean candidate with `packaging/build.py`, then run
 `packaging/qualify.py` against that immutable wheel manifest and an independent
 environment, as described in [USAGE](USAGE.md#reproducible-engine-qualification).

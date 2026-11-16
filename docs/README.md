@@ -2,7 +2,8 @@
 
 ## Architecture and use
 
-- [Beta124: durable operation continuation](releases/v1.1.0-beta.124.md) and
+- [Beta125: durable operation cancellation draining](releases/v1.1.0-beta.125.md),
+  [Beta124: durable operation continuation](releases/v1.1.0-beta.124.md), and
   [the embedding contract](durable-operations.md).
 - [System prompt](system-prompt.md): structure, purpose-ordered sections, the size budget and how to add a block.
 - [Provider accounts and backup models](provider-accounts-and-backups.md): several accounts per provider rotate on the provider's Retry-After and on rejected credentials; catalog models declare live backups.
