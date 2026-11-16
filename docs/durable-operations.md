@@ -115,13 +115,20 @@ submit, get, events and cancel methods.
 
 An existing interactive operation cannot acquire reusable authority implicitly.
 A host may explicitly select
-`OperationHandoff(name, inputs=original_inputs, resume_run_id=source_run_id)`
+`OperationHandoff(name, resume_run_id=source_run_id)`
 instead of an ordinary `OperationInvocation`. The runner additionally authorizes
 `operation.handoff` on the exact session before grant capture. The source must
 be a nondelegated legacy operation in that session, timed out or interrupted,
 with the same original author, initiator, authority, audience, scopes and parent,
 and matching definition version and input digest. Capture must bind the source
 run ID as well as the new full request and identity.
+
+From beta126, inputs may be omitted. Core resolves the canonical accepted input
+and checkpoint origin through its existing read-only ancestry validation before
+capturing the grant. It verifies the full chain's identity, definition version
+and input digest. Explicit inputs, when supplied, must match those canonical
+inputs. A consumer only opts its selected resume into `OperationHandoff`; it
+does not walk run history, decode checkpoints or reconstruct operation inputs.
 
 Admission claims that source checkpoint atomically and exactly once. The
 ordinary checkpoint writer also respects this claim, preventing a concurrent
@@ -158,8 +165,8 @@ Live provider and consumer acceptance are separate qualification steps.
 
 ## Release and adoption
 
-Use the beta125 or later cohort for durable operations; it includes cancellation
-draining in addition to the beta124 contract. The kernel, SQLite, gateway and
+Use the beta126 or later cohort for the complete contract, including canonical
+source-only handoff and beta125 cancellation draining. The kernel, SQLite, gateway and
 Python SDK changes ship together. Publication requires the official Core release
 qualification gates.
 Build the clean candidate with `packaging/build.py`, then run

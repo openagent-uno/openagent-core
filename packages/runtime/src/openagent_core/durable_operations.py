@@ -10,7 +10,7 @@ from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
 from .contracts import ExecutionContext, ResourceRef, RunEvent, RunRecord, RunRequest
-from .operations import STARTED, OperationInvocation, StagedOperation, _digest, resolve_operation, run_operation
+from .operations import STARTED, OperationError, OperationInvocation, StagedOperation, _digest, _resume, resolve_operation, run_operation
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,8 +18,8 @@ class OperationHandoff(OperationInvocation):
     """Explicit host selection of an existing legacy checkpoint for delegation."""
 
     def __post_init__(self):
-        if not self.resume_run_id or self.inputs is None:
-            raise ValueError('A handoff requires its source run and original operation inputs')
+        if not self.resume_run_id:
+            raise ValueError('A handoff requires its source run')
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,10 +217,17 @@ class DurableOperationRunner:
                         or any(getattr(context, field) != getattr(restored, field) for field in fields)
                         or not events or events[0].kind != STARTED
                         or events[0].payload.get('name') != operation.name
-                        or events[0].payload.get('version') != operation.version
-                        or events[0].payload.get('input_digest') != _digest(selected.inputs)):
+                        or events[0].payload.get('version') != operation.version):
                     raise PermissionError('The handoff checkpoint does not match this interactive authority and operation')
-                checkpoint_origin = events[0].payload['origin_run_id']
+                try:
+                    checkpoint_origin, inputs, _, _, _ = await _resume(
+                        self.runtime, self.runtime.services.store, request, context, operation,
+                        OperationInvocation(operation.name, inputs=selected.inputs, resume_run_id=source.run_id),
+                        self.resolve_operation,
+                    )
+                except OperationError:
+                    raise PermissionError('The handoff checkpoint does not match its canonical operation inputs') from None
+                selected = replace(selected, inputs=inputs)
             expires = self.now() + chosen.lifetime_seconds
             binding = {'operation_name': operation.name, 'operation_version': operation.version,
                        'input_digest': _digest(selected.inputs), 'expires_at': expires}

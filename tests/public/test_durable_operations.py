@@ -34,6 +34,7 @@ class Grants:
         assert binding['operation_version'] == 1
         if request.run_id not in self.captured:
             self.captured[request.run_id] = OperationGrant('grant-' + request.run_id, binding['expires_at'])
+        self.last_binding = binding
         return self.captured[request.run_id]
 
     async def validate(self, context):
@@ -74,7 +75,7 @@ class DurableOperationsTests(unittest.IsolatedAsyncioTestCase):
         def select(request, context):
             data = json.loads(request.input)
             if data.get('handoff'):
-                return OperationHandoff('process-record', inputs=data.get('inputs', {'produce': True}),
+                return OperationHandoff('process-record', inputs=data.get('inputs'),
                                         resume_run_id=data['handoff'])
             if data.get('resume'):
                 return OperationInvocation('process-record', resume_run_id=data['resume'])
@@ -365,6 +366,30 @@ class DurableOperationsTests(unittest.IsolatedAsyncioTestCase):
             await runner.submit(request, replace(self.context, author=replace(self.context.author, subject_id='other-owner')))
         self.assertEqual(self.grants.calls, 0)
         self.assertEqual(len(self.submissions), 1)
+
+    async def test_source_only_handoff_resolves_canonical_inputs_through_legacy_chain(self):
+        from openagent_core.operations import _digest
+        ready = False
+
+        async def read(args, context):
+            if not ready:
+                await asyncio.Future()
+            return {'ready': True}
+
+        runtime, runner = await self.runtime(read)
+        await runtime.submit(replace(self.request(), deadline_seconds=.15), self.context)
+        await runtime.wait('run-a', self.context)
+        await runtime.submit(RunRequest('run-m', 'session-a', 'legacy-resume', json.dumps({'resume': 'run-a'}), .15), self.context)
+        self.assertEqual((await runtime.wait('run-m', self.context)).status, 'timed_out')
+        ready = True
+        await runner.submit(RunRequest('run-b', 'session-a', 'handoff-a', json.dumps({'handoff': 'run-m'})), self.context)
+        result = await self.finished(runner, 'run-b')
+        self.assertEqual((result.status, result.origin_run_id), ('success', 'run-b'))
+        self.assertEqual(self.grants.last_binding['handoff_run_id'], 'run-m')
+        self.assertEqual(self.grants.last_binding['input_digest'], _digest({'produce': True}))
+        self.assertEqual(len(self.submissions), 1)
+        accepted = await runtime.accepted_request('run-b', self.context)
+        self.assertEqual(accepted.request.continuation.checkpoint_origin_run_id, 'run-a')
 
     async def test_handoff_survives_a_further_restart_without_repeating_effect(self):
         reads = 0
