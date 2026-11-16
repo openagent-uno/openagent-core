@@ -49,7 +49,12 @@ class MCPStdioServer:
         restart_initial_delay: float = 0.25,
         restart_max_delay: float = 5.0,
         environment: dict[str, str] | None = None,
+        idle_timeout: float | None = None,
     ):
+        """``idle_timeout`` (seconds) stops a ready process after that long
+        without calls. Its catalog stays published and the next call or
+        resource read starts the process again on demand. ``None`` keeps the
+        process running for the adapter's lifetime."""
         self.spec = spec
         self.environment = dict(os.environ if environment is None else environment)
         self.placeholder = placeholder
@@ -82,6 +87,17 @@ class MCPStdioServer:
         self._catalog_dirty = False
         self._resource_generation = secrets.token_urlsafe(24)
         self.raw_initialize: dict[str, Any] | None = None
+        self.idle_timeout = None if idle_timeout is None else max(0.0, float(idle_timeout))
+        self._idle_task: asyncio.Task[None] | None = None
+        self._idle_stopped = False
+        self._active_calls = 0
+        self._last_activity = 0.0
+
+    @property
+    def idle_stopped(self) -> bool:
+        """True while the idle policy has stopped the process and its catalog
+        remains published for an on-demand start."""
+        return self._idle_stopped and self.process is None
 
     async def start(self) -> None:
         async with self._spawn_lock:
@@ -90,6 +106,7 @@ class MCPStdioServer:
             self._closing = False
             self._restart_attempts = 0
             self._restart_requested = False
+            self._idle_stopped = False
             await self._launch()
 
     def supervise_initial_failure(self, error: BaseException) -> None:
@@ -187,8 +204,79 @@ class MCPStdioServer:
             await self._stop_process(process)
             raise HostError("plugin_disconnected", self._disconnect_message())
         self._ready_processes.add(process)
+        self._idle_stopped = False
+        self._touch()
         if self._catalog_dirty:
             self._schedule_catalog_refresh(process)
+
+    def _touch(self) -> None:
+        """Record activity and keep one idle timer for a ready process."""
+        if self.idle_timeout is None or self._closing:
+            return
+        self._last_activity = asyncio.get_running_loop().time()
+        if self._idle_task is None or self._idle_task.done():
+            self._idle_task = asyncio.create_task(
+                self._idle_loop(), name=f"mcp-idle-{self.spec.name}"
+            )
+
+    async def _idle_loop(self) -> None:
+        assert self.idle_timeout is not None
+        loop = asyncio.get_running_loop()
+        try:
+            while not self._closing:
+                remaining = self._last_activity + self.idle_timeout - loop.time()
+                if remaining > 0 or self._active_calls:
+                    await asyncio.sleep(remaining if remaining > 0 else max(self.idle_timeout, 0.05))
+                    continue
+                async with self._spawn_lock:
+                    process = self.process
+                    if (self._closing or self._active_calls or process is None
+                            or process not in self._ready_processes):
+                        return
+                    if loop.time() < self._last_activity + self.idle_timeout:
+                        continue
+                    # An intentional stop: the watcher sees an expected exit,
+                    # so it neither unpublishes the catalog nor restarts.
+                    self._idle_stopped = True
+                    await self._stop_process(process)
+                return
+        finally:
+            if self._idle_task is asyncio.current_task():
+                self._idle_task = None
+
+    async def _wake(self) -> None:
+        """Start an idle-stopped process again before a call or resource read."""
+        if self.process is not None and self.process.returncode is None:
+            return
+        if not self._idle_stopped:
+            raise HostError("plugin_unavailable", f"MCP {self.spec.name!r} is not running")
+        async with self._spawn_lock:
+            if self.process is not None and self.process.returncode is None:
+                return
+            if self._closing or not self._idle_stopped:
+                raise HostError("plugin_unavailable", f"MCP {self.spec.name!r} is not running")
+            previous = self.manifest.tools
+            try:
+                await self._launch()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - published as unavailability
+                # A failed on-demand start is a launch failure like any other:
+                # unpublish the catalog and hand it to the bounded supervisor.
+                self._idle_stopped = False
+                self.manifest = replace(
+                    self.manifest, available=False,
+                    unavailable_reason=f"MCP {self.spec.name!r} could not start on demand: {exc}",
+                )
+                self._restart_attempts = 0
+                self._schedule_restart()
+                await self._notify_state_change()
+                raise HostError(
+                    "plugin_unavailable", f"MCP {self.spec.name!r} could not start on demand"
+                ) from exc
+            self._restart_attempts = 0
+            if self.manifest.tools != previous:
+                await self._notify_state_change()
 
     async def _list_tools(
         self, process: asyncio.subprocess.Process
@@ -305,17 +393,32 @@ class MCPStdioServer:
         )
 
     async def call(self, tool: str, args: dict[str, Any], *, metadata: dict[str, Any] | None = None) -> ToolResult:
-        if self.process is None or not self.manifest.available:
+        if (self.process is None and not self._idle_stopped) or not self.manifest.available:
             raise HostError("plugin_unavailable", f"MCP {self.spec.name!r} is not running")
         if self.manifest.tool(tool) is None:
             raise HostError("tool_not_found", f"MCP {self.spec.name!r} has no tool {tool!r}")
         params = {"name": tool, "arguments": args}
         if metadata is not None:
             params["_meta"] = dict(metadata)
-        result = await self._request("tools/call", params)
+        self._active_calls += 1
+        try:
+            await self._wake()
+            if self.manifest.tool(tool) is None:
+                raise HostError("tool_not_found", f"MCP {self.spec.name!r} has no tool {tool!r}")
+            result = await self._request("tools/call", params)
+        finally:
+            self._active_calls -= 1
+            self._touch()
         return ToolResult.from_wire(result)
 
     async def read_resource(self, uri: str) -> dict[str, Any]:
+        if self.idle_stopped and self.manifest.available:
+            self._active_calls += 1
+            try:
+                await self._wake()
+            finally:
+                self._active_calls -= 1
+                self._touch()
         process = self.process
         manifest = self.manifest
         if process is None or not manifest.available or manifest.resource_protocol != "mcp-app-resources/1":
@@ -329,6 +432,12 @@ class MCPStdioServer:
 
     async def close(self) -> None:
         self._closing = True
+        self._idle_stopped = False
+        idle = self._idle_task
+        if idle is not None and idle is not asyncio.current_task():
+            idle.cancel()
+            await asyncio.gather(idle, return_exceptions=True)
+        self._idle_task = None
         catalog = self._catalog_task
         if catalog is not None and catalog is not asyncio.current_task():
             catalog.cancel()
