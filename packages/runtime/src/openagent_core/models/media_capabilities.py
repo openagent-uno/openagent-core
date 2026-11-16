@@ -195,6 +195,72 @@ def default_input_modalities(provider: str, model: str) -> list[str]:
     return [item for item in ("text", "image", "audio", "video", "file") if item in modalities]
 
 
+MODALITIES_SOURCE_KEY = "input_modalities_source"
+# ``provider``: declared by the provider's catalog; ``default``: inferred from
+# the model family; ``manual``: set by a person and never refreshed.
+MODALITIES_SOURCES = frozenset({"provider", "default", "manual"})
+
+
+def declared_capabilities(entry: dict[str, Any] | None) -> dict[str, list[str]]:
+    """The ``input_modalities`` and ``capabilities`` a discovery entry declares."""
+    out: dict[str, list[str]] = {}
+    for key in ("input_modalities", "capabilities"):
+        value = (entry or {}).get(key)
+        if isinstance(value, list) and all(isinstance(item, str) for item in value):
+            out[key] = list(value)
+    return out
+
+
+def refreshed_model_metadata(
+    metadata: dict[str, Any] | None,
+    *,
+    provider: str,
+    model: str,
+    discovered: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Metadata with the provider's current media declaration applied.
+
+    A ``manual`` declaration is kept as is. Otherwise the provider's declared
+    modalities win; without a declaration the model-family default applies,
+    so a row registered before the provider (or the default) knew better is
+    corrected on the next refresh. A declared ``vision`` capability always
+    means image input.
+    """
+    out = dict(metadata or {})
+    if out.get(MODALITIES_SOURCE_KEY) == "manual":
+        return out
+    declared = declared_capabilities(discovered)
+    if "capabilities" in declared:
+        out["capabilities"] = declared["capabilities"]
+    source = "default"
+    try:
+        modalities = set(normalize_input_modalities(declared["input_modalities"]))
+        source = "provider"
+    except (KeyError, ValueError):
+        modalities = set(default_input_modalities(provider, model))
+    if "vision" in (out.get("capabilities") or []):
+        modalities.add("image")
+    out["input_modalities"] = [item for item in ("text", "image", "audio", "video", "file") if item in modalities]
+    out[MODALITIES_SOURCE_KEY] = source
+    return out
+
+
+def mark_manual_modalities(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Record that a person set ``input_modalities`` unless a source is given.
+
+    ``input_modalities_source: "auto"`` clears a manual declaration so the
+    next refresh applies the provider's or the default one again.
+    """
+    out = dict(metadata)
+    if out.get(MODALITIES_SOURCE_KEY) == "auto":
+        out.pop(MODALITIES_SOURCE_KEY, None)
+        out.pop("input_modalities", None)
+        return out
+    if "input_modalities" in out and out.get(MODALITIES_SOURCE_KEY) not in MODALITIES_SOURCES:
+        out[MODALITIES_SOURCE_KEY] = "manual"
+    return out
+
+
 def normalize_model_metadata(
     metadata: dict[str, Any] | None,
     *,
@@ -207,6 +273,7 @@ def normalize_model_metadata(
     raw = out.get("input_modalities")
     if raw is None:
         out["input_modalities"] = default_input_modalities(provider, model)
+        out.setdefault(MODALITIES_SOURCE_KEY, "default")
         return out
     try:
         out["input_modalities"] = normalize_input_modalities(raw)

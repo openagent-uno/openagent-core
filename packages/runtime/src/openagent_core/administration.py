@@ -103,6 +103,9 @@ class ProviderModelAdmin:
         for key in ("enabled","is_classifier"):
             if key in fields and not isinstance(fields[key],bool): raise ValueError("Model flags must be boolean")
         if "metadata" in fields and not isinstance(fields["metadata"],dict): raise ValueError("metadata must be an object")
+        fields = dict(fields)
+        if fields.get("kind", "llm") == "llm":
+            fields["metadata"] = await self._seed_capabilities(fields.get("provider_id"), fields["model"].strip(), fields.get("metadata"))
         async with self._mutations:
             if await self.db.get_provider(fields["provider_id"]) is None: raise LookupError("Provider not found")
             if any(r["model"]==fields["model"].strip() for r in await self.db.list_models(provider_id=fields["provider_id"])):
@@ -113,6 +116,9 @@ class ProviderModelAdmin:
 
     async def update_model(self, context, model_id: int, fields: dict):
         await self.authorize(context, "model.write")
+        if isinstance(fields.get("metadata"), dict):
+            from .models.media_capabilities import mark_manual_modalities
+            fields = {**fields, "metadata": mark_manual_modalities(fields["metadata"])}
         async with self._mutations:
             await self.db.update_model_fields(model_id, fields)
             with self.scope(): await self.reload_catalog()
@@ -154,6 +160,64 @@ class ProviderModelAdmin:
                 result = await list_provider_models(row["name"], row.get("api_key"), row.get("base_url"))
         await self.authorize(context, "model.discover")
         return result
+
+    async def _seed_capabilities(self, provider_id, model: str, metadata: dict | None) -> dict:
+        """A new model's media declaration: a person's, else the provider's, else the default."""
+        from .models.media_capabilities import mark_manual_modalities, refreshed_model_metadata
+        out = mark_manual_modalities(dict(metadata or {}))
+        if out.get("input_modalities_source") == "manual":
+            return out
+        row = await self.db.get_provider(provider_id) if isinstance(provider_id, int) and not isinstance(provider_id, bool) else None
+        if row is None:
+            return out
+        return refreshed_model_metadata(out, provider=row["name"], model=model,
+                                        discovered=await self._discovered_entry(row, model))
+
+    async def _discovered_entry(self, row: dict, model: str) -> dict | None:
+        entries = await self._discovered_entries(row)
+        return next((entry for entry in entries if entry.get("id") == model), None)
+
+    async def _discovered_entries(self, row: dict) -> list[dict]:
+        from .models.discovery import list_provider_models
+        try:
+            with self.scope():
+                async with asyncio.timeout(10):
+                    return await list_provider_models(row["name"], row.get("api_key"), row.get("base_url"))
+        except (TimeoutError, OSError, ValueError):
+            # An unreachable provider keeps the stored declaration.
+            return []
+
+    async def refresh_capabilities(self, context, provider_id: int) -> dict:
+        """Re-read every model's media declaration from its provider.
+
+        Run after a login or a provider change. Rows a person set by hand
+        (``input_modalities_source: manual``) are never touched.
+        """
+        await self.authorize(context, "model.write")
+        from .models.media_capabilities import refreshed_model_metadata
+        row = await self.db.get_provider(provider_id)
+        if row is None: raise LookupError("Provider not found")
+        entries = {entry.get("id"): entry for entry in await self._discovered_entries(row)}
+        await self.authorize(context, "model.write")
+        updated, manual = [], 0
+        async with self._mutations:
+            for model in await self.db.list_models_enriched(provider_id=provider_id, kind="llm"):
+                before = dict(model.get("metadata") or {})
+                if before.get("input_modalities_source") == "manual":
+                    manual += 1
+                    continue
+                if model["model"] not in entries:
+                    # Unreachable provider, or a model it no longer lists:
+                    # keep the stored declaration.
+                    continue
+                after = refreshed_model_metadata(before, provider=row["name"], model=model["model"],
+                                                 discovered=entries.get(model["model"]))
+                if after != before:
+                    await self.db.update_model_fields(model["id"], {"metadata": after})
+                    updated.append(model["runtime_id"])
+            if updated:
+                with self.scope(): await self.reload_catalog()
+        return {"provider_id": provider_id, "reachable": bool(entries), "updated": updated, "manual": manual}
 
     async def test_provider(self, context, provider_id: int, model_ref: str | None = None):
         await self.authorize(context, "provider.test")

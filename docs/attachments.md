@@ -116,6 +116,16 @@ row registered with a text-only declaration next to the provider's own
 Claude generation from 3 onward defaults to text, image and file input, also
 behind an OpenAI-compatible proxy.
 
+`metadata.input_modalities_source` records where the declaration came from:
+`provider` (the provider's model catalog declared it), `default` (inferred
+from the model family) or `manual` (a person set it). Registering a model
+reads the provider's declaration. `ProviderModelAdmin.refresh_capabilities`
+re-reads it for every language model of a provider, for example after a
+sign-in or a new endpoint, and never changes a `manual` declaration or a
+model the provider does not list. Setting `input_modalities` through
+`update_model` without a source marks it `manual`; the source `auto` hands
+it back to the provider.
+
 A provider configuration may declare `video_input_format: input_video` when
 its OpenAI-compatible chat endpoint accepts `input_video.data` as base64.
 Declare `video` in the corresponding model's `input_modalities` so the
