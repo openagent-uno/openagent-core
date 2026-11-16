@@ -508,6 +508,34 @@ class DurableOperationsTests(unittest.IsolatedAsyncioTestCase):
                 await runner.cancel('run-a', replace(self.context, session_id='session-b'))
         self.assertEqual((await runtime.services.store.durable_operation('run-a'))['state'], 'active')
 
+    async def test_caller_disconnect_drains_logical_and_physical_cancellation(self):
+        entered = asyncio.Event()
+
+        async def read(args, context):
+            entered.set()
+            await asyncio.Future()
+
+        runtime, runner = await self.runtime(read)
+        await runner.submit(self.request(), self.context)
+        await asyncio.wait_for(entered.wait(), 3)
+        stopped = asyncio.Event()
+        original_stop = runtime.services.store.stop_durable_operation
+
+        async def pause_after_stop(*args):
+            await original_stop(*args)
+            self.assertTrue((await runtime.get_run('run-a', self.context)).cancel_requested)
+            stopped.set()
+            await asyncio.sleep(.05)
+
+        with patch.object(runtime.services.store, 'stop_durable_operation', new=pause_after_stop):
+            observer = asyncio.create_task(runner.cancel('run-a', self.context))
+            await asyncio.wait_for(stopped.wait(), 3)
+            observer.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await observer
+        self.assertEqual((await runner.get_run('run-a', self.context)).status, 'cancelled')
+        self.assertEqual((await runtime.get_run('run-a', self.context)).status, 'cancelled')
+
     async def test_gateway_sdk_follows_origin_and_cannot_supply_delegation(self):
         from openagent_gateway import create_app
         from openagent_sdk import RunClient

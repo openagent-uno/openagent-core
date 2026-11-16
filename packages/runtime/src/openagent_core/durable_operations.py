@@ -271,6 +271,10 @@ class DurableOperationRunner:
             return await self.runtime.cancel(run_id, context, reserve=reserve)
         await self.runtime.authorize(context, 'run.cancel',
                                      ResourceRef('session', original.tenant_id, original.session_id), audience=context.audience)
+        from .persistence import complete_before_cancelling
+        return await complete_before_cancelling(self._cancel_operation(run_id, context))
+
+    async def _cancel_operation(self, run_id, context):
         async with self._lock:
             row = await self.runtime.services.store.durable_operation(run_id)
             current = await self.runtime.get_run(row['current_run_id'], context)
