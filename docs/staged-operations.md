@@ -43,9 +43,11 @@ version when a stage's behavior changes.
 
 - `ToolStep` invokes an exact authorized catalog destination. It checkpoints
   the JSON result envelope and stops when the tool returns an MCP error.
-- `WaitStep` polls one exact read-only tool with fixed arguments, a deadline and
-  a maximum of 128 reads. The host supplies a pure terminal predicate. Use it
-  for receipts of already submitted jobs.
+- `WaitStep` polls one exact read-only tool with fixed arguments and a pure
+  terminal predicate. Waits of up to one hour allow up to 128 reads. A host
+  can wait on an already submitted job for up to three hours by setting
+  `timeout_seconds` and spacing reads at least 15 seconds apart. Extended
+  waits allow up to 720 reads. The run deadline and cancellation still apply.
 - `CompletionStep` invokes the configured `StatelessInference` provider.
   It supplies the stage prompt and JSON Schema with no chat transcript or
   tools. The engine parses and validates the output before checkpointing it.
