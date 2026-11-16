@@ -16,6 +16,9 @@ export interface RunRecord {
   request_digest: string;
   cancel_requested: boolean;
   output?: unknown;
+  origin_run_id?: string;
+  segment_run_id?: string;
+  segment?: number;
 }
 export interface RunEvent {
   cursor: number;

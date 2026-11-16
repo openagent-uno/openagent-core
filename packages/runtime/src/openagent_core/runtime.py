@@ -714,6 +714,7 @@ class Runtime:
 
     async def _execute(self, request: RunRequest, context: ExecutionContext, executor: AgentExecutor,
                        graph: _ActiveGraph, capability_revision: int) -> None:
+        from .operations import OperationPending
         try:
             with execution_scope(self,context,request.run_id,
                                  module_generation=graph.profile.generation,
@@ -749,6 +750,10 @@ class Runtime:
                         record=await self.services.store.get(request.run_id)
                         await self.services.store.transition(request.run_id,'cancelled' if record.cancel_requested else 'success',
                                                              output=None if record.cancel_requested else result)
+        except OperationPending as pending:
+            await self.services.store.transition(request.run_id,'timed_out',
+                                                  output={'reason':'operation_pending','retry_allowed':True,
+                                                          'retry_after_seconds':pending.retry_after_seconds})
         except TimeoutError:
             await self.services.store.transition(request.run_id,'timed_out')
         except asyncio.CancelledError:

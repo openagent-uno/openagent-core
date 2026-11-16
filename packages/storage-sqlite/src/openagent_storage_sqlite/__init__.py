@@ -5,6 +5,7 @@ sessions_v2/session_runs/session_messages/domain_events from storage v2.
 """
 from __future__ import annotations
 from contextlib import contextmanager
+from dataclasses import asdict
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Mapping
@@ -106,6 +107,13 @@ class SqliteRuntimeStore:
                 ''')
             self._db.execute('PRAGMA journal_mode=WAL')
             self._db.execute('PRAGMA synchronous=FULL')
+            self._db.execute('''CREATE TABLE IF NOT EXISTS durable_operations (
+                origin_run_id TEXT PRIMARY KEY REFERENCES session_runs(id) ON DELETE CASCADE,
+                current_run_id TEXT NOT NULL REFERENCES session_runs(id) ON DELETE CASCADE,
+                segment INTEGER NOT NULL, state TEXT NOT NULL)''')
+            self._db.execute('''CREATE TABLE IF NOT EXISTS durable_operation_handoffs (
+                source_run_id TEXT PRIMARY KEY REFERENCES session_runs(id) ON DELETE CASCADE,
+                origin_run_id TEXT NOT NULL REFERENCES session_runs(id) ON DELETE CASCADE)''')
             with self._transaction() as db:
                 ensure_delegated_ancestry(db)
                 restore_runtime_search_intents(db, int(time.time()*1000))
@@ -135,9 +143,14 @@ class SqliteRuntimeStore:
     @staticmethod
     def _record(row) -> RunRecord:
         metadata = json.loads(row['metadata_json'])
-        return RunRecord(row['id'],row['session_id'],row['tenant_id'],row['status'],
+        values=(row['id'],row['session_id'],row['tenant_id'],row['status'],
                          metadata.get('request_digest',''), json.loads(row['output_json']) if row['output_json'] else None,
                          metadata.get('cancel_requested',False),row['delegated_parent_run_id'])
+        continuation=metadata.get('operation_continuation')
+        if continuation:
+            from openagent_core.durable_operations import DurableRunRecord
+            return DurableRunRecord(*values,continuation['origin_run_id'],row['id'],continuation['segment'])
+        return RunRecord(*values)
 
     def _require_run_not_quarantined(self, run_id: str) -> None:
         from openagent_core.workspace_administration import require_session_not_quarantined
@@ -225,11 +238,69 @@ class SqliteRuntimeStore:
             metadata={'runtime_contract':1,'request_digest':digest,'execution_context':context.snapshot(),
                       'deadline_seconds':request.deadline_seconds,'cancel_requested':bool(reservation),
                       'attachments':request.attachments,'model_ref':request.model_ref,'steer_run_id':request.steer_run_id}
+            continuation=getattr(request,'continuation',None)
+            if continuation is not None:
+                from openagent_core.durable_operations import OperationRunRequest
+                if not isinstance(request,OperationRunRequest) or not context.deferred or not context.delegation_id:
+                    raise PermissionError('A durable operation requires a delegated runtime request')
+                if continuation.segment == 0:
+                    count=db.execute("SELECT COUNT(*) FROM durable_operations WHERE state='active'").fetchone()[0]
+                    if count >= 100:
+                        raise ValueError('The durable operation admission limit was reached')
+                    if continuation.handoff_run_id:
+                        self._require_run_not_quarantined(continuation.handoff_run_id)
+                        source=db.execute('SELECT * FROM session_runs WHERE id=?',(continuation.handoff_run_id,)).fetchone()
+                        source_metadata=json.loads(source['metadata_json']) if source else {}
+                        original_context=source_metadata.get('execution_context',{})
+                        binding=context.snapshot()
+                        identity_fields=('author','initiator','authority','session_id','agent_id','audience','scopes','parent_run_id')
+                        if (source is None or source['status'] not in {'timed_out','interrupted'}
+                                or source['session_id']!=request.session_id
+                                or source_metadata.get('operation_continuation')
+                                or original_context.get('deferred') or original_context.get('delegation_id')
+                                or any(canonical_json(original_context.get(key))!=canonical_json(binding.get(key))
+                                       for key in identity_fields)
+                                or db.execute('SELECT 1 FROM durable_operation_handoffs WHERE source_run_id=?',
+                                              (continuation.handoff_run_id,)).fetchone()
+                                or db.execute("SELECT 1 FROM domain_events WHERE event_type='run.operation.started' AND json_extract(metadata_json,'$.resume_run_id')=? LIMIT 1",
+                                              (continuation.handoff_run_id,)).fetchone()):
+                            raise IdempotencyConflict('The handoff source is unavailable or already claimed')
+                else:
+                    previous=db.execute('SELECT * FROM session_runs WHERE id=?',(continuation.previous_run_id,)).fetchone()
+                    if previous is None or previous['status'] not in {'timed_out','interrupted'}:
+                        raise IdempotencyConflict('The previous segment is not resumable')
+                    prior=json.loads(previous['metadata_json'])
+                    descriptor=prior.get('operation_continuation') or {}
+                    immutable=('origin_run_id','name','version','expires_at','segment_seconds','max_segments',
+                               'requested_deadline_seconds','handoff_run_id','checkpoint_origin_run_id')
+                    if (any(descriptor.get(key)!=getattr(continuation,key) for key in immutable)
+                            or descriptor.get('segment')!=continuation.segment-1
+                            or canonical_json(prior['execution_context'])!=canonical_json(context.snapshot())
+                            or previous['session_id']!=request.session_id
+                            or json.loads(previous['input_json'])!=request.input
+                            or prior.get('attachments',[])!=list(request.attachments)
+                            or prior.get('model_ref')!=request.model_ref):
+                        raise IdempotencyConflict('The continuation changed its admitted input or authority')
+                metadata['operation_continuation']=asdict(continuation)
             db.execute('''INSERT INTO session_runs(id,tenant_id,session_id,ordinal,idempotency_key,runner_kind,
                 agent_id,status,status_raw,input_json,metadata_json,raw_envelope_json,raw_envelope_schema,created_at_ms,delegated_parent_run_id)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(request.run_id,context.tenant_id,request.session_id,ordinal,
                 request.idempotency_key,'agent',context.agent_id,'queued','accepted',canonical_json(request.input),
                 canonical_json(metadata),'{}',1,now,context.parent_run_id))
+            if continuation is not None:
+                if continuation.segment == 0:
+                    db.execute('INSERT INTO durable_operations VALUES(?,?,?,?)',
+                               (request.run_id,request.run_id,0,'cancelled' if reservation else 'active'))
+                    if continuation.handoff_run_id:
+                        db.execute('INSERT INTO durable_operation_handoffs VALUES(?,?)',
+                                   (continuation.handoff_run_id,request.run_id))
+                else:
+                    changed=db.execute('''UPDATE durable_operations SET current_run_id=?,segment=?
+                        WHERE origin_run_id=? AND current_run_id=? AND segment=? AND state='active' ''',
+                        (request.run_id,continuation.segment,continuation.origin_run_id,
+                         continuation.previous_run_id,continuation.segment-1)).rowcount
+                    if changed != 1:
+                        raise IdempotencyConflict('The operation continuation was cancelled or already claimed')
             if self._content_privacy_publication is not None:
                 self._content_privacy_publication.inherit(db,request.run_id,request.session_id,context.parent_run_id)
             if reservation:
@@ -434,6 +505,12 @@ class SqliteRuntimeStore:
             if run is None or run['status'] != 'running':
                 raise RuntimeError('An operation checkpoint requires an active run')
             previous = payload.get('resume_run_id')
+            claim=db.execute('SELECT origin_run_id FROM durable_operation_handoffs WHERE source_run_id=?',
+                             (previous,)).fetchone()
+            if claim is not None:
+                owner=db.execute("SELECT json_extract(metadata_json,'$.operation_continuation.origin_run_id') FROM session_runs WHERE id=?",(run_id,)).fetchone()
+                if owner is None or owner[0]!=claim[0]:
+                    raise IdempotencyConflict('The checkpoint is owned by a delegated handoff')
             conflict = db.execute('''SELECT 1 FROM domain_events WHERE event_type=?
                 AND (run_id=? OR json_extract(metadata_json,'$.resume_run_id')=?) LIMIT 1''',
                 (STARTED, run_id, previous)).fetchone()
@@ -448,6 +525,40 @@ class SqliteRuntimeStore:
         rows = self.connection.execute('''SELECT sequence,event_type,metadata_json FROM domain_events
             WHERE run_id=? AND event_type IN (?,?,?) ORDER BY sequence''', (run_id, *CHECKPOINT_EVENTS))
         return tuple(RunEvent(r[0], run_id, r[1], json.loads(r[2])) for r in rows)
+
+    def _durable_operation(self,run_id):
+        row=self.connection.execute('''SELECT d.* FROM durable_operations d JOIN session_runs r
+            ON r.id=? AND (d.origin_run_id=r.id OR d.origin_run_id=json_extract(r.metadata_json,'$.operation_continuation.origin_run_id'))''',
+            (run_id,)).fetchone()
+        if row is not None:
+            self._require_run_not_quarantined(run_id)
+        return dict(row) if row is not None else None
+
+    def _durable_operations(self):
+        rows=self.connection.execute('''SELECT d.*,c.finished_at_ms AS segment_finished_at_ms FROM durable_operations d
+            JOIN session_runs r ON r.id=d.origin_run_id JOIN sessions_v2 s ON s.id=r.session_id
+            JOIN session_runs c ON c.id=d.current_run_id
+            WHERE d.state='active' AND s.visibility<>'quarantined' ORDER BY r.created_at_ms,d.origin_run_id LIMIT 100''')
+        return tuple(dict(row) for row in rows)
+
+    def _stop_durable_operation(self,origin_run_id,state):
+        if state not in {'success','failed','cancelled','rejected','skipped','expired','exhausted','revoked'}:
+            raise ValueError('Unsupported durable operation outcome')
+        with self._transaction() as db:
+            self._require_run_not_quarantined(origin_run_id)
+            changed=db.execute("UPDATE durable_operations SET state=? WHERE origin_run_id=? AND state='active'",(state,origin_run_id)).rowcount
+            if changed and state in {'cancelled','expired','exhausted','revoked'}:
+                self._event(db,origin_run_id,'run.operation.finished',
+                            {'status':'cancelled' if state=='cancelled' else 'failed',
+                             'reason':'operation_'+state,'retry_allowed':False})
+
+    def _durable_operation_events(self,origin_run_id,after):
+        self._require_run_not_quarantined(origin_run_id)
+        rows=self.connection.execute('''SELECT e.sequence,e.run_id,e.event_type,e.metadata_json
+            FROM domain_events e JOIN session_runs r ON r.id=e.run_id
+            WHERE json_extract(r.metadata_json,'$.operation_continuation.origin_run_id')=? AND e.sequence>?
+            ORDER BY e.sequence LIMIT 1001''',(origin_run_id,after))
+        return tuple(RunEvent(row[0],row[1],row[2],json.loads(row[3])) for row in rows)
 
     def _recover(self) -> None:
         pending=self.connection.execute("SELECT t.session_run_id,t.tool_call_id FROM tool_invocations t JOIN session_runs r ON r.id=t.session_run_id WHERE json_extract(r.metadata_json,'$.runtime_contract')=1 AND t.finished_at_ms IS NULL").fetchall()
@@ -694,6 +805,9 @@ class SqliteRuntimeStore:
         request=RunRequest(row['id'],row['session_id'],row['idempotency_key'],json.loads(row['input_json']),
             metadata.get('deadline_seconds'),tuple(metadata.get('attachments',())),
             metadata.get('model_ref'),metadata.get('steer_run_id'))
+        if metadata.get('operation_continuation'):
+            from openagent_core.durable_operations import OperationContinuation,OperationRunRequest
+            request=OperationRunRequest(**asdict(request),continuation=OperationContinuation(**metadata['operation_continuation']))
         return AcceptedRunRequest(request,PrincipalRef(**context['author']),
             PrincipalRef(**context['initiator']),PrincipalRef(**context['authority']),
             tuple(PrincipalRef(**p) for p in context['audience']),tuple(context.get('scopes',())),
@@ -714,6 +828,10 @@ class SqliteRuntimeStore:
     events = _serialized(_events)
     start_operation = _serialized(_start_operation)
     operation_events = _serialized(_operation_events)
+    durable_operation = _serialized(_durable_operation)
+    durable_operations = _serialized(_durable_operations)
+    stop_durable_operation = _serialized(_stop_durable_operation)
+    durable_operation_events = _serialized(_durable_operation_events)
     recover = _serialized(_recover)
     children = _serialized(_children)
     accepted_request = _serialized(_accepted_request)

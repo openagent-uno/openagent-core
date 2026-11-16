@@ -37,6 +37,21 @@ class OperationError(RuntimeError):
     """An operation cannot safely advance."""
 
 
+class OperationPending(TimeoutError):
+    """A trusted adapter observed read-only readiness still pending, without an effect.
+
+    This is not a generic provider error or permission to retry an uncertain
+    submission. The step must independently satisfy the normal replay contract.
+    """
+
+    def __init__(self, retry_after_seconds=15):
+        if (isinstance(retry_after_seconds, bool) or not isinstance(retry_after_seconds, (int, float))
+                or not math.isfinite(retry_after_seconds) or not 0.1 <= retry_after_seconds <= 3600):
+            raise ValueError('A pending observation requires a bounded retry delay')
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__('A read-only operation is still pending')
+
+
 class StagedOperationStore(Protocol):
     """Optional RuntimeStore port, used only by staged operations."""
 
@@ -330,6 +345,15 @@ async def _complete(runtime, inference, step: CompletionStep) -> Any:
 
 
 async def _execute_step(runtime, inference, step):
+    try:
+        return await _execute_step_once(runtime, inference, step)
+    except OperationPending:
+        if not _safe_to_retry(step):
+            raise OperationError('A pending signal cannot authorize retrying an uncertain effect') from None
+        raise
+
+
+async def _execute_step_once(runtime, inference, step):
     async with asyncio.timeout(step.timeout_seconds):
         if isinstance(step, ToolStep):
             return await _call(runtime, step)
@@ -358,6 +382,7 @@ async def resolve_operation(selector, request: RunRequest, context: ExecutionCon
 
 async def _resume(runtime, store, request, context, operation, invocation, selector):
     chain, seen = [], {request.run_id}
+    durable_origin = None
     previous = invocation.resume_run_id
     while previous is not None:
         if not isinstance(previous, str) or not previous or previous in seen or len(chain) >= _MAX_RESUMES:
@@ -368,10 +393,19 @@ async def _resume(runtime, store, request, context, operation, invocation, selec
             raise PermissionError('Operation continuation requires an interrupted or failed run in this session')
         accepted = await runtime.accepted_request(previous, context)
         fields = ('author', 'initiator', 'authority', 'audience', 'scopes', 'delegation_id', 'deferred', 'parent_run_id')
-        if any(getattr(accepted, field) != getattr(context, field) for field in fields):
+        from .durable_operations import OperationRunRequest
+        handoff = (isinstance(request, OperationRunRequest) and request.continuation.handoff_run_id
+                   and not accepted.deferred and not accepted.delegation_id)
+        checked = tuple(field for field in fields if not handoff or field not in {'delegation_id', 'deferred'})
+        if any(getattr(accepted, field) != getattr(context, field) for field in checked):
             raise PermissionError('Operation checkpoint belongs to another execution authority')
         events = await store.operation_events(previous)
         if not events or events[0].kind != STARTED:
+            if isinstance(accepted.request, OperationRunRequest) and context.deferred:
+                descriptor = accepted.request.continuation
+                durable_origin = descriptor.checkpoint_origin_run_id or descriptor.origin_run_id
+                previous = descriptor.previous_run_id or descriptor.handoff_run_id
+                continue
             raise OperationError('No staged operation checkpoint was found')
         start = events[0].payload
         if start.get('name') != operation.name or start.get('version') != operation.version:
@@ -379,7 +413,7 @@ async def _resume(runtime, store, request, context, operation, invocation, selec
         chain.append(events)
         previous = start.get('resume_run_id')
 
-    origin_run_id = chain[-1][0].run_id
+    origin_run_id = durable_origin or chain[-1][0].run_id
     original = await resolve_operation(selector, accepted.request, context)
     if original is None or original.name != operation.name or original.resume_run_id is not None:
         raise OperationError('The original accepted operation is unavailable')
