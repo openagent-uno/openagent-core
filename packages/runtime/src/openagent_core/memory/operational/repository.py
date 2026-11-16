@@ -862,8 +862,11 @@ def project_legacy_session(
                     conn.execute("UPDATE session_runs SET raw_envelope_json=? WHERE id=? AND session_id=? "
                                  "AND json_extract(metadata_json,'$.runtime_contract')=1",
                                  (json.dumps(envelope, ensure_ascii=False), run_id, session_id))
+        renamed = _apply_runtime_session_title(conn, session_id, legacy, now_ms=effective_now)
         _mark_legacy_changes(conn, session_id, now_ms=effective_now,
                              source_hash=hashlib.sha256(json.dumps(legacy, default=str, sort_keys=True).encode()).hexdigest())
+        if renamed is not None:
+            return renamed
         return ProjectionWrite(session_id, True, False, 1, "complete", None)
 
     # A compatibility source may be deliberately forgotten and later created
@@ -1439,6 +1442,58 @@ def restore_tombstoned_session(
         restored.get("completeness"),
         revision,
     )
+
+def _apply_runtime_session_title(
+    conn: Any, session_id: str, legacy: dict[str, Any], *, now_ms: int
+) -> ProjectionWrite | None:
+    """Carry an explicit rename from the compatibility row to a runtime-owned session.
+
+    Runtime admission owns everything else about such a session, but its title
+    is display metadata the user edits through the compatibility row (the
+    rename endpoint writes ``sessions.metadata.title``). Without this the rename
+    stayed in that row and the session kept its first-message title.
+    """
+    raw = legacy.get("metadata")
+    try:
+        metadata = json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+    except (TypeError, ValueError):
+        return None
+    title = str(metadata.get("title") or "").strip()[:200]
+    if not title:
+        return None
+    cursor = conn.execute(f"SELECT {','.join(_SESSION_COLUMNS)} FROM sessions_v2 WHERE id=?", (session_id,))
+    raw_row = cursor.fetchone()
+    if raw_row is None:
+        return None
+    row = _row_dict(cursor, raw_row)
+    if str(row.get("title") or "") == title:
+        return None
+    source_version = int(row["source_version"]) + 1
+    revision = _allocate_revision(conn, now_ms)
+    stored = json.loads(row.get("metadata_json") or "{}")
+    if isinstance(stored.get("legacy"), dict):
+        stored["legacy"]["title"] = title
+    conn.execute(
+        "UPDATE sessions_v2 SET title=?, metadata_json=?, source_version=?, "
+        "updated_at_ms=MAX(updated_at_ms, ?) WHERE id=?",
+        (title, json.dumps(stored, ensure_ascii=False), source_version, now_ms, session_id),
+    )
+    cursor = conn.execute(f"SELECT {','.join(_SESSION_COLUMNS)} FROM sessions_v2 WHERE id=?", (session_id,))
+    updated = _row_dict(cursor, cursor.fetchone())
+    _upsert_activity(conn, session=updated, source_version=source_version, revision=revision)
+    tenant_id = str(updated["tenant_id"])
+    _insert_outbox(
+        conn, tenant_id=tenant_id, source_kind="session", source_id=session_id,
+        operation="upsert", source_version=source_version,
+        acl_version=int(updated["acl_version"]), now_ms=now_ms,
+    )
+    _insert_domain_event(
+        conn, session_id=session_id, tenant_id=tenant_id,
+        owner_principal_id=updated.get("owner_principal_id"), event_type="session.renamed",
+        source_version=source_version, now_ms=now_ms, metadata={"source_version": source_version},
+    )
+    return ProjectionWrite(session_id, True, False, source_version, updated.get("completeness"), revision)
+
 
 def reconcile_pending(
     conn: Any,
