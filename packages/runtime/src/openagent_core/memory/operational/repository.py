@@ -814,6 +814,27 @@ def _adopted_legacy_projection(conn, session_id, projection, existing, now_ms):
                            str(projection.session["completeness"]), None)
 
 
+def apply_run_envelope(conn: Any, session_id: str, envelope: dict[str, Any]) -> None:
+    """Attach a provider run envelope to its admitted run.
+
+    Also records which model answered, so history can show it after a
+    reload. An already recorded model is kept.
+    """
+    run_id = envelope.get("run_id") or envelope.get("id")
+    if not run_id:
+        return
+    model = envelope.get("model")
+    provider = envelope.get("model_provider")
+    conn.execute(
+        "UPDATE session_runs SET raw_envelope_json=?, model=COALESCE(model, ?), "
+        "model_provider=COALESCE(model_provider, ?) WHERE id=? AND session_id=? "
+        "AND json_extract(metadata_json,'$.runtime_contract')=1",
+        (json.dumps(envelope, ensure_ascii=False),
+         model.strip() if isinstance(model, str) and model.strip() else None,
+         provider.strip() if isinstance(provider, str) and provider.strip() else None,
+         run_id, session_id))
+
+
 def project_legacy_session(
     conn: Any,
     session_id: str,
@@ -857,11 +878,7 @@ def project_legacy_session(
             for envelope in raw_runs:
                 if not isinstance(envelope, dict):
                     continue
-                run_id = envelope.get("run_id") or envelope.get("id")
-                if run_id:
-                    conn.execute("UPDATE session_runs SET raw_envelope_json=? WHERE id=? AND session_id=? "
-                                 "AND json_extract(metadata_json,'$.runtime_contract')=1",
-                                 (json.dumps(envelope, ensure_ascii=False), run_id, session_id))
+                apply_run_envelope(conn, session_id, envelope)
         renamed = _apply_runtime_session_title(conn, session_id, legacy, now_ms=effective_now)
         _mark_legacy_changes(conn, session_id, now_ms=effective_now,
                              source_hash=hashlib.sha256(json.dumps(legacy, default=str, sort_keys=True).encode()).hexdigest())

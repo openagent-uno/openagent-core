@@ -192,3 +192,7 @@ Beta83 also clears persisted resume state before any model has run after
 startup. Reset correctness does not depend on a populated provider cache. The
 regression starts a dispatcher with no cached model over an existing SQLite
 session, then checks that its resume row is erased.
+
+Each run records the model that answered it (`session_runs.model`, filled from
+the provider run envelope when the run completes), so a client can label a turn
+after a reload. Cancelled and interrupted runs may have no recorded model.
