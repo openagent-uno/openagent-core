@@ -221,8 +221,8 @@ class StreamSession:
         if coalesce_window_ms is None:
             coalesce_window_ms = self.DEFAULT_COALESCE_WINDOW_MS
         self.coalesce_window_ms = max(0, int(coalesce_window_ms))
-        # When False, typed replies stay silent even if TTS resolved;
-        # voice (STT) still speaks via the mirror-modality rule.
+        # When False, replies stay silent even if TTS resolved, including
+        # replies to transcribed voice notes.
         self.speak_enabled = bool(speak_enabled)
 
         self.inbound: asyncio.Queue[Event] = asyncio.Queue()
@@ -1390,11 +1390,9 @@ class StreamSession:
         if not text and not attachments:
             return
 
-        # Mirror modality: voice in → voice out regardless of the
-        # session toggle. Merged bursts inherit the last message's
-        # source (see ``_merge_burst``).
-        from_voice = (msg.source != "user_typed")
-        speak = bool(self._tts) and (from_voice or self.speak_enabled)
+        # A voice note is input, not a request for a spoken reply: only a
+        # session with speech on (a live voice conversation) speaks.
+        speak = bool(self._tts) and self.speak_enabled
         runner = StreamTurnRunner(
             self._agent,
             self,
