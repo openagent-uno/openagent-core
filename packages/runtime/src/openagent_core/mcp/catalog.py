@@ -283,6 +283,65 @@ def revoke_interactive_capabilities(catalog: CapabilityCatalog,
         catalog.revoke_lease(lease)
 
 
+class DelegatedDeviceSource(InteractiveCapabilitySource):
+    """A device destination its owner lent to their own authorized automations.
+
+    A connected device's tools normally reach only the turns its owner starts
+    (``InteractiveCapabilitySource`` refuses deferred work, and deferred work
+    never carries temporary leases). The host registers this source only after
+    the owner explicitly allowed an automation to use this exact device. It has
+    no lease, so it never rides inside an ``ExecutionContext``; every discovery
+    and call requires a deferred run of exactly this owner and agent, and the
+    host's source authorizer must additionally recheck the owner's consent and
+    the run's delegation each time. A disconnected device simply answers
+    nothing, because the registry no longer reaches its origin.
+    """
+
+    def __init__(self, origin: TurnExecutionOrigin, server_name: str, source_id: str,
+                 *, owner, agent_id: str) -> None:
+        super().__init__(origin, server_name, source_id)
+        self.owner, self.agent_id = owner, agent_id
+
+    def _check(self, context: ExecutionContext) -> None:
+        if (not context.deferred or not context.delegation_id or context.ingress_id
+                or context.capabilities or context.initiator != self.owner
+                or context.authority != self.owner or context.agent_id != self.agent_id):
+            raise CapabilityUnavailable(
+                "This device is lent only to its owner's authorized automations")
+
+
+def register_delegated_device_capabilities(catalog: CapabilityCatalog, origin: TurnExecutionOrigin,
+                                           *, source_namespace: str, owner,
+                                           agent_id: str) -> tuple[str, ...]:
+    """Register one owner's device for their own deferred, authorized runs.
+
+    Called by the host after an explicit, durable consent of ``owner`` for this
+    device, never from a client-supplied registration. Returns the source IDs
+    the host must revoke when the consent ends or the device disconnects; the
+    host's source authorizer must refuse these sources unless the run's
+    delegation is one the consent names.
+    """
+    if not source_namespace or source_namespace.startswith(("client:", "server:")):
+        raise ValueError("Provide a host-owned capability namespace")
+    if getattr(owner, "kind", None) != "user" or not agent_id:
+        raise ValueError("A device is lent by a user to one agent")
+    source_ids = []
+    for item in origin.registry.list_servers(origin):
+        name = str(item["name"]).removeprefix("client:")
+        source_id = f"{source_namespace}/{name}"
+        adapter = DelegatedDeviceSource(origin, name, source_id, owner=owner, agent_id=agent_id)
+        catalog.register(source_id, adapter, adapter, target_label=origin.device_label)
+        source_ids.append(source_id)
+    return tuple(source_ids)
+
+
+def revoke_delegated_device_capabilities(catalog: CapabilityCatalog,
+                                         source_ids: tuple[str, ...]) -> None:
+    """End a lent device's sources (consent withdrawn or device gone)."""
+    for source_id in source_ids:
+        catalog.revoke(source_id)
+
+
 class PoolCatalogBinding:
     def __init__(self, pool: Any, catalog: CapabilityCatalog, *, trusted_modules: tuple[str, ...],
                  target_label: str = "Agent workspace", user_sources: frozenset[str] = frozenset(),

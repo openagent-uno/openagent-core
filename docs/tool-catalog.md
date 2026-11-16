@@ -163,6 +163,21 @@ origin and registry. Other channels and deferred work have no such lease.
 Disconnect/revocation must also revoke the registered source IDs; even before
 that cleanup, the registry and origin checks deny new calls.
 
+### A device lent to its owner's automations
+
+Deferred work never carries leases, so an automation never reaches a device
+through the interactive path. When a device's owner explicitly allows one of
+their automations to use it, the host calls
+`register_delegated_device_capabilities(catalog, origin, source_namespace=...,
+owner=..., agent_id=...)` and keeps the returned source IDs. These
+`DelegatedDeviceSource` registrations have no lease and never ride inside an
+`ExecutionContext`: every discovery and call requires a deferred run with a
+delegation, no ingress, and exactly that owner as initiator and authority on
+that agent. The host's source authorizer must additionally refuse them unless
+the run's delegation is one the owner's consent names, rechecked each time.
+`revoke_delegated_device_capabilities` ends the loan; a disconnected device
+answers nothing even before that, because the registry no longer reaches it.
+
 ## PTC and envelopes
 
 The Python bridge accepts `call_tool(tool_ref, args)`. Its socket and container
