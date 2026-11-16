@@ -38,10 +38,13 @@ _STATUS_EXHAUSTED = "EXHAUSTED"  # rate-limited; auto-recovers after cooldown
 _STATUS_DEAD = "DEAD"  # auth failure; terminal, never auto-recovers
 
 # ── Cooldown TTLs (seconds) ──────────────────────────────────────────
-# 429 / 529 are transient — the account comes back after a cool-off. We have
-# no reliable ``retry-after`` on ModelRateLimitError (it carries only a status
-# code), so honour the default rather than guessing a hint that isn't there.
+# 429 / 529 are transient — the account comes back after a cool-off. The
+# provider's own ``Retry-After`` (read from the original HTTP error, see
+# :func:`retry_after_seconds`) wins: a usage window that resets in days must
+# not be retried hourly, a burst limit should not idle an account for an hour.
+# Without a hint the default applies.
 _RATE_LIMIT_COOLDOWN_S = 3600.0  # ~1h
+_MAX_COOLDOWN_S = 31 * 86400.0
 # Auth failures (401 / 403) are configuration/billing problems that a retry
 # won't clear — the account is marked DEAD and never re-selected.
 _AUTH_STATUS_CODES = frozenset({401, 403})
@@ -124,14 +127,23 @@ class CredentialPool:
 
     # ── rotation ─────────────────────────────────────────────────────
     def mark_exhausted_and_rotate(
-        self, *, status_code: int | None, api_key_hint: str | None
+        self,
+        *,
+        status_code: int | None,
+        api_key_hint: str | None,
+        retry_after_s: float | None = None,
     ) -> PooledAccount | None:
         """Mark the account matching ``api_key_hint`` failed, then re-select.
 
-        429/529 → EXHAUSTED with a cooldown TTL; 401/403 → DEAD (terminal).
-        Returns the next usable account, or ``None`` when the pool is drained
-        (the caller then falls through to the existing fallback path).
+        429/529 → EXHAUSTED for ``retry_after_s`` when the provider gave one
+        (bounded to 1 s … 31 days), otherwise the default cooldown; 401/403 →
+        DEAD (terminal until the provider configuration changes, which builds a
+        fresh pool). Returns the next usable account, or ``None`` when the
+        pool is drained (the caller then falls through to the fallback path).
         """
+        cooldown = _RATE_LIMIT_COOLDOWN_S
+        if retry_after_s is not None and retry_after_s > 0:
+            cooldown = min(max(float(retry_after_s), 1.0), _MAX_COOLDOWN_S)
         with self._lock:
             now = time.monotonic()
             for acc in self._accounts:
@@ -141,7 +153,7 @@ class CredentialPool:
                         acc.last_error_reset_at = None
                     else:
                         acc.last_status = _STATUS_EXHAUSTED
-                        acc.last_error_reset_at = now + _RATE_LIMIT_COOLDOWN_S
+                        acc.last_error_reset_at = now + cooldown
                     break
             return self._select_locked()
 
@@ -197,6 +209,77 @@ class CredentialPool:
                 ):
                     return True
             return False
+
+
+# ── what a failure means for the pool ────────────────────────────────
+_MAX_CHAIN = 8
+
+
+def _header(headers: Any, name: str) -> str | None:
+    try:
+        value = headers.get(name)
+    except Exception:  # noqa: BLE001 — any odd mapping is "no header"
+        return None
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def retry_after_seconds(error: BaseException | None, *, now: float | None = None) -> float | None:
+    """The provider's ``Retry-After`` for this failure, in seconds, if any.
+
+    Walks the exception chain to the original HTTP error (provider adapters
+    raise ``ModelProviderError(...) from <sdk error>``) and reads the standard
+    ``Retry-After`` header (delta-seconds or HTTP-date) or ``retry-after-ms``.
+    Returns ``None`` when no usable hint exists.
+    """
+    seen: set[int] = set()
+    for _ in range(_MAX_CHAIN):
+        if error is None or id(error) in seen:
+            return None
+        seen.add(id(error))
+        response = getattr(error, "response", None)
+        headers = getattr(response, "headers", None)
+        if headers is not None:
+            millis = _header(headers, "retry-after-ms")
+            if millis is not None:
+                try:
+                    value = float(millis) / 1000.0
+                    if value > 0:
+                        return value
+                except ValueError:
+                    pass
+            raw = _header(headers, "retry-after")
+            if raw is not None:
+                try:
+                    value = float(raw)
+                    return value if value > 0 else None
+                except ValueError:
+                    from email.utils import parsedate_to_datetime
+                    try:
+                        when = parsedate_to_datetime(raw).timestamp()
+                    except (TypeError, ValueError, IndexError, OverflowError):
+                        return None
+                    delta = when - (time.time() if now is None else now)
+                    return delta if delta > 0 else None
+        error = getattr(error, "__cause__", None) or getattr(error, "__context__", None)
+    return None
+
+
+def rotates_account(error: BaseException) -> bool:
+    """Whether another account of the same provider may succeed.
+
+    A rate limit or exhausted allowance (429/529) cools the account down; a
+    rejected credential (401/403) retires it. Anything else is not about the
+    account and goes straight to the fallback path.
+    """
+    from openagent_core.core.runtime_errors import ModelProviderError, ModelRateLimitError
+
+    if not isinstance(error, ModelProviderError):
+        return False
+    try:
+        classified = ModelProviderError.classify(error)
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(classified, ModelRateLimitError) or classified.status_code in _AUTH_STATUS_CODES
 
 
 # ── strategy resolution ──────────────────────────────────────────────

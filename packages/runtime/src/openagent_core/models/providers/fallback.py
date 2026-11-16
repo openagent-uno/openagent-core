@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Iterator, List, Optional, Union
 
 from openagent_core.core.runtime_errors import ContextWindowExceededError, ModelProviderError, ModelRateLimitError
+from openagent_core.models.credential_pool import retry_after_seconds, rotates_account
 from openagent_core.models.providers.base import Model
 from openagent_core.models.providers.response import ModelResponse, ModelResponseEvent
 from openagent_core.core._run_state.agent import RunOutputEvent
@@ -452,26 +453,23 @@ async def acall_model_with_fallback(
         pool = getattr(model, "_openagent_cred_pool", None)
         if pool is not None:
             try:
-                classified = ModelProviderError.classify(primary_error)
-                if isinstance(classified, ModelRateLimitError):
-                    while True:
-                        nxt = pool.mark_exhausted_and_rotate(
-                            status_code=classified.status_code,
-                            api_key_hint=model.api_key,
-                        )
-                        if nxt is None:
-                            break  # pool drained → existing fallback path below
-                        model.api_key, model.base_url = nxt.api_key, nxt.base_url
-                        model.client = model.async_client = None
-                        try:
-                            return await model.aresponse(**kwargs)
-                        except ModelProviderError as e:
-                            if not isinstance(ModelProviderError.classify(e), ModelRateLimitError):
-                                # A non-rate-limit failure on the rotated account
-                                # is the more actionable error — surface it.
-                                primary_error = e
-                                break
-                            # This account is also rate-limited → keep rotating.
+                while rotates_account(primary_error):
+                    nxt = pool.mark_exhausted_and_rotate(
+                        status_code=ModelProviderError.classify(primary_error).status_code,
+                        api_key_hint=model.api_key,
+                        retry_after_s=retry_after_seconds(primary_error),
+                    )
+                    if nxt is None:
+                        break  # pool drained → existing fallback path below
+                    model.api_key, model.base_url = nxt.api_key, nxt.base_url
+                    model.client = model.async_client = None
+                    try:
+                        return await model.aresponse(**kwargs)
+                    except ModelProviderError as e:
+                        # The next account's failure decides: another limit or
+                        # rejected credential keeps rotating, anything else is
+                        # the more actionable error and is surfaced.
+                        primary_error = e
             except Exception:
                 pass  # never let a pool bug break the fallback contract
 
@@ -596,47 +594,34 @@ async def acall_model_stream_with_fallback(
 
     if not any_event_emitted:
         pool = getattr(model, "_openagent_cred_pool", None)
-        if pool is not None:
+        while pool is not None and rotates_account(primary_error):
             try:
-                classified = ModelProviderError.classify(primary_error)
-                rotate = isinstance(classified, ModelRateLimitError)
+                nxt = pool.mark_exhausted_and_rotate(
+                    status_code=ModelProviderError.classify(primary_error).status_code,
+                    api_key_hint=model.api_key,
+                    retry_after_s=retry_after_seconds(primary_error),
+                )
             except Exception:
-                rotate = False
-            while rotate:
-                try:
-                    nxt = pool.mark_exhausted_and_rotate(
-                        status_code=classified.status_code,
-                        api_key_hint=model.api_key,
-                    )
-                except Exception:
+                break
+            if nxt is None:
+                break  # pool drained → existing fallback path below
+            model.api_key, model.base_url = nxt.api_key, nxt.base_url
+            model.client = model.async_client = None
+            attempt_emitted = False
+            try:
+                async for event in model.aresponse_stream(**kwargs):
+                    attempt_emitted = True
+                    yield event
+                return  # rotated account streamed cleanly
+            except ModelProviderError as e:
+                primary_error = e
+                if attempt_emitted:
+                    # Committed output on this account then failed — cannot
+                    # rotate again without duplicating; degrade to fallback.
                     break
-                if nxt is None:
-                    break  # pool drained → existing fallback path below
-                model.api_key, model.base_url = nxt.api_key, nxt.base_url
-                model.client = model.async_client = None
-                attempt_emitted = False
-                try:
-                    async for event in model.aresponse_stream(**kwargs):
-                        attempt_emitted = True
-                        yield event
-                    return  # rotated account streamed cleanly
-                except ModelProviderError as e:
-                    if attempt_emitted:
-                        # Committed output on this account then failed — cannot
-                        # rotate again without duplicating; degrade to fallback.
-                        primary_error = e
-                        break
-                    try:
-                        classified = ModelProviderError.classify(e)
-                    except Exception:
-                        primary_error = e
-                        break
-                    if not isinstance(classified, ModelRateLimitError):
-                        primary_error = e
-                        break
-                    # zero-event rate-limit on this account → try the next one
-                except Exception:
-                    break  # non-provider stream error → degrade to fallback
+                # zero-event limit or rejected credential → try the next one
+            except Exception:
+                break  # non-provider stream error → degrade to fallback
 
     # ── existing fallback path (unchanged behaviour) ──
     fallbacks = get_fallback_models(fallback_config, primary_error)

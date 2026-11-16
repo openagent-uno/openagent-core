@@ -177,11 +177,33 @@ class ProviderModelAdmin:
         return {"ok":True,"model":selected,"response":response.content}
 
 
+def _key_display(key) -> str:
+    return "—" if key is None else (key if isinstance(key,str) and key.startswith("${") else "****" + (key[-4:] if isinstance(key,str) and len(key)>4 else ""))
+
+
+def _public_metadata(metadata):
+    """Provider metadata without credentials.
+
+    ``metadata.accounts`` is a credential pool (see ``models.credential_pool``):
+    every entry's ``api_key`` is write-only, like the provider's own key, and is
+    replaced by ``api_key_display``. An account's own ``base_url`` is kept.
+    """
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("accounts"), list):
+        return metadata
+    out = dict(metadata)
+    out["accounts"] = [
+        {**{k: v for k, v in account.items() if k != "api_key"}, "api_key_display": _key_display(account.get("api_key"))}
+        if isinstance(account, dict) else account
+        for account in metadata["accounts"]
+    ]
+    return out
+
+
 def public_provider(row: dict) -> dict:
     out = {k:row.get(k) for k in ("id","name","framework","kind","base_url","metadata","created_at","updated_at")}
+    out["metadata"] = _public_metadata(out["metadata"])
     out["enabled"] = bool(row.get("enabled",True))
-    key = row.get("api_key")
-    out["api_key_display"] = "—" if key is None else (key if isinstance(key,str) and key.startswith("${") else "****" + (key[-4:] if isinstance(key,str) and len(key)>4 else ""))
+    out["api_key_display"] = _key_display(row.get("api_key"))
     return out
 
 

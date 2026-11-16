@@ -1823,6 +1823,15 @@ class RoutingDecision:
     candidates: list[str]
 
 
+_CATALOG_FALLBACK_ATTRS = ("on_rate_limit", "on_error")
+
+
+def _merge_refs(configured: list[Any], catalog: list[str]) -> list[Any]:
+    """Configured refs first, then catalog refs not already listed."""
+    seen = {value for value in configured if isinstance(value, str)}
+    return list(configured) + [value for value in catalog if value not in seen]
+
+
 class ModelDispatcher(BaseModel):
     """Single dispatcher routing every turn through a TeamRouterProvider.
 
@@ -1885,6 +1894,9 @@ class ModelDispatcher(BaseModel):
         # rebuild must recreate fallbacks from the fresh provider rows rather
         # than retaining a model object with stale secrets.
         self._configured_fallback_refs: dict[str, list[Any]] | None = None
+        # True while ``_fallback_config`` exists only because catalog models
+        # declare ``metadata.fallback_priority`` (no configured chain).
+        self._catalog_fallback_owned = False
         self._local_fallback = LocalFallbackPolicy()
 
         # Per-entry-model TeamRouterProvider. The provider's session
@@ -2004,10 +2016,27 @@ class ModelDispatcher(BaseModel):
         URLs, and per-model sampling), so it is the only correct resolver.
         Non-catalog refs are retained for the generic built-in resolver.
         """
-        config = self._fallback_config
+        catalog_refs = self._catalog_fallback_refs()
         sources = self._configured_fallback_refs
-        if config is None or sources is None:
-            return
+        if sources is None:
+            # No configured chain. Catalog models may still declare one; it is
+            # rebuilt on every catalog change, so it follows the live models.
+            if not catalog_refs:
+                if self._catalog_fallback_owned:
+                    self._fallback_config = None
+                    self._catalog_fallback_owned = False
+                return
+            from openagent_core.models.providers.fallback import FallbackConfig
+            config, sources = FallbackConfig(), {}
+            self._catalog_fallback_owned = True
+        else:
+            config = self._fallback_config
+            if config is None:
+                return
+        sources = {
+            attr: _merge_refs(sources.get(attr) or [], catalog_refs if attr in _CATALOG_FALLBACK_ATTRS else [])
+            for attr in ("on_error", "on_rate_limit", "on_context_overflow")
+        }
         # Already initialized runners retain this object while provider IO is
         # suspended. Rebuilding its lists in place can replace their resolved
         # Models with raw refs immediately before a fallback is selected.
@@ -2056,6 +2085,27 @@ class ModelDispatcher(BaseModel):
         self._fallback_config = self._local_fallback.augment_fallback_config(
             config, providers_config=self._providers_config,
         )
+
+    def _catalog_fallback_refs(self) -> list[str]:
+        """Runtime ids of catalog models that declare ``fallback_priority``.
+
+        Public catalog contract: an enabled language model of an enabled
+        provider whose ``metadata.fallback_priority`` is a non-negative integer
+        joins the rate-limit and error fallback chains, lowest priority first
+        (then runtime id). It follows the live catalog: adding, disabling or
+        clearing the key takes effect at the next catalog rebuild, with no
+        restart. Configured refs keep precedence and run first.
+        """
+        ranked: list[tuple[int, str]] = []
+        for entry in iter_configured_models(self._providers_config or []):
+            metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+            priority = metadata.get("fallback_priority")
+            if isinstance(priority, bool) or not isinstance(priority, int) or priority < 0:
+                continue
+            if entry.disabled or (metadata.get("kind") or "llm") != "llm":
+                continue
+            ranked.append((priority, entry.runtime_id))
+        return [runtime_id for _, runtime_id in sorted(ranked)]
 
     def set_local_fallback_policy(self, raw: Any) -> None:
         """Configure cloud/local standby routing before Agent.initialize()."""
