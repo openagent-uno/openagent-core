@@ -24,7 +24,7 @@ def vault_blocks():
 
 
 def tool_blocks():
-    return rule_blocks("core.tools", "core.managers")
+    return rule_blocks("core.tools", "core.computers", "core.managers")
 
 
 def shipped_rule_ids():

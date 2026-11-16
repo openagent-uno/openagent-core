@@ -37,7 +37,7 @@ sections, in order (`prompts.SECTION_ORDER`):
 | --- | --- | --- |
 | `identity` | What the agent is and how framework and host rules relate | `core.identity` |
 | `principles` | Evidence, provenance, authority, act-then-report | `core.principles` |
-| `tools` | How discovery and the capability map work; MCP sources | `core.tools`, `module.mcp` |
+| `tools` | How discovery and the capability map work; choosing shell, the agent's browser or screen control on a computer; MCP sources | `core.tools`, `core.computers`, `module.mcp` |
 | `routing` | Which capability owns which job; managers; federated search; model pinning | `core.managers`, `module.search.federation`, `module.models` |
 | `memory` | The vault: where memory lives, read/save rules, quality, end-of-turn check | `module.vault.storage`, `.discipline`, `.quality`, `.checklist` |
 | `history` | Sessions, the current conversation, runs | `module.sessions.history` |
@@ -58,7 +58,7 @@ is the same for the same set of blocks.
 Framework plus every module block must stay within **18,000 characters**
 (about 4.5k tokens at four characters per token). Single blocks stay within
 2,400 characters, the memory section within 4,800 and the tools section within
-3,200. `tests/prompts/test_prompt_lint.py` enforces this. In 1.1.0b100 the
+4,800 (3,200 until 1.1.0b110 added `core.computers`). `tests/prompts/test_prompt_lint.py` enforces this. In 1.1.0b100 the
 composed framework and modules went from 33,819 to about 14,900 characters.
 
 The prompt carries routing rules and non-negotiables. Detail that matters only

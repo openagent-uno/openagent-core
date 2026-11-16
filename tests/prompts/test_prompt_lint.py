@@ -29,7 +29,9 @@ _MODULES = ("events", "mcp", "scheduler", "search", "sessions", "tool-discovery"
 # about 14.9k; raise it only together with a reviewed, deliberate addition.
 TOTAL_BUDGET_CHARS = 18_000
 BLOCK_BUDGET_CHARS = 2_400
-SECTION_BUDGET_CHARS = {"memory": 4_800, "tools": 3_200}
+# The tools section grew to 4,800 in 1.1.0b110 for `core.computers` (how to
+# choose between shell, the agent's browser and screen control on a target).
+SECTION_BUDGET_CHARS = {"memory": 4_800, "tools": 4_800}
 
 # A backticked, lowercase, hyphenated word with no underscore names a source
 # (`vault`, `vault-gate`, `schedules`); tool names and parameters carry an
@@ -132,6 +134,23 @@ class PromptLintTests(unittest.TestCase):
             for pattern in forbidden:
                 self.assertIsNone(re.search(pattern, block.text),
                                   f"{block.id} matches {pattern!r}")
+
+    def test_computer_rules_keep_their_non_negotiables(self):
+        # A live run declared itself blocked because its only data source was
+        # read-only, although a signed-in browser on a connected device could
+        # do the job; the rule tells the agent to look across targets first.
+        text = rule_blocks("core.computers")[0].text
+        for rule in ("use the narrowest kind that does the job",
+                     "A read-only source is not the only way to act.",
+                     "check whether another target in `<capabilities>`",
+                     "After each action that changes something, check the result",
+                     "Never type passwords, one-time codes or payment details",
+                     "never\nsolve a CAPTCHA",
+                     "Stop before an irreversible or public action"):
+            self.assertIn(rule, text)
+        from openagent_module_tool_discovery import ToolDiscoveryModule  # noqa: F401
+        source = (ROOT / "packages/module-tool-discovery/src/openagent_module_tool_discovery/__init__.py").read_text()
+        self.assertIn('"core.tools","core.computers","core.managers"', source)
 
     def test_delegation_rules_do_not_contradict(self):
         text = rule_blocks("module.delegation")[0].text

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "openagent-modules-full"
-version = "1.1.0b5"
+version = "1.1.0b6"
 description = "Dependency-only full OpenAgent module profile"
 requires-python = ">=3.11"
 license = "MIT"
@@ -23,7 +23,7 @@ dependencies = [
   "openagent-module-attachments==1.1.0b1",
   "openagent-module-logs==1.1.0b1",
   "openagent-module-ptc==1.1.0b1",
-  "openagent-module-tool-discovery==1.1.0b2",
+  "openagent-module-tool-discovery==1.1.0b3",
 ]
 
 [tool.hatch.build.targets.wheel]

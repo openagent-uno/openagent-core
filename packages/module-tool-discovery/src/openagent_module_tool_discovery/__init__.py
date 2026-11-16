@@ -7,7 +7,7 @@ from openagent_core.prompts import rule_blocks
 
 @dataclass(frozen=True,slots=True)
 class ToolDiscoveryDescriptor:
-    id:str="tool-discovery";version:str="1.1.0b2";api_version:str=MODULE_API_VERSION
+    id:str="tool-discovery";version:str="1.1.0b3";api_version:str=MODULE_API_VERSION
     requires_modules:frozenset[str]=frozenset();optional_integrations:frozenset[str]=frozenset()
     required_services:frozenset[object]=frozenset({"runtime.executor"})
     provided_services:frozenset[object]=frozenset()
@@ -29,7 +29,7 @@ class ToolDiscoveryModule:
             from openagent_core.mcp.pool import MCPPool
             agent.set_capability_pool(MCPPool.from_config([{"builtin":"tool-search"}],include_defaults=False))
         self._contribution=ModuleContribution(prompt_blocks=rule_blocks(
-            "core.tools","core.managers"))
+            "core.tools","core.computers","core.managers"))
         return self._contribution
     async def reconfigure(self,config):return self._contribution
     async def drain(self):return None
