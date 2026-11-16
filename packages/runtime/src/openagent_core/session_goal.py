@@ -251,8 +251,27 @@ class GoalStore:
 
 
 def system_block(goal: Optional[SessionGoal]) -> str:
-    """The stable prompt block for an active goal (unchanged while it is)."""
-    if goal is None or goal.status != ACTIVE:
+    """The stable prompt block for a session's goal (unchanged while it is).
+
+    An active goal drives the work. A paused goal stays the standing context
+    of the conversation: the agent still knows its role and rules when the
+    user writes, but nothing continues on its own. An achieved goal adds
+    nothing.
+    """
+    if goal is None:
+        return ""
+    if goal.status == PAUSED:
+        reason = f" ({goal.paused_reason})" if goal.paused_reason else ""
+        return (
+            "<session-goal>\n"
+            f"This conversation has a goal set by the user. It is paused{reason}:\n"
+            f"{goal.objective}\n\n"
+            "It is still the standing context of this conversation: follow it when you "
+            "answer or work here. It does not continue on its own while paused; the user "
+            "or a schedule resumes it. Do not write `[goal: ...]` markers while it is paused.\n"
+            "</session-goal>"
+        )
+    if goal.status != ACTIVE:
         return ""
     return (
         "<session-goal>\n"

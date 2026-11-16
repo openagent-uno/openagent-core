@@ -90,6 +90,25 @@ class AfterReply(GoalFixture):
 
         self.assertIsNone(await after_reply(self.db, "s", "still working"))
 
+    async def test_a_paused_goal_stays_the_standing_context_of_the_prompt(self):
+        # A live run: with its goal paused, the agent could not see its role
+        # or rules when the user wrote, and no tool exposes the goal.
+        from openagent_core.session_goal import decorate_system
+
+        await self.store.set("s", "triage the reports and answer every reporter")
+        active = await decorate_system(self.db, "s", "framework")
+        await self.store.pause("s", "waiting for the build machine")
+        paused = await decorate_system(self.db, "s", "framework")
+        await self.store.complete("s", "done")
+        achieved = await decorate_system(self.db, "s", "framework")
+
+        self.assertIn("continues automatically", active)
+        self.assertIn("triage the reports and answer every reporter", paused)
+        self.assertIn("paused (waiting for the build machine)", paused)
+        self.assertIn("standing context", paused)
+        self.assertNotIn("continues automatically", paused)
+        self.assertEqual("framework", achieved)
+
 
 class GoalCommand(GoalFixture):
     async def run_command(self, argument):

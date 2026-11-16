@@ -43,3 +43,9 @@ While the goal is active:
 
 The stop button cancels the running turn as usual; the goal stays active and
 continues with the next message. A paused or achieved goal never continues.
+
+A paused goal still reaches the prompt: every turn gets a `<session-goal>`
+block that presents the objective (and the pause reason) as the standing
+context of the conversation, without the instruction to keep working. So when
+the user writes during a pause, the agent still knows its role and rules. An
+achieved goal adds nothing to the prompt.
