@@ -49,3 +49,30 @@ block that presents the objective (and the pause reason) as the standing
 context of the conversation, without the instruction to keep working. So when
 the user writes during a pause, the agent still knows its role and rules. An
 achieved goal adds nothing to the prompt.
+
+## After a runtime restart
+
+A restart (a deploy, a crash, the process running out of memory) ends the turn
+that was working on the goal. Nothing inside that turn can continue it, so the
+host does. Once it has started, a host calls
+`session_goal.resume_after_restart(db, authority=..., submit=...)`:
+
+- it looks at every active goal whose latest run a restart interrupted;
+- `authority(session_id)` returns the durable delegation the goal's owner gave
+  the host for deferred work (an `ExecutionContext`), or `None`;
+- with a delegation, the goal uses one continuation and a new run is admitted
+  through `submit`. Its prompt tells the agent that the earlier turn was
+  interrupted, that commands in flight never reported back, and to check the
+  actual state before repeating anything. The run's idempotency key is
+  `goal-restart:<interrupted run id>`, so a goal resumes at most once per
+  interrupted run;
+- without a delegation the goal pauses with the reason, so it never reads as
+  active while nothing works on it;
+- when the interrupted run was itself such a resume, the goal pauses instead
+  of resuming again: a step that keeps crashing the runtime cannot loop.
+
+To capture the delegation, a host implements `ChatCommandHost.goal_changed`:
+Core calls it, in the verified scope of the person who ran `/goal`, after
+every change (set, pause, resume, done, clear, max). A host that edits goals
+through its own API calls the same logic there. A goal a person did not set
+through one of these paths has no delegation.

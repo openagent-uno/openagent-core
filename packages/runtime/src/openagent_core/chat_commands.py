@@ -180,6 +180,15 @@ class ChatCommandHost:
     async def session_status(self, session: SessionRef) -> SessionStatus:
         raise ChatCommandUnavailable
 
+    async def goal_changed(self, session: SessionRef) -> None:
+        """A person set, changed, resumed or removed this session's goal.
+
+        Called in that person's verified execution scope. A host that can
+        resume a goal after a restart captures (or withdraws) the durable
+        delegation for it here. Errors are ignored: the command already
+        succeeded.
+        """
+
     async def authorize_model_change(self, session: SessionRef) -> None:
         """Raise ``PermissionError`` if the caller may not change the model."""
 
@@ -390,6 +399,16 @@ class ChatCommandService:
         return await self._pin_model(control, db, session_id, arg.strip())
 
     async def _goal(self, request: ChatCommandRequest) -> ChatCommandResult:
+        result = await self._goal_command(request)
+        word = (request.argument or "").strip().lower()
+        if word not in ("", "status", "show") and request.session.session_id:
+            try:
+                await self.host.goal_changed(request.session)
+            except Exception:  # noqa: BLE001 - the command already succeeded
+                pass
+        return result
+
+    async def _goal_command(self, request: ChatCommandRequest) -> ChatCommandResult:
         from . import session_goal
 
         session_id = request.session.session_id

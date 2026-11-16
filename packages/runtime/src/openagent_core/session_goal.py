@@ -17,6 +17,7 @@ command or the API is visible to the running turn at once.
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -224,6 +225,37 @@ class GoalStore:
 
         return await self._run(write)
 
+    async def interrupted_by_restart(self) -> list[tuple[SessionGoal, str, bool]]:
+        """Active goals whose latest run a runtime restart interrupted.
+
+        Each entry is ``(goal, interrupted_run_id, was_restart_resume)``: the
+        last flag says that the interrupted run was itself a resume after an
+        earlier restart.
+        """
+        async def read(conn):
+            cur = await conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_runs'")
+            if await cur.fetchone() is None:
+                return []
+            cur = await conn.execute(f"SELECT {_COLUMNS} FROM session_goals WHERE status='active'")
+            goals = [_row(row) for row in await cur.fetchall()]
+            found = []
+            for goal in goals:
+                cur = await conn.execute(
+                    "SELECT id, status, output_json, idempotency_key FROM session_runs "
+                    "WHERE session_id=? ORDER BY ordinal DESC, created_at_ms DESC LIMIT 1", (goal.session_id,))
+                run = await cur.fetchone()
+                if run is None or run[1] != "interrupted":
+                    continue
+                try:
+                    reason = (json.loads(run[2]) if run[2] else {}).get("reason")
+                except (TypeError, ValueError, AttributeError):
+                    reason = None
+                if reason == "runtime_restarted":
+                    found.append((goal, str(run[0]), str(run[3] or "").startswith(RESTART_RUN_PREFIX)))
+            return found
+
+        return await self._run(read)
+
     async def consume_continuation(self, session_id: str) -> Optional[SessionGoal]:
         """Take one automatic continuation from an active goal.
 
@@ -299,6 +331,79 @@ def continuation_prompt(goal: SessionGoal) -> str:
         "something only the user can provide, end your reply with `[goal: blocked] <reason>`.\n"
         "</system-reminder>"
     )
+
+
+RESTART_RUN_PREFIX = "goal-restart:"
+
+
+def restart_prompt(goal: SessionGoal) -> str:
+    """The reminder that restarts work on a goal after a runtime restart."""
+    note = f"\nLast progress note: {goal.note}" if goal.note else ""
+    return (
+        "<system-reminder>\n"
+        "The runtime restarted while you were working, and your previous turn was interrupted. "
+        "Commands and tool calls that were running then did not report back: they may have "
+        "finished, failed or never run. Check the actual state before you repeat any of them, "
+        "and do not rerun the step that was in progress if it may have caused the restart "
+        "(for example a command that used too much memory).\n\n"
+        f"The session goal is still open (automatic continuation {goal.continuations} of "
+        f"{goal.max_continuations}):\n{goal.objective}{note}\n\n"
+        "Continue working toward it now. If it is fully achieved, end your reply with "
+        "`[goal: achieved] <outcome>`. If you are blocked on something only the user can "
+        "provide, end your reply with `[goal: blocked] <reason>`.\n"
+        "</system-reminder>"
+    )
+
+
+async def resume_after_restart(db: Any, *, authority: Any, submit: Any) -> list[dict[str, Any]]:
+    """Restart work on the goals a runtime restart interrupted.
+
+    A host calls this once after it started. ``authority(session_id)`` returns
+    the durable delegation the goal's owner gave it (an ``ExecutionContext``
+    for deferred work) or ``None``; ``submit(request, context)`` admits the
+    run. A goal resumes at most once per interrupted run and uses one
+    continuation. Without a delegation, or when the interrupted run was
+    already a resume (a restart loop), the goal pauses with the reason, so it
+    never reads as active while nothing works on it. Nothing here raises.
+    """
+    import uuid
+
+    from openagent_core.contracts import RunRequest
+
+    store = GoalStore(db)
+    results: list[dict[str, Any]] = []
+    try:
+        interrupted = await store.interrupted_by_restart()
+    except Exception as exc:  # noqa: BLE001 - recovery must never fail a start
+        return [{"action": "failed", "error": type(exc).__name__}]
+    for goal, run_id, was_resume in interrupted:
+        session_id = goal.session_id
+        try:
+            if was_resume:
+                await store.pause(session_id, "The runtime restarted twice while working on this goal. "
+                                              "Resume it or send a message to continue.")
+                results.append({"session_id": session_id, "action": "paused", "reason": "repeated_restart"})
+                continue
+            try:
+                context = await authority(session_id)
+            except Exception:  # noqa: BLE001 - no usable delegation
+                context = None
+            if context is None:
+                await store.pause(session_id, "The runtime restarted while working on this goal. "
+                                              "Resume it or send a message to continue.")
+                results.append({"session_id": session_id, "action": "paused", "reason": "no_delegation"})
+                continue
+            current = await store.consume_continuation(session_id)
+            if current is None or current.status != ACTIVE:
+                results.append({"session_id": session_id, "action": "paused", "reason": "budget"})
+                continue
+            new_run_id = str(uuid.uuid4())
+            await submit(RunRequest(new_run_id, session_id, RESTART_RUN_PREFIX + run_id,
+                                    restart_prompt(current)), context)
+            results.append({"session_id": session_id, "action": "resumed", "run_id": new_run_id})
+        except Exception as exc:  # noqa: BLE001 - one goal must not block the others
+            results.append({"session_id": session_id, "action": "failed", "error": type(exc).__name__})
+    return results
 
 
 _MARKER = re.compile(r"^[ \t>*_`-]*\[goal:\s*(achieved|blocked)\][ \t]*(.*)$", re.IGNORECASE | re.MULTILINE)
