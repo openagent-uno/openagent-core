@@ -72,6 +72,43 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
     async def test_visual_completion_prefers_the_operation_extractor(self):
         await self.exercise_visual_operation(dedicated_extractor=True)
 
+    async def test_extended_wait_polls_one_receipt_past_the_normal_read_limit(self):
+        receipt = {'id': 'record-a'}
+        reads = 0
+        sleep = asyncio.sleep
+
+        async def read(args, context):
+            nonlocal reads
+            self.assertEqual(args, receipt)
+            self.assertEqual(context, self.context)
+            reads += 1
+            return {'structuredContent': {'ready': reads == 129}}
+
+        wait = WaitStep('receipt', 'records', 'read', receipt,
+                        until=lambda result: result['structuredContent']['ready'],
+                        timeout_seconds=7200, interval_seconds=15)
+        with self.assertRaises(ValueError):
+            _step_digest(replace(wait, interval_seconds=14))
+        with self.assertRaises(ValueError):
+            _step_digest(replace(wait, timeout_seconds=10801))
+        with self.assertRaises(ValueError):
+            _step_digest(ToolStep('write', 'records', 'write', timeout_seconds=7200))
+
+        async def skip_poll_interval(seconds):
+            await sleep(0 if seconds == 15 else seconds)
+
+        def next_step(state):
+            return CompleteOperation('Receipt collected') if 'receipt' in state.results else wait
+
+        runtime = await self.runtime(next_step, {'read': read})
+        with patch('openagent_core.operations.asyncio.sleep', new=skip_poll_interval):
+            await self.submit(runtime, 'run-a', inputs={})
+            result = await runtime.wait('run-a', self.context)
+        self.assertEqual((result.status, result.output), ('success', 'Receipt collected'))
+        self.assertEqual(reads, 129)
+        events = await runtime.services.store.operation_events('run-a')
+        self.assertEqual([event.payload['key'] for event in events if event.kind == STEP_COMPLETED], ['receipt'])
+
     async def exercise_visual_operation(self, *, dedicated_extractor):
         calls = []
         observations = []
@@ -317,6 +354,12 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(calls[0], calls[1])
 
     async def test_interrupt_resume_reuses_checkpoints_and_single_use_ancestry(self):
+        await self.exercise_interrupted_wait(extended=False)
+
+    async def test_extended_wait_resumes_the_same_receipt_without_resubmitting(self):
+        await self.exercise_interrupted_wait(extended=True)
+
+    async def exercise_interrupted_wait(self, *, extended):
         calls, planned = [], []
         waiting = asyncio.Event()
         ready = False
@@ -338,7 +381,9 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
                 return ToolStep('submit', 'records', 'submit', {'key': key}, idempotent=True)
             self.assertEqual(state.result_run_ids['submit'], 'run-a')
             if 'wait' not in state.results:
-                return WaitStep('wait', 'records', 'read', state.results['submit'], until=lambda result: result['ready'])
+                options = {'timeout_seconds': 7200, 'interval_seconds': 15} if extended else {}
+                return WaitStep('wait', 'records', 'read', state.results['submit'],
+                                until=lambda result: result['ready'], **options)
             return CompleteOperation('Ready')
 
         tools = {'submit': submit, 'read': read}
@@ -397,6 +442,12 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('published', str(result.output))
 
     async def test_cancellation_stops_pending_stage_and_prevents_resume(self):
+        await self.exercise_cancelled_wait(extended=False)
+
+    async def test_cancellation_stops_an_extended_wait_and_prevents_resume(self):
+        await self.exercise_cancelled_wait(extended=True)
+
+    async def exercise_cancelled_wait(self, *, extended):
         entered = asyncio.Event()
         calls = 0
 
@@ -407,7 +458,8 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.Future()
 
         def next_step(_state):
-            return WaitStep('wait', 'records', 'read', {}, until=lambda result: True)
+            options = {'timeout_seconds': 7200, 'interval_seconds': 15} if extended else {}
+            return WaitStep('wait', 'records', 'read', {}, until=lambda result: True, **options)
 
         runtime = await self.runtime(next_step, {'read': tool})
         await self.submit(runtime, 'run-a', inputs={})
@@ -417,3 +469,29 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
         await self.submit(runtime, 'run-b', resume_run_id='run-a')
         self.assertEqual((await runtime.wait('run-b', self.context)).status, 'failed')
         self.assertEqual(calls, 1)
+
+    async def test_run_deadline_stops_an_extended_wait(self):
+        entered = asyncio.Event()
+        stopped = asyncio.Event()
+
+        async def read(_args, _context):
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                stopped.set()
+
+        def next_step(_state):
+            return WaitStep('wait', 'records', 'read', {'id': 'record-a'}, until=lambda result: True,
+                            timeout_seconds=7200, interval_seconds=15)
+
+        runtime = await self.runtime(next_step, {'read': read})
+        request = RunRequest('run-a', self.context.session_id, 'run-a', json.dumps({'inputs': {}}),
+                             deadline_seconds=0.2)
+        await runtime.submit(request, self.context)
+        await asyncio.wait_for(entered.wait(), 3)
+        result = await runtime.wait('run-a', self.context)
+        self.assertEqual(result.status, 'timed_out')
+        self.assertTrue(stopped.is_set())
+        events = await runtime.services.store.operation_events('run-a')
+        self.assertFalse(any(event.kind == STEP_COMPLETED for event in events))

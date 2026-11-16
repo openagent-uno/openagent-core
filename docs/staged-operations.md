@@ -43,9 +43,12 @@ version when a stage's behavior changes.
 
 - `ToolStep` invokes an exact authorized catalog destination. It checkpoints
   the JSON result envelope and stops when the tool returns an MCP error.
-- `WaitStep` polls one exact read-only tool with fixed arguments, a deadline and
-  a maximum of 128 reads. The host supplies a pure terminal predicate. Use it
-  for receipts of already submitted jobs.
+- `WaitStep` polls one exact read-only tool with fixed arguments and a pure
+  terminal predicate. Waits of up to one hour allow up to 128 reads. A host
+  can wait on an already submitted job for up to three hours by setting
+  `timeout_seconds` and spacing reads at least 15 seconds apart. Extended
+  waits allow up to 720 reads. The run deadline and cancellation still apply.
+  This extended bound requires a Core release that includes this change.
 - `CompletionStep` invokes the configured `StatelessInference` provider.
   It supplies the stage prompt and JSON Schema with no chat transcript or
   tools. The engine parses and validates the output before checkpointing it.
@@ -101,6 +104,21 @@ cancellation is terminal. Restart preserves the checkpoints and leaves the
 old run interrupted until a new authorized request continues it.
 
 This interface caps operation results at 256 KiB per stage and 4 MiB in total,
-with at most 256 completed stages and eight continuation links. Individual
-step deadlines range from 0.1 to 3,600 seconds, under the enclosing run deadline.
+with at most 256 completed stages and eight continuation links. Tool and
+completion deadlines range from 0.1 to 3,600 seconds. Receipt waits can extend
+to 10,800 seconds as described above, under the enclosing run deadline.
 Stateless planning receives its explicit prompt and any declared visual evidence.
+
+## Continuing unattended work
+
+The host must admit a run with a deadline that covers its complete operation
+and select an extended wait when a submitted job can exceed an hour. Existing
+checkpoints keep their original stage digest. Adopting the new Core does not
+change the accepted timeout of a stage already in progress.
+
+The receipt wait runs inside the admitted task. A timeout ends that run, and
+runtime shutdown leaves it interrupted. Recovery preserves checkpoints but
+requires a new authorized continuation. This contract does not schedule that
+continuation automatically or restore expired execution authority. A host that
+needs unattended continuation after restart must use a durable delegation and
+an upstream continuation contract that revalidates it before execution.
