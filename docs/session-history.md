@@ -198,3 +198,5 @@ the provider run envelope when the run completes), so a client can label a turn
 after a reload. Cancelled and interrupted runs may have no recorded model.
 A turn rebuilt from the run journal carries that model too, falling back to
 the provider run envelope for runs stored before the column was filled.
+`SessionInspection.live_runs` returns the same `model` (and `model_provider`)
+on each run of the live view.

@@ -49,11 +49,14 @@ class DurablePublicHistory(unittest.IsolatedAsyncioTestCase):
         conn = sqlite3.connect(self.path / 'state.sqlite')
         conn.execute("UPDATE session_runs SET model='fixture-llm' WHERE id='recorded'")
         conn.execute("UPDATE session_runs SET raw_envelope_json=? WHERE id='enveloped'",
-                     ('{"run_id": "enveloped", "model": "envelope-llm"}',))
+                     ('{"run_id": "enveloped", "model": "envelope-llm", "model_provider": "Fixture"}',))
         conn.commit(); conn.close()
         result = await self.inspection.transcript(self.management, 'parent')
         models = {m['runId']: m.get('model') for m in result['messages'] if m['role'] == 'assistant'}
         self.assertEqual({'recorded': 'fixture-llm', 'enveloped': 'envelope-llm', 'unknown': None}, models)
+        live = await self.inspection.live_runs(self.management, 'parent')
+        self.assertEqual({'recorded': ('fixture-llm', None), 'enveloped': ('envelope-llm', 'Fixture'), 'unknown': (None, None)},
+                         {run['id']: (run['model'], run['model_provider']) for run in live['runs']})
 
     async def test_reopen_recovers_accepted_input_completed_and_partial_tools_without_legacy_mirror(self):
         await self.store.accept(RunRequest('accepted', 'parent', 'accepted', 'Original input', attachments=({'file_id': 'host-file'},)), self.context)
