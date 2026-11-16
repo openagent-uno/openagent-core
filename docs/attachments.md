@@ -109,6 +109,13 @@ and the OpenAI-compatible tool loop against a local fixture transport.
 
 ## Inline video for OpenAI-compatible providers
 
+A model's native inputs come from `input_modalities` in its metadata. A
+`vision` entry in the model's `capabilities` also counts as image input, so a
+row registered with a text-only declaration next to the provider's own
+`vision` capability still receives images natively. Without metadata, every
+Claude generation from 3 onward defaults to text, image and file input, also
+behind an OpenAI-compatible proxy.
+
 A provider configuration may declare `video_input_format: input_video` when
 its OpenAI-compatible chat endpoint accepts `input_video.data` as base64.
 Declare `video` in the corresponding model's `input_modalities` so the

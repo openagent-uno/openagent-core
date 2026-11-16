@@ -170,9 +170,10 @@ def default_input_modalities(provider: str, model: str) -> list[str]:
     modalities = {"text"}
     if p == "google" and "gemini" in m:
         modalities.update({"image", "audio", "video", "file"})
-    elif m.startswith("claude-") and any(
-        marker in m for marker in ("claude-3", "claude-sonnet-4", "claude-opus-4", "claude-haiku-4")
+    elif m.startswith("claude-") and not any(
+        marker in m for marker in ("claude-1", "claude-2", "claude-instant")
     ):
+        # Every Claude generation since 3 accepts images and documents.
         modalities.update({"image", "file"})
     elif p == "openai" and any(
         marker in m for marker in ("gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4")
@@ -225,11 +226,17 @@ def input_modalities_for(entry: Any) -> frozenset[str]:
             getattr(entry, "provider", ""), getattr(entry, "model_id", ""),
         )
     try:
-        return frozenset(normalize_input_modalities(raw))
+        modalities = set(normalize_input_modalities(raw))
     except ValueError:
-        return frozenset(default_input_modalities(
+        modalities = set(default_input_modalities(
             getattr(entry, "provider", ""), getattr(entry, "model_id", ""),
         ))
+    # A provider that declares a "vision" capability accepts images, even on
+    # rows whose persisted declaration predates it.
+    capabilities = metadata.get("capabilities")
+    if isinstance(capabilities, (list, tuple)) and "vision" in capabilities:
+        modalities.add("image")
+    return frozenset(modalities)
 
 
 def native_modalities_for_payload(
