@@ -120,5 +120,6 @@ The receipt wait runs inside the admitted task. A timeout ends that run, and
 runtime shutdown leaves it interrupted. Recovery preserves checkpoints but
 requires a new authorized continuation. This contract does not schedule that
 continuation automatically or restore expired execution authority. A host that
-needs unattended continuation after restart must use a durable delegation and
-an upstream continuation contract that revalidates it before execution.
+needs unattended continuation after restart can opt into the
+[durable operation runner](durable-operations.md), which captures and revalidates
+an explicit delegation before continuing execution.

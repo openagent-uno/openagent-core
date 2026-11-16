@@ -31,6 +31,13 @@ class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs): return None
 
 
+def _record(value):
+    if 'origin_run_id' in value:
+        from openagent_core.durable_operations import DurableRunRecord
+        return DurableRunRecord(**value)
+    return RunRecord(**value)
+
+
 class RunClient:
     def __init__(self,base_url: str,headers: Callable[[], Any],*,path='/api/v1/runs',timeout=10):
         parsed=urlsplit(base_url)
@@ -67,10 +74,10 @@ class RunClient:
             raise
         except (URLError,TimeoutError,ConnectionError,OSError,json.JSONDecodeError) as exc:
             raise AcceptanceUncertain(request.run_id) from exc
-        return RunRecord(**value)
+        return _record(value)
 
     async def get(self,run_id: str) -> RunRecord:
-        return RunRecord(**await self._request('GET','/'+quote(run_id,safe='')))
+        return _record(await self._request('GET','/'+quote(run_id,safe='')))
 
     async def events(self,run_id: str,after: int=0) -> tuple[RunEvent,...]:
         if after<0: raise ValueError('Cursor cannot be negative')
@@ -78,11 +85,11 @@ class RunClient:
         return tuple(RunEvent(**event) for event in result['events'])
 
     async def cancel(self,run_id: str) -> RunRecord:
-        return RunRecord(**await self._request('POST','/'+quote(run_id,safe='')+'/cancel'))
+        return _record(await self._request('POST','/'+quote(run_id,safe='')+'/cancel'))
 
     async def children(self,run_id: str) -> tuple[RunRecord,...]:
         result=await self._request('GET','/'+quote(run_id,safe='')+'/children')
-        return tuple(RunRecord(**row) for row in result['runs'])
+        return tuple(_record(row) for row in result['runs'])
 
     async def wait(self,run_id: str,*,interval: float=.5) -> RunRecord:
         if interval<=0: raise ValueError('Polling interval must be positive')

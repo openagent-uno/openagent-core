@@ -2,6 +2,7 @@
 
 ## Architecture and use
 
+- [Unreleased durable operation continuation](durable-operations.md).
 - [System prompt](system-prompt.md): structure, purpose-ordered sections, the size budget and how to add a block.
 - [Provider accounts and backup models](provider-accounts-and-backups.md): several accounts per provider rotate on the provider's Retry-After and on rejected credentials; catalog models declare live backups.
 - [Default router model](default-router-model.md): one default router at most, only an enabled model of an enabled provider, repaired on open.
