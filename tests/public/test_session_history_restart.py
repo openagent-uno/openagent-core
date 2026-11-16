@@ -39,6 +39,22 @@ class DurablePublicHistory(unittest.IsolatedAsyncioTestCase):
         await self.db.close()
         self.temporary.cleanup()
 
+    async def test_a_turn_rebuilt_from_the_journal_keeps_the_model_that_answered(self):
+        import sqlite3
+        for run_id in ('recorded', 'enveloped', 'unknown'):
+            await self.store.accept(RunRequest(run_id, 'parent', run_id, 'Question ' + run_id), self.context)
+            await self.store.transition(run_id, 'running')
+            await self.store.append_event(run_id, 'run.stream', {'kind': 'delta', 'text': 'Answer ' + run_id})
+            await self.store.transition(run_id, 'success', output='Answer ' + run_id)
+        conn = sqlite3.connect(self.path / 'state.sqlite')
+        conn.execute("UPDATE session_runs SET model='fixture-llm' WHERE id='recorded'")
+        conn.execute("UPDATE session_runs SET raw_envelope_json=? WHERE id='enveloped'",
+                     ('{"run_id": "enveloped", "model": "envelope-llm"}',))
+        conn.commit(); conn.close()
+        result = await self.inspection.transcript(self.management, 'parent')
+        models = {m['runId']: m.get('model') for m in result['messages'] if m['role'] == 'assistant'}
+        self.assertEqual({'recorded': 'fixture-llm', 'enveloped': 'envelope-llm', 'unknown': None}, models)
+
     async def test_reopen_recovers_accepted_input_completed_and_partial_tools_without_legacy_mirror(self):
         await self.store.accept(RunRequest('accepted', 'parent', 'accepted', 'Original input', attachments=({'file_id': 'host-file'},)), self.context)
         await self.store.transition('accepted', 'running')

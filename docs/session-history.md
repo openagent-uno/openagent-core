@@ -196,3 +196,5 @@ session, then checks that its resume row is erased.
 Each run records the model that answered it (`session_runs.model`, filled from
 the provider run envelope when the run completes), so a client can label a turn
 after a reload. Cancelled and interrupted runs may have no recorded model.
+A turn rebuilt from the run journal carries that model too, falling back to
+the provider run envelope for runs stored before the column was filled.

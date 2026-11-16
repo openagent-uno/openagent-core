@@ -107,8 +107,20 @@ async def runtime_journal_run(row, events, canonical_messages):
     if not any(m['role'] == 'assistant' for m in messages):
         messages.extend({'role': 'assistant', 'content': m['text']}
                         for m in canonical_messages if m['role'] == 'assistant')
-    return {'run_id': row['id'], 'status': row['status'], 'created_at': row['created_at_ms'] / 1000,
-            'messages': messages, 'tools': list(tools.values()), '_journal_streamed': had_deltas}
+    run = {'run_id': row['id'], 'status': row['status'], 'created_at': row['created_at_ms'] / 1000,
+           'messages': messages, 'tools': list(tools.values()), '_journal_streamed': had_deltas}
+    # The model that answered: the run's recorded one, else the provider
+    # envelope's, so a turn rebuilt from the journal keeps its label.
+    keys = set(row.keys()) if hasattr(row, 'keys') else set()
+    model = row['model'] if 'model' in keys else None
+    if not model and 'raw_envelope_json' in keys:
+        try:
+            model = (json.loads(row['raw_envelope_json'] or '{}') or {}).get('model')
+        except (TypeError, ValueError, AttributeError):
+            model = None
+    if isinstance(model, str) and model.strip():
+        run['model'] = model.strip()
+    return run
 
 
 def _build_run_tool_index(
