@@ -5,15 +5,24 @@ from openagent_core.modules import MODULE_API_VERSION,ModuleConfig,ModuleContext
 from openagent_core.prompts import rule_blocks
 
 
+# The "Computers and browsers" guidance explains shell, browser and screen
+# control on the agent's host and on devices people connect. A host whose
+# agents have no such tools turns it off: ``computers_guidance: false``.
+COMPUTERS_GUIDANCE="computers_guidance"
+
+
 @dataclass(frozen=True,slots=True)
 class ToolDiscoveryDescriptor:
-    id:str="tool-discovery";version:str="1.1.0b3";api_version:str=MODULE_API_VERSION
+    id:str="tool-discovery";version:str="1.1.0b4";api_version:str=MODULE_API_VERSION
     requires_modules:frozenset[str]=frozenset();optional_integrations:frozenset[str]=frozenset()
     required_services:frozenset[object]=frozenset({"runtime.executor"})
     provided_services:frozenset[object]=frozenset()
     supported_surfaces:frozenset[str]=frozenset({"service","agent_tools"})
     def validate(self,config:ModuleConfig)->None:
         if "agent_tools" not in config.surfaces:raise ValueError("tool-discovery requires its agent_tools surface")
+        if set(config.options)-{COMPUTERS_GUIDANCE}:raise ValueError("Unknown tool-discovery options")
+        if not isinstance(config.options.get(COMPUTERS_GUIDANCE,True),bool):
+            raise ValueError("computers_guidance must be true or false")
     def migrations(self)->tuple[ModuleMigration,...]:return ()
     async def prepare(self,context:ModuleContext):return ToolDiscoveryModule(context)
 
@@ -28,8 +37,9 @@ class ToolDiscoveryModule:
         if "tool-search" not in names:
             from openagent_core.mcp.pool import MCPPool
             agent.set_capability_pool(MCPPool.from_config([{"builtin":"tool-search"}],include_defaults=False))
+        computers=self.context.config.options.get(COMPUTERS_GUIDANCE,True)
         self._contribution=ModuleContribution(prompt_blocks=rule_blocks(
-            "core.tools","core.computers","core.managers"))
+            *(("core.tools","core.computers","core.managers") if computers else ("core.tools","core.managers"))))
         return self._contribution
     async def reconfigure(self,config):return self._contribution
     async def drain(self):return None

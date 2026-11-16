@@ -110,6 +110,27 @@ class AfterReply(GoalFixture):
         self.assertEqual("framework", achieved)
 
 
+class GoalObjectiveLimit(GoalFixture):
+    """An objective over the limit is refused; it used to be cut without a word."""
+
+    async def test_too_long_is_an_error_for_set_update_and_the_command(self):
+        from openagent_core.chat_commands import (ChatCommandHost, ChatCommandRequest,
+                                                  ChatCommandService, SessionRef)
+
+        long = "x" * (session_goal.MAX_OBJECTIVE_CHARS + 1)
+        with self.assertRaisesRegex(ValueError, "4001 characters"):
+            await self.store.set("s", long)
+        self.assertIsNone(await self.store.get("s"))
+        await self.store.set("s", "  " + "y" * session_goal.MAX_OBJECTIVE_CHARS + "  ")
+        with self.assertRaises(ValueError):
+            await self.store.update("s", objective=long)
+        self.assertEqual("y" * session_goal.MAX_OBJECTIVE_CHARS, (await self.store.get("s")).objective)
+        service = ChatCommandService(SimpleNamespace(memory_db=self.db), ChatCommandHost())
+        result = await service.execute(ChatCommandRequest("goal", SessionRef("s"), long))
+        self.assertIn("limit is 4000", result.text)
+        self.assertEqual("y" * session_goal.MAX_OBJECTIVE_CHARS, (await self.store.get("s")).objective)
+
+
 class GoalCommand(GoalFixture):
     async def run_command(self, argument):
         from openagent_core.chat_commands import (ChatCommandHost, ChatCommandRequest,

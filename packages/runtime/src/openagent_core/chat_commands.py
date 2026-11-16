@@ -448,7 +448,10 @@ class ChatCommandService:
             except ValueError as exc:
                 return ChatCommandResult(str(exc), FAILED)
             return ChatCommandResult(session_goal.describe(goal) if goal else "No goal to change.")
-        goal = await store.set(session_id, arg)
+        try:
+            goal = await store.set(session_id, arg)
+        except ValueError as exc:
+            return ChatCommandResult(str(exc), FAILED)
         return ChatCommandResult(
             f"Goal set: {goal.objective}\n"
             "The agent will keep working on it in this conversation until it is achieved or blocked, "

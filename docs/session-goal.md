@@ -18,6 +18,9 @@ The command is in the shared catalogue (`openagent_core.chat_commands`), so it
 works in every host that runs session commands (app, CLI, messaging channels).
 Hosts can also drive goals through `openagent_core.session_goal.GoalStore`.
 
+An objective can be up to 4000 characters. A longer one is refused with a
+message that gives its length; it is never cut short.
+
 ## How it works
 
 `openagent_core.session_goal` stores one row per session in `session_goals`

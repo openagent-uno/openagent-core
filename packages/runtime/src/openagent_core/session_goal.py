@@ -95,6 +95,16 @@ def _clip(text: Optional[str], limit: int) -> Optional[str]:
     return text[:limit] if text else None
 
 
+def _objective(text: Optional[str]) -> str:
+    """The objective as it will be stored; too long is an error, never a silent cut."""
+    value = (text or "").strip()
+    if len(value) > MAX_OBJECTIVE_CHARS:
+        raise ValueError(
+            f"The objective is {len(value)} characters long; the limit is {MAX_OBJECTIVE_CHARS}. "
+            "Shorten it and try again.")
+    return value
+
+
 def _row(row: Any) -> Optional[SessionGoal]:
     if row is None:
         return None
@@ -139,7 +149,7 @@ class GoalStore:
     async def set(self, session_id: str, objective: str, *,
                   max_continuations: Optional[int] = None) -> SessionGoal:
         """Give the session a new active goal, replacing any previous one."""
-        objective = _clip(objective, MAX_OBJECTIVE_CHARS)
+        objective = _objective(objective)
         if not session_id or not objective:
             raise ValueError("a session and a non-empty objective are required")
         cap = DEFAULT_MAX_CONTINUATIONS if max_continuations is None else int(max_continuations)
@@ -168,7 +178,7 @@ class GoalStore:
             goal = await self._fetch(conn, session_id)
             if goal is None:
                 return None
-            new_objective = _clip(objective, MAX_OBJECTIVE_CHARS) if objective is not None else goal.objective
+            new_objective = _objective(objective) if objective is not None else goal.objective
             if not new_objective:
                 raise ValueError("the objective cannot be empty")
             cap = goal.max_continuations if max_continuations is None else int(max_continuations)
