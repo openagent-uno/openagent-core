@@ -192,6 +192,10 @@ class CatalogAdapters(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(PermissionError):
                     await call(result_cursor=cursor)
                 self.policy.denied.clear()
+            # Arguments repeated from the original call, without a tool_ref,
+            # cannot start a new invocation: the cursor alone decides the page.
+            repeated = await call(result_cursor=cursor, args={"repeated": "original"})
+            self.assertEqual(repeated["offset"], len(collected))
             while cursor is not None:
                 next_page = await call(result_cursor=cursor)
                 self.assertEqual(next_page["offset"], len(collected))

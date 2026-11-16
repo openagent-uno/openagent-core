@@ -1224,7 +1224,10 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
         """
         catalog, context = _authorized_catalog(pool)
         if result_cursor is not None:
-            if tool_ref is not None or args is not None:
+            # Without a tool_ref this cannot be a new invocation, so arguments
+            # repeated from the original call are ignored. With a tool_ref the
+            # intent is ambiguous: say so instead of guessing.
+            if tool_ref is not None:
                 raise ValueError("Pass only result_cursor to read another result page")
             return await pages.next(result_cursor, catalog=catalog, context=context)
         if not tool_ref:
