@@ -952,6 +952,27 @@ class Scheduler:
         return await self.execution_service.run_task(self, task, trigger=trigger,
             request_id=request_id, payload=context, execute=self._execute_task)
 
+    async def _resume_session_goal(self, session_id: str) -> None:
+        """Give a paused conversation goal a fresh budget when its loop fires.
+
+        A loop is how a standing role comes back each day; its goal pauses
+        when the agent reports it is blocked until then or its continuations
+        run out. The firing reactivates it so the turn works under the goal
+        again. An achieved goal stays achieved; nothing here fails a firing.
+        """
+        try:
+            from openagent_core.session_goal import PAUSED, GoalStore
+
+            store = GoalStore(self.db)
+            goal = await store.get(session_id)
+            if goal is None or goal.status != PAUSED:
+                return
+            await store.resume(session_id)
+        except Exception as exc:  # noqa: BLE001 - a goal must never fail a firing
+            elog("scheduler.loop_goal_resume_failed", level="warning", session_id=session_id, error=str(exc))
+            return
+        elog("scheduler.loop_goal_resumed", session_id=session_id)
+
     async def _run_in_session(
         self, task: dict, session_id: str, prompt: str, *,
         timeout: float | None, dry_run: bool, lean_local: bool,
@@ -974,6 +995,7 @@ class Scheduler:
         from openagent_core.runtime import current_execution_context, current_runtime
 
         runtime, context = current_runtime(), current_execution_context()
+        await self._resume_session_goal(session_id)
         with (
             execution_origin_scope(None),
             dry_run_scope(dry_run),

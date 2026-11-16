@@ -150,6 +150,25 @@ class SessionLoop(unittest.IsolatedAsyncioTestCase):
         )).fetchall()
         self.assertEqual([plain_run], [row[0] for row in rows])
 
+    async def test_a_firing_reactivates_a_paused_goal_of_the_conversation(self):
+        from openagent_core.session_goal import ACHIEVED, ACTIVE, GoalStore
+
+        store = GoalStore(self.db)
+        await store.set("session-chat-1", "Triage every report of the day.", max_continuations=3)
+        await store.consume_continuation("session-chat-1")
+        await store.pause("session-chat-1", "window closed until 09:00")
+
+        with execution_scope(FakeRuntime(), self.context(), "automation-run"):
+            await self.scheduler._execute_task(self.task)
+
+        goal = await store.get("session-chat-1")
+        self.assertEqual((ACTIVE, 0), (goal.status, goal.continuations))
+
+        await store.complete("session-chat-1", "done")
+        with execution_scope(FakeRuntime(), self.context(), "automation-run"):
+            await self.scheduler._execute_task(self.task)
+        self.assertEqual(ACHIEVED, (await store.get("session-chat-1")).status)
+
     async def test_classic_tasks_are_unchanged(self):
         task_id = await self.db.add_task("plain", "0 * * * *", "Do it.")
         task = await self.db.get_task(task_id)

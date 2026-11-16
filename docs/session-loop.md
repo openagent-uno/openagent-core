@@ -34,6 +34,10 @@ firing is a turn of that chat, sees its history and answers there.
   A client that has the conversation open reloads it through its history API,
   so the loop's turn appears without reopening the chat; other clients ignore
   it. Hosts without a sink stay silent.
+- A firing reactivates the conversation's goal when it is paused (the agent
+  reported it is blocked until the next firing, or its continuations ran
+  out), with a fresh continuation budget, so a standing role such as a daily
+  triage works under its goal every day. An achieved goal stays achieved.
 - Loop firings get no `scheduled_run` row in the activity feed: the turn
   surfaces through the conversation's own activity, and a row per firing
   would repeat it once per interval. The runs stay in `task_runs` (the
