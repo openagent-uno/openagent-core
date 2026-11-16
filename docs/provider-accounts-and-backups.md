@@ -55,3 +55,14 @@ fallback chain at all.
 
 The account pool is tried first; the backup models only when every account of
 the failing provider is cooling down or retired.
+
+A streaming backup that sends no provider output within
+`OPENAGENT_FALLBACK_FIRST_OUTPUT_TIMEOUT_S` seconds (default 120) counts as
+failed: its stream is closed and the next backup is tried. When none answers,
+the turn ends with the original failure instead of waiting. This covers a
+backup that accepts the connection and then never answers, such as an offline
+machine behind a VPN or a stopped local server. The wait restarts after the
+local markers that come before the request (request started, compaction). Once
+output has started, the stream is never cut. Set the value to `0` to disable
+the bound. It applies to async streaming backups, the path the runtime uses for
+turns. The primary model and non-streaming calls keep their provider timeouts.

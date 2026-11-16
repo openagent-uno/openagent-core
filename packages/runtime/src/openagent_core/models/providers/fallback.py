@@ -819,6 +819,65 @@ def _try_fallback_models_stream(
     raise primary_error
 
 
+# A backup reached through a path that accepts the connection and never answers
+# (an offline machine behind a userspace VPN, a stopped local server) would hold
+# the turn for the provider SDK's read timeout and its retries. Each backup gets
+# a bounded wait for its first provider output; local markers emitted before
+# the network round trip restart the wait, and once output has started the
+# stream is never cut. Zero or a negative value disables the bound.
+FALLBACK_FIRST_OUTPUT_TIMEOUT_ENV = "OPENAGENT_FALLBACK_FIRST_OUTPUT_TIMEOUT_S"
+DEFAULT_FALLBACK_FIRST_OUTPUT_TIMEOUT_S = 120.0
+_LOCAL_MARKER_EVENTS = frozenset({
+    ModelResponseEvent.model_request_started.value,
+    ModelResponseEvent.compression_started.value,
+    ModelResponseEvent.compression_completed.value,
+    ModelResponseEvent.fallback_model_activated.value,
+})
+
+
+def _fallback_first_output_timeout_s() -> Optional[float]:
+    raw = str(runtime_environment().get(FALLBACK_FIRST_OUTPUT_TIMEOUT_ENV, "")).strip()
+    try:
+        value = float(raw) if raw else DEFAULT_FALLBACK_FIRST_OUTPUT_TIMEOUT_S
+    except ValueError:
+        value = DEFAULT_FALLBACK_FIRST_OUTPUT_TIMEOUT_S
+    return value if value > 0 else None
+
+
+def _is_local_marker(event: StreamEvent) -> bool:
+    return isinstance(event, ModelResponse) and event.event in _LOCAL_MARKER_EVENTS
+
+
+async def _abounded_first_output(model: Model, kwargs: dict) -> AsyncIterator[StreamEvent]:
+    """Stream ``model``; fail if no provider output arrives within the bound."""
+    timeout = _fallback_first_output_timeout_s()
+    iterator = model.aresponse_stream(**kwargs).__aiter__()
+    waiting = timeout is not None
+    try:
+        while True:
+            try:
+                if waiting:
+                    event = await asyncio.wait_for(iterator.__anext__(), timeout)
+                else:
+                    event = await iterator.__anext__()
+            except StopAsyncIteration:
+                return
+            except asyncio.TimeoutError:
+                raise ModelProviderError(
+                    message=f"Model '{model.id}' produced no output within {timeout:g}s",
+                    status_code=504,
+                    model_name=getattr(model, "name", None),
+                    model_id=str(model.id),
+                ) from None
+            if waiting and not _is_local_marker(event):
+                waiting = False
+            yield event
+    finally:
+        aclose = getattr(iterator, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
+
 async def _atry_fallback_models_stream(
     fallback_models: List[Model],
     primary_error: Exception,
@@ -831,7 +890,7 @@ async def _atry_fallback_models_stream(
     for i, fallback in enumerate(candidates):
         try:
             log_warning(f"Trying fallback model {i + 1}/{len(candidates)}: {fallback.id}")
-            async for event in fallback.aresponse_stream(**kwargs):
+            async for event in _abounded_first_output(fallback, kwargs):
                 yield event
             _breaker_record_success(str(fallback.id))
             _notify_fallback(fallback_config, primary_model_id, fallback.id, primary_error)
