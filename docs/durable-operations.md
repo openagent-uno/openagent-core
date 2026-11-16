@@ -1,6 +1,6 @@
 # Durable operation continuation
 
-This unreleased contract lets a trusted host opt selected staged operations
+This beta124 contract lets a trusted host opt selected staged operations
 into delegated continuation. Core observes the existing runtime ledger and
 admits another bounded execution segment after a timeout or runtime interruption.
 Each segment uses the original accepted input, operation definition and domain
@@ -152,8 +152,8 @@ Live provider and consumer acceptance are separate qualification steps.
 
 ## Release and adoption
 
-This is an unreleased source contract. It requires a successor official Core
-release containing the kernel, SQLite, gateway and Python SDK changes together.
+The beta124 cohort contains the kernel, SQLite, gateway and Python SDK changes
+together. Publication requires the official Core release qualification gates.
 Build the clean candidate with `packaging/build.py`, then run
 `packaging/qualify.py` against that immutable wheel manifest and an independent
 environment, as described in [USAGE](USAGE.md#reproducible-engine-qualification).
