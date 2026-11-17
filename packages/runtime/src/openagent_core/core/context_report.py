@@ -28,9 +28,12 @@ Everything here is *reused*, not reinvented:
   ``sessions.session_data['session_metrics']`` the runtime already
   maintains (:class:`openagent_core.core.metrics.SessionMetrics`).
 
-The single public entry point, :func:`build_context_report`, returns a
+The synchronous entry point, :func:`build_context_report`, returns a
 JSON-friendly dict — the shared wire contract rendered by the desktop/mobile
 app panel, the CLI ``/context`` table, and the chat-channel text block. A
+companion :func:`build_context_report_async` keeps database reads and complete
+transcript tokenization off an async host's event loop without changing that
+report. A
 companion :func:`format_context_report_text` renders that dict to a fenced
 monospace block for text-only surfaces.
 """
@@ -54,7 +57,7 @@ from openagent_core.core.compaction import (
     _resolve_model_id,
 )
 
-__all__ = ["build_context_report", "format_context_report_text"]
+__all__ = ["build_context_report", "build_context_report_async", "format_context_report_text"]
 
 
 def _read_session_scalars(db_path: str, session_id: str) -> tuple[dict[str, Any], str]:
@@ -265,6 +268,26 @@ def build_context_report(agent: Any, session_id: str | None) -> dict[str, Any] |
         "pricing_available": pricing_available,
         "turns": len(runs),
     }
+
+
+async def build_context_report_async(agent: Any, session_id: str | None) -> dict[str, Any] | None:
+    """Build the identical complete report without blocking the host loop.
+
+    The shared persistence worker preserves runtime ContextVars and drains
+    an admitted operation before propagating cancellation. No report or
+    authorization result is cached. Callers publishing to a principal must
+    recheck access after awaiting this function.
+    """
+    from openagent_core.persistence import run_sync
+
+    report = await run_sync(build_context_report, agent, session_id)
+    # Catalog cache misses normally schedule a lazy refresh on the running
+    # loop. The worker has no loop; retain that behavior on the caller's loop
+    # after producing the same best-effort report from the current cache.
+    if report is not None and report.get("window_source") in {"static", "fallback"}:
+        from openagent_core.models.catalog import _maybe_prime_openrouter_cache
+        _maybe_prime_openrouter_cache()
+    return report
 
 
 def _tool_search_schema_tokens(agent: Any, tokenizer_id: str) -> int:

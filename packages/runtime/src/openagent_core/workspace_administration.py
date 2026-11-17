@@ -569,8 +569,8 @@ class SessionInspection:
     async def context_report(self,context,session_id):
         await self.authorize(context,session_id)
         if self.agent is None:raise LookupError("Agent unavailable")
-        from .core.context_report import build_context_report
-        report=build_context_report(self.agent,session_id)
+        from .core.context_report import build_context_report_async
+        report=await build_context_report_async(self.agent,session_id)
         await self.authorize(context,session_id)
         return report or {"session_id":session_id,"sections":[],"context_window":0}
 

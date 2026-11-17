@@ -6116,9 +6116,8 @@ class MemoryDB:
         conn = await self._ensure_connected()
         # LLM-dispatch hydration must skip TTS/STT model rows (they share
         # the table but route through LiteLLM, not the LLM frameworks).
-        # The kind discriminator now lives on ``models.kind``; the
-        # ``providers.kind='llm'`` check is kept as a no-op safety net
-        # for any pre-migration legacy row that still carried it.
+        # The discriminator lives on ``models.kind``. The deprecated provider
+        # kind does not prevent one connection from serving several kinds.
         clauses: list[str] = ["1=1"]
         join_filter = " AND m.kind = 'llm'"
         if enabled_only:

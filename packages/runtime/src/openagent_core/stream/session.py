@@ -1853,8 +1853,8 @@ class StreamTurnRunner:
                 # the status handler.
                 if comp["phase"] == "done":
                     try:
-                        from openagent_core.core.context_report import build_context_report
-                        report = build_context_report(self._agent, session_id)
+                        from openagent_core.core.context_report import build_context_report_async
+                        report = await build_context_report_async(self._agent, session_id)
                         if report is not None:
                             await publish(ContextReport(
                                 session_id=session_id,
@@ -2358,9 +2358,9 @@ class StreamTurnRunner:
             # conversation grows. Best-effort — measurement must never
             # break a turn, and text-only channels simply ignore the frame.
             try:
-                from openagent_core.core.context_report import build_context_report
+                from openagent_core.core.context_report import build_context_report_async
 
-                report = build_context_report(self._agent, session_id)
+                report = await build_context_report_async(self._agent, session_id)
                 if report is not None:
                     await publish(ContextReport(
                         session_id=session_id,

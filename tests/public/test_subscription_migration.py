@@ -106,3 +106,20 @@ async def test_adoption_reuses_one_rotating_store_for_text_and_image_rows(tmp_pa
         assert cloned[0]['metadata']['budget_model_group'] == 'legacy:gpt-fixture:high'
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_original_references_bind_to_the_first_available_account_not_a_disabled_one(tmp_path):
+    db = MemoryDB(str(tmp_path / 'state.sqlite')); await db.connect()
+    source = tmp_path / 'source.json'
+    source.write_text(json.dumps({'accounts': [
+        {'id':'disabled', 'access_token':'fixture-disabled', 'priority':0, 'enabled':False},
+        {'id':'available', 'access_token':'fixture-available', 'priority':1, 'enabled':True}]}))
+    try:
+        pid = await db.upsert_provider(name='legacy', framework='api-based')
+        await db.upsert_model(provider_id=pid, model='fixture', is_classifier=True)
+        result = await adopt_subscription_accounts(db, pid, 'codex', source, quiesced=True, expected_sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+        assert (await db.get_provider(pid))['metadata']['account_id'] == 'available'
+        assert (await db.get_provider(result['connections'][1]['provider_id']))['enabled'] is False
+    finally:
+        await db.close()

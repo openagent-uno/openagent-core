@@ -50,6 +50,10 @@ Stream backpressure and cancellation reach the upstream producer. Hosts must
 close the service after draining its calls; `Runtime.close()` closes services
 created through its instance-owned registry.
 
+Admission slots and start pacing are shared by workers using the same store;
+starting another worker does not multiply an account's upstream concurrency.
+OS locks release abandoned slots after a worker exits.
+
 Rotating refresh tokens are protected by a thread and interprocess file lock.
 Each operation reloads the private store under that lock before refreshing or
 writing. Corrupt stores fail without overwriting their contents. Credentials

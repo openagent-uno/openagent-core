@@ -46,10 +46,10 @@ def create_app(settings, *, token_manager=None):
         timeout=settings.request_timeout,
         chunk_timeout=settings.chunk_timeout,
     )
-    _upstream_slots = threading.BoundedSemaphore(max(1, settings.upstream_max_concurrency))
-    _queue_slots = threading.BoundedSemaphore(
-        max(1, settings.upstream_max_concurrency + settings.upstream_max_queue)
-    )
+    from ..admission import StorePacer, StoreSemaphore
+    _upstream_slots = StoreSemaphore(settings.creds_file, "active", settings.upstream_max_concurrency)
+    _queue_slots = StoreSemaphore(settings.creds_file, "queue", settings.upstream_max_concurrency + settings.upstream_max_queue)
+    _store_pacer = StorePacer(settings.creds_file)
     _pace_lock = threading.Lock()
     _next_upstream_at = 0.0
     _metrics_lock = threading.Lock()
@@ -268,8 +268,8 @@ def create_app(settings, *, token_manager=None):
             return
         with _pace_lock:
             now = time.monotonic()
-            sleep_s = max(0.0, _next_upstream_at - now)
-            _next_upstream_at = max(_next_upstream_at, now) + min_interval
+            sleep_s = _store_pacer.reserve(min_interval)
+            _next_upstream_at = now + sleep_s + min_interval
         if sleep_s:
             if cancel_event is not None:
                 if cancel_event.wait(sleep_s):
@@ -330,6 +330,7 @@ def create_app(settings, *, token_manager=None):
         if wait_s <= 0:
             return
         with _pace_lock:
+            _store_pacer.cool_down(wait_s)
             _next_upstream_at = max(_next_upstream_at, time.monotonic() + wait_s)
 
 

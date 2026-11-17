@@ -1,5 +1,6 @@
 """Instance isolation, exact account routing and streaming without a proxy process."""
 import asyncio
+import os
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -29,7 +30,8 @@ async def test_import_and_construction_are_inert_and_private(tmp_path, vendor, m
         assert "test-secret" not in json.dumps(accounts)
         assert "access_token" not in json.dumps(accounts)
         assert await other.accounts() == []
-        assert (tmp_path / "owner" / "credentials.json").stat().st_mode & 0o777 == 0o600
+        if os.name != "nt":
+            assert (tmp_path / "owner" / "credentials.json").stat().st_mode & 0o777 == 0o600
     finally:
         await service.close()
         await other.close()
@@ -159,7 +161,8 @@ def test_refresh_token_is_rotated_once_across_processes(tmp_path, vendor):
         assert output.count(('token', 'rotated-test-access')) == 3
         saved = json.loads(path.read_text())['accounts'][0]
         assert saved['refresh_token'] == 'rotated-test-refresh'
-        assert path.stat().st_mode & 0o777 == 0o600
+        if os.name != "nt":
+            assert path.stat().st_mode & 0o777 == 0o600
     finally:
         for worker in workers:
             if worker.is_alive(): worker.terminate()

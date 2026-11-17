@@ -37,6 +37,11 @@ async def adopt_subscription_accounts(db, provider_id: int, provider: str, sourc
     accounts = manager.list_accounts()
     if not accounts:
         raise ValueError("The legacy credential store contains no managed accounts")
+    # Keep historical references on the first account the legacy pool could
+    # actually use, rather than silently binding them to a disabled account.
+    now_ms = time.time() * 1000
+    accounts.sort(key=lambda account: (account.get("enabled") is False,
+                                       int(account.get("limited_until_ms") or 0) > now_ms))
     default_before = await db.get_default_router()
     target_root = Path(db.db_path).parent / "subscriptions"
     created = []
@@ -81,8 +86,8 @@ async def adopt_subscription_accounts(db, provider_id: int, provider: str, sourc
                         columns = list(copy)
                         await conn.execute(f"INSERT INTO models ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})", tuple(copy.values()))
                 else:
-                    await conn.execute("UPDATE providers SET metadata_json=?,updated_at=? WHERE id=?",
-                                       (json.dumps(meta), time.time(), pid))
+                    await conn.execute("UPDATE providers SET metadata_json=?,enabled=?,updated_at=? WHERE id=?",
+                                       (json.dumps(meta), int(legacy["enabled"] and account.get("enabled", True)), time.time(), pid))
                 owner_id = (credential_owners or {}).get(str(account["id"]), pid)
                 meta["credential_store_id"] = owner_id
                 await conn.execute("UPDATE providers SET metadata_json=? WHERE id=?", (json.dumps(meta), pid))

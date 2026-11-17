@@ -348,9 +348,9 @@ class ChatCommandService:
         if not session_id:
             return ChatCommandResult("No active session to inspect.")
         try:
-            from .core.context_report import build_context_report, format_context_report_text
+            from .core.context_report import build_context_report_async, format_context_report_text
 
-            report = build_context_report(self.agent, session_id)
+            report = await build_context_report_async(self.agent, session_id)
             if report is None:
                 return ChatCommandResult("No context to report for this session yet.")
             return ChatCommandResult(format_context_report_text(report), context=report)
