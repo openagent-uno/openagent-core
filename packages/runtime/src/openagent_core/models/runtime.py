@@ -118,12 +118,14 @@ async def run_provider_smoke_test(
     framework: str | None = None,
     session_id: str = "provider-test",
     prompt: str = "Say 'ok' and nothing else.",
+    db: Any = None,
 ) -> tuple[str, ModelResponse]:
     """Run a minimal prompt through the configured runtime for one provider.
 
     When the same vendor is registered under more than one framework,
     pass ``framework=`` to disambiguate — otherwise the first matching
-    entry wins.
+    entry wins. Supply the bound host database for native subscriptions and
+    model settings. Probes never replay or write conversation history.
     """
     # Resolve the provider row by (name, framework) pair. Fall back to
     # the first entry that matches by name when framework is unspecified.
@@ -152,9 +154,15 @@ async def run_provider_smoke_test(
     provider = create_model_from_spec(
         runtime_model,
         providers_config=providers_config,
+        db=db,
     )
-    resp = await provider.generate(
-        messages=[{"role": "user", "content": prompt}],
-        session_id=session_id,
-    )
-    return runtime_model, resp
+    from openagent_core.core.execution_profile import stateless_completion_scope
+    try:
+        with stateless_completion_scope():
+            resp = await provider.generate(
+                messages=[{"role": "user", "content": prompt}],
+                session_id=session_id,
+            )
+        return runtime_model, resp
+    finally:
+        await provider.shutdown()

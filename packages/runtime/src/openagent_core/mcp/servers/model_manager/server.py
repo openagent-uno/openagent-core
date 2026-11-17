@@ -561,6 +561,7 @@ async def test_model(runtime_id: str) -> dict[str, Any]:
         model_id=runtime_id,
         framework=model_row["framework"],
         session_id="model-manager-probe",
+        db=db,
     )
     return {"ok": True, "runtime_id": runtime_id, "response": resp.content}
 
