@@ -5,6 +5,10 @@ account is out of quota or its credential stops working. Both follow the live
 catalog: changing a provider or model row takes effect at the next catalog
 rebuild, without restarting the runtime.
 
+Built-in subscription connections use exact account routing; see
+[subscriptions](subscriptions.md). The explicit API credential-pool contract
+below remains available and does not implicitly pool independent cards.
+
 ## Several accounts for one provider
 
 A provider row can carry a credential pool in `metadata.accounts`:

@@ -211,11 +211,12 @@ def build_runtime_model_id(
     raw = str(model_id or "").strip()
     if not raw:
         return raw
-    if ":" in raw:
+    # A vendor model may itself contain slashes or effort suffixes. Only an
+    # explicit prefix matching this connection is already qualified.
+    if raw.startswith(f"{provider_name}:"):
         return raw
-    if "/" in raw:
-        prefix, rest = raw.split("/", 1)
-        return f"{prefix}:{rest}"
+    if raw.startswith(f"{provider_name}/"):
+        return f"{provider_name}:{raw[len(provider_name) + 1:]}"
     return f"{provider_name}:{raw}"
 
 
@@ -475,7 +476,14 @@ def get_model_pricing(model_ref: str, providers_config: dict | None = None) -> d
 
     # Online catalog (OpenRouter). Resolved from a process-wide cache
     # populated by discovery.py; never blocks — returns None on cache miss.
-    online = _openrouter_pricing_lookup(runtime_id)
+    from .connections import pricing_reference, register_pricing_connection
+    if providers_config:
+        for connection in _iter_provider_entries(providers_config):
+            register_pricing_connection(connection)
+    reference = pricing_reference(runtime_id)
+    if reference is None:
+        return {"input_cost_per_million": 0.0, "output_cost_per_million": 0.0, "input_cache_read_per_million": 0.0}
+    online = _openrouter_pricing_lookup(reference)
     if online is not None:
         _log_pricing(
             model_ref, runtime_id, "openrouter",

@@ -38,7 +38,8 @@ class VoiceService:
         row=await self.db.latest_audio_model(kind)
         if row is None:return None
         row=dict(row)
-        vendor=str(row.get("provider_name") or "").lower().strip()
+        vendor=str((row.get("provider_metadata") or {}).get("vendor") or row.get("provider_name") or "").lower().strip()
+        row["provider_name"] = vendor
         # The default API destinations of these providers are part of their
         # adapter contract. Other adapters require an explicit configured URL.
         defaults={"openai":"https://api.openai.com/v1", "elevenlabs":"https://api.elevenlabs.io/v1", "groq":"https://api.groq.com/openai/v1"}

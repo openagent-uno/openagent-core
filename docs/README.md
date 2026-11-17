@@ -8,6 +8,7 @@
   [Beta124: durable operation continuation](releases/v1.1.0-beta.124.md), and
   [the embedding contract](durable-operations.md).
 - [System prompt](system-prompt.md): structure, purpose-ordered sections, the size budget and how to add a block.
+- [Built-in subscriptions and provider connections](subscriptions.md): exact accounts, typed models, shared budgets and offline migration.
 - [Provider accounts and backup models](provider-accounts-and-backups.md): several accounts per provider rotate on the provider's Retry-After and on rejected credentials; catalog models declare live backups.
 - [Default router model](default-router-model.md): one default router at most, only an enabled model of an enabled provider, repaired on open.
 - [Provider failure messages](provider-failure-messages.md): empty provider accounts (402) and oversized requests (413) reach chat users as such, with correct retry advice.
@@ -186,3 +187,5 @@ The beta45 candidate adds the dependency-free native permission API; its
 source and wheel workflows distinguish platform contracts from host acceptance.
 
 - [Optional remote capabilities, inventory and media](remote-capabilities.md)
+
+- [Beta128: built-in subscription connections](releases/v1.1.0-beta.128.md).

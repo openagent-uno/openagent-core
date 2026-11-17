@@ -1255,6 +1255,11 @@ class NativeProvider(ProviderResources, BaseModel):
         if self._base_url:
             return self._base_url
         configured = self._provider_setting("base_url")
+        from .connections import connection_info
+        info = connection_info(self._provider_config())
+        if info["access"] == "subscription":
+            return "http://subscription.internal/v1"
+        provider_name = info["vendor"] or provider_name
         default = PROVIDER_DEFAULT_BASE_URLS.get(provider_name)
         if default is not None:
             return configured or default
@@ -1274,7 +1279,7 @@ class NativeProvider(ProviderResources, BaseModel):
     # modello (``models.metadata_json``). Whitelist stretta: qui passa solo cio'
     # che e' campionamento, mai credenziali o url.
     _SAMPLING_KEYS = ("temperature", "top_p", "top_k", "min_p", "max_tokens",
-                      "presence_penalty", "frequency_penalty", "repeat_penalty", "seed")
+                      "presence_penalty", "frequency_penalty", "repeat_penalty", "seed", "reasoning_effort")
 
     def _sampling_from_model_row(self) -> dict[str, Any]:
         """Sampling params declared on the model row, or ``{}``.
@@ -1312,7 +1317,10 @@ class NativeProvider(ProviderResources, BaseModel):
             con = _sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
             try:
                 row = con.execute(
-                    "select metadata_json from models where model=? limit 1", (model_id,)
+                    "select m.metadata_json from models m join providers p on p.id=m.provider_id "
+                    "where p.name=? and m.model in (?,?,?) order by m.model=? desc limit 1",
+                    (self._runtime_parts()[0], model_id, f"{self._runtime_parts()[0]}:{model_id}",
+                     f"{self._runtime_parts()[0]}/{model_id}", model_id)
                 ).fetchone()
             finally:
                 con.close()
@@ -1350,7 +1358,12 @@ class NativeProvider(ProviderResources, BaseModel):
         return cls(**filtered)
 
     def _load_runtime_model_class(self, provider_name: str) -> tuple[type | None, dict[str, Any]]:
-        spec = RUNTIME_PROVIDER_CLASSES.get(provider_name)
+        from .connections import connection_info
+        info = connection_info(self._provider_config())
+        driver = info["vendor"]
+        if info["access"] == "subscription":
+            return self._construct_subscription_class(), {}
+        spec = RUNTIME_PROVIDER_CLASSES.get(driver or provider_name)
         if not spec:
             spec = self._self_hosted_spec(provider_name)
         if not spec:
@@ -1358,6 +1371,11 @@ class NativeProvider(ProviderResources, BaseModel):
         module_name, class_name, extra_kwargs = spec
         module = importlib.import_module(module_name)
         return getattr(module, class_name), dict(extra_kwargs)
+
+    @staticmethod
+    def _construct_subscription_class():
+        from .providers.openai.like import OpenAILike
+        return OpenAILike
 
     def _self_hosted_spec(self, provider_name: str) -> tuple[str, str, dict[str, Any]] | None:
         """Driver for an operator-registered OpenAI-compatible server.
@@ -1396,6 +1414,11 @@ class NativeProvider(ProviderResources, BaseModel):
         provider_name, model_id = self._runtime_parts()
         api_key = self._resolved_api_key()
         base_url = self._resolved_base_url()
+        from ..subscriptions.service import subscription_for
+        subscription = subscription_for(self._provider_config(), self._db_path) if self._provider_config().get("metadata", {}).get("access") == "subscription" else None
+        if subscription is not None:
+            api_key = subscription.settings.api_key
+            base_url = "http://subscription.internal/v1"
         model_class, extra_kwargs = self._load_runtime_model_class(provider_name)
         if model_class is not None:
             extra_kwargs = {
@@ -1454,6 +1477,9 @@ class NativeProvider(ProviderResources, BaseModel):
             # I parametri di campionamento della riga del modello vincono sui
             # default del provider: sono la scelta esplicita di un operatore.
             extra_kwargs = {**extra_kwargs, **self._sampling_from_model_row()}
+            if subscription is not None:
+                extra_kwargs["http_client"] = subscription.inference_client((self._provider_config().get("metadata") or {}).get("account_id"))
+                extra_kwargs["max_retries"] = 0
             model = self._construct_model(
                 model_class,
                 id=model_id,

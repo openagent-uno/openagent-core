@@ -511,6 +511,11 @@ class Runtime:
             handler = logging_state.pop('handler', None)
             if handler is not None:
                 handler.close()
+            for service in self.module_registries.pop('model-subscriptions', {}).values():
+                try:
+                    await service.close()
+                except Exception as exc:
+                    errors.append(exc)
             if self.services.owns_store:
                 await self.services.store.close()
             self._started = False

@@ -277,6 +277,11 @@ CREATE TABLE IF NOT EXISTS usage_log (
 );
 CREATE INDEX IF NOT EXISTS idx_usage_year_month ON usage_log(year_month);
 CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_log(timestamp);
+-- Exact provider identity plus range keeps budget checks out of whole-ledger scans.
+CREATE INDEX IF NOT EXISTS idx_usage_provider_window ON usage_log(
+    substr(model, 1, instr(model, ':') - 1), timestamp, model,
+    input_tokens, output_tokens, cost
+);
 
 -- Budget rules — per-scope spend caps that the router enforces by EXCLUDING
 -- an over-cap scope from the enabled catalog for the rest of the window (it
@@ -1106,6 +1111,8 @@ class MemoryDB:
     def __init__(self, db_path: str = "openagent.db"):
         self.db_path = db_path
         self._module_migrations = []
+        self._scope_reads: dict[tuple, asyncio.Task] = {}
+        self._scope_tasks: set[asyncio.Task] = set()
         self._conn: aiosqlite.Connection | None = None
         self._owns_connection = True
         # Monotonic time at which the shared connection was first seen inside
@@ -2590,6 +2597,12 @@ class MemoryDB:
         await self._conn.commit()
 
     async def close(self) -> None:
+        pending = tuple(self._scope_tasks)
+        self._scope_reads.clear()
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         if self._conn:
             if self._owns_connection:
                 await self._conn.close()
@@ -5182,6 +5195,7 @@ class MemoryDB:
         landing at 30/h: the token alerts read an accounting hole as calm.
         The row is built ONCE outside the retry so a second attempt writes the
         same row rather than a duplicate under a new id."""
+        self._scope_reads.clear()
         row_id = str(uuid.uuid4())
         now = time.time()
         from datetime import datetime, timezone
@@ -5205,7 +5219,10 @@ class MemoryDB:
                 )
             return row_id
 
-        return await self._write_with_retry(_do)
+        try:
+            return await self._write_with_retry(_do)
+        finally:
+            self._scope_reads.clear()
 
     async def get_monthly_usage(self, year_month: str | None = None) -> float:
         """Total cost for a given month (default: current month)."""
@@ -5421,12 +5438,32 @@ class MemoryDB:
           ``input_tokens + output_tokens``.
         - Scope filter:
             global   → no model/session filter (the whole window).
-            provider → ``model LIKE '<value>:%'`` (runtime_ids are provider:model).
+            provider → exact connection identity and explicitly declared budget groups.
             model    → ``model = '<value>'``.
             task     → ``session_id LIKE 'scheduler:<value>:%'`` (a task run tree;
                        sub-agent child sessions namespace UNDER the parent, so a
                        prefix match captures the whole tree). Reporting only.
         """
+        key = (scope_kind, scope_value, metric, since_epoch)
+        task = self._scope_reads.get(key)
+        if task is None:
+            task = asyncio.create_task(self._read_scope_spend(
+                scope_kind=scope_kind, scope_value=scope_value,
+                metric=metric, since_epoch=since_epoch,
+            ))
+            self._scope_reads[key] = task
+            self._scope_tasks.add(task)
+            def finished(done):
+                self._scope_tasks.discard(done)
+                if self._scope_reads.get(key) is done:
+                    self._scope_reads.pop(key, None)
+                if not done.cancelled():
+                    done.exception()
+            task.add_done_callback(finished)
+        # One view leaving must not cancel another view's identical read.
+        return await asyncio.shield(task)
+
+    async def _read_scope_spend(self, *, scope_kind, scope_value, metric, since_epoch):
         conn = await self._ensure_connected()
         metric_expr = (
             "COALESCE(SUM(input_tokens + output_tokens), 0)"
@@ -5437,16 +5474,25 @@ class MemoryDB:
         if scope_kind == "global":
             scope_clause = ""
         elif scope_kind == "provider":
-            scope_clause = " AND model LIKE ?"
-            params.append(f"{scope_value}:%")
+            scope_clause = """ AND substr(model, 1, instr(model, ':') - 1) IN (
+                SELECT ? UNION SELECT name FROM providers
+                WHERE json_extract(metadata_json, '$.budget_group') = ?
+                   OR json_extract(metadata_json, '$.vendor') = ?)"""
+            params.extend([scope_value, scope_value, scope_value])
         elif scope_kind == "task":
             scope_clause = " AND session_id LIKE ?"
             params.append(f"scheduler:{scope_value}:%")
         else:  # model
-            scope_clause = " AND model = ?"
-            params.append(scope_value)
+            scope_clause = """ AND (model = ? OR model IN (
+                SELECT p.name || ':' || m.model FROM models m JOIN providers p ON p.id=m.provider_id
+                WHERE json_extract(m.metadata_json, '$.budget_model_group') = ?))"""
+            params.extend([scope_value, scope_value])
+        # Without statistics SQLite may choose the timestamp-only index and
+        # scan every provider. Owned databases install this covering index at
+        # connect. Borrowed transactions keep their host's schema/query plan.
+        index = " INDEXED BY idx_usage_provider_window" if scope_kind == "provider" and self._owns_connection else ""
         cursor = await conn.execute(
-            f"SELECT {metric_expr} FROM usage_log "
+            f"SELECT {metric_expr} FROM usage_log{index} "
             f"WHERE timestamp >= ?{scope_clause}",
             params,
         )
@@ -5963,7 +6009,7 @@ class MemoryDB:
                m.created_at AS created_at, m.updated_at AS updated_at,
                p.name AS provider_name, p.framework AS framework,
                p.api_key AS api_key, p.base_url AS base_url,
-               p.enabled AS provider_enabled
+               p.enabled AS provider_enabled, p.metadata_json AS provider_metadata_json
         FROM models m
         JOIN providers p ON p.id = m.provider_id
     """
@@ -5978,6 +6024,11 @@ class MemoryDB:
             d["metadata"] = json.loads(meta_raw)
         except (TypeError, ValueError):
             d["metadata"] = {}
+        provider_meta = d.pop("provider_metadata_json", "{}") or "{}"
+        try:
+            d["provider_metadata"] = json.loads(provider_meta)
+        except (TypeError, ValueError):
+            d["provider_metadata"] = {}
         d["enabled"] = bool(d["enabled"])
         d["is_classifier"] = bool(d.get("is_classifier"))
         d["provider_enabled"] = bool(d["provider_enabled"])
@@ -6068,7 +6119,7 @@ class MemoryDB:
         # The kind discriminator now lives on ``models.kind``; the
         # ``providers.kind='llm'`` check is kept as a no-op safety net
         # for any pre-migration legacy row that still carried it.
-        clauses: list[str] = ["p.kind = 'llm'"]
+        clauses: list[str] = ["1=1"]
         join_filter = " AND m.kind = 'llm'"
         if enabled_only:
             # Model-side filter must go in the JOIN predicate, not WHERE,
@@ -6132,6 +6183,9 @@ class MemoryDB:
                     "is_classifier": bool(r["m_is_classifier"]),
                     "metadata": model_metadata,
                 })
+        from openagent_core.models.connections import register_pricing_connection
+        for provider in by_id.values():
+            register_pricing_connection(provider)
         return list(by_id.values())
 
     async def get_model(self, model_id: int) -> dict | None:

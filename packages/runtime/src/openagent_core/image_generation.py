@@ -87,7 +87,7 @@ def images_endpoint(base_url: str, provider: str = "") -> str:
 
 async def generate_image_bytes(
     *, endpoint: str, api_key: str, model: str, prompt: str,
-    size: str = "1024x1024", quality: str = "auto",
+    size: str = "1024x1024", quality: str = "auto", client: httpx.AsyncClient | None = None,
 ) -> GeneratedImage:
     if not prompt.strip() or len(prompt) > 4000:
         raise ValueError("An image prompt of at most 4000 characters is required")
@@ -103,8 +103,16 @@ async def generate_image_bytes(
     headers = {"content-type": "application/json"}
     if api_key:
         headers["authorization"] = f"Bearer {api_key}"
-    async with httpx.AsyncClient(timeout=600.0, follow_redirects=False) as client:
-        response = await client.post(endpoint, headers=headers, json=payload)
+    from contextlib import asynccontextmanager
+    @asynccontextmanager
+    async def route():
+        if client is not None:
+            yield client
+        else:
+            async with httpx.AsyncClient(timeout=600.0, follow_redirects=False) as owned:
+                yield owned
+    async with route() as routed_client:
+        response = await routed_client.post(endpoint, headers=headers, json=payload)
         if response.status_code >= 400:
             raise _provider_error(response)
         body = response.json()
@@ -123,7 +131,7 @@ async def generate_image_bytes(
             # Limit bytes while streaming to avoid unbounded disk/memory use.
             if urlparse(remote_url).scheme != "https":
                 raise ValueError("The image backend returned an insecure download URL")
-            async with client.stream("GET", remote_url) as download:
+            async with httpx.AsyncClient(timeout=600.0, follow_redirects=False) as downloader, downloader.stream("GET", remote_url) as download:
                 download.raise_for_status()
                 chunks = bytearray()
                 async for chunk in download.aiter_bytes():

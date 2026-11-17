@@ -113,7 +113,7 @@ def main() -> None:
         subprocess.run([str(value) for value in command], cwd=cwd, check=True)
     run(uv, "pip", "install", "--python", python, "--find-links", directory,
         "-r", requirements, *wheels,
-        f"openagent-core[engine,providers,audio,retrieval,modules]=={version}")
+        f"openagent-core[engine,providers,subscriptions,audio,retrieval,modules]=={version}")
     run(uv, "pip", "check", "--python", python)
     # -I proves that installed entrypoints and children do not borrow source
     # PYTHONPATH. The full test process may then use its normal source fixtures.

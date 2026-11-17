@@ -85,7 +85,7 @@ async def _capability_backend(requested_model: str = "") -> Optional[tuple[str, 
         conn = await _conn.get()
         rows = await (await conn.execute(
             """
-            SELECT p.base_url AS base_url, p.api_key AS api_key, p.name AS provider,
+            SELECT p.id AS provider_id, p.metadata_json AS provider_metadata_json, p.base_url AS base_url, p.api_key AS api_key, p.name AS provider,
                    m.model AS model, m.kind AS kind,
                    m.metadata_json AS metadata_json
             FROM models m JOIN providers p ON p.id = m.provider_id
@@ -115,8 +115,13 @@ async def _capability_backend(requested_model: str = "") -> Optional[tuple[str, 
         if not supports_image_generation(str(row["kind"] or "llm"), meta):
             continue
         from openagent_core.image_generation import images_endpoint
+        provider_metadata = _json.loads(row["provider_metadata_json"] or "{}")
+        if provider_metadata.get("access") == "subscription":
+            # An opaque local reference, resolved only inside Core at invocation.
+            image_model_id = provider_image_model_id(str(row["model"] or ""), meta)
+            return f"subscription://{int(row['provider_id'])}", "", image_model_id
         try:
-            url = images_endpoint(str(row["base_url"] or ""), str(row["provider"] or ""))
+            url = images_endpoint(str(row["base_url"] or ""), str(provider_metadata.get("vendor") or row["provider"] or ""))
         except ValueError:
             continue
         if url:
@@ -202,10 +207,29 @@ async def generate_image(
         return {"ok": False, "reason": reason}
     url, api_key, backend_model = backend
     from openagent_core.image_generation import ImageGenerationError, generate_image_bytes
+    client = None
+    if url.startswith("subscription://"):
+        from openagent_core.engine import MemoryDB
+        from openagent_core.mcp.servers._common import db_path
+        from openagent_core.subscriptions.service import subscription_for
+        path = db_path()
+        db = MemoryDB(path)
+        await db.connect()
+        try:
+            row = await db.get_provider(int(url.removeprefix("subscription://")))
+        finally:
+            await db.close()
+        if row is None or not row.get("enabled"):
+            return {"ok": False, "reason": "Image connection is unavailable"}
+        service = subscription_for(row, path)
+        if service is None:
+            return {"ok": False, "reason": "Image subscription is unavailable"}
+        client = service.inference_client((row.get("metadata") or {}).get("account_id"))
+        url, api_key = "http://subscription.internal/v1/images/generations", service.settings.api_key
     try:
         image = await generate_image_bytes(
             endpoint=url, api_key=api_key, model=backend_model or model or "gpt-image-1",
-            prompt=prompt, size=size, quality=quality,
+            prompt=prompt, size=size, quality=quality, client=client,
         )
     except ImageGenerationError as exc:
         return {"ok": False, "reason": f"image generation failed: {exc}",

@@ -76,6 +76,8 @@ from openagent_core.core.logging import elog
 # are stored, validated, and REPORTED in the usage view, but their enforcement
 # (scheduler skip + mid-run cancel) is phase 2 and lives at other hooks — a task
 # is a CALLER, not a routing target, so excluding a model can't stop it.
+from openagent_core.models.connections import budget_scope_keys
+
 ENFORCEABLE_SCOPE_KINDS = frozenset({"global", "provider", "model"})
 
 # Scopes whose cap is HARD ("strict"): enforced even when excluding them would
@@ -242,7 +244,7 @@ def _scope_is_cost_ineffective(
         models = [
             e
             for e in iter_configured_models(providers_config)
-            if e.provider == scope_value and not e.disabled
+            if ("provider", scope_value) in budget_scope_keys(e, providers_config) and not e.disabled
         ]
         return bool(models) and all(_zero(e.runtime_id) for e in models)
     return False
@@ -517,8 +519,7 @@ class BudgetGuard:
             provider = getattr(e, "provider", None)
             if (
                 global_blocked
-                or ("provider", provider) in keys
-                or ("model", rid) in keys
+                or bool(budget_scope_keys(e, self._providers_config) & keys)
             ):
                 blocked.add(rid)
         return blocked
@@ -551,7 +552,7 @@ class BudgetGuard:
         def _specific(e) -> bool:
             rid = getattr(e, "runtime_id", None)
             provider = getattr(e, "provider", None)
-            return ("provider", provider) in keys or ("model", rid) in keys
+            return bool(budget_scope_keys(e, self._providers_config) & keys)
 
         def _blocked(e) -> bool:
             return _specific(e) or global_over
@@ -583,9 +584,7 @@ class BudgetGuard:
                 provider = getattr(e, "provider", None)
                 if ("global", "") in strict and global_over:
                     return True
-                if ("provider", provider) in strict and ("provider", provider) in keys:
-                    return True
-                if ("model", rid) in strict and ("model", rid) in keys:
+                if budget_scope_keys(e, self._providers_config) & strict & keys:
                     return True
                 return False
 
@@ -826,6 +825,16 @@ async def compute_budget_usage(
     from live pricing alone, so it is flagged even when config is not passed.
     """
     rules = await db.list_budgets(enabled_only=enabled_only)
+    model_kinds: dict[str, set[str]] | None = None
+    if rules and callable(getattr(db, "list_models_enriched", None)):
+        try:
+            model_kinds = {}
+            for row in await db.list_models_enriched():
+                for reference in (row["runtime_id"], (row.get("metadata") or {}).get("budget_model_group")):
+                    if reference:
+                        model_kinds.setdefault(reference, set()).add(row.get("kind", "llm"))
+        except Exception:
+            model_kinds = None  # Older host adapters keep their existing contract.
     now = time.time()
     zone = _agent_zone()
     out: list[dict] = []
@@ -835,7 +844,13 @@ async def compute_budget_usage(
         window = rule.get("window")
         metric = rule.get("metric")
         enforced = scope_kind in ENFORCEABLE_SCOPE_KINDS and window in ENFORCEABLE_WINDOWS
+        if scope_kind == "model" and model_kinds is not None:
+            kinds = model_kinds.get(rule.get("scope_value") or "", set())
+            enforced = enforced and "llm" in kinds
+            if kinds - {"llm"}:
+                base["metering_warning"] = "Image/audio billing is not recorded by every adapter; this rule cannot guarantee a hard spend cap."
         base["enforced"] = enforced
+        base["enforced_kinds"] = ["llm"] if enforced else []
         cost_ineffective = False
         if metric == "cost_usd":
             try:
