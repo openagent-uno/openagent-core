@@ -215,3 +215,33 @@ async def test_reauthentication_keeps_account_identity_name_and_disabled_state(t
         assert 'test-renewed' not in json.dumps(result)
     finally:
         await service.close()
+
+
+@pytest.mark.asyncio
+async def test_claude_live_catalog_is_account_owned_paginated_and_not_a_static_snapshot(tmp_path):
+    service = SubscriptionService("claude", tmp_path / "work.json")
+    service.manager.save_account({"access_token": "synthetic-catalog-token"}, name="Work")
+    requests = []
+    def respond(request):
+        requests.append(request)
+        assert request.headers["authorization"] == "Bearer synthetic-catalog-token"
+        if request.url.params.get("after_id") == "claude-opus-fixture":
+            return httpx.Response(200, json={"data": [{"id": "new-provider-family", "display_name": "New family"}], "has_more": False})
+        return httpx.Response(200, json={"data": [{"id": "claude-opus-fixture", "display_name": "Fixture"}], "has_more": True, "last_id": "claude-opus-fixture"})
+    await service._catalog_client.aclose()
+    service._catalog_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        models = await service.models()
+        assert [m["id"] for m in models] == ["claude-opus-fixture", "new-provider-family"]
+        assert models[1]["input_modalities"] == ["text"]
+        assert all(m["catalog_source"] == "provider" for m in models)
+        assert len(requests) == 2
+        assert "synthetic-catalog-token" not in json.dumps(models)
+        # A failed live request must not silently advertise a stale snapshot.
+        await service._catalog_client.aclose()
+        service._catalog_client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(401, json={"token": "never-public"})))
+        with pytest.raises(ValueError, match="discovery failed") as error:
+            await service.models()
+        assert "never-public" not in str(error.value)
+    finally:
+        await service.close()

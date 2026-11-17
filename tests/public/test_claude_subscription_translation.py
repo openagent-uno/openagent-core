@@ -389,3 +389,15 @@ def test_stream_omits_usage_when_not_requested():
     chunks = list(T.anthropic_stream_to_openai(iter(events), "claude-sonnet-4-6"))
     assert chunks[-1] == "data: [DONE]\n\n"
     assert all('"usage"' not in c for c in chunks)
+
+
+def test_versioned_family_aliases_keep_the_same_upstream_generation():
+    for family, version in (("opus", "4-8"), ("sonnet", "4-6"), ("haiku", "4-5")):
+        alias = family + "-" + version
+        request = {"model": alias, "messages": [{"role": "user", "content": "ok"}]}
+        payload = T.openai_to_anthropic(request, default_max_tokens=64, max_tools=19, model_map={})
+        assert payload["model"] == "claude-" + alias
+        assert request["model"] == alias
+    for identifier in ("claude-opus-4-8", "custom-version", "opus", "vendor/opus-4-8"):
+        assert T._upstream_model(identifier, {}) == identifier
+    assert T._upstream_model("opus-4-8", {"opus-4-8": "explicit-target"}) == "explicit-target"

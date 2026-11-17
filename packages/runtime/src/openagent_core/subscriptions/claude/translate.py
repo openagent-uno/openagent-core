@@ -44,6 +44,15 @@ _SYSTEM_ROLES = ("system", "developer")
 _TOOL_ID_DISALLOWED = re.compile(r"[^a-zA-Z0-9_-]")
 
 
+def _upstream_model(model: str, model_map: Dict[str, str]) -> str:
+    """Accept legacy family/version aliases without changing their generation."""
+    if model in model_map:
+        return model_map[model]
+    if re.fullmatch(r"(?:opus|sonnet|haiku)-\d+(?:-\d+)*(?:-latest)?", model):
+        return "claude-" + model
+    return model
+
+
 def _safe_tool_id(raw: Any) -> str:
     """Map an arbitrary OpenAI tool-call id onto Anthropic's allowed charset.
 
@@ -127,7 +136,7 @@ def openai_to_anthropic(
             _last_block["cache_control"] = {"type": "ephemeral"}
 
     payload: Dict[str, Any] = {
-        "model": model_map.get(req.get("model", ""), req.get("model", "")),
+        "model": _upstream_model(req.get("model", ""), model_map),
         "max_tokens": int(req.get("max_tokens") or req.get("max_completion_tokens") or default_max_tokens),
         "system": [billing_block()],
         "messages": convo,

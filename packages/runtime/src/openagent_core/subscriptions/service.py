@@ -34,6 +34,7 @@ class SubscriptionService:
         settings.admin_api_key = secrets.token_urlsafe(32)
         self.provider, self.settings = provider, settings
         self._inference_clients = {}
+        self._catalog_client = httpx.AsyncClient(timeout=10) if provider == "claude" else None
         self._adapter = adapter
         self.manager = auth.TokenManager(credentials_path, **({"settings": settings} if provider == "codex" else {}))
         self.app = adapter.create_app(settings, token_manager=self.manager)
@@ -92,7 +93,54 @@ class SubscriptionService:
                 headers={"Authorization": "Bearer " + settings.api_key}, timeout=settings.request_timeout)
         return self._inference_clients[account_id]
 
+    async def _claude_models(self):
+        """Read the authenticated provider catalog rather than a version snapshot."""
+        import asyncio
+        import json
+        from openagent_core.persistence import run_sync
+        try:
+            token = await run_sync(self.manager.get_token)
+            entries, seen, cursor = [], set(), None
+            async with asyncio.timeout(15):
+                for _ in range(5):
+                    params = {"limit": 100}
+                    if cursor: params["after_id"] = cursor
+                    async with self._catalog_client.stream("GET", "https://api.anthropic.com/v1/models",
+                            params=params, headers={"Authorization": "Bearer " + token,
+                            "anthropic-version": "2023-06-01", "anthropic-beta": "oauth-2025-04-20"}) as response:
+                        response.raise_for_status()
+                        payload = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            payload.extend(chunk)
+                            if len(payload) > 2 << 20: raise ValueError("Catalog exceeds limit")
+                    page = json.loads(payload)
+                    for item in page.get("data", []):
+                        identifier = item.get("id")
+                        if not isinstance(identifier, str) or not identifier or len(identifier) > 256: continue
+                        if identifier in seen: continue
+                        seen.add(identifier)
+                        known_media = identifier.startswith(("claude-opus-", "claude-sonnet-", "claude-haiku-"))
+                        entries.append({"id": identifier, "object": "model", "kind": "llm",
+                            "display_name": item.get("display_name") or identifier,
+                            "owned_by": "anthropic-subscription", "catalog_source": "provider",
+                            "input_modalities": ["text", "image", "file"] if known_media else ["text"]})
+                    if not page.get("has_more"): return entries
+                    next_cursor = page.get("last_id")
+                    if not isinstance(next_cursor, str) or not next_cursor or next_cursor == cursor:
+                        raise ValueError("Invalid catalog cursor")
+                    cursor = next_cursor
+            raise ValueError("Catalog exceeds page limit")
+        except Exception:
+            # Preserve cancellation and never expose token exchange/upstream bodies.
+            raise ValueError("Subscription model discovery failed; retry or reconnect the account") from None
+
     async def models(self):
+        # Before sign-in, the declared catalog is a credential-free preview.
+        # Signed-in Claude connections use the actual account's live catalog.
+        if self.provider == "claude":
+            from openagent_core.persistence import run_sync
+            if await run_sync(self.manager.list_accounts):
+                return await self._claude_models()
         result = await self.request("GET", "/v1/models")
         entries = result.get("data", [])
         # One upstream reasoning model may expose image generation too. Give that
@@ -145,6 +193,8 @@ class SubscriptionService:
             await client.aclose()
         self._inference_clients.clear()
         await self.client.aclose()
+        if self._catalog_client is not None:
+            await self._catalog_client.aclose()
 
 
 def subscription_for(row: dict, db_path: str | Path) -> SubscriptionService | None:
