@@ -66,7 +66,7 @@ async def adopt_subscription_accounts(db, provider_id: int, provider: str, sourc
                 if index:
                     name = f"{vendor}-subscription-{uuid.uuid4().hex[:16]}"
                     values = {**legacy, "name": name, "metadata_json": json.dumps(meta),
-                              "enabled": int(legacy["enabled"] and account.get("enabled", True)),
+                              "enabled": int(legacy["enabled"] and account.get("enabled") is not False),
                               "created_at": time.time(), "updated_at": time.time()}
                     values.pop("id")
                     columns = list(values)
@@ -87,7 +87,7 @@ async def adopt_subscription_accounts(db, provider_id: int, provider: str, sourc
                         await conn.execute(f"INSERT INTO models ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})", tuple(copy.values()))
                 else:
                     await conn.execute("UPDATE providers SET metadata_json=?,enabled=?,updated_at=? WHERE id=?",
-                                       (json.dumps(meta), int(legacy["enabled"] and account.get("enabled", True)), time.time(), pid))
+                                       (json.dumps(meta), int(legacy["enabled"] and account.get("enabled") is not False), time.time(), pid))
                 owner_id = (credential_owners or {}).get(str(account["id"]), pid)
                 meta["credential_store_id"] = owner_id
                 await conn.execute("UPDATE providers SET metadata_json=? WHERE id=?", (json.dumps(meta), pid))

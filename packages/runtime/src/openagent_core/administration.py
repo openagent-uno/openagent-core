@@ -263,21 +263,35 @@ class ProviderModelAdmin:
             if operation == "update_account":
                 patch = fields or {}
                 result = await service.update_account(patch)
-                if patch.get("id") == (row.get("metadata") or {}).get("account_id") and "enabled" in patch:
+                if patch.get("id") == (row.get("metadata") or {}).get("account_id") and ({"enabled", "name"} & patch.keys()):
                     owner = (row.get("metadata") or {}).get("credential_store_id", row["id"])
                     for linked in await self.db.list_providers():
                         meta = linked.get("metadata") or {}
                         if meta.get("access") == "subscription" and meta.get("credential_store_id", linked["id"]) == owner and meta.get("account_id") == patch["id"]:
-                            await self.db.set_provider_enabled(linked["id"], patch["enabled"])
+                            changes = {}
+                            if "enabled" in patch: changes["enabled"] = patch["enabled"]
+                            if "name" in patch: changes["metadata"] = {**meta, "label": patch["name"].strip()}
+                            await self.db.update_provider_fields(linked["id"], changes)
                     with self.scope(): await self.reload_catalog()
                 return result
-            result = await service.complete_sign_in(fields or {})
+            metadata = row.get("metadata") or {}
+            submitted = {**(fields or {})}
+            submitted["name"] = submitted.get("name") or metadata.get("label") or row["name"]
+            result = await service.complete_sign_in(submitted, account_id=metadata.get("account_id"))
         await self.authorize(context, "provider.write")
         account = result.get("account") or {}
         if account.get("id"):
-            await self.update_provider(context, provider_id, {"metadata": {
-                **(row.get("metadata") or {}), "account_id": account["id"],
-                "label": account.get("name") or (row.get("metadata") or {}).get("label", row["name"])}})
+            owner = (row.get("metadata") or {}).get("credential_store_id", row["id"])
+            linked_rows = await self.db.list_providers()
+            for linked in linked_rows:
+                meta = linked.get("metadata") or {}
+                if linked["id"] == provider_id or (meta.get("access") == "subscription"
+                        and meta.get("credential_store_id", linked["id"]) == owner
+                        and meta.get("account_id") == account["id"]):
+                    await self.db.update_provider_fields(linked["id"], {"metadata": {
+                        **meta, "account_id": account["id"],
+                        "label": account.get("name") or meta.get("label", linked["name"])}})
+            with self.scope(): await self.reload_catalog()
         await self.refresh_capabilities(context, provider_id)
         return result
 

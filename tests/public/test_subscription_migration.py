@@ -114,7 +114,7 @@ async def test_original_references_bind_to_the_first_available_account_not_a_dis
     source = tmp_path / 'source.json'
     source.write_text(json.dumps({'accounts': [
         {'id':'disabled', 'access_token':'fixture-disabled', 'priority':0, 'enabled':False},
-        {'id':'available', 'access_token':'fixture-available', 'priority':1, 'enabled':True}]}))
+        {'id':'available', 'access_token':'fixture-available', 'priority':1, 'enabled':None}]}))
     try:
         pid = await db.upsert_provider(name='legacy', framework='api-based')
         await db.upsert_model(provider_id=pid, model='fixture', is_classifier=True)

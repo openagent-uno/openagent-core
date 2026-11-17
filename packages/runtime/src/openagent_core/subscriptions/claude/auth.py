@@ -396,13 +396,18 @@ class TokenManager:
         *,
         name: Optional[str] = None,
         priority: Optional[int] = None,
+        identifier: Optional[str] = None,
     ) -> Dict[str, Any]:
         with self._lock:
             store = self._load_store_unlocked()
-            account_name = (name or "").strip()
+            existing = self._find_account_unlocked(identifier) if identifier else None
+            if identifier and existing is None:
+                raise KeyError("Subscription account is no longer linked")
+            account_name = (name or "").strip() or (str(existing.get("name") or "") if existing else "")
             if not account_name:
                 account_name = _next_account_name(store.get("accounts", []))
-            existing = self._find_account_unlocked(account_name)
+            if existing is None:
+                existing = self._find_account_unlocked(account_name)
             used_ids = {str(a.get("id")) for a in store.get("accounts", []) if a is not existing}
             account_id = str(existing.get("id")) if existing else _unique_account_id(account_name, used_ids)
             account_priority = _safe_int(
@@ -415,6 +420,7 @@ class TokenManager:
                     "id": account_id,
                     "name": account_name,
                     "priority": account_priority,
+                    "enabled": existing.get("enabled", True) if existing else True,
                     "access_token": str(creds.get("access_token") or ""),
                     "refresh_token": str(creds.get("refresh_token") or ""),
                     "expires_at_ms": _safe_int(creds.get("expires_at_ms"), 0),

@@ -750,7 +750,7 @@ def create_app(settings, *, token_manager=None):
             priority = int(raw_priority) if raw_priority is not None and str(raw_priority).strip() else None
         except (TypeError, ValueError):
             priority = None
-        account = _token_mgr.save_account(creds, name=name, priority=priority)
+        account = _token_mgr.save_account(creds, name=name, priority=priority, identifier=body.get("account_id"))
         return {"account": _account_view(account)}
 
 

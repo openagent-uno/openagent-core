@@ -194,3 +194,24 @@ async def test_transport_rejects_an_app_that_returns_without_a_response():
     async with httpx.AsyncClient(transport=SubscriptionTransport(app)) as client:
         with pytest.raises(RuntimeError, match='no response'):
             await asyncio.wait_for(client.get('http://subscription.internal/broken'), 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('vendor', ['claude', 'codex'])
+async def test_reauthentication_keeps_account_identity_name_and_disabled_state(tmp_path, vendor):
+    import importlib
+    service = SubscriptionService(vendor, tmp_path / 'store.json')
+    try:
+        first = service.manager.save_account({'access_token':'test-old-token'}, name='Work')
+        await service.update_account({'id':first['id'], 'enabled':False})
+        login = await service.start_sign_in()
+        adapter = importlib.import_module(f'openagent_core.subscriptions.{vendor}.adapter')
+        with patch.object(adapter, 'exchange_code', return_value={'access_token':'test-renewed', 'refresh_token':'test-refresh'}):
+            result = await service.complete_sign_in({'state':login['state'], 'code':'fixture-code', 'name':'Renamed work'}, account_id=first['id'])
+        assert result['account']['id'] == first['id']
+        accounts = await service.accounts()
+        assert len(accounts) == 1 and accounts[0]['name'] == 'Renamed work'
+        assert accounts[0]['enabled'] is False
+        assert 'test-renewed' not in json.dumps(result)
+    finally:
+        await service.close()

@@ -189,3 +189,5 @@ source and wheel workflows distinguish platform contracts from host acceptance.
 - [Optional remote capabilities, inventory and media](remote-capabilities.md)
 
 - [Beta128: built-in subscription connections](releases/v1.1.0-beta.128.md).
+
+- [Beta129: stable subscription renewal](releases/v1.1.0-beta.129.md).

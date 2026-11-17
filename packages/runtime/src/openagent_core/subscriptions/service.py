@@ -105,7 +105,7 @@ class SubscriptionService:
     async def start_sign_in(self):
         return await self.request("POST", "/admin/oauth/start")
 
-    async def complete_sign_in(self, fields):
+    async def complete_sign_in(self, fields, *, account_id: str | None = None):
         fields = dict(fields)
         code = str(fields.get("code") or "").strip()
         if code.startswith(("http://", "https://")):
@@ -115,6 +115,8 @@ class SubscriptionService:
                 raise ValueError("OAuth state mismatch")
             fields["code"] = query.get("code", [""])[0]
         allowed = {key: fields[key] for key in ("state", "code", "name") if key in fields}
+        if account_id is not None:
+            allowed["account_id"] = account_id
         return await self.request("POST", "/admin/oauth/complete", json=allowed)
 
     async def update_account(self, fields):
