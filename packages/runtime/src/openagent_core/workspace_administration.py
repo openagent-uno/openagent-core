@@ -4,6 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 from .contracts import ResourceRef, require_authorized
+from .memory.operational.repository import answering_model
 from .runtime import runtime_scope
 
 
@@ -183,16 +184,20 @@ class SessionInspection:
         await self.authorize(context,session_id)
         conn=await self.db._ensure_connected()
         # The model that answered: the recorded one, else the provider envelope's
-        # (runs stored before the column was filled). The envelope is read in
-        # SQL only for those runs, never loaded into Python.
+        # (runs stored before the column was filled). Only the envelope's model
+        # fields are read, in SQL and for those runs alone.
         rows=await (await conn.execute("SELECT id,status,input_json,output_json,created_at_ms,finished_at_ms,metadata_json,"
-            "CASE WHEN model IS NOT NULL THEN model WHEN json_valid(raw_envelope_json) THEN json_extract(raw_envelope_json,'$.model') END AS answered_model,"
-            "CASE WHEN model_provider IS NOT NULL THEN model_provider WHEN json_valid(raw_envelope_json) THEN json_extract(raw_envelope_json,'$.model_provider') END AS answered_provider "
+            "model AS answered_model,model_provider AS answered_provider,"
+            "CASE WHEN model IS NULL AND json_valid(raw_envelope_json) THEN json_object('model',json_extract(raw_envelope_json,'$.model'),"
+            "'model_provider',json_extract(raw_envelope_json,'$.model_provider'),'metrics',json_object('details',json_object('model',"
+            "json_extract(raw_envelope_json,'$.metrics.details.model')))) END AS envelope_models "
             "FROM session_runs WHERE tenant_id=? AND session_id=? AND json_extract(metadata_json,'$.runtime_contract')=1 ORDER BY ordinal DESC LIMIT ?",(context.tenant_id,session_id,max(1,min(int(limit),8))))).fetchall()
         result=[];revision=0
         for row in reversed(rows):
             metadata=json.loads(row["metadata_json"])
             author=metadata.get("execution_context",{}).get("author",{})
+            answered=answering_model(json.loads(row["envelope_models"]) if row["envelope_models"] else
+                {"model":row["answered_model"],"model_provider":row["answered_provider"]})
             events=await (await conn.execute("SELECT sequence,event_type,metadata_json,occurred_at_ms FROM domain_events WHERE tenant_id=? AND session_id=? AND run_id=? ORDER BY sequence LIMIT 2001",(context.tenant_id,session_id,row["id"]))).fetchall()
             truncated = len(events) > 2000
             if truncated:
@@ -212,8 +217,7 @@ class SessionInspection:
                 "attachments":await self._public_input_refs(context,session_id,metadata.get("attachments", ())),
                 "output":json.loads(row["output_json"]) if row["output_json"] else None,
                 "created_at_ms":row["created_at_ms"],"finished_at_ms":row["finished_at_ms"],
-                "model":row["answered_model"] if isinstance(row["answered_model"],str) and row["answered_model"].strip() else None,
-                "model_provider":row["answered_provider"] if isinstance(row["answered_provider"],str) and row["answered_provider"].strip() else None,
+                "model":answered[0],"model_provider":answered[1],
                 "author":{key:author[key] for key in ("authority","tenant_id","subject_id","kind") if isinstance(author.get(key),str)},
                 "events":[{"cursor":e["sequence"],"kind":e["event_type"],"payload":await self._public_output_frame(context,session_id,json.loads(e["metadata_json"]),run_status=row["status"]),"timestamp_ms":e["occurred_at_ms"]} for e in events[:2000] if e["event_type"] in {"run.stream","run.status","run.delta"}],"truncated":truncated})
         await self.authorize(context,session_id)

@@ -200,3 +200,10 @@ A turn rebuilt from the run journal carries that model too, falling back to
 the provider run envelope for runs stored before the column was filled.
 `SessionInspection.live_runs` returns the same `model` (and `model_provider`)
 on each run of the live view.
+
+The envelope names the model the run started with. When that model failed and
+a backup answered, the recorded model is the backup: the one that wrote the
+most output in the run's per-model usage (`metrics.details.model`). The model
+the run started with keeps the provider label the envelope gives it. History,
+the rebuilt journal and the live view use the same rule
+(`memory.operational.repository.answering_model`).

@@ -26,3 +26,15 @@ and alias helpers. The conversational model can therefore be Claude while a
 separate enabled image provider handles the image call; Claude's chat-only
 proxy does not itself supply an image endpoint. Image editing and
 provider-specific non-compatible APIs are outside this transport.
+
+## Refusals
+
+When the provider answers with an HTTP error, `generate_image_bytes` raises
+`ImageGenerationError`. It carries the HTTP `status`, the provider's own error
+type or code as `kind`, and a message that quotes what the provider said
+(whitespace collapsed, at most 600 characters). The `media-gen` tool returns
+that as `{ok: false, reason, status, error_type}`. The status alone does not
+name the cause: a subscription service may answer 429 both for an exhausted
+quota and for a sign-in that has ended, and only the quoted message and
+`error_type` tell them apart. A model reading the tool result should report the
+quoted cause.

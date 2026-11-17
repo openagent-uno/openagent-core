@@ -26,6 +26,45 @@ def provider_image_model_id(model_id: str, metadata: object) -> str:
     return alias.strip() if isinstance(alias, str) and alias.strip() else model_id
 
 
+class ImageGenerationError(Exception):
+    """The image provider refused a request; carries what it said and why.
+
+    ``kind`` is the provider's own error type or code (for example an expired
+    sign-in or an exhausted quota), so a caller never has to guess the cause
+    from the HTTP status alone.
+    """
+
+    def __init__(self, status: int, message: str = "", kind: str = "") -> None:
+        self.status, self.kind = status, kind
+        text = f"the image provider answered HTTP {status}"
+        if kind:
+            text += f" ({kind})"
+        super().__init__(f"{text}: {message}" if message else text)
+
+
+def _provider_error(response: httpx.Response) -> ImageGenerationError:
+    """What the provider said, bounded: its message and its error type."""
+    message = kind = ""
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    error = body.get("error") if isinstance(body, dict) else None
+    if isinstance(error, dict):
+        message = error.get("message") if isinstance(error.get("message"), str) else ""
+        named = [error.get(key) for key in ("type", "code")]
+        kind = next((value for value in named if isinstance(value, str) and value.strip()), "")
+    elif isinstance(error, str):
+        message = error
+    elif isinstance(body, dict):
+        detail = body.get("detail") or body.get("message")
+        message = detail if isinstance(detail, str) else ""
+    message = " ".join(message.split())
+    if len(message) > 600:
+        message = message[:599].rstrip() + "…"
+    return ImageGenerationError(response.status_code, message, " ".join(kind.split())[:80])
+
+
 @dataclass(frozen=True)
 class GeneratedImage:
     content: bytes
@@ -66,7 +105,8 @@ async def generate_image_bytes(
         headers["authorization"] = f"Bearer {api_key}"
     async with httpx.AsyncClient(timeout=600.0, follow_redirects=False) as client:
         response = await client.post(endpoint, headers=headers, json=payload)
-        response.raise_for_status()
+        if response.status_code >= 400:
+            raise _provider_error(response)
         body = response.json()
         data = body.get("data") if isinstance(body, dict) else None
         if not isinstance(data, list) or not data or not isinstance(data[0], dict):

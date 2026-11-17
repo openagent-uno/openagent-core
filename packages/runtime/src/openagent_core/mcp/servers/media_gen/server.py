@@ -194,17 +194,22 @@ async def generate_image(
 
     Returns ``{ok, local_path, remote_url, model, size}``. ``ok`` is False
     with a ``reason`` field when no backend is configured or the request
-    failed."""
+    failed. A refusal by the provider also carries its HTTP ``status`` and its
+    own ``error_type``; the ``reason`` quotes what the provider said, so
+    report that cause (an expired sign-in is not an exhausted quota)."""
     backend, reason = await _image_backend(model)
     if backend is None:
         return {"ok": False, "reason": reason}
     url, api_key, backend_model = backend
-    from openagent_core.image_generation import generate_image_bytes
+    from openagent_core.image_generation import ImageGenerationError, generate_image_bytes
     try:
         image = await generate_image_bytes(
             endpoint=url, api_key=api_key, model=backend_model or model or "gpt-image-1",
             prompt=prompt, size=size, quality=quality,
         )
+    except ImageGenerationError as exc:
+        return {"ok": False, "reason": f"image generation failed: {exc}",
+                "status": exc.status, "error_type": exc.kind}
     except Exception as exc:  # noqa: BLE001 - an MCP failure is a tool result
         return {"ok": False, "reason": f"image generation failed: {exc}"}
     extension = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}[image.mime_type]

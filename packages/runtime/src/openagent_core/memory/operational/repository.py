@@ -814,6 +814,36 @@ def _adopted_legacy_projection(conn, session_id, projection, existing, now_ms):
                            str(projection.session["completeness"]), None)
 
 
+def answering_model(envelope: Any) -> tuple[str | None, str | None]:
+    """The model that produced a run's answer, and its provider.
+
+    The envelope names the model the run was started with. When that model
+    failed and a backup answered, the per-model usage is the only place that
+    says so: the model that wrote the most output is the one that answered.
+    """
+    if not isinstance(envelope, dict):
+        return None, None
+
+    def text(value: Any) -> str | None:
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+    model, provider = text(envelope.get("model")), text(envelope.get("model_provider"))
+    metrics = envelope.get("metrics")
+    details = metrics.get("details") if isinstance(metrics, dict) else None
+    used = details.get("model") if isinstance(details, dict) else None
+    best: tuple[str, str | None] | None = None
+    most = -1
+    for entry in used if isinstance(used, list) else ():
+        name = text(entry.get("id")) if isinstance(entry, dict) else None
+        tokens = entry.get("output_tokens") if isinstance(entry, dict) else None
+        tokens = tokens if isinstance(tokens, int) and not isinstance(tokens, bool) else 0
+        if name and tokens >= most:
+            best, most = (name, text(entry.get("provider"))), tokens
+    if best is None or best[0] == model:
+        return model, provider
+    return best
+
+
 def apply_run_envelope(conn: Any, session_id: str, envelope: dict[str, Any]) -> None:
     """Attach a provider run envelope to its admitted run.
 
@@ -823,16 +853,12 @@ def apply_run_envelope(conn: Any, session_id: str, envelope: dict[str, Any]) -> 
     run_id = envelope.get("run_id") or envelope.get("id")
     if not run_id:
         return
-    model = envelope.get("model")
-    provider = envelope.get("model_provider")
+    model, provider = answering_model(envelope)
     conn.execute(
         "UPDATE session_runs SET raw_envelope_json=?, model=COALESCE(model, ?), "
         "model_provider=COALESCE(model_provider, ?) WHERE id=? AND session_id=? "
         "AND json_extract(metadata_json,'$.runtime_contract')=1",
-        (json.dumps(envelope, ensure_ascii=False),
-         model.strip() if isinstance(model, str) and model.strip() else None,
-         provider.strip() if isinstance(provider, str) and provider.strip() else None,
-         run_id, session_id))
+        (json.dumps(envelope, ensure_ascii=False), model, provider, run_id, session_id))
 
 
 def project_legacy_session(

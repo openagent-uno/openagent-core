@@ -114,9 +114,10 @@ async def runtime_journal_run(row, events, canonical_messages):
     keys = set(row.keys()) if hasattr(row, 'keys') else set()
     model = row['model'] if 'model' in keys else None
     if not model and 'raw_envelope_json' in keys:
+        from openagent_core.memory.operational.repository import answering_model
         try:
-            model = (json.loads(row['raw_envelope_json'] or '{}') or {}).get('model')
-        except (TypeError, ValueError, AttributeError):
+            model = answering_model(json.loads(row['raw_envelope_json'] or '{}'))[0]
+        except (TypeError, ValueError):
             model = None
     if isinstance(model, str) and model.strip():
         run['model'] = model.strip()

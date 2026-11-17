@@ -41,7 +41,7 @@ class DurablePublicHistory(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_turn_rebuilt_from_the_journal_keeps_the_model_that_answered(self):
         import sqlite3
-        for run_id in ('recorded', 'enveloped', 'unknown'):
+        for run_id in ('recorded', 'enveloped', 'backup', 'unknown'):
             await self.store.accept(RunRequest(run_id, 'parent', run_id, 'Question ' + run_id), self.context)
             await self.store.transition(run_id, 'running')
             await self.store.append_event(run_id, 'run.stream', {'kind': 'delta', 'text': 'Answer ' + run_id})
@@ -50,12 +50,17 @@ class DurablePublicHistory(unittest.IsolatedAsyncioTestCase):
         conn.execute("UPDATE session_runs SET model='fixture-llm' WHERE id='recorded'")
         conn.execute("UPDATE session_runs SET raw_envelope_json=? WHERE id='enveloped'",
                      ('{"run_id": "enveloped", "model": "envelope-llm", "model_provider": "Fixture"}',))
+        # The run started with one model and a backup answered it.
+        conn.execute("UPDATE session_runs SET raw_envelope_json=? WHERE id='backup'",
+                     ('{"run_id": "backup", "model": "envelope-llm", "model_provider": "Fixture", "metrics": {"details": '
+                      '{"model": [{"id": "backup-llm", "provider": "Backup", "output_tokens": 12}]}}}',))
         conn.commit(); conn.close()
         result = await self.inspection.transcript(self.management, 'parent')
         models = {m['runId']: m.get('model') for m in result['messages'] if m['role'] == 'assistant'}
-        self.assertEqual({'recorded': 'fixture-llm', 'enveloped': 'envelope-llm', 'unknown': None}, models)
+        self.assertEqual({'recorded': 'fixture-llm', 'enveloped': 'envelope-llm', 'backup': 'backup-llm', 'unknown': None}, models)
         live = await self.inspection.live_runs(self.management, 'parent')
-        self.assertEqual({'recorded': ('fixture-llm', None), 'enveloped': ('envelope-llm', 'Fixture'), 'unknown': (None, None)},
+        self.assertEqual({'recorded': ('fixture-llm', None), 'enveloped': ('envelope-llm', 'Fixture'),
+                          'backup': ('backup-llm', 'Backup'), 'unknown': (None, None)},
                          {run['id']: (run['model'], run['model_provider']) for run in live['runs']})
 
     async def test_reopen_recovers_accepted_input_completed_and_partial_tools_without_legacy_mirror(self):

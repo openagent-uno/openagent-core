@@ -3,7 +3,7 @@ import json
 import sqlite3
 import unittest
 
-from openagent_core.memory.operational.repository import apply_run_envelope
+from openagent_core.memory.operational.repository import answering_model, apply_run_envelope
 
 
 class RunModelAttribution(unittest.TestCase):
@@ -36,6 +36,32 @@ class RunModelAttribution(unittest.TestCase):
         apply_run_envelope(self.conn, "other-session", {"run_id": "run-2", "model": "x"})
         self.assertEqual((None, None, 0), self._row("legacy"))
         self.assertEqual(0, self._row("run-2")[2])
+
+    def test_a_backup_that_answered_is_recorded_instead_of_the_model_the_run_started_with(self):
+        envelope = {"run_id": "run-1", "model": "primary-llm", "model_provider": "Primary",
+                    "metrics": {"details": {"model": [
+                        {"id": "backup-llm", "provider": "Backup", "output_tokens": 40}]}}}
+        self.assertEqual(("backup-llm", "Backup"), answering_model(envelope))
+        apply_run_envelope(self.conn, "s", envelope)
+        self.assertEqual(("backup-llm", "Backup", 1), self._row("run-1"))
+
+    def test_the_model_that_wrote_the_most_output_answered(self):
+        used = [{"id": "primary-llm", "provider": "Primary Chat", "output_tokens": 5},
+                {"id": "backup-llm", "provider": "Backup", "output_tokens": 90}]
+        envelope = {"model": "primary-llm", "model_provider": "Primary", "metrics": {"details": {"model": used}}}
+        self.assertEqual(("backup-llm", "Backup"), answering_model(envelope))
+        # The run's own model keeps the provider label the envelope gives it.
+        used[0]["output_tokens"] = 900
+        self.assertEqual(("primary-llm", "Primary"), answering_model(envelope))
+
+    def test_an_envelope_without_usable_usage_names_its_own_model(self):
+        for metrics in (None, {}, {"details": None}, {"details": {"model": []}},
+                        {"details": {"model": [{"id": " ", "output_tokens": 3}, "x"]}},
+                        {"details": {"output_model": [{"id": "parser", "output_tokens": 3}]}}):
+            self.assertEqual(("fixture-llm", "Fixture"), answering_model(
+                {"model": "fixture-llm", "model_provider": "Fixture", "metrics": metrics}))
+        self.assertEqual((None, None), answering_model(None))
+        self.assertEqual((None, None), answering_model({"model": 7}))
 
 
 if __name__ == "__main__":
