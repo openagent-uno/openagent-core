@@ -40,6 +40,7 @@ class SubscriptionService:
         settings.admin_api_key = secrets.token_urlsafe(32)
         self.provider, self.settings = provider, settings
         self._inference_clients = {}
+        self._inference_apps = {}
         self._catalog_client = httpx.AsyncClient(timeout=10) if provider == "claude" else None
         self._adapter = adapter
         self._access_grant = _access_grant is not None
@@ -156,21 +157,25 @@ class SubscriptionService:
                              else "Invalid or expired subscription sign-in; start again")
         return response.json()
 
+    async def capabilities(self):
+        return {"sign_in": True, "credential_management": "local"}
+
     async def accounts(self):
         result = await self.request("GET", "/admin/accounts")
         fields = {"id", "name", "enabled", "priority", "plan", "managed", "limited", "limited_until_ms", "limited_for_s", "expires_at_ms", "has_refresh_token", "quota", "status"}
         return [{key: value for key, value in account.items() if key in fields}
                 for account in result.get("accounts", []) if isinstance(account, dict)]
 
-    def inference_client(self, account_id: str | None = None, *, single_attempt: bool = False):
-        """Bind selection and retries to the card's exact account, never a sibling."""
-        if account_id is None:
-            return self.client
-        client_key = (account_id, True) if single_attempt else account_id
-        if client_key not in self._inference_clients:
+    def inference_base_url(self, account_id=None, *, single_attempt=False):
+        return "http://subscription.internal/v1"
+
+    def inference_app(self, account_id: str, *, single_attempt: bool = False):
+        """Exact-account ASGI protocol, reusable by an explicitly started host."""
+        if not isinstance(account_id, str) or not account_id or len(account_id) > 1024:
+            raise ValueError("A bounded account identifier is required")
+        key = (account_id, single_attempt)
+        if key not in self._inference_apps:
             from dataclasses import replace
-            import httpx
-            from .transport import SubscriptionTransport
             manager = self.manager
 
             class BoundAccount:
@@ -197,18 +202,36 @@ class SubscriptionService:
                 # Core owns usage accounting; avoid multiple file-ledger writers.
                 settings.usage_enabled = False
             app = self._adapter.create_app(settings, token_manager=BoundAccount())
+            self._inference_apps[key] = app
+        return self._inference_apps[key]
+
+    def inference_client(self, account_id: str | None = None, *, single_attempt: bool = False):
+        """Bind selection and retries to the card's exact account, never a sibling."""
+        if account_id is None:
+            return self.client
+        client_key = (account_id, True) if single_attempt else account_id
+        if client_key not in self._inference_clients:
+            import httpx
+            from .transport import SubscriptionTransport
+            app = self.inference_app(account_id, single_attempt=single_attempt)
             self._inference_clients[client_key] = httpx.AsyncClient(
                 transport=SubscriptionTransport(app), base_url="http://subscription.internal",
-                headers={"Authorization": "Bearer " + settings.api_key}, timeout=settings.request_timeout)
+                headers={"Authorization": "Bearer " + self.settings.api_key}, timeout=self.settings.request_timeout)
         return self._inference_clients[client_key]
 
-    async def _claude_models(self):
+    async def _claude_models(self, account_id=None):
         """Read the authenticated provider catalog rather than a version snapshot."""
         import asyncio
         import json
         from openagent_core.persistence import run_sync
         try:
-            token = await run_sync(self.manager.get_token)
+            if account_id is None:
+                token = await run_sync(self.manager.get_token)
+            else:
+                def selected_token():
+                    exclude = {a['id'] for a in self.manager.list_accounts() if a['id'] != account_id}
+                    return self.manager.select_account(exclude_ids=exclude).token
+                token = await run_sync(selected_token)
             entries, seen, cursor = [], set(), None
             async with asyncio.timeout(15):
                 for _ in range(5):
@@ -243,13 +266,13 @@ class SubscriptionService:
             # Preserve cancellation and never expose token exchange/upstream bodies.
             raise ValueError("Subscription model discovery failed; retry or reconnect the account") from None
 
-    async def models(self):
+    async def models(self, *, account_id=None):
         # Before sign-in, the declared catalog is a credential-free preview.
         # Signed-in Claude connections use the actual account's live catalog.
         if self.provider == "claude":
             from openagent_core.persistence import run_sync
             if await run_sync(self.manager.list_accounts):
-                return await self._claude_models()
+                return await self._claude_models(account_id=account_id)
         result = await self.request("GET", "/v1/models")
         entries = result.get("data", [])
         # One upstream reasoning model may expose image generation too. Give that
@@ -317,6 +340,12 @@ def subscription_for(row: dict, db_path: str | Path) -> SubscriptionService | No
     provider = {"anthropic": "claude", "openai": "codex"}.get(vendor)
     if provider is None:
         raise ValueError("Subscription access is supported by Anthropic and OpenAI")
+    if metadata.get('subscription_remote') is True:
+        from .remote import RemoteSubscriptionService
+        key = ('remote', provider, row.get('base_url'), row.get('api_key'), metadata.get('account_id'), metadata.get('subscription_remote_unkeyed', False))
+        if key not in _SERVICES or _SERVICES[key].client.is_closed:
+            _SERVICES[key] = RemoteSubscriptionService(provider, row.get('base_url') or '', row.get('api_key'), account_id=metadata.get('account_id'), allow_unkeyed=metadata.get('subscription_remote_unkeyed') is True)
+        return _SERVICES[key]
     if not db_path:
         raise ValueError("Subscription access requires an explicit host database path")
     path = Path(db_path)

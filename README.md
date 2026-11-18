@@ -52,3 +52,5 @@ pip install --find-links /path/to/verified-wheelhouse \
 Packages shown above are independent distribution names. Hosts pin exact wheel
 versions and build their own worker images; they never need a standalone
 OpenAgent server release or a source checkout at runtime.
+
+The optional [explicit subscription custody host](docs/subscriptions.md#explicit-shared-custody-http-host-beta136) shares rotating accounts through Core-owned protocols without embedding a standalone proxy.

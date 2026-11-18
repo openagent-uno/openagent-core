@@ -225,7 +225,7 @@ async def generate_image(
         if service is None:
             return {"ok": False, "reason": "Image subscription is unavailable"}
         client = service.inference_client((row.get("metadata") or {}).get("account_id"))
-        url, api_key = "http://subscription.internal/v1/images/generations", service.settings.api_key
+        url, api_key = service.inference_base_url((row.get("metadata") or {}).get("account_id"))+"/images/generations", service.settings.api_key
     try:
         image = await generate_image_bytes(
             endpoint=url, api_key=api_key, model=backend_model or model or "gpt-image-1",

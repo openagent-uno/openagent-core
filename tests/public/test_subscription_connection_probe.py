@@ -25,6 +25,7 @@ class SubscriptionProbeTests(unittest.IsolatedAsyncioTestCase):
             client=httpx.AsyncClient(transport=httpx.MockTransport(respond))
             account_ids=[]
             service=SimpleNamespace(settings=SimpleNamespace(api_key='synthetic'),
+                inference_base_url=lambda identifier,**kwargs:'http://subscription.internal/v1',
                 inference_client=lambda identifier: (account_ids.append(identifier) or client))
             try:
                 pid=await db.upsert_provider(name='named-account',framework='api-based',metadata={

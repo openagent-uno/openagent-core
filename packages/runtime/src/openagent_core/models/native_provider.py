@@ -1420,7 +1420,7 @@ class NativeProvider(ProviderResources, BaseModel):
         subscription = subscription_for(self._provider_config(), self._db_path) if self._provider_config().get("metadata", {}).get("access") == "subscription" else None
         if subscription is not None:
             api_key = subscription.settings.api_key
-            base_url = "http://subscription.internal/v1"
+            base_url = subscription.inference_base_url((self._provider_config().get("metadata") or {}).get("account_id"), single_attempt=bool((self._provider_config().get("metadata") or {}).get("account_fallback_group")))
         model_class, extra_kwargs = self._load_runtime_model_class(provider_name)
         if model_class is not None:
             extra_kwargs = {

@@ -46,6 +46,8 @@ def account_routes_for(row, requested, config, db_path, guard=None):
         source = rows[entry.provider]
         account_id = source['metadata']['account_id']
         service = subscription_for(source, db_path)
+        if hasattr(service, 'account_available'):
+            return service.account_available(account_id)
         return any(a['id'] == account_id and a.get('enabled') is not False
                    for a in service.manager.list_accounts())
     return AccountRoutes(requested, tuple(candidates), build, guard, available)

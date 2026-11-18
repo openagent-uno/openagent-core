@@ -178,3 +178,50 @@ Core replaces their process-global configuration, HTTP-server lifecycle and
 implicit local credential adoption with explicit instance-owned services.
 The original Claude translation regressions are retained in Core. Repository
 retirement belongs to operators after every installation has migrated.
+
+## Explicit shared-custody HTTP host (beta136)
+
+The normal connection remains in memory. An operator replacing a shared legacy
+HTTP endpoint may explicitly start `python -m openagent_core.subscriptions.host`
+from `openagent-core[subscription-host]`. It requires `--provider`, an absolute
+`--credentials` path, an absolute nonsecret `--config` JSON path and `--port`.
+The JSON accepts `settings` (the validated protocol options), `api_key_env`,
+`admin_api_key_env`, and an optional absolute Codex `usage_file`. Key fields name
+explicit environment variables; they do not embed secrets. No listener starts
+on import or from creating a normal connection. The host must replace a drained
+writer; do not duplicate a rotating token into several services.
+
+Root `/v1/*`, health and separately authenticated administrative endpoints keep
+the protocol adapter's compatibility behavior. Inference authorization never
+implicitly grants credential administration. A key is required by default;
+`--allow-unkeyed` explicitly preserves an already unkeyed endpoint behind its
+existing network isolation. It is never inferred from a missing key.
+
+`/subscription/accounts` returns a filtered nonsecret inventory and its reviewed
+identity/configuration digest. `/subscription/models?account_id=...` uses that
+exact account for authenticated catalog discovery. Exact inference is available
+under `/accounts/<base64url-utf8-account-id>/v1/*`; a `/once/v1/*` variant leaves
+pre-output account fallback to the connecting runtime. Neither path exposes
+management or tokens. The host closes its service when its ASGI lifespan ends.
+
+A connection with `metadata.subscription_remote=true` uses its explicit base URL
+and inference key instead of creating a local token store. An unkeyed connection
+requires the separate explicit `subscription_remote_unkeyed=true` flag. Account
+routing, sampling and model identity are still local Core contracts. The logical
+`credential_store_id` joins typed model rows for one remote account in that
+catalog; it does not imply a token file on the connecting host.
+
+`adopt_remote_subscription_accounts` requires a drained local runtime and the
+`account_inventory_sha256` digest of reviewed ids, labels, enabled states and
+priorities. Transient quota clocks are excluded. Original ids, pins, defaults
+and budget grouping survive; no refresh material is copied or deleted. Other
+HTTP consumers can keep the compatible root endpoint while they migrate.
+
+`ProviderModelAdmin.subscription(..., 'update_account', ...)` changes local
+connection enablement, label and fallback priority, including linked typed rows
+in that database. It never changes the shared credential's enabled state or
+label in another database. Explicit `SubscriptionService.update_account` remains
+the credential-custody administration API. Account reads expose both effective
+`enabled` and `credential_enabled`. The read-authorized `capabilities` operation
+reports whether the configured endpoint permits browser sign-in; a connecting
+host must honor that capability instead of advertising unsupported management.

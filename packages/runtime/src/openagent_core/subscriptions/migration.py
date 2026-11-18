@@ -39,6 +39,41 @@ async def adopt_subscription_accounts(db, provider_id: int, provider: str, sourc
     accounts = manager.list_accounts()
     if not accounts:
         raise ValueError("The legacy credential store contains no managed accounts")
+    return await _adopt_catalog_accounts(db, provider_id, provider, accounts, source=source,
+        original=original, digest=digest, credential_owners=credential_owners,
+        account_fallback=account_fallback, subscription_settings=subscription_settings)
+
+
+async def adopt_remote_subscription_accounts(db, provider_id: int, provider: str, *,
+                                             quiesced: bool, expected_accounts_sha256: str,
+                                             account_fallback: bool = True,
+                                             allow_unkeyed: bool = False) -> dict:
+    """Split a verified custody-host inventory without copying any token material.
+
+    The caller supplies `account_inventory_sha256` of the reviewed nonsecret
+    identity inventory. Transient quota clocks are excluded from this digest.
+    The original provider keeps its key/endpoint/identity and model references.
+    """
+    if not quiesced:
+        raise ValueError("Drain the runtime before catalog adoption")
+    row = await db.get_provider(provider_id)
+    if row is None: raise LookupError("Provider not found")
+    from .remote import RemoteSubscriptionService
+    service = RemoteSubscriptionService(provider, row.get('base_url') or '', row.get('api_key'), allow_unkeyed=allow_unkeyed)
+    try: accounts = await service.accounts()
+    finally: await service.close()
+    from .host import account_inventory_sha256
+    digest = account_inventory_sha256(accounts)
+    if digest != expected_accounts_sha256 or not accounts:
+        raise ValueError("The reviewed custody account inventory changed")
+    return await _adopt_catalog_accounts(db, provider_id, provider, accounts,
+        source=None, original=None, digest=digest, credential_owners=None,
+        account_fallback=account_fallback, subscription_settings=None, remote=True, allow_unkeyed=allow_unkeyed)
+
+
+async def _adopt_catalog_accounts(db, provider_id, provider, accounts, *, source,
+                                  original, digest, credential_owners,
+                                  account_fallback, subscription_settings, remote=False, allow_unkeyed=False):
     # Keep historical references on the first account the legacy pool could
     # actually use, rather than silently binding them to a disabled account.
     now_ms = time.time() * 1000
@@ -101,33 +136,46 @@ async def adopt_subscription_accounts(db, provider_id: int, provider: str, sourc
                     await conn.execute("UPDATE providers SET metadata_json=?,enabled=?,updated_at=? WHERE id=?",
                                        (json.dumps(meta), int(legacy["enabled"] and account.get("enabled") is not False), time.time(), pid))
                 owner_id = (credential_owners or {}).get(str(account["id"]), pid)
+                if remote:
+                    meta["subscription_remote"] = True
+                    if allow_unkeyed: meta["subscription_remote_unkeyed"] = True
+                    # A local logical owner merges typed rows for the same remote
+                    # account. It never denotes a local rotating-token file.
+                    others = await (await conn.execute("SELECT id,base_url,metadata_json FROM providers WHERE id!=?", (pid,))).fetchall()
+                    for other in others:
+                        other_meta = json.loads(other['metadata_json'] or '{}')
+                        if (other_meta.get('subscription_remote') is True and other['base_url'] == legacy['base_url']
+                                and other_meta.get('vendor') == vendor and other_meta.get('account_id') == str(account['id'])):
+                            owner_id = other_meta.get('credential_store_id', other['id'])
+                            break
                 meta["credential_store_id"] = owner_id
                 await conn.execute("UPDATE providers SET metadata_json=? WHERE id=?", (json.dumps(meta), pid))
-                target = target_root / f"{owner_id}-{provider}.json"
-                if credential_owners:
-                    # Provider ids are local to a database. Two host databases
-                    # sharing one private credential directory can have the
-                    # same id; explicit reuse still verifies the complete
-                    # stopped-writer snapshot before touching catalog rows.
-                    if not target.is_file():
-                        raise ValueError("The shared credential owner must be adopted first")
-                    existing = json.loads(target.read_text())
-                    if existing.get("accounts") != [account]:
-                        raise ValueError("The shared credential changed; do not duplicate a rotating token")
-                else:
-                    if target.exists():
-                        raise ValueError("The destination credential store already exists; nothing was overwritten")
-                    write_credentials(target, {"version": 2, "accounts": [account]})
-                    created.append(target)
+                if not remote:
+                    target = target_root / f"{owner_id}-{provider}.json"
+                    if credential_owners:
+                        # Provider ids are local to a database. Two host databases
+                        # sharing one private credential directory can have the
+                        # same id; explicit reuse still verifies the complete
+                        # stopped-writer snapshot before touching catalog rows.
+                        if not target.is_file():
+                            raise ValueError("The shared credential owner must be adopted first")
+                        existing = json.loads(target.read_text())
+                        if existing.get("accounts") != [account]:
+                            raise ValueError("The shared credential changed; do not duplicate a rotating token")
+                    else:
+                        if target.exists():
+                            raise ValueError("The destination credential store already exists; nothing was overwritten")
+                        write_credentials(target, {"version": 2, "accounts": [account]})
+                        created.append(target)
                 adopted.append({"provider_id": pid, "connection_name": name, "models": len(models),
                                 "account_id": str(account["id"]), "credential_store_id": owner_id})
             if default_before is not None and default_before.get("reason") == "first_enabled":
                 await conn.execute("UPDATE models SET is_classifier=1 WHERE id=?", (default_before["id"],))
-            if source.read_bytes() != original:
+            if source is not None and source.read_bytes() != original:
                 raise ValueError("The source writer was not stopped; migration rolled back")
     except BaseException:
         for path in created:
             path.unlink(missing_ok=True)
         raise
-    return {"connections": adopted, "source_sha256": digest, "source_preserved": True,
+    return {"connections": adopted, "source_sha256": digest, "source_preserved": source is not None, "remote_custody": remote,
             "original_provider_id": provider_id, "pins_preserved": True}

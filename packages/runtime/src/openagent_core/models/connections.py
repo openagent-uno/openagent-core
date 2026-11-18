@@ -27,6 +27,10 @@ def validate_connection(metadata: dict) -> None:
         raise ValueError("access must be api, subscription or local")
     if metadata.get("access") == "subscription" and metadata.get("vendor") not in {"anthropic", "openai"}:
         raise ValueError("Unsupported subscription vendor")
+    if "subscription_remote_unkeyed" in metadata and type(metadata["subscription_remote_unkeyed"]) is not bool:
+        raise ValueError("subscription_remote_unkeyed must be boolean")
+    if "subscription_remote" in metadata and type(metadata["subscription_remote"]) is not bool:
+        raise ValueError("subscription_remote must be boolean")
     if "credential_store_id" in metadata and (isinstance(metadata["credential_store_id"], bool) or not isinstance(metadata["credential_store_id"], int) or metadata["credential_store_id"] < 1):
         raise ValueError("credential_store_id must be a positive identifier")
     if "account_fallback_enabled" in metadata and type(metadata['account_fallback_enabled']) is not bool:

@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta136: explicit shared subscription custody](releases/v1.1.0-beta.136.md).
+
 - [Beta135: explicit account failover and deferred tool transcripts](releases/v1.1.0-beta.135.md).
 - [Beta134: validated host subscription completions](releases/v1.1.0-beta.134.md).
 

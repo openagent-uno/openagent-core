@@ -214,7 +214,7 @@ class ProviderModelAdmin:
                 from .subscriptions.service import subscription_for
                 service = subscription_for(row, self.db.db_path)
                 if service is not None:
-                    entries = await service.models()
+                    entries = await service.models(account_id=(row.get("metadata") or {}).get("account_id"))
                     return [{**entry, "kind": entry.get("kind", "llm")} for entry in entries]
                 async with asyncio.timeout(10):
                     return await list_provider_models(connection_info(row)["vendor"], row.get("api_key"), row.get("base_url"))
@@ -257,31 +257,59 @@ class ProviderModelAdmin:
 
     async def subscription(self, context, provider_id: int, operation: str, fields: dict | None = None):
         """Authorized subscription administration shared by SDK and all host transports."""
-        if operation not in {"accounts", "start", "complete", "update_account"}:
+        if operation not in {"accounts", "capabilities", "start", "complete", "update_account"}:
             raise ValueError("Unknown subscription operation")
-        await self.authorize(context, "provider.read" if operation == "accounts" else "provider.write")
+        await self.authorize(context, "provider.read" if operation in {"accounts", "capabilities"} else "provider.write")
         row = await self.db.get_provider(provider_id)
         if row is None: raise LookupError("Provider not found")
         from .subscriptions.service import subscription_for
         with self.scope():
             service = subscription_for(row, self.db.db_path)
             if service is None: raise ValueError("This is not a built-in subscription connection")
-            if operation == "accounts": return await service.accounts()
+            if operation == "capabilities": return await service.capabilities()
+            if operation == "accounts":
+                accounts = await service.accounts()
+                metadata = row.get("metadata") or {}
+                return [{**account, "credential_enabled": account.get("enabled") is not False,
+                         "enabled": bool(row.get("enabled", True) and account.get("enabled") is not False),
+                         "name": metadata.get("label") or account.get("name")}
+                        if account.get("id") == metadata.get("account_id") else account
+                        for account in accounts]
             if operation == "start": return await service.start_sign_in()
             if operation == "update_account":
                 patch = fields or {}
-                result = await service.update_account(patch)
-                if patch.get("id") == (row.get("metadata") or {}).get("account_id") and ({"enabled", "name"} & patch.keys()):
-                    owner = (row.get("metadata") or {}).get("credential_store_id", row["id"])
-                    for linked in await self.db.list_providers():
-                        meta = linked.get("metadata") or {}
-                        if meta.get("access") == "subscription" and meta.get("credential_store_id", linked["id"]) == owner and meta.get("account_id") == patch["id"]:
-                            changes = {}
-                            if "enabled" in patch: changes["enabled"] = patch["enabled"]
-                            if "name" in patch: changes["metadata"] = {**meta, "label": patch["name"].strip()}
-                            await self.db.update_provider_fields(linked["id"], changes)
-                    with self.scope(): await self.reload_catalog()
-                return result
+                metadata = row.get("metadata") or {}
+                identifier = metadata.get("account_id")
+                if not identifier or patch.get("id") != identifier:
+                    raise ValueError("The account must match this connection")
+                if set(patch) - {"id", "name", "enabled", "priority"}:
+                    raise ValueError("Unknown account connection fields")
+                if "enabled" in patch and type(patch["enabled"]) is not bool:
+                    raise ValueError("enabled must be boolean")
+                if "name" in patch and (not isinstance(patch["name"], str) or not patch["name"].strip()):
+                    raise ValueError("Account name is required")
+                if "priority" in patch and (type(patch["priority"]) is not int or not -1_000_000 <= patch["priority"] <= 1_000_000):
+                    raise ValueError("Invalid account priority")
+                # Enablement, labels and routing priority belong to the local
+                # connection. Shared credential custody may serve other hosts.
+                # Only explicit credential administration mutates that store.
+                owner = metadata.get("credential_store_id", row["id"])
+                for linked in await self.db.list_providers():
+                    meta = linked.get("metadata") or {}
+                    same_remote = meta.get("subscription_remote") == metadata.get("subscription_remote") and linked.get("base_url") == row.get("base_url")
+                    if (meta.get("access") == "subscription" and meta.get("vendor") == metadata.get("vendor")
+                            and meta.get("account_id") == identifier
+                            and bool(meta.get("subscription_remote")) == bool(metadata.get("subscription_remote"))
+                            and (same_remote if metadata.get("subscription_remote") else meta.get("credential_store_id", linked["id"]) == owner)):
+                        changes = {}
+                        new_meta = dict(meta)
+                        if "enabled" in patch: changes["enabled"] = patch["enabled"]
+                        if "name" in patch: new_meta["label"] = patch["name"].strip()
+                        if "priority" in patch: new_meta["account_fallback_priority"] = patch["priority"]
+                        if new_meta != meta: changes["metadata"] = new_meta
+                        if changes: await self.db.update_provider_fields(linked["id"], changes)
+                with self.scope(): await self.reload_catalog()
+                return {"ok": True}
             metadata = row.get("metadata") or {}
             submitted = {**(fields or {})}
             submitted["name"] = submitted.get("name") or metadata.get("label") or row["name"]

@@ -35,7 +35,7 @@ async def test_sign_in_name_renewal_and_rename_keep_shared_connections_consisten
         renewed = await signin(image_id, 'Renamed work')
         assert renewed['account']['id'] == account_id
         accounts = await service.accounts()
-        assert len(accounts) == 1 and accounts[0]['name'] == 'Renamed work' and accounts[0]['enabled'] is False
+        assert len(accounts) == 1 and accounts[0]['name'] == 'Renamed work' and accounts[0]['enabled'] is True
         for identifier in [pid,image_id]:
             row = await db.get_provider(identifier)
             assert row['metadata']['account_id'] == account_id
