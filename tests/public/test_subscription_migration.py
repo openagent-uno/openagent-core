@@ -123,3 +123,41 @@ async def test_original_references_bind_to_the_first_available_account_not_a_dis
         assert (await db.get_provider(result['connections'][1]['provider_id']))['enabled'] is False
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_independent_databases_can_adopt_one_host_owned_rotating_store(tmp_path):
+    first, second = MemoryDB(str(tmp_path / 'first.sqlite')), MemoryDB(str(tmp_path / 'second.sqlite'))
+    await first.connect(); await second.connect()
+    source = tmp_path / 'source.json'
+    source.write_text(json.dumps({'accounts': [{'id':'a', 'name':'Shared account',
+        'access_token':'fixture-access', 'refresh_token':'fixture-refresh'}]}))
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    services = []
+    try:
+        first_id = await first.upsert_provider(name='first', framework='api-based')
+        second_id = await second.upsert_provider(name='second', framework='api-based')
+        assert first_id == second_id  # Deliberate database-local id collision.
+        result = await adopt_subscription_accounts(first, first_id, 'claude', source,
+            quiesced=True, expected_sha256=digest)
+        owners = {row['account_id']: row['credential_store_id'] for row in result['connections']}
+        await adopt_subscription_accounts(second, second_id, 'claude', source,
+            quiesced=True, expected_sha256=digest, credential_owners=owners)
+        assert len(list((tmp_path / 'subscriptions').glob('*.json'))) == 1
+        for db, identifier in ((first, first_id), (second, second_id)):
+            services.append(subscription_for(await db.get_provider(identifier), db.db_path))
+        assert services[0].manager.creds_file == services[1].manager.creds_file
+        # An already loaded worker must observe another worker's atomic token
+        # replacement on its next locked operation.
+        services[1].manager.list_accounts()
+        manager = services[0].manager
+        with manager._lock:
+            store = manager._load_store_unlocked()
+            store['accounts'][0]['access_token'] = 'rotated-fixture-access'
+            manager._save_store_unlocked(store)
+        with services[1].manager._lock:
+            assert services[1].manager._load_store_unlocked()['accounts'][0]['access_token'] == 'rotated-fixture-access'
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
+    finally:
+        for service in services: await service.close()
+        await first.close(); await second.close()

@@ -160,6 +160,8 @@ def default_input_modalities(provider: str, model: str) -> list[str]:
     """
     p = str(provider or "").strip().lower()
     m = str(model or "").strip().lower()
+    from .connections import subscription_model_id
+    m = subscription_model_id("anthropic", m)
 
     # OpenRouter model ids may retain their upstream ``vendor/model`` prefix.
     if p == "openrouter" and "/" in m:

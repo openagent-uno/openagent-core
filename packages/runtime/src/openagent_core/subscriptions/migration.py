@@ -93,7 +93,11 @@ async def adopt_subscription_accounts(db, provider_id: int, provider: str, sourc
                 await conn.execute("UPDATE providers SET metadata_json=? WHERE id=?", (json.dumps(meta), pid))
                 target = target_root / f"{owner_id}-{provider}.json"
                 if credential_owners:
-                    if owner_id == pid or not target.is_file():
+                    # Provider ids are local to a database. Two host databases
+                    # sharing one private credential directory can have the
+                    # same id; explicit reuse still verifies the complete
+                    # stopped-writer snapshot before touching catalog rows.
+                    if not target.is_file():
                         raise ValueError("The shared credential owner must be adopted first")
                     existing = json.loads(target.read_text())
                     if existing.get("accounts") != [account]:

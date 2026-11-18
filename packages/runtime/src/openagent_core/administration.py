@@ -197,7 +197,14 @@ class ProviderModelAdmin:
 
     async def _discovered_entry(self, row: dict, model: str) -> dict | None:
         entries = await self._discovered_entries(row)
-        return next((entry for entry in entries if entry.get("id") == model), None)
+        reference = self._discovery_model_id(row, model)
+        return next((entry for entry in entries if entry.get("id") == reference), None)
+
+    @staticmethod
+    def _discovery_model_id(row: dict, model: str) -> str:
+        from .models.connections import connection_info, subscription_model_id
+        info = connection_info(row)
+        return subscription_model_id(info["vendor"], model) if info["access"] == "subscription" else model
 
     async def _discovered_entries(self, row: dict) -> list[dict]:
         from .models.discovery import list_provider_models
@@ -234,12 +241,13 @@ class ProviderModelAdmin:
                 if before.get("input_modalities_source") == "manual":
                     manual += 1
                     continue
-                if model["model"] not in entries:
+                reference = self._discovery_model_id(row, model["model"])
+                if reference not in entries:
                     # Unreachable provider, or a model it no longer lists:
                     # keep the stored declaration.
                     continue
                 after = refreshed_model_metadata(before, provider=row["name"], model=model["model"],
-                                                 discovered=entries.get(model["model"]))
+                                                 discovered=entries.get(reference))
                 if after != before:
                     await self.db.update_model_fields(model["id"], {"metadata": after})
                     updated.append(model["runtime_id"])

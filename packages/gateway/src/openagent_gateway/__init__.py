@@ -4,6 +4,7 @@ from dataclasses import asdict
 from typing import Any
 from aiohttp import web
 from openagent_core import RunRequest, IdempotencyConflict
+from .compression import json_compression
 
 _REQUEST_FIELDS={'run_id','session_id','idempotency_key','input','deadline_seconds','model_ref','attachments','steer_run_id'}
 
@@ -84,7 +85,7 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
         async with resolve_context(request,'run.read',run_id,None) as context:
             return web.json_response({'runs':[asdict(row) for row in await runtime.children(run_id,context)]})
 
-    app=web.Application(middlewares=[boundary],client_max_size=1<<20)
+    app=web.Application(middlewares=[json_compression,boundary],client_max_size=1<<20)
     app.add_routes([web.post(prefix,submit),web.get(prefix+'/{run_id}',read),
         web.get(prefix+'/{run_id}/events',events),web.post(prefix+'/{run_id}/cancel',cancel),
         web.get(prefix+'/{run_id}/children',children)])
@@ -96,4 +97,4 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
         app.cleanup_ctx.append(lifecycle)
     return app
 
-__all__=['create_app']
+__all__=['create_app','json_compression']

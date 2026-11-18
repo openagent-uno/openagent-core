@@ -31,6 +31,7 @@ import uuid
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from .cc_anthropic import CLAUDE_CODE_SYSTEM_PREFIX, billing_block
+from openagent_core.models.connections import subscription_model_id
 
 logger = logging.getLogger("claude_sub_proxy.translate")
 
@@ -48,9 +49,7 @@ def _upstream_model(model: str, model_map: Dict[str, str]) -> str:
     """Accept legacy family/version aliases without changing their generation."""
     if model in model_map:
         return model_map[model]
-    if re.fullmatch(r"(?:opus|sonnet|haiku)-\d+(?:-\d+)*(?:-latest)?", model):
-        return "claude-" + model
-    return model
+    return subscription_model_id("anthropic", model)
 
 
 def _safe_tool_id(raw: Any) -> str:

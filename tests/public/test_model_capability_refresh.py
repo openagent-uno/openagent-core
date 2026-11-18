@@ -93,6 +93,28 @@ class ModelCapabilityRefresh(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["reachable"])
         self.assertEqual(["text", "image"], (await self.admin.model(self.context, row["id"]))["metadata"]["input_modalities"])
 
+    async def test_subscription_alias_uses_live_declarations_without_rewriting_references(self):
+        await self.db.update_provider_fields(self.provider_id, {"metadata": {
+            "vendor": "anthropic", "access": "subscription", "account_id": "fixture-account"}})
+        entries = [{"id": "claude-opus-4-8", "input_modalities": ["text", "image", "file"]}]
+        with mock.patch.object(self.admin, "_discovered_entries", mock.AsyncMock(return_value=entries)):
+            row = await self._create("opus-4-8")
+            self.assertEqual("provider", row["metadata"]["input_modalities_source"])
+            self.assertEqual(["text", "image", "file"], row["metadata"]["input_modalities"])
+            entries[0]["input_modalities"] = ["text", "image"]
+            result = await self.admin.refresh_capabilities(self.context, self.provider_id)
+        self.assertEqual(["proxy:opus-4-8"], result["updated"])
+        refreshed = await self.admin.model(self.context, row["id"])
+        self.assertEqual("opus-4-8", refreshed["model"])
+        self.assertEqual(["text", "image"], refreshed["metadata"]["input_modalities"])
+
+    async def test_api_model_names_are_not_reinterpreted_as_subscription_aliases(self):
+        self.catalog = [{"id": "claude-opus-4-8", "input_modalities": ["text", "audio"]}]
+        row = await self._create("opus-4-8")
+        self.assertEqual("default", row["metadata"]["input_modalities_source"])
+        result = await self.admin.refresh_capabilities(self.context, self.provider_id)
+        self.assertEqual([], result["updated"])
+
 
 if __name__ == "__main__":
     unittest.main()

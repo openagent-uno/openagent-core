@@ -76,6 +76,12 @@ endpoints, pins and history; sibling models receive distinct connection
 identities. Original provider and model budget groups remain shared. For
 multiple legacy connections using one pool, adopt the owner first and pass
 its account-to-store mapping as `credential_owners` for subsequent rows.
+Database-local provider ids may coincide across independent host databases.
+Explicit `credential_owners` reuse validates the existing stopped-writer snapshot
+instead of rejecting an id collision. A host may supply the same private
+`subscriptions/` directory to its databases through its filesystem layout; all
+workers then share the same OS locks and rotating store. This is a host-owned
+storage arrangement, never an implicit search for another instance's credentials.
 The source is preserved, and failures remove only newly created destinations.
 
 A host rollback must merge the **latest** rotated credentials back into its

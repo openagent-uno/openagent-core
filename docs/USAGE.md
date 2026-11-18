@@ -158,3 +158,18 @@ migration/privacy helpers. Install the engine extra only when selecting the
 reasoning engine or its asynchronous memory API.
 
 - [Optional remote capabilities, inventory and media](remote-capabilities.md)
+
+## Negotiated buffered JSON compression
+
+The optional `openagent_gateway.json_compression` aiohttp middleware is enabled
+by `create_app` and may be reused by host HTTP gateways. It compresses buffered
+JSON GET responses from 8 KiB through 64 MiB at gzip level 1, only when the client
+explicitly accepts gzip (including quality weights). Compression runs off the
+event loop. Unadvertised clients keep identity encoding. Prepared streams, SSE,
+ranges, validators, `no-transform`, pre-encoded bodies and non-200 responses retain
+their representation. Cookies, status and other headers are preserved; compressed
+variants declare `Vary: Accept-Encoding`. Decoding is the client's HTTP stack's
+responsibility; byte-blind Iroh tunnels need no protocol change.
+
+Payload reduction is not an end-to-end session-opening speedup. Measure projection,
+transfer and client rendering separately on the intended authenticated route.

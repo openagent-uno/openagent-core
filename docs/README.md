@@ -195,3 +195,5 @@ source and wheel workflows distinguish platform contracts from host acceptance.
 - [Core beta 130: stateless account-bound probes](releases/v1.1.0-beta.130.md)
 
 - [Core beta 131: versioned Claude aliases](releases/v1.1.0-beta.131.md)
+
+- [Core beta 132: subscription identity and negotiated JSON compression](releases/v1.1.0-beta.132.md)

@@ -1,8 +1,17 @@
 """A connection's identity is independent of its vendor and model capabilities."""
 from __future__ import annotations
 
+import re
+
 ACCESS_TYPES = frozenset({"api", "subscription", "local"})
 MODEL_KINDS = ("llm", "image", "tts", "stt")
+
+
+def subscription_model_id(vendor: str, model: str) -> str:
+    """Resolve versioned subscription aliases without changing generations."""
+    if vendor == "anthropic" and re.fullmatch(r"(?:opus|sonnet|haiku)-\d+(?:-\d+)*(?:-latest)?", model):
+        return "claude-" + model
+    return model
 
 
 def connection_info(row: dict) -> dict:
