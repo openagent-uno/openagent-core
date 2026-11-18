@@ -852,6 +852,7 @@ class NativeProvider(ProviderResources, BaseModel):
         history_runs: int = FULL_SESSION_HISTORY_RUNS,
         *,
         stateless_json_schema: bool = False,
+        budget_guard: Any = None,
     ):
         self._providers_config = providers_config or {}
         self.model = normalize_runtime_model_id(model, self._providers_config)
@@ -860,6 +861,7 @@ class NativeProvider(ProviderResources, BaseModel):
         self._db_path = db_path
         self._history_runs = history_runs
         self._stateless_json_schema = stateless_json_schema
+        self._account_budget_guard = budget_guard
         self._fallback_config: Any = None
         # Pre-connected MCPTools instances supplied by MCPPool. Shared
         # across all NativeProvider instances under the same ModelDispatcher
@@ -1405,7 +1407,7 @@ class NativeProvider(ProviderResources, BaseModel):
             return None
         return ("openagent_core.models.providers.openai.like", "OpenAILike", {"name": provider_name})
 
-    def build_runtime_model(self) -> Any:
+    def build_runtime_model(self, *, account_fallback: bool = True) -> Any:
         """Construct the underlying ``Model`` instance for this runtime.
 
         Used by ``TeamRouterProvider`` to build the routing classifier
@@ -1478,7 +1480,9 @@ class NativeProvider(ProviderResources, BaseModel):
             # default del provider: sono la scelta esplicita di un operatore.
             extra_kwargs = {**extra_kwargs, **self._sampling_from_model_row()}
             if subscription is not None:
-                extra_kwargs["http_client"] = subscription.inference_client((self._provider_config().get("metadata") or {}).get("account_id"))
+                metadata = self._provider_config().get('metadata') or {}
+                route_options = {'single_attempt': True} if metadata.get('account_fallback_group') else {}
+                extra_kwargs['http_client'] = subscription.inference_client(metadata.get('account_id'), **route_options)
                 extra_kwargs["max_retries"] = 0
             model = self._construct_model(
                 model_class,
@@ -1503,7 +1507,7 @@ class NativeProvider(ProviderResources, BaseModel):
             # configured (metadata.accounts). When present, seed the model's
             # initial credential from the pool and stash it so the fallback
             # chokepoint can rotate on 429/529 before spilling to the secondary provider.
-            pool = get_or_build_pool(provider_name, self._provider_config())
+            pool = None if subscription is not None else get_or_build_pool(provider_name, self._provider_config())
             if pool is not None:
                 selected = pool.select()
                 if selected is not None:
@@ -1511,6 +1515,12 @@ class NativeProvider(ProviderResources, BaseModel):
                     model.base_url = selected.base_url
                     model.client = model.async_client = None
                 model._openagent_cred_pool = pool
+            if subscription is not None and account_fallback:
+                from .subscription_routes import account_routes_for
+                policy = account_routes_for(self._provider_config(), self.model,
+                    self._providers_config, self._db_path, self._account_budget_guard)
+                if policy is not None:
+                    model._openagent_account_routes = policy
             return model
 
         from openagent_core.models.providers.utils import get_model
@@ -1845,6 +1855,9 @@ class NativeProvider(ProviderResources, BaseModel):
             user_message = next(message for message in reversed(messages) if message.role == 'user')
             user_message.images = [Image(content=image.content, mime_type=image.mime_type) for image in request.images]
         model = self._build_runtime_model()
+        # Stateless inference and connection probes attest this exact account.
+        if hasattr(model, '_openagent_account_routes'):
+            model._openagent_account_routes = None
         options = {}
         schema = getattr(request, 'response_schema', None)
         if self._stateless_json_schema and schema and schema.get('type') == 'object':

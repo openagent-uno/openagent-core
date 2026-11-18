@@ -123,6 +123,35 @@ A host rollback must merge the **latest** rotated credentials back into its
 legacy store before restarting old writers. Restoring an old token backup
 alone can invalidate access. Never run old and new writers concurrently.
 
+## Declared account failover
+
+Native connections remain bound to their named account. A host may declare an
+`account_fallback_group` and integer `account_fallback_priority` on subscription
+connections. Offline adoption preserves a legacy multi-account pool by declaring
+this policy on the copied connections; pass `account_fallback=False` to adopt
+exact connections without it. `account_fallback_enabled=False` removes a
+connection from automatic selection while keeping its group configuration.
+
+Only enabled, same-vendor, same-model entries in that group are candidates.
+The requested account is tried first; siblings follow their declared priority.
+The shared budget guard excludes exhausted candidate scopes. Each candidate
+uses its own model settings and exact client. Only account failures (401, 403,
+429, 529) before the first upstream frame may move to a sibling. Tools are not
+replayed; cancellation, malformed requests and failures after any frame propagate.
+Stateless inference and connection probes still attest the exact account.
+Reported request usage and effective-model attribution follow the account that
+answered, with un-attributed run usage charged only once.
+
+Hosts can pass validated nonsecret `subscription_settings` during adoption:
+model aliases, advertised models, transport, deadlines, pacing and concurrency.
+Private paths and credentials are not accepted in these catalog options. A
+`subscription_admission_id` identifies one private shared admission lane for a
+migrated pool, retaining its concurrency and pacing across separate rotating
+account stores and processes. Hosts sharing a lane must use the same limits.
+The optional settings `admission_path` on a directly constructed service is
+host-owned; it contains only lease/pacing state. Grant services continue to
+require their explicit admission path and never discover credentials.
+
 ## Usage and budgets
 
 Quota is shown only when upstream reports it. Included subscription usage is

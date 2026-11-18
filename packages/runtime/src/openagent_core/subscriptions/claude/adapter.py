@@ -48,9 +48,9 @@ def create_app(settings, *, token_manager=None):
         chunk_timeout=settings.chunk_timeout,
     )
     from ..admission import StorePacer, StoreSemaphore
-    _upstream_slots = StoreSemaphore(settings.creds_file, "active", settings.upstream_max_concurrency)
-    _queue_slots = StoreSemaphore(settings.creds_file, "queue", settings.upstream_max_concurrency + settings.upstream_max_queue)
-    _store_pacer = StorePacer(settings.creds_file)
+    _upstream_slots = StoreSemaphore(settings.admission_path or settings.creds_file, "active", settings.upstream_max_concurrency)
+    _queue_slots = StoreSemaphore(settings.admission_path or settings.creds_file, "queue", settings.upstream_max_concurrency + settings.upstream_max_queue)
+    _store_pacer = StorePacer(settings.admission_path or settings.creds_file)
     _pace_lock = threading.Lock()
     _next_upstream_at = 0.0
     _metrics_lock = threading.Lock()

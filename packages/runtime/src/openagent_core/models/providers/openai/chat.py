@@ -1,5 +1,6 @@
 from base64 import b64encode
 from collections.abc import AsyncIterator
+from openagent_core.models.account_routes import account_call, account_acall, account_stream, account_astream
 from dataclasses import dataclass
 from openagent_core.configuration import getenv
 from typing import Any, Dict, Iterator, List, Literal, Optional, Type, Union
@@ -409,6 +410,7 @@ class OpenAIChat(Model):
         normalized = reformat_tool_call_ids(messages, provider="openai_chat")
         return [self._format_message(m, compress_tool_results) for m in normalized]
 
+    @account_call
     def invoke(
         self,
         messages: List[Message],
@@ -500,6 +502,7 @@ class OpenAIChat(Model):
             log_error(f"Error from OpenAI API: {str(e)}")
             raise ModelProviderError(message=str(e), model_name=self.name, model_id=self.id) from e
 
+    @account_acall
     async def ainvoke(
         self,
         messages: List[Message],
@@ -590,6 +593,7 @@ class OpenAIChat(Model):
             log_error(f"Error from OpenAI API: {str(e)}")
             raise ModelProviderError(message=str(e), model_name=self.name, model_id=self.id) from e
 
+    @account_stream
     def invoke_stream(
         self,
         messages: List[Message],
@@ -688,6 +692,7 @@ class OpenAIChat(Model):
             log_error(f"Error from OpenAI API: {str(e)}")
             raise ModelProviderError(message=str(e), model_name=self.name, model_id=self.id) from e
 
+    @account_astream
     async def ainvoke_stream(
         self,
         messages: List[Message],

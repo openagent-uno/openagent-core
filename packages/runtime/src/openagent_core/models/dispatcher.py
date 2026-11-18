@@ -33,6 +33,7 @@ describing something that no longer happens.
 from __future__ import annotations
 
 import asyncio
+from . import account_routes
 from openagent_core.configuration import runtime_environment
 import logging
 import os
@@ -856,6 +857,7 @@ class TeamRouterProvider(ProviderResources, BaseModel):
         # prefers this over the entry pick so the chat badge shows the
         # specialist that actually wrote the response, not the leader.
         self._last_delegation_by_session: dict[str, str] = {}
+        self._account_models_by_session: dict[str, dict[str, str]] = {}
         # In-flight agno run_id per session is tracked by ``BaseModel`` (see
         # ``_track_run_id`` / ``_coop_cancel``); the TEAM path captures it via
         # the ``on_run_id`` callback wired into ``_arun_runtime_stream``.
@@ -867,11 +869,9 @@ class TeamRouterProvider(ProviderResources, BaseModel):
     def effective_model_id(self, session_id: str | None = None) -> str | None:
         """Return the specialist/fallback that actually handled the turn."""
         sid = session_id or "default"
-        return (
-            self._last_delegation_by_session.get(sid)
-            or self._session_runtime_entry.get(sid)
-            or self._entry_runtime_id
-        )
+        selected = (self._last_delegation_by_session.get(sid)
+                    or self._session_runtime_entry.get(sid) or self._entry_runtime_id)
+        return account_routes.effective_model(selected, self._account_models_by_session.get(sid))
 
     # ── wiring ────────────────────────────────────────────────────────
 
@@ -928,6 +928,7 @@ class TeamRouterProvider(ProviderResources, BaseModel):
         self._session_runtime_entry.clear()
         self._session_member_map.clear()
         self._last_delegation_by_session.clear()
+        self._account_models_by_session.clear()
         self._run_ids.clear()
 
     # ── catalog → runtime objects ─────────────────────────────────────
@@ -984,6 +985,7 @@ class TeamRouterProvider(ProviderResources, BaseModel):
             model=entry.runtime_id,
             providers_config=self._providers_config,
             db_path=_runtime_db_path(self._db),
+            budget_guard=self._budget_guard,
         )
         provider.set_fallback_config(self._fallback_config)
         member_toolkits: list[Any] = []
@@ -1110,6 +1112,7 @@ class TeamRouterProvider(ProviderResources, BaseModel):
                 model=entry.runtime_id,
                 providers_config=self._providers_config,
                 db_path=_runtime_db_path(self._db),
+                budget_guard=self._budget_guard,
             )
             provider.set_fallback_config(self._fallback_config)
             if self._mcp_pool is not None:
@@ -1287,6 +1290,7 @@ class TeamRouterProvider(ProviderResources, BaseModel):
         self._session_runtime_entry.pop(session_id, None)
         self._session_member_map.pop(session_id, None)
         self._last_delegation_by_session.pop(session_id, None)
+        self._account_models_by_session.pop(session_id, None)
         self._clear_run_id(session_id)
 
     async def request_cancel(self, session_id: str) -> bool:
@@ -1605,13 +1609,15 @@ class TeamRouterProvider(ProviderResources, BaseModel):
         # drop attribution for exactly the unattended runs §7 cares about —
         # the ones with the user's seat empty, where a note that misleads has
         # nobody watching to notice.
+        account_sink, account_token = account_routes.open_usage()
+        self._account_models_by_session.pop(sid, None)
         recall_sink, recall_token = vault_recall.open_sink()
         # Capture the run's tool trace so the quality judge can verify grounding
         # (a cited id present in a tool RESULT is not fabrication). No-op sink
         # when the monitor is off — byte-identical to before.
         trace_sink, trace_token = tool_trace.maybe_open()
         outcome = vault_recall.OUTCOME_OK
-        in_tokens = out_tokens = 0
+        in_tokens = out_tokens = cache_tokens = 0
         try:
             # Plain-NativeProvider single-model path: forward the full args.
             if isinstance(runtime, BaseModel):
@@ -1647,21 +1653,23 @@ class TeamRouterProvider(ProviderResources, BaseModel):
                     files=files, images=images, audio=audio, videos=videos,
                 )
             in_tokens, out_tokens = resp.input_tokens, resp.output_tokens
-            await self.record_cost(
-                input_tokens=resp.input_tokens,
-                output_tokens=resp.output_tokens,
-                cache_read_tokens=resp.cache_read_tokens,
-                session_id=session_id,
-                runtime_id=actual_runtime_id,
-            )
+            cache_tokens = resp.cache_read_tokens
+            if account_sink['selected']:
+                resp.model = self.effective_model_id(sid)
             return resp
         except BaseException as exc:
             outcome = vault_recall.outcome_for_exception(exc)
             raise
         finally:
+            self._account_models_by_session[sid] = dict(account_sink['selected'])
+            account_routes.close_usage(account_token)
             vault_recall.close_sink(recall_token)
             tool_trace.publish(session_id, trace_sink)
             tool_trace.close(trace_token)
+            for rid, input_count, output_count, cache_count in account_routes.charge_rows(
+                    account_sink, actual_runtime_id, (in_tokens, out_tokens, cache_tokens)):
+                await self.record_cost(input_tokens=input_count, output_tokens=output_count,
+                    cache_read_tokens=cache_count, session_id=session_id, runtime_id=rid)
             await self.record_vault_recalls(
                 sink=recall_sink,
                 session_id=session_id,
@@ -1724,6 +1732,8 @@ class TeamRouterProvider(ProviderResources, BaseModel):
         # Which vault notes this turn reads, so the outcome below can be
         # attributed to them. Opened next to the usage sink because they are
         # flushed together and share a lifetime.
+        account_sink, account_token = account_routes.open_usage()
+        self._account_models_by_session.pop(sid, None)
         recall_sink, recall_token = vault_recall.open_sink()
         # Capture the run's tool trace for the quality judge (see generate()).
         # Same lifetime as the recall sink; no-op when the monitor is off.
@@ -1789,17 +1799,17 @@ class TeamRouterProvider(ProviderResources, BaseModel):
             outcome = vault_recall.outcome_for_exception(exc)
             raise
         finally:
+            self._account_models_by_session[sid] = dict(account_sink['selected'])
+            account_routes.close_usage(account_token)
             stream_usage.close_sink(sink_token)
             vault_recall.close_sink(recall_token)
             tool_trace.publish(session_id, trace_sink)
             tool_trace.close(trace_token)
-            await self.record_cost(
-                input_tokens=sink.get("input_tokens", 0),
-                output_tokens=sink.get("output_tokens", 0),
-                cache_read_tokens=sink.get("cache_read_tokens", 0),
-                session_id=session_id,
-                runtime_id=actual_runtime_id,
-            )
+            for rid, input_count, output_count, cache_count in account_routes.charge_rows(
+                    account_sink, actual_runtime_id, (sink.get('input_tokens', 0),
+                    sink.get('output_tokens', 0), sink.get('cache_read_tokens', 0))):
+                await self.record_cost(input_tokens=input_count, output_tokens=output_count,
+                    cache_read_tokens=cache_count, session_id=session_id, runtime_id=rid)
             await self.record_vault_recalls(
                 sink=recall_sink,
                 session_id=session_id,
@@ -2070,6 +2080,7 @@ class ModelDispatcher(BaseModel):
                         model=value,
                         providers_config=self._providers_config,
                         db_path=db_path,
+                        budget_guard=self._budget_guard,
                     ).build_runtime_model()
                     model.model_type = ModelType.MODEL
                     resolved.append(model)

@@ -2,6 +2,7 @@
 
 ## Architecture and use
 
+- [Beta135: explicit account failover and deferred tool transcripts](releases/v1.1.0-beta.135.md).
 - [Beta134: validated host subscription completions](releases/v1.1.0-beta.134.md).
 
 - [Beta133: host-authorized subscription grants](releases/v1.1.0-beta.133.md).

@@ -29,7 +29,17 @@ def validate_connection(metadata: dict) -> None:
         raise ValueError("Unsupported subscription vendor")
     if "credential_store_id" in metadata and (isinstance(metadata["credential_store_id"], bool) or not isinstance(metadata["credential_store_id"], int) or metadata["credential_store_id"] < 1):
         raise ValueError("credential_store_id must be a positive identifier")
-    for field in ("vendor", "label", "account_id", "budget_group"):
+    if "account_fallback_enabled" in metadata and type(metadata['account_fallback_enabled']) is not bool:
+        raise ValueError('account_fallback_enabled must be a boolean')
+    if "account_fallback_priority" in metadata and (type(metadata['account_fallback_priority']) is not int or not -1_000_000 <= metadata['account_fallback_priority'] <= 1_000_000):
+        raise ValueError('account_fallback_priority must be an integer between -1000000 and 1000000')
+    if "subscription_admission_id" in metadata and (type(metadata['subscription_admission_id']) is not int or metadata['subscription_admission_id'] < 1):
+        raise ValueError('subscription_admission_id must be a positive identifier')
+    if 'subscription_settings' in metadata:
+        from ..subscriptions.settings import validate_settings
+        provider = {'anthropic': 'claude', 'openai': 'codex'}.get(metadata.get('vendor'))
+        validate_settings(provider, metadata['subscription_settings'])
+    for field in ("vendor", "label", "account_id", "budget_group", "account_fallback_group"):
         if field in metadata and (not isinstance(metadata[field], str) or not metadata[field].strip()):
             raise ValueError(f"{field} must be a nonempty string")
 

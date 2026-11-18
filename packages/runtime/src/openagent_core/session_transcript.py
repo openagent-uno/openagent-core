@@ -547,3 +547,24 @@ def public_transcript_attachments(values):
             ref["url"] = f"/api/artifacts/{ref['artifact_id']}/content"
             result.append(ref)
     return result
+
+
+def defer_tool_message_content(message: dict) -> dict:
+    """Keep a linked tool's transcript card while its body is loaded on demand.
+
+    Apply only to an already authorized public projection. The host must expose
+    its separately authorized invocation detail operation for the same id.
+    User/assistant content, unlinked tools, attachments and ordered UI parts
+    remain available. No stored message or invocation is modified.
+    """
+    summary = message.get('tool_summary')
+    identifier = message.get('tool_invocation_id')
+    if (message.get('role') != 'tool' or not isinstance(summary, dict)
+            or not isinstance(identifier, str) or not identifier
+            or summary.get('id') != identifier):
+        return message
+    result = {**message, 'text': '', 'tool_summary': {**summary, 'details_deferred': True}}
+    if isinstance(message.get('parts'), list):
+        result['parts'] = [part for part in message['parts']
+                           if not isinstance(part, dict) or part.get('kind') != 'text']
+    return result

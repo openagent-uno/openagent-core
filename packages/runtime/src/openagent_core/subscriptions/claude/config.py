@@ -13,6 +13,7 @@ def _parse_model_map() -> Dict[str, str]:
 @dataclass
 class Settings:
     creds_file: Path
+    admission_path: Optional[Path] = None
     require_completed: bool = False
     transport: Optional[str] = None
     impersonate: str = 'chrome'

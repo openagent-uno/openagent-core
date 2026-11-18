@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openagent-core"
-version = "1.1.0b134"
+version = "1.1.0b135"
 description = "Embeddable OpenAgent runtime and public host contracts"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -29,7 +29,7 @@ include = ["openagent_core*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-openagent_core = ["prompts/*.json", "memory/operational/sql/*.sql"]
+openagent_core = ["subscriptions/NOTICE.txt", "prompts/*.json", "memory/operational/sql/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/public"]

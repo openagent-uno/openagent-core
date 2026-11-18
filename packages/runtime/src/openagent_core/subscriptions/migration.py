@@ -18,7 +18,9 @@ from openagent_core.models.catalog import build_runtime_model_id
 
 async def adopt_subscription_accounts(db, provider_id: int, provider: str, source: Path, *,
                                       quiesced: bool, expected_sha256: str,
-                                      credential_owners: dict[str, int] | None = None) -> dict:
+                                      credential_owners: dict[str, int] | None = None,
+                                      account_fallback: bool = True,
+                                      subscription_settings: dict | None = None) -> dict:
     """Split a legacy pool into exact account connections, preserving original IDs.
 
     The first account retains the provider/model IDs, pins, budgets and history.
@@ -42,6 +44,10 @@ async def adopt_subscription_accounts(db, provider_id: int, provider: str, sourc
     now_ms = time.time() * 1000
     accounts.sort(key=lambda account: (account.get("enabled") is False,
                                        int(account.get("limited_until_ms") or 0) > now_ms))
+    fallback_group = uuid.uuid4().hex if account_fallback and len(accounts) > 1 else None
+    from .settings import validate_settings
+    protocol_settings = validate_settings(provider, subscription_settings)
+    admission_id = (credential_owners or {}).get(str(accounts[0]['id']), provider_id)
     default_before = await db.get_default_router()
     target_root = Path(db.db_path).parent / "subscriptions"
     created = []
@@ -61,6 +67,12 @@ async def adopt_subscription_accounts(db, provider_id: int, provider: str, sourc
                 label = str(account.get("name") or account["id"])
                 meta = {**metadata, "vendor": vendor, "access": "subscription", "label": label,
                         "account_id": str(account["id"]), "budget_group": legacy["name"]}
+                meta['subscription_admission_id'] = admission_id
+                if protocol_settings:
+                    meta['subscription_settings'] = protocol_settings
+                if fallback_group:
+                    meta.update(account_fallback_group=fallback_group,
+                                account_fallback_priority=int(account.get('priority') or 0))
                 pid = provider_id
                 name = legacy["name"]
                 if index:

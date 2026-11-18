@@ -28,7 +28,7 @@ class SubscriptionService:
         auth = importlib.import_module(base + ".auth")
         adapter = importlib.import_module(base + ".adapter")
         if isinstance(settings, dict):
-            if "creds_file" in settings:
+            if "creds_file" in settings or "admission_path" in settings:
                 raise ValueError("The host supplies the credential path separately")
             settings = config.Settings(creds_file=credentials_path, **settings)
         settings = settings or config.Settings(creds_file=credentials_path)
@@ -73,7 +73,7 @@ class SubscriptionService:
             options = config.Settings(creds_file=admission_path, **settings)
         else:
             options = replace(settings) if settings is not None else config.Settings(creds_file=admission_path)
-        if Path(options.creds_file) != admission_path:
+        if Path(options.creds_file) != admission_path or options.admission_path is not None and Path(options.admission_path) != admission_path:
             raise ValueError('The admission path must match the protocol settings')
         options.rate_limit_retries = 0
         options.require_completed = True
@@ -162,11 +162,12 @@ class SubscriptionService:
         return [{key: value for key, value in account.items() if key in fields}
                 for account in result.get("accounts", []) if isinstance(account, dict)]
 
-    def inference_client(self, account_id: str | None = None):
+    def inference_client(self, account_id: str | None = None, *, single_attempt: bool = False):
         """Bind selection and retries to the card's exact account, never a sibling."""
         if account_id is None:
             return self.client
-        if account_id not in self._inference_clients:
+        client_key = (account_id, True) if single_attempt else account_id
+        if client_key not in self._inference_clients:
             from dataclasses import replace
             import httpx
             from .transport import SubscriptionTransport
@@ -188,14 +189,18 @@ class SubscriptionService:
                     return self.select_account().token
 
             settings = replace(self.settings)
+            # The route policy owns account failover. Do not sleep and retry
+            # the same exhausted account before it can choose its next account.
+            if single_attempt:
+                settings.rate_limit_retries = 0
             if self.provider == "codex":
                 # Core owns usage accounting; avoid multiple file-ledger writers.
                 settings.usage_enabled = False
             app = self._adapter.create_app(settings, token_manager=BoundAccount())
-            self._inference_clients[account_id] = httpx.AsyncClient(
+            self._inference_clients[client_key] = httpx.AsyncClient(
                 transport=SubscriptionTransport(app), base_url="http://subscription.internal",
                 headers={"Authorization": "Bearer " + settings.api_key}, timeout=settings.request_timeout)
-        return self._inference_clients[account_id]
+        return self._inference_clients[client_key]
 
     async def _claude_models(self):
         """Read the authenticated provider catalog rather than a version snapshot."""
@@ -319,7 +324,17 @@ def subscription_for(row: dict, db_path: str | Path) -> SubscriptionService | No
         raise ValueError("Subscription access requires an explicit persistent host database path")
     # IDs remain stable across renames; no user-controlled path component.
     identifier = int(metadata.get("credential_store_id", row["id"]))
-    key = (str(path), identifier, provider)
-    if key not in _SERVICES:
-        _SERVICES[key] = SubscriptionService(provider, path.parent / "subscriptions" / f"{identifier}-{provider}.json")
+    from .settings import native_settings, validate_settings
+    import json
+    options = validate_settings(provider, metadata.get('subscription_settings'))
+    admission_id = metadata.get('subscription_admission_id')
+    if admission_id is not None and (type(admission_id) is not int or admission_id < 1):
+        raise ValueError('subscription_admission_id must be a positive identifier')
+    directory = path.parent / 'subscriptions'
+    admission = directory / f'admission-{admission_id}-{provider}' if admission_id else None
+    store = directory / f'{identifier}-{provider}.json'
+    key = (str(path), identifier, provider, admission_id, json.dumps(options, sort_keys=True))
+    if key not in _SERVICES or _SERVICES[key].client.is_closed:
+        _SERVICES[key] = SubscriptionService(provider, store,
+            settings=native_settings(provider, store, options, admission_path=admission))
     return _SERVICES[key]
