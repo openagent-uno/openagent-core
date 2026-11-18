@@ -199,6 +199,13 @@ explicit environment variables; they do not embed secrets. No listener starts
 on import or from creating a normal connection. The host must replace a drained
 writer; do not duplicate a rotating token into several services.
 
+From beta139, subscription-only hosts also keep the model package's reasoning
+implementations lazy: constructing either subscription service and its HTTP app
+requires the subscription extras, without the optional engine, database or model
+SDK dependencies. Importing the model contracts or connection identity helpers
+does not initialize a reasoning provider. Existing model class exports retain
+their public names and load when explicitly requested.
+
 Root `/v1/*`, health and separately authenticated administrative endpoints keep
 the protocol adapter's compatibility behavior. Inference authorization never
 implicitly grants credential administration. A key is required by default;

@@ -128,6 +128,28 @@ def main() -> None:
         if installed["distributions"].get(row["name"]) != row["version"]:
             raise RuntimeError("The installed optional module does not match its candidate")
     (directory / "installed-environment.json").write_text(json.dumps(installed, indent=2) + "\n")
+    minimal = environment / "subscription-host"
+    venv.EnvBuilder(with_pip=True).create(minimal)
+    minimal_python = minimal / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    run(uv, "pip", "install", "--python", minimal_python, "--find-links", directory,
+        f"openagent-core[subscription-host]=={version}")
+    run(minimal_python, "-I", "-c", """
+import asyncio, sys, tempfile
+from pathlib import Path
+from openagent_core.subscriptions.service import SubscriptionService
+from openagent_core.subscriptions.host import create_app
+async def check():
+    with tempfile.TemporaryDirectory() as temporary:
+        for provider in ('claude', 'codex'):
+            service = SubscriptionService(provider, Path(temporary) / (provider + '.json'))
+            try:
+                assert create_app(service, api_key='qualification-inference', admin_api_key='qualification-admin')
+            finally:
+                await service.close()
+asyncio.run(check())
+assert 'openagent_core.models.native_provider' not in sys.modules
+assert not {'yaml', 'aiosqlite', 'sqlalchemy', 'mcp', 'rich'} & sys.modules.keys()
+""", cwd=minimal)
     run(npm, "--prefix", root / "sdk/typescript", "ci", "--ignore-scripts", "--no-audit", "--no-fund")
     run(npm, "--prefix", root / "sdk/typescript", "test")
     run(python, "-m", "pytest", "tests/public", "tests/prompts", "-q",
@@ -137,6 +159,7 @@ def main() -> None:
                "manifest_sha256": hashlib.sha256((directory / "manifest.json").read_bytes()).hexdigest(),
                "dirty_source": manifest["dirty_snapshot"], "dependency_check": "passed",
                "typescript": "locked SDK build, unit test and live gateway fixture passed",
+               "subscription_host": "isolated subscription-only installation and both service lifecycles passed",
                "python_suites": ["tests/public", "tests/prompts"],
                "models_or_live_channels_qualified": False}
     (directory / "engine-qualification.json").write_text(json.dumps(receipt, indent=2) + "\n")
