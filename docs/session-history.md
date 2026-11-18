@@ -51,6 +51,18 @@ Core29 reproduces the three original gaps; source tests verify the correction.
 This evidence does not assert loss of an embedding host's data and does not
 qualify a new published wheel, installer, live provider or production migration.
 
+## Optional compatibility metadata (beta138)
+
+A newly admitted session may have SQL NULL, JSON `null`, or another non-object
+value in its legacy metadata mirror. These values do not request a rename and
+must not fail canonical reconciliation or block history readiness. An explicit
+object title still propagates to the canonical feed and search journal, including
+the legacy reader's supported double-encoded JSON object form. Canonical run
+identity, authorship, ACLs and transcript contents retain their existing owners.
+
+`tests/public/test_runtime_session_rename.py` exercises the real pending-change
+reconciler, readiness coverage, invalid/non-object metadata and explicit renames.
+
 ## Resuming a conversation and recovering omitted details
 
 Durable history, the model's working context and curated Vault notes are distinct

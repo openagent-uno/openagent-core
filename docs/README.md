@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta138: nullable compatibility metadata keeps history available](releases/v1.1.0-beta.138.md).
+
 - [Beta136: explicit shared subscription custody](releases/v1.1.0-beta.136.md).
 
 - [Beta135: explicit account failover and deferred tool transcripts](releases/v1.1.0-beta.135.md).

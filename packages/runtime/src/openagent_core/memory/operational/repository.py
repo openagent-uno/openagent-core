@@ -28,6 +28,7 @@ from .projection import (
     NESTED_LAYOUT_KEY,
     SessionProjection,
     build_session_projection,
+    loads_maybe_double,
 )
 
 
@@ -1496,10 +1497,8 @@ def _apply_runtime_session_title(
     rename endpoint writes ``sessions.metadata.title``). Without this the rename
     stayed in that row and the session kept its first-message title.
     """
-    raw = legacy.get("metadata")
-    try:
-        metadata = json.loads(raw) if isinstance(raw, str) else dict(raw or {})
-    except (TypeError, ValueError):
+    metadata = loads_maybe_double(legacy.get("metadata"), {})
+    if not isinstance(metadata, dict):
         return None
     title = str(metadata.get("title") or "").strip()[:200]
     if not title:

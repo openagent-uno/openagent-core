@@ -11,8 +11,12 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from openagent_core.memory.db import SCHEMA_SQL
-from openagent_core.memory.operational.repository import project_legacy_session
+from openagent_core.memory.operational.repository import (
+    project_legacy_session, projection_coverage, reconcile_pending,
+)
 from openagent_core.memory.operational.schema import operational_schema_sql
 
 TENANT = "installation:test"
@@ -70,3 +74,29 @@ def test_the_same_title_again_changes_nothing(tmp_path):
     _rename(con, "Daily Triage")
 
     assert con.execute("SELECT source_version FROM sessions_v2 WHERE id=?", (SID,)).fetchone() == version
+
+
+@pytest.mark.parametrize("metadata", [None, "null", "[]", "false", '"null"', '{"unfinished":'])
+def test_metadata_without_a_title_does_not_block_runtime_history_reconciliation(tmp_path, metadata):
+    con = _db(tmp_path)
+    con.execute("INSERT INTO sessions(session_id,session_type,metadata,runs,created_at,updated_at) "
+                "VALUES (?,'agent',?,'[]',1,2)", (SID, metadata))
+    con.execute("INSERT INTO legacy_session_changes(session_id,operation,observed_at_ms) "
+                "VALUES (?,'insert',1)", (SID,))
+    con.commit()
+
+    assert len(reconcile_pending(con, now_ms=3)) == 1
+    assert projection_coverage(con)["complete"] is True
+    assert con.execute("SELECT owner_principal_id,title FROM sessions_v2 WHERE id=?", (SID,)).fetchone() == (
+        OWNER, "Questa è la conversazione…")
+    assert con.execute("SELECT count(*) FROM domain_events WHERE event_type='session.renamed'").fetchone()[0] == 0
+
+
+def test_double_encoded_compatibility_metadata_carries_an_explicit_rename(tmp_path):
+    con = _db(tmp_path)
+    con.execute("INSERT INTO sessions(session_id,session_type,metadata,runs,created_at,updated_at) "
+                "VALUES (?,'agent',?,'[]',1,2)",
+                (SID, json.dumps(json.dumps({"title": "Reviewed title"}))))
+    project_legacy_session(con, SID)
+    assert con.execute("SELECT owner_principal_id,title FROM sessions_v2 WHERE id=?", (SID,)).fetchone() == (
+        OWNER, "Reviewed title")
