@@ -9,7 +9,7 @@ from .connections import subscription_model_id
 def account_routes_for(row, requested, config, db_path, guard=None):
     metadata = row.get('metadata') or {}
     group = metadata.get('account_fallback_group')
-    if not group or metadata.get('access') != 'subscription' or metadata.get('account_fallback_enabled') is False:
+    if 'llm' not in metadata.get('account_fallback_kinds', ['llm']) or not group or metadata.get('access') != 'subscription' or metadata.get('account_fallback_enabled') is False:
         return None
     vendor = metadata.get('vendor')
     rows = {r['name']: r for r in _iter_provider_entries(config)}
@@ -27,6 +27,7 @@ def account_routes_for(row, requested, config, db_path, guard=None):
                 or meta.get('vendor') != vendor
                 or meta.get('account_fallback_group') != group
                 or meta.get('account_fallback_enabled') is False
+                or 'llm' not in meta.get('account_fallback_kinds', ['llm'])
                 or not meta.get('account_id')
                 or subscription_model_id(vendor, entry.model_id) != wire_model):
             continue

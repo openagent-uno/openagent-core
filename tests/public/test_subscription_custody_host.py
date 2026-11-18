@@ -251,3 +251,46 @@ async def test_remote_claude_catalog_uses_selected_account_not_pool_default(tmp_
             assert (await remote.models())[0]['id']=='claude-sonnet-fixture'
             assert seen==['Bearer second-fixture']
         finally:await remote.close()
+
+
+@pytest.mark.asyncio
+async def test_exact_codex_calls_share_root_usage_and_metrics_and_flush_on_shutdown(tmp_path,monkeypatch):
+    service=SubscriptionService('codex',tmp_path/'credentials.json',settings={'upstream_min_interval':0,'rate_limit_retries':0})
+    first=service.manager.save_account({'access_token':'first-fixture'},name='Personal')
+    second=service.manager.save_account({'access_token':'second-fixture'},name='Work')
+    def events(client,body,**kwargs):
+        yield {'type':'response.output_text.delta','delta':'host-ok'},{}
+        yield {'type':'response.completed','response':{'id':'fixture','status':'completed','usage':{'input_tokens':2,'output_tokens':1}}},{}
+    monkeypatch.setattr('openagent_core.subscriptions.codex.codex_backend.CodexClient.stream',events)
+    usage=tmp_path/'pool-usage.json'
+    async with hosted(service,usage_file=usage) as url:
+        remote=RemoteSubscriptionService('codex',url,'inference-fixture')
+        try:
+            body={'model':'fixture','messages':[{'role':'user','content':'hello'}]}
+            async with httpx.AsyncClient(base_url=url,trust_env=False) as client:
+                response=await client.post('/v1/chat/completions',headers={'Authorization':'Bearer inference-fixture'},json=body)
+                assert response.status_code==200
+                assert (await remote.complete(body,account_id=second['id']))['choices'][0]['message']['content']=='host-ok'
+                response=await client.get('/admin/diagnostics',headers={'Authorization':'Bearer admin-fixture'})
+                metrics=response.json()['metrics']
+                assert metrics['accepted']==2 and metrics['completed']==2 and metrics['active']==0
+                response=await client.get('/admin/usage',headers={'Authorization':'Bearer admin-fixture'})
+                report=response.json()
+                assert report['totals']['turns']==2 and report['totals']['input_tokens']==4
+                assert set(report['by_account'])=={first['id'],second['id']}
+                # This third call remains below the periodic flush threshold.
+                await remote.complete(body,account_id=second['id'])
+        finally:await remote.close()
+    from openagent_core.subscriptions.codex.usage import UsageLedger
+    report=UsageLedger(usage).report()
+    assert report['totals']['turns']==3 and report['totals']['input_tokens']==6
+
+
+def test_explicit_model_schema_can_restrict_a_subscription_preset():
+    from openagent_core.models.settings_schema import model_settings_schema,validate_settings
+    provider={'name':'work','metadata':{'vendor':'openai','access':'subscription'}}
+    model={'kind':'llm','model':'fixture','metadata':{'parameter_schema':[{
+        'key':'reasoning_effort','label':'Reasoning effort','type':'enum','options':['low','medium']}]}}
+    assert model_settings_schema(provider,model)[0]['options']==['low','medium']
+    validate_settings(provider,model,{'reasoning_effort':'medium'})
+    with pytest.raises(ValueError):validate_settings(provider,model,{'reasoning_effort':'xhigh'})

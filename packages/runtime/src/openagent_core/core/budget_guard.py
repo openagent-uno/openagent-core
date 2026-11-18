@@ -394,7 +394,7 @@ class BudgetGuard:
 
     # ── refresh (async) ───────────────────────────────────────────────
 
-    async def refresh(self) -> None:
+    async def refresh(self, *, emit_alerts: bool = True) -> None:
         """Recompute the per-rule snapshot and fire threshold alerts.
 
         Reloads all enabled rules every time, so a rule added out-of-process
@@ -424,8 +424,9 @@ class BudgetGuard:
             if st is None:
                 continue
             snapshot.append(st)
-            self._maybe_fire_alerts(st)
-            self._maybe_warn_cost_ineffective(st)
+            if emit_alerts:
+                self._maybe_fire_alerts(st)
+                self._maybe_warn_cost_ineffective(st)
         self._snapshot = snapshot
         self._has_rules = bool(rules)
         self._last_refresh_monotonic = time.monotonic()

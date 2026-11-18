@@ -5,6 +5,7 @@ import re
 
 ACCESS_TYPES = frozenset({"api", "subscription", "local"})
 MODEL_KINDS = ("llm", "image", "tts", "stt")
+ACCOUNT_CONNECTION_FIELDS = ("name", "enabled", "priority", "fallback_enabled")
 
 
 def subscription_model_id(vendor: str, model: str) -> str:
@@ -33,6 +34,10 @@ def validate_connection(metadata: dict) -> None:
         raise ValueError("subscription_remote must be boolean")
     if "credential_store_id" in metadata and (isinstance(metadata["credential_store_id"], bool) or not isinstance(metadata["credential_store_id"], int) or metadata["credential_store_id"] < 1):
         raise ValueError("credential_store_id must be a positive identifier")
+    if "account_fallback_kinds" in metadata:
+        kinds = metadata['account_fallback_kinds']
+        if not isinstance(kinds, list) or not kinds or any(not isinstance(k, str) or k not in {'llm','image'} for k in kinds) or len(kinds) != len(set(kinds)):
+            raise ValueError('account_fallback_kinds must contain unique llm/image capabilities')
     if "account_fallback_enabled" in metadata and type(metadata['account_fallback_enabled']) is not bool:
         raise ValueError('account_fallback_enabled must be a boolean')
     if "account_fallback_priority" in metadata and (type(metadata['account_fallback_priority']) is not int or not -1_000_000 <= metadata['account_fallback_priority'] <= 1_000_000):

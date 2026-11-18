@@ -282,10 +282,12 @@ class ProviderModelAdmin:
                 identifier = metadata.get("account_id")
                 if not identifier or patch.get("id") != identifier:
                     raise ValueError("The account must match this connection")
-                if set(patch) - {"id", "name", "enabled", "priority"}:
+                if set(patch) - {"id", "name", "enabled", "priority", "fallback_enabled"}:
                     raise ValueError("Unknown account connection fields")
                 if "enabled" in patch and type(patch["enabled"]) is not bool:
                     raise ValueError("enabled must be boolean")
+                if "fallback_enabled" in patch and type(patch["fallback_enabled"]) is not bool:
+                    raise ValueError("fallback_enabled must be boolean")
                 if "name" in patch and (not isinstance(patch["name"], str) or not patch["name"].strip()):
                     raise ValueError("Account name is required")
                 if "priority" in patch and (type(patch["priority"]) is not int or not -1_000_000 <= patch["priority"] <= 1_000_000):
@@ -306,6 +308,7 @@ class ProviderModelAdmin:
                         if "enabled" in patch: changes["enabled"] = patch["enabled"]
                         if "name" in patch: new_meta["label"] = patch["name"].strip()
                         if "priority" in patch: new_meta["account_fallback_priority"] = patch["priority"]
+                        if "fallback_enabled" in patch: new_meta["account_fallback_enabled"] = patch["fallback_enabled"]
                         if new_meta != meta: changes["metadata"] = new_meta
                         if changes: await self.db.update_provider_fields(linked["id"], changes)
                 with self.scope(): await self.reload_catalog()

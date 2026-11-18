@@ -169,11 +169,11 @@ class SubscriptionService:
     def inference_base_url(self, account_id=None, *, single_attempt=False):
         return "http://subscription.internal/v1"
 
-    def inference_app(self, account_id: str, *, single_attempt: bool = False):
+    def inference_app(self, account_id: str, *, single_attempt: bool = False, usage_ledger=None, metrics_state=None):
         """Exact-account ASGI protocol, reusable by an explicitly started host."""
         if not isinstance(account_id, str) or not account_id or len(account_id) > 1024:
             raise ValueError("A bounded account identifier is required")
-        key = (account_id, single_attempt)
+        key = (account_id, single_attempt, id(usage_ledger), id(metrics_state))
         if key not in self._inference_apps:
             from dataclasses import replace
             manager = self.manager
@@ -200,8 +200,10 @@ class SubscriptionService:
                 settings.rate_limit_retries = 0
             if self.provider == "codex":
                 # Core owns usage accounting; avoid multiple file-ledger writers.
-                settings.usage_enabled = False
-            app = self._adapter.create_app(settings, token_manager=BoundAccount())
+                settings.usage_enabled = usage_ledger is not None
+            shared = {"metrics_state":metrics_state} if metrics_state is not None else {}
+            if usage_ledger is not None: shared["usage_ledger"] = usage_ledger
+            app = self._adapter.create_app(settings, token_manager=BoundAccount(), **shared)
             self._inference_apps[key] = app
         return self._inference_apps[key]
 

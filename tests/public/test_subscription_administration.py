@@ -41,8 +41,9 @@ async def test_sign_in_name_renewal_and_rename_keep_shared_connections_consisten
             assert row['metadata']['account_id'] == account_id
             assert row['metadata']['label'] == 'Renamed work'
             assert row['enabled'] is False
-        await admin.subscription(context, image_id, 'update_account', {'id':account_id,'name':'Display name'})
+        await admin.subscription(context, image_id, 'update_account', {'id':account_id,'name':'Display name','fallback_enabled':False})
         for identifier in [pid,image_id]:
             assert (await db.get_provider(identifier))['metadata']['label'] == 'Display name'
+            assert (await db.get_provider(identifier))['metadata']['account_fallback_enabled'] is False
     finally:
         await service.close(); await db.close()

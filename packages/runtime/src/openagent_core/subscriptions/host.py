@@ -96,12 +96,21 @@ def create_app(service, *, api_key: str | None, admin_api_key: str | None = None
             forwarded = {**scope, 'path': rest, 'raw_path': rest.encode(), 'root_path': '',
                 'headers': [(k,v) for k,v in scope['headers'] if k.lower() != b'authorization']+
                            [(b'authorization', ('Bearer '+service.settings.api_key).encode())]}
-            await service.inference_app(identifier, single_attempt=once)(forwarded, receive, send)
+            await service.inference_app(identifier, single_attempt=once,
+                metrics_state=root.state.metrics_state,
+                usage_ledger=getattr(root.state, "usage_ledger", None))(forwarded, receive, send)
 
     @asynccontextmanager
     async def lifespan(app):
         try: yield
-        finally: await service.close()
+        finally:
+            try:
+                ledger = getattr(root.state, 'usage_ledger', None)
+                if ledger is not None:
+                    from ..persistence import run_sync
+                    await run_sync(ledger.flush)
+            finally:
+                await service.close()
 
     return Starlette(routes=[Route('/subscription/accounts', inventory), Route('/subscription/models', models),
                              Mount('/accounts', app=ExactAccount()), Mount('/', app=root)], lifespan=lifespan)

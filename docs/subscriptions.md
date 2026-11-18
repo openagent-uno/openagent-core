@@ -128,7 +128,9 @@ alone can invalidate access. Never run old and new writers concurrently.
 Native connections remain bound to their named account. A host may declare an
 `account_fallback_group` and integer `account_fallback_priority` on subscription
 connections. Offline adoption preserves a legacy multi-account pool by declaring
-this policy on the copied connections; pass `account_fallback=False` to adopt
+this policy on the copied connections. `account_fallback_kinds` explicitly lists
+`llm` and/or `image`; absent metadata retains the earlier text-only policy.
+Adoption derives these kinds from the existing catalog capabilities. Pass `account_fallback=False` to adopt
 exact connections without it. `account_fallback_enabled=False` removes a
 connection from automatic selection while keeping its group configuration.
 
@@ -138,6 +140,12 @@ The shared budget guard excludes exhausted candidate scopes. Each candidate
 uses its own model settings and exact client. Only account failures (401, 403,
 429, 529) before the first upstream frame may move to a sibling. Tools are not
 replayed; cancellation, malformed requests and failures after any frame propagate.
+Image generation uses `generate_subscription_image` with the same catalog and
+budget admission. Only complete 401/403/429/529 refusals can select another
+account; transport failures, invalid images and cancellation never replay a job.
+Its result identifies the actual connection and account. Typed rows sharing a
+credential are attempted once.
+
 Stateless inference and connection probes still attest the exact account.
 Reported request usage and effective-model attribution follow the account that
 answered, with un-attributed run usage charged only once.
@@ -225,3 +233,9 @@ the credential-custody administration API. Account reads expose both effective
 `enabled` and `credential_enabled`. The read-authorized `capabilities` operation
 reports whether the configured endpoint permits browser sign-in; a connecting
 host must honor that capability instead of advertising unsupported management.
+
+The `ACCOUNT_CONNECTION_FIELDS` contract includes `fallback_enabled` for local
+account policy updates. Administration applies it to all linked typed rows of
+that account without changing the shared custody credential or other catalogs.
+The optional HTTP custody host shares request metrics and the Codex usage ledger
+between root and exact-account routes, flushing pending usage on shutdown.

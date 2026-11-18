@@ -98,6 +98,10 @@ async def _adopt_catalog_accounts(db, provider_id, provider, accounts, *, source
             if metadata.get("access") == "subscription":
                 raise ValueError("This connection is already a built-in subscription")
             models = [dict(row) for row in await (await conn.execute("SELECT * FROM models WHERE provider_id=?", (provider_id,))).fetchall()]
+            from ..image_generation import supports_image_generation
+            fallback_kinds = (['llm'] if any(m.get('kind', 'llm') == 'llm' for m in models) else [])
+            if any(supports_image_generation(m.get('kind', 'llm'), json.loads(m.get('metadata_json') or '{}')) for m in models):
+                fallback_kinds.append('image')
             for index, account in enumerate(accounts):
                 label = str(account.get("name") or account["id"])
                 meta = {**metadata, "vendor": vendor, "access": "subscription", "label": label,
@@ -106,7 +110,7 @@ async def _adopt_catalog_accounts(db, provider_id, provider, accounts, *, source
                 if protocol_settings:
                     meta['subscription_settings'] = protocol_settings
                 if fallback_group:
-                    meta.update(account_fallback_group=fallback_group,
+                    meta.update(account_fallback_group=fallback_group, account_fallback_kinds=fallback_kinds or ["llm"],
                                 account_fallback_priority=int(account.get('priority') or 0))
                 pid = provider_id
                 name = legacy["name"]

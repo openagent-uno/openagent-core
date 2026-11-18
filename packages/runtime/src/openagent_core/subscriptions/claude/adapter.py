@@ -36,7 +36,7 @@ from ..errors import SubscriptionError, validated_events, upstream_failure
 
 
 
-def create_app(settings, *, token_manager=None):
+def create_app(settings, *, token_manager=None, metrics_state=None):
     app = FastAPI(title="claude-sub-proxy", version="0.1.0")
 
     _token_mgr = token_manager or TokenManager(settings.creds_file)
@@ -71,6 +71,9 @@ def create_app(settings, *, token_manager=None):
         "max_queue_wait_s": 0.0,
         "cancelled": 0,
     }
+    if metrics_state is not None:
+        _metrics, _metrics_lock = metrics_state
+
 
     _RATE_LIMIT_MARKERS = (
         "rate_limit",
@@ -886,6 +889,7 @@ def create_app(settings, *, token_manager=None):
             }
         }
 
+    app.state.metrics_state = (_metrics, _metrics_lock)
     app.state.token_manager = _token_mgr
     app.state.upstream_client = _client
     return app

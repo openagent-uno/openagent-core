@@ -20,13 +20,13 @@ def model_settings_schema(provider: dict, model: dict) -> list[dict]:
         return [{"key": "language", "label": "Language", "type": "string"}]
     if kind != "llm":
         return []
-    if access == "subscription" and vendor == "openai":
-        return [{"key": "reasoning_effort", "label": "Reasoning effort", "type": "enum",
-                 "options": ["low", "medium", "high", "xhigh"]}]
     declared = (model.get("metadata") or {}).get("parameter_schema")
     if isinstance(declared, list):
         return [{k: v for k, v in field.items() if k in {"key", "label", "type", "min", "max", "options"}}
                 for field in declared if isinstance(field, dict) and field.get("key") in SAMPLING_KEYS]
+    if access == "subscription" and vendor == "openai":
+        return [{"key": "reasoning_effort", "label": "Reasoning effort", "type": "enum",
+                 "options": ["low", "medium", "high", "xhigh"]}]
     if vendor == "anthropic":
         return [{"key": "max_tokens", "label": "Maximum output tokens", "type": "integer", "min": 1}]
     if vendor == "openai" and (identifier.startswith("gpt-5") or identifier.startswith(("o1", "o3", "o4"))):
@@ -42,11 +42,13 @@ def model_settings_schema(provider: dict, model: dict) -> list[dict]:
 def validate_settings(provider: dict, model: dict, metadata: dict) -> None:
     import math
     schema = {field["key"]: field for field in model_settings_schema(provider, model)}
-    for key in SAMPLING_KEYS & metadata.keys():
+    for key in (SAMPLING_KEYS & metadata.keys()) | (schema.keys() & metadata.keys()):
         if key not in schema:
             raise ValueError(f"{key} is not supported by this model connection")
         value, field = metadata[key], schema[key]
-        if field["type"] == "enum":
+        if field["type"] == "string":
+            if not isinstance(value, str): raise ValueError(f"Invalid {key}")
+        elif field["type"] == "enum":
             if value not in field.get("options", []):
                 raise ValueError(f"Invalid {key}")
         elif (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)

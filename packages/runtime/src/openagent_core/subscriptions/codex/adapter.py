@@ -50,7 +50,7 @@ from ..errors import SubscriptionError, validated_events, upstream_failure, stre
 
 
 
-def create_app(settings, *, token_manager=None):
+def create_app(settings, *, token_manager=None, metrics_state=None, usage_ledger=None):
     app = FastAPI(title="codex-sub-proxy", version="0.5.8")
 
     _token_mgr = token_manager or TokenManager(settings.creds_file)
@@ -61,7 +61,7 @@ def create_app(settings, *, token_manager=None):
         timeout=settings.request_timeout,
         chunk_timeout=settings.chunk_timeout,
     )
-    _usage_ledger = UsageLedger(
+    _usage_ledger = usage_ledger if usage_ledger is not None else UsageLedger(
         Path(settings.usage_file) if settings.usage_file else settings.creds_file.parent / "usage.json",
         retain_days=settings.usage_retain_days,
     ) if settings.usage_enabled else None
@@ -92,6 +92,9 @@ def create_app(settings, *, token_manager=None):
         "last_error_at": 0.0,
         "max_queue_wait_s": 0.0,
     }
+    if metrics_state is not None:
+        _metrics, _metrics_lock = metrics_state
+
 
     _RATE_LIMIT_MARKERS = (
         "rate limit",
@@ -1164,6 +1167,8 @@ def create_app(settings, *, token_manager=None):
     def _proxy_error_payload(exc: Exception) -> dict:
         return {"error": {"message": str(exc), "type": "proxy_error", "code": 502}}
 
+    app.state.metrics_state = (_metrics, _metrics_lock)
+    app.state.usage_ledger = _usage_ledger
     app.state.token_manager = _token_mgr
     app.state.upstream_client = _client
     return app

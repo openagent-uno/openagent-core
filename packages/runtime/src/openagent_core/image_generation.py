@@ -72,6 +72,9 @@ class GeneratedImage:
     model: str
     size: str
     remote_url: str | None = None
+    connection: str | None = None
+    connection_label: str | None = None
+    account_id: str | None = None
 
 
 def images_endpoint(base_url: str, provider: str = "") -> str:

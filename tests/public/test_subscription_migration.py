@@ -161,3 +161,20 @@ async def test_independent_databases_can_adopt_one_host_owned_rotating_store(tmp
     finally:
         for service in services: await service.close()
         await first.close(); await second.close()
+
+
+@pytest.mark.asyncio
+async def test_adopting_an_image_capable_pool_declares_image_and_text_fallback(tmp_path):
+    db=MemoryDB(str(tmp_path/'state.sqlite'));await db.connect()
+    source=tmp_path/'legacy.json'
+    source.write_text(json.dumps({'version':2,'accounts':[
+        {'id':'one','name':'Personal','access_token':'test-a'},
+        {'id':'two','name':'Work','access_token':'test-b'}]}))
+    try:
+        pid=await db.upsert_provider(name='legacy',framework='api-based')
+        await db.upsert_model(provider_id=pid,model='gpt-fixture',metadata={'capabilities':['image_generation']})
+        result=await adopt_subscription_accounts(db,pid,'codex',source,quiesced=True,expected_sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+        for row in result['connections']:
+            provider=await db.get_provider(row['provider_id'])
+            assert provider['metadata']['account_fallback_kinds']==['llm','image']
+    finally:await db.close()
