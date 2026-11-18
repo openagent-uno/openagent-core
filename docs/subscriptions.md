@@ -87,6 +87,13 @@ failed stream emits an error, never a fabricated finish or `[DONE]`. Native
 Codex length-limited completions retain their established behavior. Hosts must
 still preserve their authenticated HTTP admission, disconnect handling and
 before-first-output error propagation when adapting the shared response.
+`complete(body, account_id=...)` returns one validated result. `stream_chat(body,
+account_id=...)` yields validated OpenAI SSE frames and raises a sanitized error
+before yielding when the provider refuses the request. Prefetch its first frame
+before committing a host HTTP 200. Close the iterator on downstream disconnect.
+Raw upstream errors retain quota headers even for non-JSON error bodies; redirects
+and process proxy settings do not redirect subscription credentials. Raw SSE
+lines and total output are bounded, including malformed and ignored lines.
 
 ## Shared stores and migration
 

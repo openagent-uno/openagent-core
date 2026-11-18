@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta134: validated host subscription completions](releases/v1.1.0-beta.134.md).
+
 - [Beta133: host-authorized subscription grants](releases/v1.1.0-beta.133.md).
 
 - [Beta127: image refusals name their cause, a backup's answer is labelled with the backup](releases/v1.1.0-beta.127.md).

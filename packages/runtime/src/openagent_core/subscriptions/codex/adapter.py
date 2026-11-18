@@ -59,6 +59,7 @@ def create_app(settings, *, token_manager=None):
         transport=settings.transport,
         impersonate=settings.impersonate,
         timeout=settings.request_timeout,
+        chunk_timeout=settings.chunk_timeout,
     )
     _usage_ledger = UsageLedger(
         Path(settings.usage_file) if settings.usage_file else settings.creds_file.parent / "usage.json",
@@ -602,6 +603,8 @@ def create_app(settings, *, token_manager=None):
                 _record_usage(account, assembler)
                 return
             except (CodexHTTPError, CodexStreamError) as exc:
+                if settings.require_completed:
+                    _classify_and_raise(exc, account, state, model)
                 if yielded:
                     _metric_add("upstream_errors")
                     _set_last_error(str(exc))
@@ -885,6 +888,9 @@ def create_app(settings, *, token_manager=None):
                 except (CodexHTTPError, CodexStreamError) as exc:
                     yield _error_chunk(str(getattr(exc, "body", exc)), "upstream_error", getattr(exc, "status", 502))
                 except Exception as exc:
+                    if settings.require_completed:
+                        yield "data: " + json.dumps({"error": SubscriptionError().public()}) + "\n\n"
+                        return
                     yield _error_chunk(str(exc), "proxy_error", 502)
 
             return StreamingResponse(_gen(), media_type="text/event-stream")

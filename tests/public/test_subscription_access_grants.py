@@ -189,3 +189,117 @@ async def test_grant_http_quota_is_safe_and_retains_retry_metadata(tmp_path, ven
         assert 'SECRET' not in response.text
     finally:
         await service.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stream', [False, True])
+async def test_claude_transport_retains_quota_headers_for_host_and_never_follows_redirect(tmp_path, stream):
+    import httpx
+    from openagent_core.subscriptions.claude.config import Settings
+    now=__import__('time').time()
+    headers={'anthropic-ratelimit-unified-status':'rejected','anthropic-ratelimit-unified-reset':str(int(now+3600))}
+    original=httpx.Client
+    seen=[]
+    def factory(**kwargs):
+        assert kwargs['trust_env'] is False and kwargs['follow_redirects'] is False
+        return original(**kwargs,transport=httpx.MockTransport(lambda request:(seen.append(request) or httpx.Response(429,content=b'not JSON SECRET',headers=headers))))
+    service=SubscriptionService.from_access_token('claude','private-access',account_id='exact',admission_path=tmp_path/'a',settings=Settings(creds_file=tmp_path/'a',transport='httpx'))
+    try:
+        with patch('httpx.Client', factory):
+            response=await service.client.post('/v1/chat/completions',json={'model':'claude-sonnet-4-6','messages':[{'role':'user','content':'hello'}],'stream':stream})
+        assert len(seen)==1
+        assert 'subscription_usage_limit' in response.text
+        assert 'resets_at_ms' in response.text
+        assert 'SECRET' not in response.text
+        if stream: assert '[DONE]' not in response.text
+        else:
+            assert response.status_code==429
+            assert int(response.headers['retry-after'])>=3590
+    finally:
+        await service.close()
+
+
+def test_bounded_raw_stream_counts_ignored_lines_and_closes_on_limit():
+    from openagent_core.subscriptions.errors import bounded_sse_lines
+    closed=[]
+    def lines():
+        try:
+            yield ': heartbeat'
+            yield 'malformed not even JSON'
+        finally: closed.append(True)
+    with pytest.raises(SubscriptionError):
+        list(bounded_sse_lines(lines(),max_line_bytes=100,max_total_bytes=15))
+    assert closed==[True]
+
+
+@pytest.mark.asyncio
+async def test_failed_codex_after_partial_output_is_sanitized_and_not_retried(tmp_path):
+    from openagent_core.subscriptions.codex.codex_backend import CodexClient, CodexStreamError
+    calls=[]
+    def events(*args,**kwargs):
+        calls.append(True)
+        yield {'type':'response.output_text.delta','delta':'partial'}, {}
+        raise CodexStreamError({'type':'usage_limit_reached','message':'SECRET'})
+    service=SubscriptionService.from_access_token('codex','private',account_id='exact',admission_path=tmp_path/'a')
+    try:
+        with patch.object(CodexClient,'stream',events):
+            response=await service.client.post('/v1/chat/completions',json={'model':'gpt-5.6-sol','messages':[{'role':'user','content':'hello'}],'stream':True})
+        assert calls==[True]
+        assert 'partial' in response.text and 'subscription_usage_limit' in response.text
+        assert 'SECRET' not in response.text and '[DONE]' not in response.text
+    finally:
+        await service.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stream', [False, True])
+async def test_public_completion_prefetch_keeps_provider_rejection_before_host_success(tmp_path, stream):
+    from openagent_core.subscriptions.claude.cc_anthropic import ClaudeCodeClient, AnthropicHTTPError
+    service=SubscriptionService.from_access_token('claude','private',account_id='exact',admission_path=tmp_path/'a')
+    def fail(*args,**kwargs):
+        raise AnthropicHTTPError(429, {'error':{'type':'usage_limit_reached','message':'SECRET','resets_in_seconds':3600}})
+    try:
+        with patch.object(ClaudeCodeClient,'stream' if stream else 'complete',fail):
+            with pytest.raises(SubscriptionError) as caught:
+                body={'model':'claude-sonnet-4-6','messages':[{'role':'user','content':'hello'}]}
+                if stream:
+                    iterator=service.stream_chat(body)
+                    try: await anext(iterator)
+                    finally: await iterator.aclose()
+                else: await service.complete(body)
+        assert caught.value.status==429 and caught.value.code=='subscription_usage_limit'
+        assert caught.value.resets_at_ms>__import__('time').time()*1000
+        assert 'SECRET' not in json.dumps(caught.value.public())
+    finally:
+        await service.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('vendor', ['claude','codex'])
+async def test_host_settings_mapping_is_explicit_and_cannot_rebind_the_path(tmp_path,vendor):
+    service=SubscriptionService.from_access_token(vendor,'private',account_id='a',admission_path=tmp_path/'a',
+        settings={'chunk_timeout':60,'upstream_min_interval':0})
+    try:
+        assert service.settings.chunk_timeout==60
+        assert service.settings.upstream_min_interval==0
+        with pytest.raises(ValueError):
+            SubscriptionService.from_access_token(vendor,'private',account_id='a',admission_path=tmp_path/'a',settings={'creds_file':tmp_path/'foreign'})
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_codex_host_read_deadline_survives_shared_protocol_transport(tmp_path):
+    import httpx
+    original=httpx.Client
+    seen=[]
+    wire='data: '+json.dumps({'type':'response.output_text.delta','delta':'ok'})+'\n\n'+'data: '+json.dumps({'type':'response.completed','response':{'id':'r','usage':{}}})+'\n\n'
+    def factory(**kwargs):
+        seen.append(kwargs['timeout'].read)
+        assert kwargs['trust_env'] is False and kwargs['follow_redirects'] is False
+        return original(**kwargs,transport=httpx.MockTransport(lambda request:httpx.Response(200,content=wire)))
+    service=SubscriptionService.from_access_token('codex','private',account_id='a',admission_path=tmp_path/'a',settings={'chunk_timeout':60})
+    try:
+        with patch('httpx.Client',factory):
+            result=await service.complete({'model':'gpt-5.6-sol','messages':[{'role':'user','content':'hello'}]})
+        assert result['choices'][0]['message']['content']=='ok'
+        assert seen==[60]
+    finally:
+        await service.close()

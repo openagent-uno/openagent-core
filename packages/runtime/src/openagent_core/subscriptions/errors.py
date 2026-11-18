@@ -175,3 +175,33 @@ def validated_events(vendor, events, *, require_completed=False):
         close = getattr(events, 'close', None)
         if close is not None:
             close()
+
+
+def bounded_sse_lines(lines, *, max_line_bytes=4 << 20, max_total_bytes=32 << 20):
+    """Bound raw SSE before parsing, including malformed or ignored lines."""
+    total = 0
+    try:
+        for line in lines:
+            size = len(line.encode('utf-8')) if isinstance(line, str) else len(line)
+            total += size
+            if size > max_line_bytes or total > max_total_bytes:
+                raise SubscriptionError(code='subscription_inference_failed',
+                                        message='The subscription provider exceeded the response limit.')
+            yield line
+    finally:
+        close = getattr(lines, 'close', None)
+        if close is not None:
+            close()
+
+
+def completion_failure(vendor, payload, status, headers=None):
+    """Decode Core's public envelope without trusting an upstream message."""
+    error = payload.get('error') if isinstance(payload, dict) else None
+    code = error.get('code') if isinstance(error, dict) else None
+    statuses = {USAGE_LIMIT: 429, RATE_LIMITED: 429, RECONNECT: 401, REFUSED: 403,
+                UNAVAILABLE: 503, NOT_CONNECTED: 409, 'subscription_inference_failed': 502}
+    if isinstance(code, str) and code in statuses:
+        retry = _number((headers or {}).get('retry-after'))
+        return SubscriptionError(status if status >= 400 else statuses[code], code,
+                                 resets_at_ms=_number(error.get('resets_at_ms')), retry_after_s=retry)
+    return upstream_failure(vendor, status if status >= 400 else 502, payload, headers)

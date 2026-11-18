@@ -27,7 +27,13 @@ class SubscriptionService:
         config = importlib.import_module(base + ".config")
         auth = importlib.import_module(base + ".auth")
         adapter = importlib.import_module(base + ".adapter")
+        if isinstance(settings, dict):
+            if "creds_file" in settings:
+                raise ValueError("The host supplies the credential path separately")
+            settings = config.Settings(creds_file=credentials_path, **settings)
         settings = settings or config.Settings(creds_file=credentials_path)
+        if Path(settings.creds_file) != credentials_path:
+            raise ValueError("The credential path must match the protocol settings")
         if provider == "codex":
             settings.usage_file = str(credentials_path.with_suffix(".usage.json"))
         settings.api_key = secrets.token_urlsafe(32)
@@ -61,7 +67,12 @@ class SubscriptionService:
             raise ValueError('Unknown subscription provider')
         from dataclasses import replace
         config = importlib.import_module(f'openagent_core.subscriptions.{provider}.config')
-        options = replace(settings) if settings is not None else config.Settings(creds_file=admission_path)
+        if isinstance(settings, dict):
+            if "creds_file" in settings:
+                raise ValueError("The host supplies the admission path separately")
+            options = config.Settings(creds_file=admission_path, **settings)
+        else:
+            options = replace(settings) if settings is not None else config.Settings(creds_file=admission_path)
         if Path(options.creds_file) != admission_path:
             raise ValueError('The admission path must match the protocol settings')
         options.rate_limit_retries = 0
@@ -70,6 +81,69 @@ class SubscriptionService:
         return cls(provider, admission_path, settings=options, _access_grant={
             'access_token':access_token, 'identifier':account_id,
             'vendor_account_id':vendor_account_id, 'plan':plan})
+
+    async def complete(self, body: dict, *, account_id: str | None = None) -> dict:
+        """One shared Chat Completions result for a trusted host adapter."""
+        from .errors import SubscriptionError, completion_failure
+        response = await self.inference_client(account_id).post(
+            "/v1/chat/completions", json={**body, "stream": False})
+        if len(response.content) > 32 << 20:
+            raise SubscriptionError()
+        try:
+            result = response.json()
+        except ValueError:
+            raise SubscriptionError() from None
+        if not response.is_success or (isinstance(result, dict) and result.get("error")):
+            raise completion_failure(self.provider, result, response.status_code, response.headers)
+        if not isinstance(result, dict):
+            raise SubscriptionError()
+        return result
+
+    async def stream_chat(self, body: dict, *, account_id: str | None = None):
+        """Validated OpenAI SSE frames; prefetch keeps early errors as errors.
+
+        A host can await the first frame before committing its HTTP status.
+        Closing this iterator closes the shared upstream response. Heartbeat
+        comments do not prematurely commit a host's successful inference.
+        """
+        import json
+        from .errors import SubscriptionError, completion_failure
+        async with self.inference_client(account_id).stream(
+                "POST", "/v1/chat/completions", json={**body, "stream": True}) as response:
+            if not response.is_success:
+                content = await response.aread()
+                try:
+                    result = json.loads(content) if len(content) <= 64 << 10 else {}
+                except ValueError:
+                    result = {}
+                raise completion_failure(self.provider, result, response.status_code, response.headers)
+            total, pending, completed = 0, [], False
+            async for line in response.aiter_lines():
+                size = len(line.encode("utf-8"))
+                total += size
+                if size > 4 << 20 or total > 32 << 20:
+                    raise SubscriptionError()
+                if line.startswith("data:"):
+                    pending.append(line[5:].lstrip())
+                elif not line and pending:
+                    data = "\n".join(pending)
+                    pending.clear()
+                    if data.strip() == "[DONE]":
+                        completed = True
+                        yield "data: [DONE]\n\n"
+                        break
+                    try:
+                        event = json.loads(data)
+                    except ValueError:
+                        raise SubscriptionError() from None
+                    if not isinstance(event, dict):
+                        raise SubscriptionError()
+                    if event.get("error"):
+                        raise completion_failure(self.provider, event, 200, response.headers)
+                    yield "data: " + data + "\n\n"
+            if not completed:
+                raise SubscriptionError(code="subscription_inference_failed",
+                                        message="The subscription provider stopped this answer before it completed.")
 
     async def request(self, method: str, path: str, **kwargs):
         if self._access_grant and path.startswith('/admin/') and method != 'GET':

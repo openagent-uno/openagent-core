@@ -24,6 +24,8 @@ stays drop-in.
 
 from __future__ import annotations
 
+from ..errors import bounded_sse_lines
+
 import json
 import platform
 import uuid
@@ -164,10 +166,10 @@ def codex_headers(token: str, account_id: str, *, session_id: Optional[str] = No
 
 
 # ── transports ───────────────────────────────────────────────────────────────
-def _post_httpx(url, headers, body, *, timeout):
+def _post_httpx(url, headers, body, *, timeout, chunk_timeout=None):
     import httpx
 
-    client = httpx.Client(timeout=httpx.Timeout(timeout, connect=15.0))
+    client = httpx.Client(timeout=httpx.Timeout(timeout, read=timeout if chunk_timeout is None else chunk_timeout, connect=15.0), trust_env=False, follow_redirects=False)
     req = client.build_request("POST", url, headers=headers, content=body)
     resp = client.send(req, stream=True)
 
@@ -186,19 +188,32 @@ def _post_httpx(url, headers, body, *, timeout):
     return resp.status_code, dict(resp.headers), _it(), _close
 
 
-def _post_curl_cffi(url, headers, body, *, timeout, impersonate="chrome"):
+def _post_curl_cffi(url, headers, body, *, timeout, impersonate="chrome", chunk_timeout=None):
     from curl_cffi import requests as creq
 
-    r = creq.post(url, headers=headers, data=body, impersonate=impersonate, timeout=timeout, stream=True)
+    options = None
+    if chunk_timeout is not None and chunk_timeout > 0:
+        from curl_cffi.const import CurlOpt
+        options = {CurlOpt.LOW_SPEED_LIMIT: 1, CurlOpt.LOW_SPEED_TIME: max(1, int(chunk_timeout))}
+    session = creq.Session(impersonate=impersonate, trust_env=False, curl_options=options)
+    try:
+        r = session.post(url, headers=headers, data=body, timeout=timeout, stream=True, allow_redirects=False)
+    except BaseException:
+        session.close()
+        raise
+
+    def _close():
+        r.close()
+        session.close()
 
     def _it():
         try:
             for raw in r.iter_lines():
                 yield raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
         finally:
-            r.close()
+            _close()
 
-    return r.status_code, dict(r.headers), _it(), r.close
+    return r.status_code, dict(r.headers), _it(), _close
 
 
 def _select_transport(transport: Optional[str]) -> str:
@@ -223,11 +238,13 @@ class CodexClient:
         transport: Optional[str] = None,
         impersonate: str = "chrome",
         timeout: float = 1800.0,
+        chunk_timeout: Optional[float] = None,
     ):
         self._token_provider = token_provider
         self.transport = _select_transport(transport)
         self.impersonate = impersonate
         self.timeout = timeout
+        self.chunk_timeout = chunk_timeout
         self.session_id = str(uuid.uuid4())
         self.cli_version = CODEX_CLI_VERSION
         self.last_headers: Dict[str, str] = {}
@@ -259,11 +276,11 @@ class CodexClient:
         headers = codex_headers(self._token(token), account_id, session_id=session_id or self.session_id)
         if self.transport == "curl_cffi":
             status, resp_headers, lines, close = _post_curl_cffi(
-                CODEX_RESPONSES_URL, headers, body, timeout=self.timeout, impersonate=self.impersonate
+                CODEX_RESPONSES_URL, headers, body, timeout=self.timeout, impersonate=self.impersonate, chunk_timeout=self.chunk_timeout
             )
         else:
             status, resp_headers, lines, close = _post_httpx(
-                CODEX_RESPONSES_URL, headers, body, timeout=self.timeout
+                CODEX_RESPONSES_URL, headers, body, timeout=self.timeout, chunk_timeout=self.chunk_timeout
             )
         self.last_headers = resp_headers
 
@@ -276,21 +293,24 @@ class CodexClient:
                 parsed = raw[:2000]
             raise CodexHTTPError(status, parsed, resp_headers)
 
-        for line in lines:
-            if not line or not line.startswith("data:"):
-                continue
-            data = line[len("data:"):].strip()
-            if not data or data == "[DONE]":
-                continue
-            try:
-                event = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-            if event.get("type") in ("response.failed", "error"):
-                close()
-                error = event.get("response", {}).get("error") or event.get("error") or event
-                raise CodexStreamError(error, resp_headers)
-            yield event, resp_headers
+        try:
+            for line in bounded_sse_lines(lines):
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[len("data:"):].strip()
+                if not data or data == "[DONE]":
+                    continue
+                try:
+                    event = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") in ("response.failed", "error"):
+                    error = event.get("response", {}).get("error") or event.get("error") or event
+                    raise CodexStreamError(error, resp_headers)
+                yield event, resp_headers
+        finally:
+            close()
+
 
 
     def realtime_call(

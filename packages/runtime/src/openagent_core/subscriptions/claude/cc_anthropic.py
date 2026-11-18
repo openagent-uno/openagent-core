@@ -25,6 +25,7 @@ import json
 import threading
 import uuid
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
+from ..errors import bounded_sse_lines
 
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -174,18 +175,49 @@ def _close_on_cancel(response, cancel_event: Optional[threading.Event]):
     return finished
 
 
+def _bounded_content(chunks, limit=64 << 10):
+    result = bytearray()
+    for chunk in chunks:
+        result.extend(chunk[:max(0, limit - len(result))])
+        if len(result) >= limit:
+            break
+    return bytes(result)
+
+
+def _error_body(content):
+    # A provider's HTML error is still an HTTP failure, not a JSON-parser error.
+    body = bytes(content)[:64 << 10]
+    try:
+        return json.loads(body)
+    except (ValueError, TypeError):
+        return body.decode('utf-8', 'replace')
+
+
 def _post_httpx(url, headers, body, *, stream, timeout, cancel_event=None):
     import httpx
 
-    client = httpx.Client(timeout=httpx.Timeout(timeout, connect=10.0))
+    client = httpx.Client(timeout=httpx.Timeout(timeout, connect=10.0), trust_env=False, follow_redirects=False)
     if not stream:
-        resp = client.post(url, headers=headers, content=body)
         try:
+            resp = client.post(url, headers=headers, content=body)
+            if resp.status_code >= 300:
+                raise AnthropicHTTPError(resp.status_code, _error_body(resp.content), dict(resp.headers))
             return resp.status_code, resp.json(), None
         finally:
             client.close()
     req = client.build_request("POST", url, headers=headers, content=body)
-    resp = client.send(req, stream=True)
+    try:
+        resp = client.send(req, stream=True)
+    except BaseException:
+        client.close()
+        raise
+    if resp.status_code >= 300:
+        try:
+            content = _bounded_content(resp.iter_bytes())
+            raise AnthropicHTTPError(resp.status_code, _error_body(content), dict(resp.headers))
+        finally:
+            resp.close()
+            client.close()
     finished = _close_on_cancel(resp, cancel_event)
 
     def _it():
@@ -210,8 +242,11 @@ def _post_curl_cffi(
     from curl_cffi import requests as creq
 
     if not stream:
-        r = creq.post(url, headers=headers, data=body, impersonate=impersonate, timeout=timeout)
-        return r.status_code, r.json(), None
+        with creq.Session(impersonate=impersonate, trust_env=False) as session:
+            r = session.post(url, headers=headers, data=body, timeout=timeout, allow_redirects=False)
+            if r.status_code >= 300:
+                raise AnthropicHTTPError(r.status_code, _error_body(r.content), dict(r.headers))
+            return r.status_code, r.json(), None
     curl_options = None
     idle_timeout = float(chunk_timeout)
     if idle_timeout > 0:
@@ -225,10 +260,19 @@ def _post_curl_cffi(
             CurlOpt.LOW_SPEED_LIMIT: 1,
             CurlOpt.LOW_SPEED_TIME: max(1, int(idle_timeout)),
         }
-    r = creq.post(
-        url, headers=headers, data=body, impersonate=impersonate,
-        timeout=timeout, stream=True, curl_options=curl_options,
-    )
+    session = creq.Session(impersonate=impersonate, trust_env=False, curl_options=curl_options)
+    try:
+        r = session.post(url, headers=headers, data=body, timeout=timeout, stream=True, allow_redirects=False)
+    except BaseException:
+        session.close()
+        raise
+    if r.status_code >= 300:
+        try:
+            content = _bounded_content(r.iter_content())
+            raise AnthropicHTTPError(r.status_code, _error_body(content), dict(r.headers))
+        finally:
+            r.close()
+            session.close()
     finished = _close_on_cancel(r, cancel_event)
 
     def _it():
@@ -240,6 +284,7 @@ def _post_curl_cffi(
         finally:
             finished.set()
             r.close()
+            session.close()
 
     return r.status_code, None, _it()
 
@@ -346,7 +391,7 @@ class ClaudeCodeClient:
         if status >= 400:
             body = "".join(line for line in (lines or []))
             raise AnthropicHTTPError(status, body)
-        for line in lines:
+        for line in bounded_sse_lines(lines):
             if not line or not line.startswith("data:"):
                 continue
             data = line[len("data:"):].strip()

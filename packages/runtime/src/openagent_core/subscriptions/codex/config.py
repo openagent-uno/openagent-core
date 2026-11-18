@@ -17,6 +17,7 @@ class Settings:
     transport: Optional[str] = None
     impersonate: str = 'chrome'
     request_timeout: float = 1800.0
+    chunk_timeout: Optional[float] = None
     default_reasoning_effort: str = 'medium'
     reasoning_summary: str = 'auto'
     emit_reasoning_content: bool = True

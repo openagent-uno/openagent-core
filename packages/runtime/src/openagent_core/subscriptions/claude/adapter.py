@@ -827,6 +827,9 @@ def create_app(settings, *, token_manager=None):
                     yield "data: " + json.dumps(_error_payload(exc)) + "\n\n"
                     yield "data: [DONE]\n\n"
                 except Exception as exc:
+                    if settings.require_completed:
+                        yield "data: " + json.dumps({"error": SubscriptionError().public()}) + "\n\n"
+                        return
                     yield "data: " + json.dumps(_proxy_error_payload(exc)) + "\n\n"
                     yield "data: [DONE]\n\n"
 
