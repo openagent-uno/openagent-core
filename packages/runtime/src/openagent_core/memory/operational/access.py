@@ -8,7 +8,7 @@ rechecked against the canonical operational database before serialization.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 
 
 @dataclass(frozen=True)
@@ -159,3 +159,86 @@ async def resource_is_visible(
         if match is not None:
             return True
     return False
+
+
+# 200 resources * 4 fields + 64 identities * 2 fields + tenant/permission
+# fits SQLite's conservative 999-variable limit. Bound values preserve opaque
+# identifiers exactly; no JSON decoding or SQL interpolation of IDs is used.
+_VISIBILITY_RESOURCE_BATCH = 200
+_VISIBILITY_IDENTITY_BATCH = 64
+
+
+async def resources_are_visible(
+    conn: Any,
+    rows: Sequence[Any],
+    access: AccessContext,
+    *,
+    permission: str = "view",
+) -> list[bool]:
+    """Fresh operational-ACL checks in input order, including duplicate rows.
+
+    This is the batch equivalent of :func:`resource_is_visible`: the same
+    tenant, quarantine, ownership, public-read, typed-grant and ACL-version
+    rules apply. Explicit grants are read again on every call, in bounded
+    SQLite queries. No result, principal or authorization decision is cached.
+
+    Call after fetching candidates and again before publishing an awaited
+    page. Each batch observes the caller connection's current transaction;
+    this function starts/commits no transaction and never mutates storage.
+
+    This checks only the canonical operational ACL. It does not replace a
+    host/Runtime authorizer, device liveness, external-grant expiry, resource
+    lifecycle or cursor validation. Those checks remain the host's boundary
+    before reading and before publication.
+    """
+    decisions = [False] * len(rows)
+    identities: tuple[tuple[str, str], ...] | None = None
+    pending: list[tuple[int, str, str, int]] = []
+
+    async def check_pending() -> None:
+        if not pending:
+            return
+        requested_sql = ",".join("(?,?,?,?)" for _ in pending)
+        requested_params = tuple(value for row in pending for value in row)
+        assert identities is not None
+        for start in range(0, len(identities), _VISIBILITY_IDENTITY_BATCH):
+            selected_identities = identities[start:start + _VISIBILITY_IDENTITY_BATCH]
+            identity_sql = ",".join("(?,?)" for _ in selected_identities)
+            matches = await (await conn.execute(
+                "/* operational-resource-visibility-batch */ "
+                f"WITH requested(position,resource_type,resource_id,acl_version) AS (VALUES {requested_sql}), "
+                f"principals(principal_type,principal_id) AS (VALUES {identity_sql}) "
+                "SELECT q.position FROM requested q WHERE EXISTS ("
+                "SELECT 1 FROM resource_acl acl JOIN principals p "
+                "ON p.principal_type=acl.principal_type AND p.principal_id=acl.principal_id "
+                "WHERE acl.tenant_id=? AND acl.resource_type=q.resource_type "
+                "AND acl.resource_id=q.resource_id AND acl.acl_version=q.acl_version "
+                "AND acl.permission IN (?, 'admin'))",
+                (*requested_params, *(value for identity in selected_identities for value in identity),
+                 access.tenant_id, permission),
+            )).fetchall()
+            for match in matches:
+                decisions[int(match[0])] = True
+        pending.clear()
+
+    for index, row in enumerate(rows):
+        # Match the scalar helper's short-circuit order. Fast-path rows need
+        # neither grant columns nor an installed resource_acl table.
+        if str(row["tenant_id"]) != access.tenant_id or str(row["visibility"]) == "quarantined":
+            continue
+        owner = row["owner_principal_id"]
+        if owner is not None and str(owner) in access.principal_ids:
+            decisions[index] = True
+            continue
+        if permission in {"view", "search"} and str(row["visibility"]) in {"installation_shared", "public"}:
+            decisions[index] = True
+            continue
+        if identities is None:
+            identities = tuple(access.grant_identities)
+        if not identities:
+            continue
+        pending.append((index, str(row["resource_type"]), str(row["resource_id"]), int(row["acl_version"])))
+        if len(pending) == _VISIBILITY_RESOURCE_BATCH:
+            await check_pending()
+    await check_pending()
+    return decisions

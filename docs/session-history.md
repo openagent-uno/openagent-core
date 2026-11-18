@@ -4,6 +4,11 @@
 hosts and the standalone server. Session authorization is checked before access
 and again before publication. Reading history never executes or recovers a run.
 
+Hosts using canonical operational rows can use the [fresh ACL batch reader](operational-acl.md)
+after fetching candidates and before publishing a selected page. It retains the
+scalar ACL rules and does not replace these host authorization checks or cursor
+validation.
+
 The runtime's admitted `session_runs`, message anchors and event journal are
 durable independently of the provider's legacy session mirror. If execution
 ends before that mirror is saved, public history includes the exact admitted
