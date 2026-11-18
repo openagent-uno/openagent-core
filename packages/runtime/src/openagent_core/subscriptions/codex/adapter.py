@@ -46,6 +46,7 @@ from .codex_backend import (
     reset_after_seconds,
 )
 from .usage import UsageLedger
+from ..errors import SubscriptionError, validated_events, upstream_failure, stream_failure
 
 
 
@@ -352,7 +353,9 @@ def create_app(settings, *, token_manager=None):
 
 
     def _events(payload: dict, account: AccountToken) -> Iterator[Tuple[dict, Dict[str, str]]]:
-        return _client.stream(payload, token=account.token, account_id=account.account_id)
+        return validated_events("codex",
+            _client.stream(payload, token=account.token, account_id=account.account_id),
+            require_completed=settings.require_completed)
 
 
     def _headers_recorder(account: AccountToken):
@@ -490,6 +493,10 @@ def create_app(settings, *, token_manager=None):
         exc: Exception, account: AccountToken, state: "_RetryState", model: Optional[str] = None
     ) -> None:
         """Decide whether ``exc`` is retryable, and how. Re-raises if it is not."""
+        if settings.require_completed:
+            if isinstance(exc, CodexStreamError):
+                raise stream_failure("codex", {"type": "error", "error": exc.body}) from None
+            raise upstream_failure("codex", exc.status, json.dumps(exc.body).encode(), exc.headers) from None
         if _is_rate_limit(exc):
             state.last_rate_limit = exc
             state.reason = "rate limited"
@@ -868,6 +875,8 @@ def create_app(settings, *, token_manager=None):
                 try:
                     for chunk in _stream_turn(payload, make_assembler, include_usage=include_usage):
                         yield chunk
+                except SubscriptionError as exc:
+                    yield "data: " + json.dumps({"error": exc.public()}) + "\n\n"
                 except UpstreamOverloaded as exc:
                     yield _error_chunk(str(exc), "upstream_overloaded", 503)
                 except NoAvailableAccountError as exc:
@@ -882,6 +891,8 @@ def create_app(settings, *, token_manager=None):
 
         try:
             resp = await run_in_threadpool(_run_turn, payload, make_assembler)
+        except SubscriptionError as exc:
+            return JSONResponse(status_code=exc.status, content={"error": exc.public()}, headers=exc.headers())
         except UpstreamOverloaded as exc:
             return JSONResponse(
                 status_code=503,

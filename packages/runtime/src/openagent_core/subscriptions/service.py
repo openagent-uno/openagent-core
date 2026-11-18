@@ -16,7 +16,7 @@ class SubscriptionService:
     The optional protocol app is invoked in memory, including streamed chunks.
     It is never mounted on a host gateway or started as an HTTP listener.
     """
-    def __init__(self, provider: str, credentials_path: Path, *, settings=None):
+    def __init__(self, provider: str, credentials_path: Path, *, settings=None, _access_grant=None):
         if provider not in {"claude", "codex"}:
             raise ValueError("Unknown subscription provider")
         if not credentials_path.is_absolute():
@@ -36,14 +36,44 @@ class SubscriptionService:
         self._inference_clients = {}
         self._catalog_client = httpx.AsyncClient(timeout=10) if provider == "claude" else None
         self._adapter = adapter
-        self.manager = auth.TokenManager(credentials_path, **({"settings": settings} if provider == "codex" else {}))
+        self._access_grant = _access_grant is not None
+        if self._access_grant:
+            from .grants import AccessGrantManager
+            self.manager = AccessGrantManager(auth, **_access_grant)
+        else:
+            self.manager = auth.TokenManager(credentials_path, **({"settings": settings} if provider == "codex" else {}))
         self.app = adapter.create_app(settings, token_manager=self.manager)
         self.client = httpx.AsyncClient(
             transport=SubscriptionTransport(self.app), base_url="http://subscription.internal",
             headers={"Authorization": "Bearer " + settings.api_key}, timeout=settings.request_timeout,
         )
 
+    @classmethod
+    def from_access_token(cls, provider: str, access_token: str, *, account_id: str,
+                          admission_path: Path, vendor_account_id='', plan='', settings=None):
+        """Use a host's authorized grant without copying its credential store.
+
+        This inference-only service never persists tokens or refresh material.
+        The explicit admission path coordinates workers and may hold nonsecret
+        pacing/lease files. The host owns authorization, renewal and storage.
+        """
+        if provider not in {'claude', 'codex'}:
+            raise ValueError('Unknown subscription provider')
+        from dataclasses import replace
+        config = importlib.import_module(f'openagent_core.subscriptions.{provider}.config')
+        options = replace(settings) if settings is not None else config.Settings(creds_file=admission_path)
+        if Path(options.creds_file) != admission_path:
+            raise ValueError('The admission path must match the protocol settings')
+        options.rate_limit_retries = 0
+        options.require_completed = True
+        if provider == 'codex': options.usage_enabled = False
+        return cls(provider, admission_path, settings=options, _access_grant={
+            'access_token':access_token, 'identifier':account_id,
+            'vendor_account_id':vendor_account_id, 'plan':plan})
+
     async def request(self, method: str, path: str, **kwargs):
+        if self._access_grant and path.startswith('/admin/') and method != 'GET':
+            raise ValueError('The host manages this account; this service only accepts access grants')
         response = await self.client.request(method, path,
             headers={"Authorization": "Bearer " + self.settings.admin_api_key}, **kwargs)
         if not response.is_success:
@@ -170,6 +200,8 @@ class SubscriptionService:
     async def update_account(self, fields):
         """Update the exact credential without exposing or replacing its tokens."""
         import asyncio
+        if self._access_grant:
+            raise ValueError("The host manages this account")
         identifier = fields.get("id")
         patch = {key: fields[key] for key in ("name", "enabled", "priority") if key in fields}
         if not isinstance(identifier, str) or not identifier:

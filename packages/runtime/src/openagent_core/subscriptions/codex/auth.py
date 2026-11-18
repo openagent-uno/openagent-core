@@ -140,28 +140,8 @@ def credential_from_tokens(
 
 
 def _post_form(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    """POST an OAuth token request as JSON (what the Codex CLI sends)."""
-    data = json.dumps(body).encode()
-    headers = {
-        "content-type": "application/json",
-        "accept": "application/json",
-        "user-agent": "codex_cli_rs/0.149.0",
-    }
-    try:
-        from curl_cffi import requests as creq
-
-        r = creq.post(url, data=data, headers=headers, impersonate="chrome", timeout=20)
-        if r.status_code != 200:
-            raise RuntimeError(f"HTTP {r.status_code}: {r.text[:300]}")
-        return r.json()
-    except ImportError:
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                return json.loads(resp.read().decode())
-        except urllib.error.HTTPError as exc:  # surface the body, not just the code
-            detail = exc.read().decode(errors="replace")[:300]
-            raise RuntimeError(f"HTTP {exc.code}: {detail}") from None
+    from ..oauth import post_token
+    return post_token("codex", url, body)
 
 
 def refresh_token(refresh_tok: str, scope: str = REFRESH_SCOPE) -> Dict[str, Any]:
@@ -179,7 +159,7 @@ def refresh_token(refresh_tok: str, scope: str = REFRESH_SCOPE) -> Dict[str, Any
     )
     access = res.get("access_token")
     if not access:
-        raise RuntimeError(f"ChatGPT token refresh returned no access_token: {str(res)[:200]}")
+        raise RuntimeError("ChatGPT token refresh returned no access token")
     cred = credential_from_tokens(
         access,
         res.get("refresh_token") or refresh_tok,
@@ -243,7 +223,7 @@ def begin_login() -> PendingLogin:
     )
 
 
-def exchange_code(code: str, verifier: str) -> Dict[str, Any]:
+def exchange_code(code: str, verifier: str, *, redirect_uri: str = REDIRECT_URI) -> Dict[str, Any]:
     """Redeem an authorization code for a store credential."""
     if not code:
         raise ValueError("code is required")
@@ -255,12 +235,12 @@ def exchange_code(code: str, verifier: str) -> Dict[str, Any]:
             "grant_type": "authorization_code",
             "client_id": OAUTH_CLIENT_ID,
             "code": code,
-            "redirect_uri": REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "code_verifier": verifier,
         },
     )
     if not res.get("access_token"):
-        raise RuntimeError(f"token exchange returned no access_token: {str(res)[:200]}")
+        raise RuntimeError("Token exchange returned no access token")
     return credential_from_tokens(
         res["access_token"], res.get("refresh_token", ""), res.get("id_token", "")
     )

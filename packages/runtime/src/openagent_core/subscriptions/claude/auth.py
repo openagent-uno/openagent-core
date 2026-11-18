@@ -116,27 +116,8 @@ def _creds_from_claude_code_shape(data: Dict[str, Any]) -> Optional[Dict[str, An
 
 
 def _post_token(endpoint: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    """POST a token request. Prefers curl_cffi (Cloudflare-safe), falls back to
-    urllib if curl_cffi isn't installed."""
-    data = json.dumps(body).encode()
-    headers = {
-        "content-type": "application/json",
-        "accept": "application/json",
-        "user-agent": f"claude-cli/{detect_cc_version()} (external, sdk-cli)",
-    }
-    try:
-        from curl_cffi import requests as creq
-
-        r = creq.post(endpoint, data=data, headers=headers, impersonate="chrome", timeout=15)
-        if r.status_code != 200:
-            raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
-        return r.json()
-    except ImportError:
-        import urllib.request
-
-        req = urllib.request.Request(endpoint, data=data, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read().decode())
+    from ..oauth import post_token
+    return post_token("claude", endpoint, body)
 
 
 def refresh_token(refresh_tok: str, scope: str = REFRESH_SCOPE) -> Dict[str, Any]:
@@ -220,7 +201,7 @@ def begin_login() -> PendingLogin:
     )
 
 
-def exchange_code(code: str, verifier: str, state: str) -> Dict[str, Any]:
+def exchange_code(code: str, verifier: str, state: str, *, redirect_uri: str = REDIRECT_URI) -> Dict[str, Any]:
     """Redeem an authorization code for a store credential.
 
     Both token endpoints are tried in order: the platform host is the current
@@ -236,7 +217,7 @@ def exchange_code(code: str, verifier: str, state: str) -> Dict[str, Any]:
         "client_id": OAUTH_CLIENT_ID,
         "code": code,
         "state": state,
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": redirect_uri,
         "code_verifier": verifier,
     }
     last_error: Optional[Exception] = None
@@ -244,6 +225,8 @@ def exchange_code(code: str, verifier: str, state: str) -> Dict[str, Any]:
         try:
             res = _post_token(endpoint, body)
         except Exception as exc:  # noqa: BLE001 — try the next endpoint
+            if "invalid_grant" in str(exc):
+                raise
             last_error = exc
             continue
         if res.get("access_token"):
@@ -252,6 +235,8 @@ def exchange_code(code: str, verifier: str, state: str) -> Dict[str, Any]:
                 "refresh_token": res.get("refresh_token", ""),
                 "expires_at_ms": _now_ms() + int(res.get("expires_in", 3600)) * 1000,
                 "scope": res.get("scope", LOGIN_SCOPES),
+                "account_id": str((res.get("account") or {}).get("uuid") or "")[:200],
+                "email": str((res.get("account") or {}).get("email_address") or "")[:320],
             }
     raise last_error or RuntimeError("token exchange failed")
 

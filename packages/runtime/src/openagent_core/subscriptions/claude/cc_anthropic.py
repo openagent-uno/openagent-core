@@ -91,9 +91,10 @@ def cc_session_id() -> str:
 class AnthropicHTTPError(RuntimeError):
     """Raised on a non-2xx response from the Anthropic Messages endpoint."""
 
-    def __init__(self, status: int, body: Any):
+    def __init__(self, status: int, body: Any, headers=None):
         self.status = status
         self.body = body
+        self.headers = headers or {}
         super().__init__(f"Anthropic HTTP {status}: {body}")
 
 

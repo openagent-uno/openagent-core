@@ -32,6 +32,7 @@ from .auth import (
     exchange_code,
 )
 from .cc_anthropic import AnthropicHTTPError, ClaudeCodeClient
+from ..errors import SubscriptionError, validated_events, upstream_failure
 
 
 
@@ -394,6 +395,9 @@ def create_app(settings, *, token_manager=None):
                     _token_mgr.mark_success(account.id)
                     return response
                 except AnthropicHTTPError as exc:
+                    if settings.require_completed:
+                        raise upstream_failure("claude", exc.status, exc.body,
+                                               getattr(exc, "headers", {})) from None
                     if _is_rate_limit(exc):
                         last_rate_limit = exc
                         _metric_add("rate_limited")
@@ -490,6 +494,9 @@ def create_app(settings, *, token_manager=None):
                     _metric_add("cancelled")
                     return
                 except AnthropicHTTPError as exc:
+                    if settings.require_completed:
+                        raise upstream_failure("claude", exc.status, exc.body,
+                                               getattr(exc, "headers", {})) from None
                     if yielded:
                         # Already streamed chunks — cannot safely retry/rotate.
                         _metric_add("upstream_errors")
@@ -797,10 +804,13 @@ def create_app(settings, *, token_manager=None):
             def _gen():
                 try:
                     for chunk in translate.anthropic_stream_to_openai(
-                        _stream_with_pacing(payload, cancel_event), model,
+                        validated_events("claude", _stream_with_pacing(payload, cancel_event),
+                                         require_completed=settings.require_completed), model,
                         include_usage=include_usage,
                     ):
                         yield chunk
+                except SubscriptionError as exc:
+                    yield "data: " + json.dumps({"error": exc.public()}) + "\n\n"
                 except UpstreamOverloaded as exc:
                     yield "data: " + json.dumps({
                         "error": {
@@ -831,6 +841,8 @@ def create_app(settings, *, token_manager=None):
 
         try:
             resp = await run_in_threadpool(_complete_with_pacing, payload)
+        except SubscriptionError as exc:
+            return JSONResponse(status_code=exc.status, content={"error": exc.public()}, headers=exc.headers())
         except UpstreamOverloaded as exc:
             return JSONResponse(
                 status_code=503,

@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta133: host-authorized subscription grants](releases/v1.1.0-beta.133.md).
+
 - [Beta127: image refusals name their cause, a backup's answer is labelled with the backup](releases/v1.1.0-beta.127.md).
 - [Beta126: canonical source-only operation handoff](releases/v1.1.0-beta.126.md),
   [Beta125: durable operation cancellation draining](releases/v1.1.0-beta.125.md),

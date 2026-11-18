@@ -60,6 +60,34 @@ writing. Corrupt stores fail without overwriting their contents. Credentials
 use atomic replacement and private files; hosts remain responsible for the
 containing directory's ACL, particularly on Windows.
 
+## Hosts with central credential custody
+
+`SubscriptionService.from_access_token(provider, access_token, account_id=...,
+admission_path=absolute_private_path, vendor_account_id=..., plan=...)` uses
+an exact, ephemeral host-authorized grant. The host authenticates and authorizes
+its caller, renews its account, and supplies the current access token. Core never
+reads, copies or writes the host's credential store or refresh token. The
+admission path coordinates nonsecret pacing and leases across workers; choose
+one private path per actual account. Close each service after its calls drain.
+Management mutations are refused for grant services.
+
+The public `openagent_core.subscriptions.oauth.oauth` exchanges or refreshes
+credentials through the same provider implementation as native accounts. The
+host owns the authorize request, state verification, PKCE verifier, encrypted
+custody and access policy. Supply `redirect_uri` and `refresh_scope` explicitly
+when those differ from the native flow; this does not change native sign-in
+permissions. Returned credentials belong only in the host's private custody API.
+No browser, listener, token file or environment discovery is involved.
+
+`openagent_core.subscriptions.errors.SubscriptionError` provides sanitized
+`public()` and `headers()` projections. Quota windows retain their reset and
+Retry-After without forwarding vendor messages or credential exchange bodies.
+Grant inference requires a completed upstream terminal event. A truncated or
+failed stream emits an error, never a fabricated finish or `[DONE]`. Native
+Codex length-limited completions retain their established behavior. Hosts must
+still preserve their authenticated HTTP admission, disconnect handling and
+before-first-output error propagation when adapting the shared response.
+
 ## Shared stores and migration
 
 `subscription_for(provider_row, absolute_database_path)` resolves a private
