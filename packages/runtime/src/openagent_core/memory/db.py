@@ -1146,6 +1146,20 @@ class MemoryDB:
     async def connect(self) -> None:
         if self._conn is not None:
             return
+        try:
+            await self._connect_owned()
+        except BaseException:
+            # A failed/cancelled bootstrap never exposes a half-open database
+            # or leaves an aiosqlite worker pinning its transaction/process.
+            connection, self._conn = self._conn, None
+            if connection is not None:
+                try:
+                    await asyncio.shield(connection.close())
+                except BaseException:
+                    logger.debug("Failed database bootstrap cleanup", exc_info=True)
+            raise
+
+    async def _connect_owned(self) -> None:
         # ``timeout`` is the SQLite-level wait when another connection holds a
         # write lock. WAL mode lets readers proceed without blocking writers,
         # but ``executescript(SCHEMA_SQL)`` below needs a write lock to

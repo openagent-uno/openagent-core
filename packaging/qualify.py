@@ -152,7 +152,10 @@ assert not {'yaml', 'aiosqlite', 'sqlalchemy', 'mcp', 'rich'} & sys.modules.keys
 """, cwd=minimal)
     run(npm, "--prefix", root / "sdk/typescript", "ci", "--ignore-scripts", "--no-audit", "--no-fund")
     run(npm, "--prefix", root / "sdk/typescript", "test")
-    run(python, "-m", "pytest", "tests/public", "tests/prompts", "-q",
+    # The development pytest config adds every source package to sys.path.
+    # Qualification must exercise the installed cohort, including its optional
+    # modules and package data, rather than importing those source directories.
+    run(python, "-m", "pytest", "-o", "pythonpath=", "tests/public", "tests/prompts", "-q",
         "--junitxml", directory / "public-engine-tests.xml")
     receipt = {"format": 1, "status": "development-tests-passed" if manifest["dirty_snapshot"] else "installed-engine-tests-passed",
                "repository_commit": revision, "core_version": version,

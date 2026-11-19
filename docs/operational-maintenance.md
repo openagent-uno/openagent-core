@@ -20,3 +20,11 @@ errors publish degraded status, suppress private exception details and retry
 with bounded backoff. Cancellation drains existing SQLite work before closing
 the worker-owned connection. Canonical data and identity are never reset.
 The owned writer uses the existing runtime SQLite busy-timeout configuration.
+
+Opening an already installed operational schema checks its journal triggers
+without executing their installation scripts again. This avoids acquiring a
+write lock or rescanning historical automation rows on every connection. A
+missing trigger still invokes the locked installation and seed repair, while
+canonical schema checksums remain authoritative. Failed or cancelled
+`MemoryDB.connect()` closes its owned connection and releases uncommitted work
+before propagating the original exception.

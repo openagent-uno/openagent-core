@@ -13,6 +13,7 @@ import errno
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -68,6 +69,26 @@ def legacy_bridge_sql() -> str:
 
 def automation_bridge_sql() -> str:
     return _resource_text("legacy_automation_change_triggers.sql")
+
+
+async def _bridge_installed(conn: aiosqlite.Connection, script: str) -> bool:
+    """An installed journal needs no DDL or repeated historical seed scan.
+
+    Missing triggers still select the normal, locked installation/repair path.
+    Their presence is the same compatibility evidence used by startup's exact
+    legacy audit; this does not replace the canonical schema checksum checks.
+    """
+    names = set(re.findall(
+        r"(?im)^\s*CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_]\w*)",
+        script,
+    ))
+    if not names:
+        return False
+    rows = await (await conn.execute(
+        "SELECT name FROM sqlite_schema WHERE type='trigger' AND name IN ("
+        + ",".join("?" for _ in names) + ")", tuple(sorted(names)),
+    )).fetchall()
+    return {str(row[0]) for row in rows} == names
 
 
 def operational_search_schema_sql() -> str:
@@ -896,9 +917,13 @@ async def ensure_operational_storage(
             ddl_applied_this_run=not installed,
         )
         if await _legacy_bridge_compatible(conn):
-            await conn.executescript(legacy_bridge_sql())
+            script = legacy_bridge_sql()
+            if not await _bridge_installed(conn, script):
+                await conn.executescript(script)
         if await _automation_bridge_compatible(conn):
-            await conn.executescript(automation_bridge_sql())
+            script = automation_bridge_sql()
+            if not await _bridge_installed(conn, script):
+                await conn.executescript(script)
         await _complete_migration(
             conn,
             app_version=app_version,
