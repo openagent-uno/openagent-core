@@ -25,6 +25,7 @@ stays drop-in.
 from __future__ import annotations
 
 from ..errors import bounded_sse_lines
+from .. import blocking
 
 import json
 import platform
@@ -283,10 +284,12 @@ class CodexClient:
                 CODEX_RESPONSES_URL, headers, body, timeout=self.timeout, chunk_timeout=self.chunk_timeout
             )
         self.last_headers = resp_headers
+        finished = blocking.close_on_cancel(close)
 
         if status >= 400:
             raw = "".join(line for line in (lines or []))
             close()
+            finished.set()
             try:
                 parsed = json.loads(raw)
             except Exception:
@@ -295,6 +298,7 @@ class CodexClient:
 
         try:
             for line in bounded_sse_lines(lines):
+                blocking.check_cancelled()
                 if not line or not line.startswith("data:"):
                     continue
                 data = line[len("data:"):].strip()
@@ -309,6 +313,7 @@ class CodexClient:
                     raise CodexStreamError(error, resp_headers)
                 yield event, resp_headers
         finally:
+            finished.set()
             close()
 
 

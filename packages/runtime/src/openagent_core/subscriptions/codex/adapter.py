@@ -47,6 +47,7 @@ from .codex_backend import (
 )
 from .usage import UsageLedger
 from ..errors import SubscriptionError, validated_events, upstream_failure, stream_failure
+from .. import blocking
 
 
 
@@ -140,7 +141,7 @@ def create_app(settings, *, token_manager=None, metrics_state=None, usage_ledger
     def _upstream_lease():
         admission_timeout = max(0.0, settings.upstream_admission_timeout)
         queue_timeout = max(1.0, settings.upstream_queue_timeout)
-        if not _queue_slots.acquire(timeout=admission_timeout):
+        if not blocking.acquire(_queue_slots, admission_timeout):
             _metric_add("rejected")
             msg = (
                 "upstream queue is full "
@@ -158,7 +159,7 @@ def create_app(settings, *, token_manager=None, metrics_state=None, usage_ledger
                 _metrics["queued"] += 1
             queue_registered = True
 
-            if not _upstream_slots.acquire(timeout=queue_timeout):
+            if not blocking.acquire(_upstream_slots, queue_timeout):
                 _metric_add("queue_timeouts")
                 msg = f"upstream queue timed out after {queue_timeout:.0f}s"
                 _set_last_error(msg)
@@ -276,7 +277,7 @@ def create_app(settings, *, token_manager=None, metrics_state=None, usage_ledger
             sleep_s = _store_pacer.reserve(min_interval)
             _next_upstream_at = now + sleep_s + min_interval
         if sleep_s:
-            time.sleep(sleep_s)
+            blocking.sleep(sleep_s)
 
 
     def _cool_down_upstream(wait_s: float) -> None:
@@ -489,7 +490,7 @@ def create_app(settings, *, token_manager=None, metrics_state=None, usage_ledger
                 f"sleeping {wait_s:.1f}s (retry {attempt + 1}/{attempts - 1})",
                 flush=True,
             )
-            time.sleep(wait_s)
+            blocking.sleep(wait_s)
         _raise_exhausted(state)
 
 
@@ -569,6 +570,7 @@ def create_app(settings, *, token_manager=None, metrics_state=None, usage_ledger
         for account, _attempt in _account_attempts(state, model):
             try:
                 with _upstream_lease():
+                    blocking.check_cancelled()
                     assembler.consume(_events(payload, account), on_headers=_headers_recorder(account))
                 _token_mgr.mark_success(account.id, model=model)
                 assembler.cache_reasoning(_reasoning_cache)
@@ -594,6 +596,7 @@ def create_app(settings, *, token_manager=None, metrics_state=None, usage_ledger
             yielded = False
             try:
                 with _upstream_lease():
+                    blocking.check_cancelled()
                     for chunk in assembler.chunks(
                         _events(payload, account),
                         include_usage=include_usage,
@@ -896,10 +899,10 @@ def create_app(settings, *, token_manager=None, metrics_state=None, usage_ledger
                         return
                     yield _error_chunk(str(exc), "proxy_error", 502)
 
-            return StreamingResponse(_gen(), media_type="text/event-stream")
+            return StreamingResponse(blocking.iterate(_gen()), media_type="text/event-stream")
 
         try:
-            resp = await run_in_threadpool(_run_turn, payload, make_assembler)
+            resp = await blocking.run(_run_turn, payload, make_assembler)
         except SubscriptionError as exc:
             return JSONResponse(status_code=exc.status, content={"error": exc.public()}, headers=exc.headers())
         except UpstreamOverloaded as exc:
@@ -996,6 +999,7 @@ def create_app(settings, *, token_manager=None, metrics_state=None, usage_ledger
             for account, _attempt in _account_attempts(state, realtime_model, keep_excluded=True):
                 try:
                     with _upstream_lease():
+                        blocking.check_cancelled()
                         # Un session_id NUOVO per ogni telefonata.
                         #
                         # Di default l'id e' stabile per processo: va benissimo per il

@@ -272,3 +272,15 @@ and the reviewed source hash are mandatory; the function does not control
 services or discover files. Only after every consumer has passed embedded
 inference should the operator remove the retired listeners and their services.
 Do not restore stale credential files when rolling back catalog rows.
+
+### Streaming worker ownership
+
+Blocking Codex streams run on a dedicated request worker. Acquiring, yielding
+and closing a suspended protocol iterator on different pool threads can lose
+the thread-local owner of its OS admission lock even after a successful reply.
+The bounded bridge keeps `next()` and `close()` on the same worker, propagates
+the host context and emits invisible SSE heartbeats. Cancellation stops queue
+admission, pacing and retry waits, closes an established upstream response and
+closes the iterator on its owning worker. The non-streamed aggregation path
+uses the same request cancellation context. No account, model, quota or
+concurrency setting is changed to recover a stranded lease.
