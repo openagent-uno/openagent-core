@@ -284,3 +284,20 @@ admission, pacing and retry waits, closes an established upstream response and
 closes the iterator on its owning worker. The non-streamed aggregation path
 uses the same request cancellation context. No account, model, quota or
 concurrency setting is changed to recover a stranded lease.
+
+### Quota telemetry without exposing credentials
+
+Claude response quota headers are parsed inside the Core for both transports,
+streaming and aggregation. Only allowlisted numeric windows/status fields and
+an observation timestamp are persisted for the exact account and exposed by
+`accounts()`. Request-scoped observers prevent cross-account contamination.
+Ordinary replies remain usable if optional quota persistence is unavailable.
+
+A trusted monitor can call `refresh_usage(account_id=..., model=...)` to send
+a minimal one-output-token probe through that account's normal native admission
+lane. This consumes a model request; schedule it deliberately. The result
+contains the HTTP status, safe quota snapshot and `fresh` flag. Missing headers
+remain unknown or stale, never a fabricated zero. Rate-limit replies can still
+provide useful telemetry. Consumers keep thresholds, schedules, alerting and
+other domain policy outside the Core; they do not read or transmit OAuth tokens,
+reimplement provider headers or depend on a separate custody listener.

@@ -33,6 +33,7 @@ from .auth import (
 )
 from .cc_anthropic import AnthropicHTTPError, ClaudeCodeClient
 from ..errors import SubscriptionError, validated_events, upstream_failure
+from ..quota import observe
 
 
 
@@ -393,7 +394,7 @@ def create_app(settings, *, token_manager=None, metrics_state=None):
                 if excluded_accounts:
                     _metric_add("account_switches")
                 try:
-                    with _upstream_lease():
+                    with _upstream_lease(), observe(lambda quota: _token_mgr.record_quota(account.id, quota)):
                         response = _client.complete(payload, token=account.token)
                     _token_mgr.mark_success(account.id)
                     return response
@@ -481,7 +482,7 @@ def create_app(settings, *, token_manager=None, metrics_state=None):
                 if excluded_accounts:
                     _metric_add("account_switches")
                 try:
-                    with _upstream_lease(cancel_event):
+                    with _upstream_lease(cancel_event), observe(lambda quota: _token_mgr.record_quota(account.id, quota)):
                         for chunk in _client.stream(
                             payload, token=account.token, cancel_event=cancel_event,
                         ):

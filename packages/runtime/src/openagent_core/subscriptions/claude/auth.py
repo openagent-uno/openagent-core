@@ -469,6 +469,8 @@ class TokenManager:
                     "has_refresh_token": bool(account.get("refresh_token")),
                     "expires_at_ms": _safe_int(account.get("expires_at_ms"), 0),
                 }
+                if account.get("quota"):
+                    status["quota"] = dict(account["quota"])
                 if status["limited"]:
                     status["limited_for_s"] = max(0, (limited_until - now + 999) // 1000)
                 if account.get("last_error"):
@@ -476,6 +478,16 @@ class TokenManager:
                 statuses.append(status)
 
         return statuses
+
+    def record_quota(self, account_id: str, quota: Dict[str, Any]) -> None:
+        if not quota:
+            return
+        with self._lock:
+            account = self._find_account_unlocked(account_id)
+            if account is None:
+                return
+            account['quota'] = dict(quota)
+            self._save_store_unlocked(self._load_store_unlocked())
 
     def mark_rate_limited(self, account_id: str, cooldown_s: float, *, reason: str = "") -> None:
         until = _now_ms() + int(max(0.0, cooldown_s) * 1000)

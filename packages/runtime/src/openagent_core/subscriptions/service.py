@@ -166,6 +166,27 @@ class SubscriptionService:
         return [{key: value for key, value in account.items() if key in fields}
                 for account in result.get("accounts", []) if isinstance(account, dict)]
 
+    async def refresh_usage(self, *, account_id: str, model: str) -> dict:
+        """Probe Claude quota through the exact account's normal admission lane.
+
+        This consumes a minimal model request. No raw token or vendor headers
+        leave the Core; missing telemetry never becomes a fabricated zero.
+        """
+        if self.provider != 'claude':
+            raise ValueError('This quota probe is available for Claude subscriptions')
+        import time
+        started = int(time.time()*1000)
+        accounts = await self.accounts()
+        if not any(a['id'] == account_id for a in accounts):
+            raise KeyError('Unknown account')
+        response = await self.inference_client(account_id, single_attempt=True).post(
+            '/v1/chat/completions', json={'model':model, 'max_tokens':1,
+                'messages':[{'role':'user','content':'.'}], 'stream':False})
+        accounts = await self.accounts()
+        quota = next((a.get('quota') or {} for a in accounts if a['id'] == account_id), {})
+        return {'status':response.status_code, 'quota':quota,
+                'fresh':quota.get('observed_at_ms', 0) >= started}
+
     def inference_base_url(self, account_id=None, *, single_attempt=False):
         return "http://subscription.internal/v1"
 

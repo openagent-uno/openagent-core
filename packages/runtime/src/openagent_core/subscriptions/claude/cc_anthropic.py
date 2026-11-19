@@ -26,6 +26,7 @@ import threading
 import uuid
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 from ..errors import bounded_sse_lines
+from ..quota import report_claude
 
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -200,6 +201,7 @@ def _post_httpx(url, headers, body, *, stream, timeout, cancel_event=None):
     if not stream:
         try:
             resp = client.post(url, headers=headers, content=body)
+            report_claude(resp.headers)
             if resp.status_code >= 300:
                 raise AnthropicHTTPError(resp.status_code, _error_body(resp.content), dict(resp.headers))
             return resp.status_code, resp.json(), None
@@ -211,6 +213,7 @@ def _post_httpx(url, headers, body, *, stream, timeout, cancel_event=None):
     except BaseException:
         client.close()
         raise
+    report_claude(resp.headers)
     if resp.status_code >= 300:
         try:
             content = _bounded_content(resp.iter_bytes())
@@ -244,6 +247,7 @@ def _post_curl_cffi(
     if not stream:
         with creq.Session(impersonate=impersonate, trust_env=False) as session:
             r = session.post(url, headers=headers, data=body, timeout=timeout, allow_redirects=False)
+            report_claude(r.headers)
             if r.status_code >= 300:
                 raise AnthropicHTTPError(r.status_code, _error_body(r.content), dict(r.headers))
             return r.status_code, r.json(), None
@@ -266,6 +270,7 @@ def _post_curl_cffi(
     except BaseException:
         session.close()
         raise
+    report_claude(r.headers)
     if r.status_code >= 300:
         try:
             content = _bounded_content(r.iter_content())
