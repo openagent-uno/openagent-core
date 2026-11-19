@@ -24,6 +24,9 @@ def connection_info(row: dict) -> dict:
 
 
 def validate_connection(metadata: dict) -> None:
+    if 'subscription_store_layout' in metadata:
+        from ..subscriptions.settings import store_layout
+        store_layout(metadata['subscription_store_layout'])
     if "access" in metadata and metadata["access"] not in ACCESS_TYPES:
         raise ValueError("access must be api, subscription or local")
     if metadata.get("access") == "subscription" and metadata.get("vendor") not in {"anthropic", "openai"}:

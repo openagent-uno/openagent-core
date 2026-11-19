@@ -76,6 +76,7 @@ async def localize_subscription_accounts(db, provider: str, source: Path, *,
                                         credential_owners: dict[str, int],
                                         provider_ids: list[int],
                                         admission_id: int,
+                                        store_layout: str = 'flat',
                                         subscription_settings: dict | None = None) -> dict:
     """Convert reviewed remote account rows in place to embedded inference.
 
@@ -95,7 +96,8 @@ async def localize_subscription_accounts(db, provider: str, source: Path, *,
     original = source.read_bytes()
     if hashlib.sha256(original).hexdigest() != expected_sha256:
         raise ValueError("The credential store changed after the host stopped its writer")
-    from .settings import validate_settings
+    from .settings import validate_settings, store_directory
+    root = store_directory(Path(db.db_path), provider, store_layout)
     options = validate_settings(provider, subscription_settings)
     manager = importlib.import_module(f"openagent_core.subscriptions.{provider}.auth").TokenManager(source)
     accounts = {str(a['id']): a for a in manager.list_accounts()}
@@ -104,7 +106,6 @@ async def localize_subscription_accounts(db, provider: str, source: Path, *,
             or len(set(credential_owners.values())) != len(credential_owners)):
         raise ValueError("Provide one distinct positive credential owner for every source account")
     vendor = {"claude": "anthropic", "codex": "openai"}[provider]
-    root = Path(db.db_path).parent / 'subscriptions'
     created, converted = [], []
     try:
         async with db._isolated_write() as conn:
@@ -135,6 +136,10 @@ async def localize_subscription_accounts(db, provider: str, source: Path, *,
                 meta.pop('subscription_remote_unkeyed', None)
                 meta['credential_store_id'] = credential_owners[str(meta['account_id'])]
                 meta['subscription_admission_id'] = admission_id
+                if store_layout != 'flat':
+                    meta['subscription_store_layout'] = store_layout
+                else:
+                    meta.pop('subscription_store_layout', None)
                 # A per-connection override remains authoritative over host defaults.
                 meta['subscription_settings'] = {**options, **(meta.get('subscription_settings') or {})}
                 validate_settings(provider, meta['subscription_settings'])

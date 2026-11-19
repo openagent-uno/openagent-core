@@ -19,6 +19,20 @@ _INTS = {'default_max_tokens', 'max_tools', 'upstream_max_concurrency',
          'upstream_max_queue', 'rate_limit_retries'}
 
 
+def store_layout(value='flat') -> str:
+    """A fixed layout choice, never a caller-supplied filesystem path."""
+    if not isinstance(value, str) or value not in {'flat', 'provider'}:
+        raise ValueError('subscription_store_layout must be flat or provider')
+    return value
+
+
+def store_directory(db_path: Path, provider: str, layout='flat') -> Path:
+    if provider not in {'claude', 'codex'}:
+        raise ValueError('Unknown subscription provider')
+    root = db_path.parent / 'subscriptions'
+    return root / provider if store_layout(layout) == 'provider' else root
+
+
 def validate_settings(provider: str, options: dict | None) -> dict:
     if provider not in {'claude', 'codex'}:
         raise ValueError('Unknown subscription provider')

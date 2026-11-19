@@ -302,7 +302,8 @@ class ProviderModelAdmin:
                     if (meta.get("access") == "subscription" and meta.get("vendor") == metadata.get("vendor")
                             and meta.get("account_id") == identifier
                             and bool(meta.get("subscription_remote")) == bool(metadata.get("subscription_remote"))
-                            and (same_remote if metadata.get("subscription_remote") else meta.get("credential_store_id", linked["id"]) == owner)):
+                            and (same_remote if metadata.get("subscription_remote") else (meta.get("credential_store_id", linked["id"]) == owner
+                                and meta.get("subscription_store_layout", "flat") == metadata.get("subscription_store_layout", "flat")))):
                         changes = {}
                         new_meta = dict(meta)
                         if "enabled" in patch: changes["enabled"] = patch["enabled"]
@@ -326,6 +327,8 @@ class ProviderModelAdmin:
                 meta = linked.get("metadata") or {}
                 if linked["id"] == provider_id or (meta.get("access") == "subscription"
                         and meta.get("credential_store_id", linked["id"]) == owner
+                        and meta.get("vendor") == (row.get("metadata") or {}).get("vendor")
+                        and meta.get("subscription_store_layout", "flat") == (row.get("metadata") or {}).get("subscription_store_layout", "flat")
                         and meta.get("account_id") == account["id"]):
                     await self.db.update_provider_fields(linked["id"], {"metadata": {
                         **meta, "account_id": account["id"],

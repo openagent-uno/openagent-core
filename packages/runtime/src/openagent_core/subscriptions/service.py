@@ -376,16 +376,17 @@ def subscription_for(row: dict, db_path: str | Path) -> SubscriptionService | No
         raise ValueError("Subscription access requires an explicit persistent host database path")
     # IDs remain stable across renames; no user-controlled path component.
     identifier = int(metadata.get("credential_store_id", row["id"]))
-    from .settings import native_settings, validate_settings
+    from .settings import native_settings, validate_settings, store_directory, store_layout
     import json
     options = validate_settings(provider, metadata.get('subscription_settings'))
     admission_id = metadata.get('subscription_admission_id')
     if admission_id is not None and (type(admission_id) is not int or admission_id < 1):
         raise ValueError('subscription_admission_id must be a positive identifier')
-    directory = path.parent / 'subscriptions'
+    layout = store_layout(metadata.get('subscription_store_layout', 'flat'))
+    directory = store_directory(path, provider, layout)
     admission = directory / f'admission-{admission_id}-{provider}' if admission_id else None
     store = directory / f'{identifier}-{provider}.json'
-    key = (str(path), identifier, provider, admission_id, json.dumps(options, sort_keys=True))
+    key = (str(path), identifier, provider, layout, admission_id, json.dumps(options, sort_keys=True))
     if key not in _SERVICES or _SERVICES[key].client.is_closed:
         _SERVICES[key] = SubscriptionService(provider, store,
             settings=native_settings(provider, store, options, admission_path=admission))

@@ -301,3 +301,15 @@ remain unknown or stale, never a fabricated zero. Rate-limit replies can still
 provide useful telemetry. Consumers keep thresholds, schedules, alerting and
 other domain policy outside the Core; they do not read or transmit OAuth tokens,
 reimplement provider headers or depend on a separate custody listener.
+
+### Provider-scoped shared custody directories
+
+`subscription_store_layout: "provider"` is an explicit native connection setting.
+It stores credentials and admission state beneath `subscriptions/claude/` or
+`subscriptions/codex/`, allowing the host to share only the required vendor's
+directory with another process. The default `"flat"` retains every existing path.
+No arbitrary path is accepted. Share directories, never individual rotating files.
+The offline `localize_subscription_accounts(..., store_layout="provider")` operation
+sets the layout while preserving reviewed provider/model IDs and settings. Stop
+all writers first; never change an active connection's layout without migrating
+its store. The host retains responsibility for mounts, permissions and custody.

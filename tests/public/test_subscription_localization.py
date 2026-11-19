@@ -1,6 +1,7 @@
 """Offline retirement of a custody listener, without rebuilding catalogs."""
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 from openagent_core.engine import MemoryDB
@@ -9,7 +10,8 @@ from openagent_core.subscriptions.service import subscription_for
 
 
 @pytest.mark.asyncio
-async def test_localization_preserves_catalog_and_shares_atomic_rotations(tmp_path):
+@pytest.mark.parametrize("layout", ["flat", "provider"])
+async def test_localization_preserves_catalog_and_shares_atomic_rotations(tmp_path, layout):
     source = tmp_path / 'old.json'
     source.write_text(json.dumps({'accounts': [
         {'id':'a', 'name':'Personal', 'access_token':'fixture-a', 'refresh_token':'rotate-a'},
@@ -38,7 +40,7 @@ async def test_localization_preserves_catalog_and_shares_atomic_rotations(tmp_pa
             before_rows = [await db.get_provider(pid) for pid in ids]
             result = await localize_subscription_accounts(db, 'claude', source, quiesced=True,
                 expected_sha256=hashlib.sha256(original).hexdigest(), credential_owners={'a':71,'b':72},
-                provider_ids=ids, admission_id=70, subscription_settings={'request_timeout':120})
+                provider_ids=ids, admission_id=70, store_layout=layout, subscription_settings={'request_timeout':120})
             assert result['provider_ids']==ids and result['accounts']==2
             assert await db.list_models()==before_models
             assert (await db.get_provider(api))['base_url']=='https://api.anthropic.com'
@@ -50,10 +52,13 @@ async def test_localization_preserves_catalog_and_shares_atomic_rotations(tmp_pa
                 assert m['budget_group']=='original' and m['account_fallback_group']=='keep'
                 assert m['subscription_settings']=={'request_timeout':120,'max_tools':12}
             services.append(subscription_for(await db.get_provider(ids[0]), db.db_path))
-        assert len(list(shared.glob('*.json')))==2 and source.read_bytes()==original
+        directory = shared / 'claude' if layout == 'provider' else shared
+        assert len(list(directory.glob('*.json')))==2 and source.read_bytes()==original
+        assert not (shared / 'codex').exists()
+        assert services[0].settings.admission_path == Path(dbs[0].db_path).parent / 'subscriptions' / ('claude/admission-70-claude' if layout == 'provider' else 'admission-70-claude')
         assert services[0].manager.creds_file.samefile(services[1].manager.creds_file)
         from openagent_core.subscriptions.credential_storage import write_credentials
-        target=shared/'71-claude.json'; data=json.loads(target.read_text())
+        target=directory/'71-claude.json'; data=json.loads(target.read_text())
         data['accounts'][0]['access_token']='rotated-fixture'
         write_credentials(target,data)
         # Core's manager reopens the atomic replacement instead of retaining a stale token.
@@ -109,3 +114,32 @@ async def test_source_change_rolls_back_database_and_only_new_files(tmp_path, mo
         assert await db.get_provider(pid)==before
         assert not (tmp_path/'subscriptions'/'1-claude.json').exists()
     finally: await db.close()
+
+
+@pytest.mark.parametrize("layout", ["../outside", "/tmp/private", None, {}, True, "claude"])
+def test_layout_refuses_paths_and_unknown_choices(tmp_path, layout):
+    from openagent_core.models.connections import validate_connection
+    from openagent_core.subscriptions.settings import store_directory
+    with pytest.raises(ValueError, match="subscription_store_layout"):
+        validate_connection({"subscription_store_layout": layout})
+    with pytest.raises(ValueError, match="subscription_store_layout"):
+        store_directory(tmp_path / "db.sqlite", "claude", layout)
+    assert not (tmp_path / "subscriptions").exists()
+
+
+@pytest.mark.asyncio
+async def test_flat_and_partitioned_stores_with_same_owner_stay_independent(tmp_path):
+    from openagent_core.subscriptions.credential_storage import write_credentials
+    meta = {"access":"subscription", "vendor":"anthropic", "credential_store_id":7}
+    services=[]
+    try:
+        for layout, token in (("flat", "flat-fixture"), ("provider", "partitioned-fixture")):
+            directory=tmp_path / "subscriptions"
+            if layout == "provider": directory /= "claude"
+            write_credentials(directory / "7-claude.json", {"accounts":[{"id":"a", "access_token":token}]})
+            services.append(subscription_for({"id":1, "metadata":{**meta, "subscription_store_layout":layout}}, tmp_path / "db.sqlite"))
+        assert services[0] is not services[1]
+        assert services[0].manager.list_accounts()[0]["access_token"] == "flat-fixture"
+        assert services[1].manager.list_accounts()[0]["access_token"] == "partitioned-fixture"
+    finally:
+        for service in services: await service.close()

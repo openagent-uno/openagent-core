@@ -64,7 +64,7 @@ async def generate_subscription_image(db, provider_id: int, *, model: str, promp
             from .remote import remote_base_url
             owner = ('remote', remote_base_url(p.get('base_url') or ''))
         else:
-            owner = ('native', meta.get('credential_store_id', p['id']))
+            owner = ('native', meta.get('subscription_store_layout', 'flat'), meta.get('credential_store_id', p['id']))
         key = (owner, meta['account_id'])
         if key not in seen:
             unique.append(candidate); seen.add(key)
