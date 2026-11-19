@@ -71,6 +71,87 @@ async def adopt_remote_subscription_accounts(db, provider_id: int, provider: str
         account_fallback=account_fallback, subscription_settings=None, remote=True, allow_unkeyed=allow_unkeyed)
 
 
+async def localize_subscription_accounts(db, provider: str, source: Path, *,
+                                        quiesced: bool, expected_sha256: str,
+                                        credential_owners: dict[str, int],
+                                        provider_ids: list[int],
+                                        admission_id: int,
+                                        subscription_settings: dict | None = None) -> dict:
+    """Convert reviewed remote account rows in place to embedded inference.
+
+    All writers of the source and destination must be stopped. The host supplies
+    a private shared subscriptions directory through its filesystem layout when
+    several databases use these accounts. Existing files must match the stopped
+    source exactly. No model, account, preference or history row is recreated.
+    """
+    if not quiesced:
+        raise ValueError("Drain every runtime and stop the old credential writer first")
+    if provider not in {"claude", "codex"} or not source.is_absolute() or source.is_symlink():
+        raise ValueError("An explicit regular credential store and subscription provider are required")
+    if type(admission_id) is not int or admission_id < 1:
+        raise ValueError("A positive shared admission identifier is required")
+    if not provider_ids or any(type(i) is not int or i < 1 for i in provider_ids) or len(set(provider_ids)) != len(provider_ids):
+        raise ValueError("Explicit distinct provider identifiers are required")
+    original = source.read_bytes()
+    if hashlib.sha256(original).hexdigest() != expected_sha256:
+        raise ValueError("The credential store changed after the host stopped its writer")
+    from .settings import validate_settings
+    options = validate_settings(provider, subscription_settings)
+    manager = importlib.import_module(f"openagent_core.subscriptions.{provider}.auth").TokenManager(source)
+    accounts = {str(a['id']): a for a in manager.list_accounts()}
+    if (not accounts or set(credential_owners) != set(accounts)
+            or any(type(v) is not int or v < 1 for v in credential_owners.values())
+            or len(set(credential_owners.values())) != len(credential_owners)):
+        raise ValueError("Provide one distinct positive credential owner for every source account")
+    vendor = {"claude": "anthropic", "codex": "openai"}[provider]
+    root = Path(db.db_path).parent / 'subscriptions'
+    created, converted = [], []
+    try:
+        async with db._isolated_write() as conn:
+            rows = await (await conn.execute("SELECT id,metadata_json FROM providers")).fetchall()
+            selected = []
+            for row in rows:
+                meta = json.loads(row['metadata_json'] or '{}')
+                if (row['id'] in provider_ids and meta.get('access') == 'subscription' and meta.get('vendor') == vendor
+                        and meta.get('subscription_remote') is True
+                        and str(meta.get('account_id')) in accounts):
+                    selected.append((row['id'], meta))
+            if {i for i, _ in selected} != set(provider_ids):
+                raise ValueError("The reviewed remote account connections changed; nothing was changed")
+            # Preserve even source accounts without catalog rows. Never silently
+            # discard a disabled account while retiring its old credential host.
+            for account_id, account in accounts.items():
+                target = root / f'{credential_owners[account_id]}-{provider}.json'
+                if target.is_symlink():
+                    raise ValueError("Share the directory, not individual rotating credential files")
+                if target.exists():
+                    if json.loads(target.read_text()).get('accounts') != [account]:
+                        raise ValueError("The shared credential changed; do not duplicate a rotating token")
+                else:
+                    write_credentials(target, {'version': 2, 'accounts': [account]})
+                    created.append(target)
+            for identifier, meta in selected:
+                meta.pop('subscription_remote', None)
+                meta.pop('subscription_remote_unkeyed', None)
+                meta['credential_store_id'] = credential_owners[str(meta['account_id'])]
+                meta['subscription_admission_id'] = admission_id
+                # A per-connection override remains authoritative over host defaults.
+                meta['subscription_settings'] = {**options, **(meta.get('subscription_settings') or {})}
+                validate_settings(provider, meta['subscription_settings'])
+                await conn.execute("UPDATE providers SET base_url=NULL,metadata_json=? WHERE id=?",
+                                   (json.dumps(meta), identifier))
+                converted.append(identifier)
+            if source.read_bytes() != original:
+                raise ValueError("The source writer was not stopped; migration rolled back")
+    except BaseException:
+        for path in created:
+            path.unlink(missing_ok=True)
+        raise
+    return {'provider_ids': converted, 'accounts': len(accounts),
+            'source_sha256': expected_sha256, 'source_preserved': True,
+            'models_preserved': True, 'embedded': True}
+
+
 async def _adopt_catalog_accounts(db, provider_id, provider, accounts, *, source,
                                   original, digest, credential_owners,
                                   account_fallback, subscription_settings, remote=False, allow_unkeyed=False):

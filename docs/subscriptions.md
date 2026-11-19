@@ -246,3 +246,29 @@ account policy updates. Administration applies it to all linked typed rows of
 that account without changing the shared custody credential or other catalogs.
 The optional HTTP custody host shares request metrics and the Codex usage ledger
 between root and exact-account routes, flushing pending usage on shutdown.
+
+### Retiring a custody listener without recreating connections
+
+`localize_subscription_accounts(...)` converts an explicit reviewed list of
+remote subscription provider IDs in place. Stop **all** credential writers and
+consumers, verify the private catalog/credential backup, and supply the source
+SHA-256, `quiesced=True`, a distinct positive `credential_owners` mapping for
+all source accounts and a shared `admission_id`. No account or model row is
+cloned. Connection/model IDs, enabled flags, defaults, settings, budget and
+fallback groups, session references and unrelated API connections survive.
+The obsolete endpoint is cleared; valid connection protocol overrides take
+precedence over supplied host defaults. Even accounts without catalog rows
+remain in their private stores. Results contain no credentials.
+
+When separate databases use the same accounts, mount the same private
+`subscriptions/` directory at each database directory and use the same owner
+and admission identifiers. Individual rotating-file symlinks are refused:
+atomic credential replacement would break their sharing. The underlying
+filesystem must support cross-process file locking and atomic replacement;
+a read-only mount or independently copied refresh token is not a replacement.
+Existing destination accounts must exactly match the stopped source. A failed
+transaction removes only destinations created by that invocation. Quiescence
+and the reviewed source hash are mandatory; the function does not control
+services or discover files. Only after every consumer has passed embedded
+inference should the operator remove the retired listeners and their services.
+Do not restore stale credential files when rolling back catalog rows.
