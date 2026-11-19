@@ -50,6 +50,27 @@ class AdministrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(await self.db.list_models()), 1)
         self.assertEqual(self.reloads, 4)
 
+    async def test_display_label_preserves_pool_credentials_models_and_session_pin(self):
+        metadata = {"vendor": "openai", "access": "api", "label": "Before",
+                    "accounts": [{"api_key": "pool-secret", "label": "First"}],
+                    "budget_group": "shared"}
+        p = await self.admin.create_provider(self.context, dict(
+            name="work", framework="api-based", api_key="secret", metadata=metadata))
+        m = await self.admin.create_model(self.context, dict(provider_id=p["id"], model="one"))
+        await self.db.pin_session_model("session-one", m["runtime_id"])
+        renamed = await self.admin.update_provider(self.context, p["id"], {"label": "  Personal  "})
+        self.assertEqual(renamed["label"], "Personal")
+        stored = await self.db.get_provider(p["id"])
+        self.assertEqual(stored["metadata"], {**metadata, "label": "Personal"})
+        self.assertEqual(stored["api_key"], "secret")
+        self.assertEqual(stored["name"], "work")
+        self.assertEqual(await self.db.get_session_pin("session-one"), m["runtime_id"])
+        self.assertEqual((await self.admin.model(self.context, m["id"]))["runtime_id"], m["runtime_id"])
+        for invalid in (None, 4, "   ", "a" * 81):
+            with self.assertRaises(ValueError):
+                await self.admin.update_provider(self.context, p["id"], {"label": invalid})
+        self.assertEqual((await self.db.get_provider(p["id"]))["metadata"], stored["metadata"])
+
     async def test_invalid_rename_rolls_back_pin_and_identity(self):
         p = await self.admin.create_provider(self.context, dict(name="local", framework="api-based"))
         m = await self.admin.create_model(self.context, dict(provider_id=p["id"], model="one"))

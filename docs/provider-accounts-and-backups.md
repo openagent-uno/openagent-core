@@ -70,3 +70,12 @@ local markers that come before the request (request started, compaction). Once
 output has started, the stream is never cut. Set the value to `0` to disable
 the bound. It applies to async streaming backups, the path the runtime uses for
 turns. The primary model and non-streaming calls keep their provider timeouts.
+
+## Connection labels and account identity
+
+`ProviderModelAdmin.update_provider(context, id, {"label": "Work"})` changes
+the display label atomically while preserving stored metadata, pooled credentials,
+provider identity and session model references. Labels contain 1 to 80 characters.
+The connection contract advertises `PROVIDER_UPDATE_FIELDS`. Subscription account
+responses include `account_name`, the credential account name, independently of
+the connection's editable label and the existing compatibility `name` field.

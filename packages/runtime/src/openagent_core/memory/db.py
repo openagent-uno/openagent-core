@@ -5861,7 +5861,7 @@ class MemoryDB:
     async def update_provider_fields(self, provider_id: int, changes: dict[str, Any]) -> dict[str, Any]:
         """Update one provider identity and migrate its exact session pins atomically."""
         from openagent_core.models.catalog import build_runtime_model_id
-        allowed = {"name", "framework", "kind", "api_key", "base_url", "enabled", "metadata"}
+        allowed = {"name", "label", "framework", "kind", "api_key", "base_url", "enabled", "metadata"}
         if set(changes) - allowed:
             raise ValueError("Unknown provider fields")
         await self._ensure_connected()
@@ -5876,6 +5876,11 @@ class MemoryDB:
             name = merged["name"]
             if not isinstance(name, str) or not name.strip(): raise ValueError("Provider name is required")
             if not isinstance(merged.get("metadata") or {}, dict): raise ValueError("metadata must be an object")
+            if "label" in changes:
+                label = changes["label"]
+                if not isinstance(label, str) or not label.strip() or len(label.strip()) > 80:
+                    raise ValueError("Connection name must contain 1 to 80 characters")
+                merged["metadata"] = {**(merged.get("metadata") or {}), "label": label.strip()}
             if not isinstance(merged["enabled"], bool): raise ValueError("enabled must be boolean")
             rows = await (await conn.execute("SELECT model FROM models WHERE provider_id=?", (int(provider_id),))).fetchall()
             await conn.execute("UPDATE providers SET name=?,api_key=?,base_url=?,enabled=?,metadata_json=?,updated_at=? WHERE id=?",

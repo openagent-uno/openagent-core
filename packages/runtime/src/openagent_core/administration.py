@@ -270,10 +270,10 @@ class ProviderModelAdmin:
             if operation == "accounts":
                 accounts = await service.accounts()
                 metadata = row.get("metadata") or {}
-                return [{**account, "credential_enabled": account.get("enabled") is not False,
+                return [{**account, "account_name": account.get("name"), "credential_enabled": account.get("enabled") is not False,
                          "enabled": bool(row.get("enabled", True) and account.get("enabled") is not False),
                          "name": metadata.get("label") or account.get("name")}
-                        if account.get("id") == metadata.get("account_id") else account
+                        if account.get("id") == metadata.get("account_id") else {**account, "account_name": account.get("name")}
                         for account in accounts]
             if operation == "start": return await service.start_sign_in()
             if operation == "update_account":

@@ -5,6 +5,7 @@ import re
 
 ACCESS_TYPES = frozenset({"api", "subscription", "local"})
 MODEL_KINDS = ("llm", "image", "tts", "stt")
+PROVIDER_UPDATE_FIELDS = ("label", "name", "api_key", "base_url", "enabled", "metadata")
 ACCOUNT_CONNECTION_FIELDS = ("name", "enabled", "priority", "fallback_enabled")
 
 
