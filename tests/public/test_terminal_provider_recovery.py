@@ -161,18 +161,18 @@ async def test_native_cancelled_actual_runner_persists_session_before_propagatio
             with pytest.raises(asyncio.CancelledError, match="stopped before provider IO"):
                 async for _ in native.stream([{"role": "user", "content": "fixture input"}], session_id="cancelled-session"):
                     pass
-        session = store.get_session("cancelled-session")
-        assert session is not None
-        assert len(session.runs) == 1
+        history = store.get_session("cancelled-session")
+        assert history is not None
+        assert len(history.runs) == 1
         # The pre-existing promote_interrupted_run policy stores interrupted
         # provider history as COMPLETED to retain context. The cancellation
         # outcome above remains CancelledError; this verifies cleanup persisted
         # the actual input/messages, not a new storage-status policy.
         raw = store.get_session("cancelled-session", deserialize=False)
         assert raw["runs"][0]["status"] == "COMPLETED"
-        assert session.runs[0].input.input_content == "fixture input"
+        assert history.runs[0].input.input_content == "fixture input"
         assert any(message.role == "user" and message.content == "fixture input"
-                   for message in session.get_messages())
+                   for message in history.get_messages())
         if partial:
             # Directly exhausting the existing Agent runner retains partial
             # content in the run envelope while its messages can be user-only.
@@ -180,7 +180,7 @@ async def test_native_cancelled_actual_runner_persists_session_before_propagatio
             assert raw["runs"][0]["content"] == "partial work"
             if team:
                 assert any(message.role == "assistant" and message.content == "partial work"
-                           for message in session.get_messages())
+                           for message in history.get_messages())
         generate.assert_not_called()
     finally:
         store.close()
