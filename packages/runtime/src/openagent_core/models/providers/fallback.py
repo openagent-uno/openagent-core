@@ -163,9 +163,12 @@ def get_fallback_models(fallback_config: Optional[FallbackConfig], error: Except
 def _check_automatic_primary(model, config, kwargs):
     if config is None or not config.recover_unavailable:
         return
-    if ((config.eligible is not None and not config.eligible(model, kwargs))
-            or (_breaker_enabled() and _breaker_quarantined(_health_id(model), time.monotonic()))):
-        error = ModelProviderError("The selected model is temporarily unavailable", status_code=503,
+    cooling = _breaker_enabled() and _breaker_quarantined(_health_id(model), time.monotonic())
+    if ((config.eligible is not None and not config.eligible(model, kwargs)) or cooling):
+        from openagent_core.core.public_errors import PUBLIC_MESSAGES
+        with _breaker_lock:
+            code = _breaker_public_codes.get(_health_id(model), "model_unavailable") if cooling else "model_unavailable"
+        error = ModelProviderError(PUBLIC_MESSAGES[code], status_code=503,
                                    model_id=_route_id(model))
         error.routing_skip = True
         raise error
@@ -219,7 +222,7 @@ async def _initial_stream(model, config, kwargs):
 def _record_automatic_failure(model, config, error):
     if (config is not None and config.recover_unavailable and not getattr(error, "routing_skip", False)
             and get_fallback_models(config, error)):
-        _breaker_record_failure(_health_id(model))
+        _breaker_record_failure(_health_id(model), error)
 
 
 async def _authorize_automatic_model(model, config):
@@ -798,6 +801,8 @@ _breaker_lock = threading.Lock()
 # model id -> (istante in cui si puo' riprovare, fallimenti consecutivi)
 from openagent_core.instance_state import InstanceMapping
 _breaker = InstanceMapping('provider-fallback-breaker')
+# The cooldown never retains provider exception objects or diagnostics.
+_breaker_public_codes = InstanceMapping('provider-fallback-public-codes')
 
 
 def _breaker_enabled() -> bool:
@@ -812,9 +817,11 @@ def _breaker_quarantined(model_id: str, now: float) -> bool:
         return bool(entry and now < entry[0])
 
 
-def _breaker_record_failure(model_id: str) -> None:
+def _breaker_record_failure(model_id: str, error: BaseException | None = None) -> None:
     if not model_id:
         return
+    from openagent_core.core.public_errors import classify_run_error
+    code = classify_run_error(error).code if error is not None else "model_unavailable"
     with _breaker_lock:
         _, failures = _breaker.get(model_id, (0.0, 0))
         failures += 1
@@ -823,6 +830,7 @@ def _breaker_record_failure(model_id: str) -> None:
         ceiling = max(base, float(env.get('OPENAGENT_FALLBACK_BREAKER_MAX_SECONDS', _BREAKER_MAX_SECONDS)))
         delay = min(base * (2 ** min(failures - 1, 30)), ceiling)
         _breaker[model_id] = (time.monotonic() + delay, failures)
+        _breaker_public_codes[model_id] = code
     log_warning(f"Fallback breaker: '{model_id}' in quarantena per {delay:.0f}s (fallimento #{failures})")
 
 
@@ -831,6 +839,7 @@ def _breaker_record_success(model_id: str) -> None:
         return
     with _breaker_lock:
         _breaker.pop(model_id, None)
+        _breaker_public_codes.pop(model_id, None)
 
 
 def breaker_snapshot() -> dict[str, float]:
@@ -844,6 +853,7 @@ def reset_breaker() -> None:
     """Svuota lo stato. Serve ai test, non al runtime."""
     with _breaker_lock:
         _breaker.clear()
+        _breaker_public_codes.clear()
 
 
 def _route_id(model):
@@ -911,7 +921,7 @@ def _try_fallback_models(
             _notify_fallback(fallback_config, primary_model_id, fallback.id, primary_error)
             return result
         except ModelProviderError as e:
-            _breaker_record_failure(_health_id(fallback))
+            _breaker_record_failure(_health_id(fallback), e)
             log_warning(f"Fallback model '{fallback.id}' also failed: {str(e)}")
             continue
     raise primary_error
@@ -942,7 +952,7 @@ async def _atry_fallback_models(
         except ModelProviderError as e:
             if _committed_tools(kwargs, initial_messages):
                 raise
-            _breaker_record_failure(_health_id(fallback))
+            _breaker_record_failure(_health_id(fallback), e)
             log_warning(f"Fallback model '{fallback.id}' also failed: {str(e)}")
             continue
     raise primary_error
@@ -970,7 +980,7 @@ def _try_fallback_models_stream(
         except ModelProviderError as e:
             if emitted:
                 raise
-            _breaker_record_failure(_health_id(fallback))
+            _breaker_record_failure(_health_id(fallback), e)
             log_warning(f"Fallback model '{fallback.id}' also failed: {str(e)}")
             continue
     raise primary_error
@@ -1065,7 +1075,7 @@ async def _atry_fallback_models_stream(
         except ModelProviderError as e:
             if emitted:
                 raise
-            _breaker_record_failure(_health_id(fallback))
+            _breaker_record_failure(_health_id(fallback), e)
             log_warning(f"Fallback model '{fallback.id}' also failed: {str(e)}")
             continue
     raise primary_error

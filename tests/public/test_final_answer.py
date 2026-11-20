@@ -208,9 +208,12 @@ class ActualProviderToolLoop(unittest.IsolatedAsyncioTestCase):
         answers=[]
         async def capture(x):answers.append(x)
         with patch.object(native,'_ensure_team',return_value=None),patch.object(native,'_ensure_agent',return_value=runner):
-            chunks=[c async for c in native.stream([{'role':'user','content':'q'}],session_id='s',on_final_answer=capture)]
+            chunks=[]
+            with self.assertRaisesRegex(RuntimeError,'failed'):
+                async for chunk in native.stream([{'role':'user','content':'q'}],session_id='s',on_final_answer=capture):
+                    chunks.append(chunk)
         self.assertEqual(['partial'],chunks)
-        self.assertEqual([None],answers)
+        self.assertEqual([],answers)
 
     async def test_real_native_runner_tool_loop_excludes_prelude_from_final(self):
         from unittest.mock import patch

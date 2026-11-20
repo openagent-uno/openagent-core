@@ -227,6 +227,11 @@ def _status_code(error: BaseException) -> int | None:
 # message are published. Never return provider JSON, keys or request bodies.
 def _model_diagnostic_code(text: str) -> str | None:
     from .runtime_errors import ModelProviderError
+    # A cooling route stores only its allowlisted category and reconstitutes
+    # this constant message. Preserve it across runners that serialize errors.
+    for code, message in PUBLIC_MESSAGES.items():
+        if code != GENERIC and message.lower() in text:
+            return code
     patterns = (
         ("auth_expired", ("invalid_grant", "refresh token expired", "refresh_token expired", "token has expired", "token is expired", "token expired", "authentication expired", "authentication has expired", "credentials have expired", "credentials expired", "token was revoked")),
         ("provider_not_configured", ("provider_not_configured", "no ai account is configured", "no claude ai account", "no provider configured", "provider is not configured", "api key is required", "no api key", "api_key must be set", "missing api key", "missing api_key")),

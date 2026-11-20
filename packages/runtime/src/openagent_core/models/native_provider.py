@@ -2192,8 +2192,9 @@ class NativeProvider(ProviderResources, BaseModel):
         events are forwarded to ``on_status`` in a normalized JSON
         format, and image/file artifacts from tool results
         are written to disk and yielded as ``[IMAGE:/path]`` markers.
-        On any failure, falls back to :meth:`generate` and yields the
-        full content as one chunk so the caller still gets a reply.
+        Only an uncommitted, nonterminal stream may fall back to
+        :meth:`generate`. Terminal failures, cancellation, output and tools
+        never authorize replay of the run.
 
         Media kwargs (``files``/``images``/``audio``/``videos``) are
         forwarded to the runtime's native ``runner.arun(...)`` so multimodal
@@ -2224,6 +2225,10 @@ class NativeProvider(ProviderResources, BaseModel):
         emitted_media: set[tuple[str, str]] = set()
         final_answer = None
         terminal_failed = False
+        terminal_error = None
+        emitted = 0
+        tools_started = False
+        generate_started = False
 
         try:
             stream_kwargs: dict[str, Any] = {
@@ -2245,98 +2250,112 @@ class NativeProvider(ProviderResources, BaseModel):
             parent_run_id = stream_kwargs.get("run_id")
             stream = runner.arun(prompt, **stream_kwargs)
             try:
-                emitted = 0
-                async for event in stream:
-                    # Capture the agno run_id (first event wins) so a barge-in
-                    # can cooperatively cancel THIS run and let agno persist it.
-                    self._track_run_id(sid, getattr(event, "run_id", None))
-                    parent_event = is_parent_run_event(event, runner, sid)
-                    if parent_event and parent_run_id is None:
-                        parent_run_id = getattr(event, "run_id", None)
-                    if parent_event and isinstance(event, event_types["run_failed"]):
-                        terminal_failed = True
-                    if isinstance(event, content_types):
-                        text = getattr(event, "content", None) or ""
-                        if text:
-                            emitted += len(text)
-                            yield text
-                        image = getattr(event, "image", None)
-                        if image is not None:
-                            stable_id = (
-                                getattr(image, "id", None)
-                                or getattr(image, "filepath", None)
-                                or getattr(image, "url", None)
-                                or f"object:{id(image)}"
-                            )
-                            key = ("image", str(stable_id))
-                            marker = None
-                            if key not in emitted_media:
-                                emitted_media.add(key)
-                                marker = _save_agno_output_media(image, "image")
-                                if marker is None:
-                                    marker = _output_media_failure("image")
-                            if marker:
+                async with asyncio.timeout(None) as cleanup_deadline:
+                    async for event in stream:
+                        if terminal_error is not None:
+                            continue
+                        # Capture the agno run_id (first event wins) so a barge-in
+                        # can cooperatively cancel THIS run and let agno persist it.
+                        self._track_run_id(sid, getattr(event, "run_id", None))
+                        parent_event = is_parent_run_event(event, runner, sid)
+                        if parent_event and parent_run_id is None:
+                            parent_run_id = getattr(event, "run_id", None)
+                        if parent_event and isinstance(event, event_types["run_failed"]):
+                            terminal_failed = True
+                            if getattr(event, "is_cancelled", False):
+                                terminal_error = asyncio.CancelledError(getattr(event, "reason", None) or "Runtime run was cancelled.")
+                            else:
+                                from openagent_core.core.public_errors import run_error_from_runtime
+                                terminal_error = run_error_from_runtime(getattr(event, "content", None), getattr(event, "error_type", None))
+                            # Cancellation may be yielded before the native runner
+                            # persists its final run/session. Drain its cleanup in
+                            # this task, with one total deadline and no more output.
+                            cleanup_deadline.reschedule(asyncio.get_running_loop().time() + 15.0)
+                            continue
+                        if isinstance(event, tool_started_types + tool_completed_types + tool_error_types):
+                            tools_started = True
+                        if isinstance(event, content_types):
+                            text = getattr(event, "content", None) or ""
+                            if text:
+                                emitted += len(text)
+                                yield text
+                            image = getattr(event, "image", None)
+                            if image is not None:
+                                stable_id = (
+                                    getattr(image, "id", None)
+                                    or getattr(image, "filepath", None)
+                                    or getattr(image, "url", None)
+                                    or f"object:{id(image)}"
+                                )
+                                key = ("image", str(stable_id))
+                                marker = None
+                                if key not in emitted_media:
+                                    emitted_media.add(key)
+                                    marker = _save_agno_output_media(image, "image")
+                                    if marker is None:
+                                        marker = _output_media_failure("image")
+                                if marker:
+                                    emitted += len(marker)
+                                    yield marker
+                            continue
+                        if isinstance(event, tool_started_types):
+                            if on_status is not None:
+                                await self._emit_agno_tool_status(
+                                    on_status, getattr(event, "tool", None),
+                                    phase="started",
+                                )
+                        elif isinstance(event, tool_completed_types):
+                            tool_exec = getattr(event, "tool", None)
+                            # Only the authorized catalog's successful semantic
+                            # result can account for a vault read. Provider labels
+                            # alone cannot identify the trusted memory module.
+                            tool_trace.record_execution(tool_exec)
+                            if on_status is not None:
+                                await self._emit_agno_tool_status(
+                                    on_status, tool_exec,
+                                )
+                            for marker in _output_media_markers(
+                                event, emitted=emitted_media,
+                            ):
                                 emitted += len(marker)
                                 yield marker
-                        continue
-                    if isinstance(event, tool_started_types):
-                        if on_status is not None:
-                            await self._emit_agno_tool_status(
-                                on_status, getattr(event, "tool", None),
-                                phase="started",
-                            )
-                    elif isinstance(event, tool_completed_types):
-                        tool_exec = getattr(event, "tool", None)
-                        # Only the authorized catalog's successful semantic
-                        # result can account for a vault read. Provider labels
-                        # alone cannot identify the trusted memory module.
-                        tool_trace.record_execution(tool_exec)
-                        if on_status is not None:
-                            await self._emit_agno_tool_status(
-                                on_status, tool_exec,
-                            )
-                        for marker in _output_media_markers(
-                            event, emitted=emitted_media,
-                        ):
-                            emitted += len(marker)
-                            yield marker
-                    elif isinstance(event, tool_error_types):
-                        tool_exec = getattr(event, "tool", None)
-                        # Failed calls no longer arrive as a synthetic
-                        # completed+error pair.  They are still real tool
-                        # executions and must remain visible to the quality /
-                        # reply-guard trace; only vault recall attribution is
-                        # success-only.
-                        tool_trace.record_execution(tool_exec)
-                        if on_status is not None:
-                            await self._emit_agno_tool_status(
-                                on_status, tool_exec,
-                                error_text=getattr(event, "error", None),
-                            )
-                    elif isinstance(event, run_completed_types):
-                        if parent_event and parent_run_id and getattr(event, "run_id", None) == parent_run_id:
-                            final_answer = getattr(event, "final_answer", None)
-                        # The streamed run's tokens. Without this the whole
-                        # streaming path is invisible to usage_log — see
-                        # src/models/stream_usage.py.
-                        from openagent_core.models import stream_usage
+                        elif isinstance(event, tool_error_types):
+                            tool_exec = getattr(event, "tool", None)
+                            # Failed calls no longer arrive as a synthetic
+                            # completed+error pair.  They are still real tool
+                            # executions and must remain visible to the quality /
+                            # reply-guard trace; only vault recall attribution is
+                            # success-only.
+                            tool_trace.record_execution(tool_exec)
+                            if on_status is not None:
+                                await self._emit_agno_tool_status(
+                                    on_status, tool_exec,
+                                    error_text=getattr(event, "error", None),
+                                )
+                        elif isinstance(event, run_completed_types):
+                            if parent_event and parent_run_id and getattr(event, "run_id", None) == parent_run_id:
+                                final_answer = getattr(event, "final_answer", None)
+                            # The streamed run's tokens. Without this the whole
+                            # streaming path is invisible to usage_log — see
+                            # src/models/stream_usage.py.
+                            from openagent_core.models import stream_usage
 
-                        _ev_metrics = getattr(event, "metrics", None)
-                        inp, out = stream_usage.metrics_to_tokens(_ev_metrics)
-                        cr = stream_usage.metrics_to_cache_read(_ev_metrics)
-                        stream_usage.record(
-                            input_tokens=inp, output_tokens=out, model=self.model,
-                            cache_read_tokens=cr,
-                        )
-                        # Completion is the reconciliation snapshot: provider-
-                        # generated media and any tool media whose intermediate
-                        # event was skipped still surface here. Object-id dedup
-                        # prevents a tool artifact being emitted twice.
-                        for marker in _output_media_markers(
-                            event, emitted=emitted_media,
-                        ):
-                            emitted += len(marker)
-                            yield marker
+                            _ev_metrics = getattr(event, "metrics", None)
+                            inp, out = stream_usage.metrics_to_tokens(_ev_metrics)
+                            cr = stream_usage.metrics_to_cache_read(_ev_metrics)
+                            stream_usage.record(
+                                input_tokens=inp, output_tokens=out, model=self.model,
+                                cache_read_tokens=cr,
+                            )
+                            # Completion is the reconciliation snapshot: provider-
+                            # generated media and any tool media whose intermediate
+                            # event was skipped still surface here. Object-id dedup
+                            # prevents a tool artifact being emitted twice.
+                            for marker in _output_media_markers(
+                                event, emitted=emitted_media,
+                            ):
+                                emitted += len(marker)
+                                yield marker
             finally:
                 self._clear_run_id(sid)
                 aclose = getattr(stream, "aclose", None)
@@ -2345,12 +2364,15 @@ class NativeProvider(ProviderResources, BaseModel):
                         await aclose()
                     except Exception:  # noqa: BLE001
                         pass
+            if terminal_error is not None:
+                raise terminal_error
             elog("runtime.stream.done", model=self.model, chars=emitted)
-            if emitted == 0:
+            if emitted == 0 and not tools_started:
                 elog("runtime.stream.empty_fallback",
                     model=self.model,
                     session_id=sid,
                 )
+                generate_started = True
                 response = await self.generate(
                     messages,
                     system=system,
@@ -2363,6 +2385,10 @@ class NativeProvider(ProviderResources, BaseModel):
                 if response.content:
                     yield response.content
         except Exception as e:
+            if terminal_error is not None:
+                raise terminal_error
+            if terminal_failed or emitted or tools_started or generate_started:
+                raise
             raw_error = str(e) or repr(e)
             if sid != "default" and self._is_session_corruption_error(raw_error):
                 elog("runtime.stream.corrupt_session",

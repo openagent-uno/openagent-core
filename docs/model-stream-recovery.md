@@ -19,6 +19,30 @@ Without step 1 a single network interruption ended a long agent turn, because
 models default to `retries = 0` and many installations configure no fallback.
 Regressions: `tests/public/test_transient_stream_retry.py`.
 
+The outer native provider adapter treats a parent runtime error or cancellation
+event as terminal. It propagates the original safe failure category instead of
+turning a failed zero-output stream into a second complete run. Visible output,
+tool activity and a failed empty-stream generate attempt also prevent replay.
+After a terminal event its iterator is drained under one 15-second cleanup
+deadline, then closed before the failure crosses the host boundary. This lets
+native cancellation persist its final run and session after yielding the event.
+Later content and completion events are suppressed; failed or cancelled runs
+do not attest a completed final answer. Cleanup failure or expiry preserves the
+captured terminal category and never starts another provider run.
+The existing history policy still promotes interrupted provider-session rows
+to `COMPLETED` when retaining their messages for conversational continuity.
+This legacy storage envelope is separate from the cancellation propagated by
+the adapter and the canonical Runtime's cancelled outcome; this change does
+not alter that history policy.
+
+Automatic route cooldowns retain only an allowlisted public error code, never a
+provider exception, token or response body. A later request with no available
+backup reports that safe category without contacting the cooling route again.
+This also applies when the catalog's fallback list contains only the primary
+itself, or every backup is unavailable or cooling down. Ordinary input errors
+that do not trigger automatic recovery keep their original failure on each
+request. HTTP/SDK/SQLite regressions: `tests/public/test_terminal_provider_recovery.py`.
+
 ## Parallel local tool calls
 
 On a connected computer, mutating tools share a single-writer lease
