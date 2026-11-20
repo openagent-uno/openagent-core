@@ -134,11 +134,11 @@ class SubscriptionBackupTransportTests(unittest.IsolatedAsyncioTestCase):
                 "created": 1, "model": "gpt-example", "choices": [{"index": 0,
                 "message": {"role": "assistant", "content": "RECOVERED"}, "finish_reason": "stop"}]})
         client = httpx.AsyncClient(transport=httpx.MockTransport(completion))
-        service = SimpleNamespace(settings=SimpleNamespace(api_key="fixture-only"),
+        service = SimpleNamespace(settings=SimpleNamespace(api_key="fixture"),
             inference_base_url=lambda *a, **k: "http://subscription.internal/v1",
             inference_client=lambda *a, **k: client)
         config = [{"name": "subscription-card", "framework": "api-based", "enabled": True,
-            "api_key": "fixture-only", "base_url": "http://subscription.internal/v1",
+            "api_key": "fixture", "base_url": "http://subscription.internal/v1",
             "metadata": {"access": "subscription", "vendor": "openai", "account_id": "account-one"},
             "models": [{"model": "gpt-example", "enabled": True, "metadata": {}}]}]
         try:

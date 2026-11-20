@@ -38,7 +38,7 @@ class InstalledAudioWorkerHTTP(unittest.IsolatedAsyncioTestCase):
                 self.rfile.read(int(self.headers.get('Content-Length', '0')))
                 authorization = self.headers.get('Authorization')
                 requests.append((self.path, authorization))
-                limited = authorization == 'Bearer limited-fixture'
+                limited = authorization == 'Bearer limited'
                 transcription = self.path.endswith('/transcriptions')
                 data = (json.dumps({'error':{'code':'model_not_found' if failure_status==404 else 'rate_limit_error','message':'fixture PRIVATE-DETAIL'}}).encode() if limited else
                         b'{"text":"recovered transcription"}' if transcription else wav)
@@ -53,9 +53,9 @@ class InstalledAudioWorkerHTTP(unittest.IsolatedAsyncioTestCase):
                 db = MemoryDB(str(Path(temporary) / 'agent.db')); await db.connect()
                 try:
                     healthy = await db.upsert_provider(name='healthy-audio', framework='api-based',
-                        api_key='healthy-fixture', base_url=f'http://127.0.0.1:{server.server_port}/v1', metadata={'vendor':'openai'})
+                        api_key='healthy', base_url=f'http://127.0.0.1:{server.server_port}/v1', metadata={'vendor':'openai'})
                     limited = await db.upsert_provider(name='limited-audio', framework='api-based',
-                        api_key='limited-fixture', base_url=f'http://127.0.0.1:{server.server_port}/v1', metadata={'vendor':'openai'})
+                        api_key='limited', base_url=f'http://127.0.0.1:{server.server_port}/v1', metadata={'vendor':'openai'})
                     for kind, model in [('stt','whisper-1'), ('tts','tts-1')]:
                         await db.upsert_model(provider_id=healthy, model=model, kind=kind, metadata={'response_format':'wav'})
                         await asyncio.sleep(.01)
@@ -68,14 +68,14 @@ class InstalledAudioWorkerHTTP(unittest.IsolatedAsyncioTestCase):
                             await voice.transcribe(source)
                         self.assertEqual(raised.exception.status_code,400)
                         self.assertEqual(len(requests),1)
-                        self.assertEqual(requests[0][1],'Bearer limited-fixture')
+                        self.assertEqual(requests[0][1],'Bearer limited')
                         return
                     self.assertEqual(await voice.transcribe(source), 'recovered transcription')
                     result = await voice.synthesize('A short fixture sentence.')
                     self.assertEqual(result.data, wav)
                     for suffix in ('transcriptions', 'speech'):
                         self.assertEqual([auth for path, auth in requests if path.endswith('/'+suffix)],
-                                         ['Bearer limited-fixture', 'Bearer healthy-fixture'])
+                                         ['Bearer limited', 'Bearer healthy'])
                 finally:
                     await db.close()
         finally:

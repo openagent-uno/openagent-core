@@ -16,8 +16,9 @@ async def test_automatic_text_recovers_with_actual_account_label_and_usage(tmp_p
         def log_message(self,*args):pass
         def do_POST(self):
             payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-            key=self.headers.get('Authorization');seen.append(key)
-            limited=key=='Bearer limited-fixture'
+            authorization=self.headers.get('Authorization')
+            seen.append(authorization)
+            limited=authorization=='Bearer limited'
             value=({'error':{'type':'rate_limit_error','message':'quota exhausted'}} if limited else
                    {'id':'fixture','object':'chat.completion','created':1,'model':'fixture-text',
                     'choices':[{'index':0,'message':{'role':'assistant','content':'4503'},'finish_reason':'stop'}],
@@ -30,7 +31,7 @@ async def test_automatic_text_recovers_with_actual_account_label_and_usage(tmp_p
     db=MemoryDB(str(tmp_path/'state.sqlite'));await db.connect()
     dispatcher=None
     try:
-        for index,(name,key) in enumerate([('primary','limited-fixture'),('backup','healthy-fixture')]):
+        for index,(name,key) in enumerate([('primary','limited'),('backup','healthy')]):
             pid=await db.upsert_provider(name=name,framework='api-based',api_key=key,
                 base_url=f'http://127.0.0.1:{server.server_port}/v1')
             await db.upsert_model(provider_id=pid,model='fixture-text',is_classifier=index==0)
@@ -39,9 +40,9 @@ async def test_automatic_text_recovers_with_actual_account_label_and_usage(tmp_p
         result=await dispatcher.generate([{'role':'user','content':'237 × 19'}],session_id='fixture-auto')
         assert '4503' in result.content
         assert result.model=='backup:fixture-text'
-        assert seen[:2]==['Bearer limited-fixture','Bearer healthy-fixture']
+        assert seen[:2]==['Bearer limited','Bearer healthy']
         # The optional history-summary manager is a separate exact-model call.
-        assert all(key=='Bearer limited-fixture' for key in seen[2:])
+        assert all(key=='Bearer limited' for key in seen[2:])
         assert len(seen)<=5
         rows=await (await db._conn.execute('select model,sum(input_tokens),sum(output_tokens) from usage_log group by model')).fetchall()
         assert [tuple(row) for row in rows]==[('backup:fixture-text',100,5)]

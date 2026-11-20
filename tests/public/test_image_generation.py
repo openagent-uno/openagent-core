@@ -55,8 +55,9 @@ class ImageTransportTests(unittest.IsolatedAsyncioTestCase):
             def log_message(self, *args): pass
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
-                key = self.headers.get('Authorization'); seen.append((key, body['model']))
-                limited = key == 'Bearer limited-fixture'
+                authorization = self.headers.get('Authorization')
+                seen.append((authorization, body['model']))
+                limited = authorization == 'Bearer limited'
                 result = ({'error': {'type': 'rate_limit_error', 'message': 'quota'}} if limited else
                           {'data': [{'b64_json': base64.b64encode(png).decode()}]})
                 encoded = json.dumps(result).encode()
@@ -68,7 +69,7 @@ class ImageTransportTests(unittest.IsolatedAsyncioTestCase):
             with tempfile.TemporaryDirectory() as temporary:
                 path = str(Path(temporary) / 'agent.db'); db = MemoryDB(path); await db.connect()
                 try:
-                    for name, key in [('first', 'limited-fixture'), ('second', 'healthy-fixture')]:
+                    for name, key in [('first', 'limited'), ('second', 'healthy')]:
                         pid = await db.upsert_provider(name=name, framework='api-based', api_key=key,
                             base_url=f'http://127.0.0.1:{server.server_port}/v1')
                         await db.upsert_model(provider_id=pid, model='image-fixture', kind='image')
@@ -80,7 +81,7 @@ class ImageTransportTests(unittest.IsolatedAsyncioTestCase):
                         result = await media_server.generate_image('A blue circle')
                     self.assertTrue(result['ok'], result)
                     self.assertEqual(target.read_bytes(), png)
-                    self.assertEqual(seen, [('Bearer limited-fixture','image-fixture'), ('Bearer healthy-fixture','image-fixture')])
+                    self.assertEqual(seen, [('Bearer limited','image-fixture'), ('Bearer healthy','image-fixture')])
                 finally:
                     await db.close()
         finally:
