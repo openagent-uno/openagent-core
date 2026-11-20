@@ -3229,7 +3229,7 @@ class MemoryDB:
         # Reset first so a failed/empty later reap can never reuse the ids from
         # an earlier call in this process.
         self._last_reaped_task_run_ids = []
-        cursor = await conn.execute(
+        reaped_rows = await conn.execute_fetchall(
             "UPDATE task_runs "
             "SET status='failed', finished_at=?, "
             "    error=COALESCE(error, '') || "
@@ -3238,12 +3238,11 @@ class MemoryDB:
             "WHERE status='running' RETURNING id",
             (now,),
         )
-        reaped_rows = await cursor.fetchall()
         # A firing flagged 'cancelling' that the prior process never finalized
         # (crash between the MCP flag and the scheduler's drain) is also an
         # orphan — finalize it as 'cancelled' (the requested outcome), kept
         # distinct from the 'failed' reap above.
-        cancel_cursor = await conn.execute(
+        cancelled_rows = await conn.execute_fetchall(
             "UPDATE task_runs "
             "SET status='cancelled', finished_at=?, "
             "    error=COALESCE(error, '') || "
@@ -3252,7 +3251,6 @@ class MemoryDB:
             "WHERE status='cancelling' RETURNING id",
             (now,),
         )
-        cancelled_rows = await cancel_cursor.fetchall()
         await conn.commit()
         self._last_reaped_task_run_ids = [str(row[0]) for row in reaped_rows]
         return len(reaped_rows) + len(cancelled_rows)
@@ -7011,18 +7009,16 @@ class MemoryDB:
                 payload = json.dumps({"unserializable": True})
         for _attempt in range(3):
             try:
-                cursor = await conn.execute(
+                # Consume RETURNING inside one SQLite worker operation. Other
+                # users of this connection may commit between Python awaits.
+                rows = await conn.execute_fetchall(
                     "INSERT INTO session_events (session_id, seq, ts_ms, type, data) "
                     "VALUES (?, COALESCE((SELECT MAX(seq) FROM session_events "
                     "WHERE session_id = ?), 0) + 1, ?, ?, ?) RETURNING seq",
                     (session_id, session_id, int(time.time() * 1000), event_type, payload),
                 )
-                try:
-                    row = await cursor.fetchone()
-                finally:
-                    await cursor.close()
                 await conn.commit()
-                return int(row[0]) if row else 0
+                return int(rows[0][0]) if rows else 0
             except sqlite3.IntegrityError:
                 continue  # lost the seq race — take the next number
             except Exception as e:  # noqa: BLE001

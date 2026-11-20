@@ -2,6 +2,9 @@
 
 ## Architecture and use
 
+- [Beta149: shared SQLite commits](releases/v1.1.0-beta.149.md) and
+  [journal/state concurrency](sqlite-commit-concurrency.md).
+
 - [Beta148: terminal provider failures and safe cooldown categories](releases/v1.1.0-beta.148.md).
 
 - [Beta147: automatic catalog recovery](releases/v1.1.0-beta.147.md).
