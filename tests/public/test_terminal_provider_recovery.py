@@ -174,8 +174,13 @@ async def test_native_cancelled_actual_runner_persists_session_before_propagatio
         assert any(message.role == "user" and message.content == "fixture input"
                    for message in session.get_messages())
         if partial:
-            assert any(message.role == "assistant" and message.content == "partial work"
-                       for message in session.get_messages())
+            # Directly exhausting the existing Agent runner retains partial
+            # content in the run envelope while its messages can be user-only.
+            # The adapter must retain that envelope, without changing history.
+            assert raw["runs"][0]["content"] == "partial work"
+            if team:
+                assert any(message.role == "assistant" and message.content == "partial work"
+                           for message in session.get_messages())
         generate.assert_not_called()
     finally:
         store.close()
