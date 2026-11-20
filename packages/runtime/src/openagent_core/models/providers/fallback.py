@@ -8,7 +8,7 @@ import os
 import threading
 import time
 from copy import copy, deepcopy
-from contextlib import aclosing
+from contextlib import aclosing, contextmanager
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Iterator, List, Optional, Union
 
@@ -238,16 +238,39 @@ async def _authorize_automatic_model(model, config):
 
 
 def _clean_kwargs_for_fallback(kwargs: dict) -> dict:
-    """Return a copy of kwargs with a fresh messages list.
+    """Remove temporary guidance without detaching the runner's transcript.
 
     The primary model's retry-with-guidance logic may have appended
     provider-specific guidance messages to kwargs["messages"]. Fallback
-    models should not see those, so we strip any temporary messages.
+    models should not see those. The list itself belongs to the runner: SDK
+    providers append assistant/tool messages to it and the runner persists it.
+    A copied list loses the successful backup's entire side of the conversation.
     """
     cleaned = dict(kwargs)
     if "messages" in cleaned:
-        cleaned["messages"] = [m for m in cleaned["messages"] if not getattr(m, "temporary", False)]
+        cleaned["messages"][:] = [m for m in cleaned["messages"] if not getattr(m, "temporary", False)]
     return cleaned
+
+
+@contextmanager
+def _retain_repaired_output(original: dict, repaired: dict):
+    """Keep generated messages, never the transformed private request prefix.
+
+    Also runs on failure/cancellation: a tool's completed effect cannot be
+    rolled back by discarding buffered provider events.
+    """
+    owner = original.get("messages")
+    attempt = repaired.get("messages")
+    before = {id(message) for message in attempt or []}
+    try:
+        yield
+    finally:
+        if isinstance(owner, list) and isinstance(attempt, list) and owner is not attempt:
+            seen = before | {id(message) for message in owner}
+            for message in attempt:
+                if id(message) not in seen and not getattr(message, "temporary", False):
+                    owner.append(message)
+                    seen.add(id(message))
 
 
 # ---------------------------------------------------------------------------
@@ -491,9 +514,12 @@ def call_model_with_fallback(
 
     Each model (including primary) uses its own retry logic before moving to the next.
     """
+    initial_messages = len(kwargs.get('messages') or [])
     try:
         return model.response(**kwargs)
     except ModelProviderError as primary_error:
+        if _committed_tools(kwargs, initial_messages):
+            raise
         _record_automatic_failure(model, fallback_config, primary_error)
         fallbacks = get_fallback_models(fallback_config, primary_error)
         if not fallbacks:
@@ -532,10 +558,15 @@ async def acall_model_with_fallback(
                     f"In-place recovery '{kind}' for model '{model.id}': "
                     f"repaired request and retrying same model once."
                 )
-                return await model.aresponse(**repaired)
+                with _retain_repaired_output(kwargs, repaired):
+                    return await model.aresponse(**repaired)
         except ModelProviderError:
+            if _committed_tools(kwargs, initial_messages):
+                raise
             pass  # repaired retry still failed → existing fallback path below
         except Exception:
+            if _committed_tools(kwargs, initial_messages):
+                raise
             pass  # any recovery bug → existing fallback path below
 
         # ── Credential-pool rotation (inert unless the model carries a pool) ──
@@ -591,12 +622,13 @@ def call_model_stream_with_fallback(
 ) -> Iterator[StreamEvent]:
     """Call the primary model stream, falling back on failure."""
     emitted = False
+    initial_messages = len(kwargs.get('messages') or [])
     try:
         for event in model.response_stream(**kwargs):
             emitted = emitted or not _is_local_marker(event)
             yield event
     except ModelProviderError as primary_error:
-        if emitted:
+        if emitted or _committed_tools(kwargs, initial_messages):
             raise
         _record_automatic_failure(model, fallback_config, primary_error)
         fallbacks = get_fallback_models(fallback_config, primary_error)
@@ -637,6 +669,7 @@ async def acall_model_stream_with_fallback(
 ) -> AsyncIterator[StreamEvent]:
     """Async variant of call_model_stream_with_fallback."""
     any_event_emitted = False
+    initial_messages = len(kwargs.get('messages') or [])
     try:
         async with aclosing(_initial_stream(model, fallback_config, kwargs)) as stream:
             async for event in stream:
@@ -644,6 +677,8 @@ async def acall_model_stream_with_fallback(
                 yield event
         return
     except ModelProviderError as e:
+        if _committed_tools(kwargs, initial_messages):
+            raise
         primary_error: ModelProviderError = e
 
     # ── Transient zero-output retry on the same model ──
@@ -664,7 +699,7 @@ async def acall_model_stream_with_fallback(
                     yield event
             return
         except ModelProviderError as e:
-            if any_event_emitted:
+            if any_event_emitted or _committed_tools(kwargs, initial_messages):
                 raise
             primary_error = e
 
@@ -685,11 +720,14 @@ async def acall_model_stream_with_fallback(
             buffered: list = []
             recovered = False
             try:
-                async with aclosing(model.aresponse_stream(**repaired)) as stream:
-                    async for event in stream:
-                        buffered.append(event)
+                with _retain_repaired_output(kwargs, repaired):
+                    async with aclosing(model.aresponse_stream(**repaired)) as stream:
+                        async for event in stream:
+                            buffered.append(event)
                 recovered = True
             except Exception:
+                if _committed_tools(kwargs, initial_messages):
+                    raise
                 recovered = False  # discard buffer → existing path unchanged
             if recovered:
                 log_warning(
@@ -702,7 +740,7 @@ async def acall_model_stream_with_fallback(
 
     if not any_event_emitted:
         pool = getattr(model, "_openagent_cred_pool", None)
-        while pool is not None and rotates_account(primary_error):
+        while pool is not None and not _committed_tools(kwargs, initial_messages) and rotates_account(primary_error):
             try:
                 nxt = pool.mark_exhausted_and_rotate(
                     status_code=ModelProviderError.classify(primary_error).status_code,
@@ -734,7 +772,7 @@ async def acall_model_stream_with_fallback(
                 break  # non-provider stream error → degrade to fallback
 
     # Never replay provider output or tool calls on another model.
-    if any_event_emitted:
+    if any_event_emitted or _committed_tools(kwargs, initial_messages):
         raise primary_error
     _record_automatic_failure(model, fallback_config, primary_error)
     fallbacks = get_fallback_models(fallback_config, primary_error)
@@ -914,6 +952,7 @@ def _try_fallback_models(
     """Try each fallback model in order. Raises the primary error if all fail."""
     candidates = _ordered_candidates(fallback_models, fallback_config=fallback_config, kwargs=kwargs, primary_model_id=primary_model_id)
     for i, fallback in enumerate(candidates):
+        initial_messages = len(kwargs.get('messages') or [])
         try:
             log_warning(f"Trying fallback model {i + 1}/{len(candidates)}: {fallback.id}")
             result = getattr(fallback, method_name)(**kwargs)
@@ -921,6 +960,8 @@ def _try_fallback_models(
             _notify_fallback(fallback_config, primary_model_id, fallback.id, primary_error)
             return result
         except ModelProviderError as e:
+            if _committed_tools(kwargs, initial_messages):
+                raise
             _breaker_record_failure(_health_id(fallback), e)
             log_warning(f"Fallback model '{fallback.id}' also failed: {str(e)}")
             continue
@@ -969,6 +1010,7 @@ def _try_fallback_models_stream(
     candidates = _ordered_candidates(fallback_models, fallback_config=fallback_config, kwargs=kwargs, primary_model_id=primary_model_id)
     for i, fallback in enumerate(candidates):
         emitted = False
+        initial_messages = len(kwargs.get('messages') or [])
         try:
             log_warning(f"Trying fallback model {i + 1}/{len(candidates)}: {fallback.id}")
             for event in fallback.response_stream(**kwargs):
@@ -978,7 +1020,7 @@ def _try_fallback_models_stream(
             _notify_fallback(fallback_config, primary_model_id, fallback.id, primary_error)
             return
         except ModelProviderError as e:
-            if emitted:
+            if emitted or _committed_tools(kwargs, initial_messages):
                 raise
             _breaker_record_failure(_health_id(fallback), e)
             log_warning(f"Fallback model '{fallback.id}' also failed: {str(e)}")
@@ -1056,6 +1098,7 @@ async def _atry_fallback_models_stream(
     candidates = _ordered_candidates(fallback_models, fallback_config=fallback_config, kwargs=kwargs, primary_model_id=primary_model_id)
     for i, fallback in enumerate(candidates):
         emitted = False
+        initial_messages = len(kwargs.get('messages') or [])
         try:
             log_warning(f"Trying fallback model {i + 1}/{len(candidates)}: {fallback.id}")
             iterator = (_initial_stream(fallback, fallback_config, kwargs)
@@ -1073,7 +1116,7 @@ async def _atry_fallback_models_stream(
             _notify_fallback(fallback_config, primary_model_id, fallback.id, primary_error)
             return
         except ModelProviderError as e:
-            if emitted:
+            if emitted or _committed_tools(kwargs, initial_messages):
                 raise
             _breaker_record_failure(_health_id(fallback), e)
             log_warning(f"Fallback model '{fallback.id}' also failed: {str(e)}")

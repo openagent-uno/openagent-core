@@ -17,6 +17,28 @@ from openagent_core.core._run_state.base import RunStatus
 from openagent_core.models.providers.message import Message
 
 
+def completed_history_messages(run: Any) -> list[Message]:
+    """Read older user-only fallback envelopes without losing their answer.
+
+    Those completed runs recorded the displayed text in ``content`` while the
+    provider appended its messages to a detached list. Only fill the entirely
+    missing assistant side of a real user turn. This is historical context,
+    never a new final-answer attestation or a reconstruction of tool effects.
+    The stored run and its messages remain untouched.
+    """
+    messages = list(run.messages or [])
+    content = getattr(run, "content", None)
+    if (getattr(run, "status", None) != RunStatus.completed
+            or not isinstance(content, str) or not content.strip()
+            or (getattr(run, "metadata", None) or {}).get("compaction")):
+        return messages
+    direct = [message for message in messages if not message.from_history and not message.temporary]
+    if (any(message.role == "user" for message in direct)
+            and not any(message.role == "assistant" for message in direct)):
+        messages.append(Message(role="assistant", content=content))
+    return messages
+
+
 def synth_interrupted_messages(run: Any) -> list[Message] | None:
     """Build ``[user, assistant?]`` for a run persisted without messages.
 

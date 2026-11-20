@@ -219,6 +219,7 @@ class TeamSession:
 
         messages_from_history = []
         system_message = None
+        from openagent_core.memory.sessions._synth import completed_history_messages
 
         # Limit the number of messages returned if limit is set
         if limit is not None:
@@ -226,7 +227,7 @@ class TeamSession:
                 if not run_response or not run_response.messages:
                     continue
 
-                for message in run_response.messages or []:
+                for message in completed_history_messages(run_response):
                     if _should_skip_message(message, skip_roles, skip_history_messages):
                         continue
 
@@ -258,7 +259,7 @@ class TeamSession:
                 if not (run_response and run_response.messages):
                     continue
 
-                for message in run_response.messages or []:
+                for message in completed_history_messages(run_response):
                     if _should_skip_message(message, skip_roles, skip_history_messages):
                         continue
 

@@ -189,9 +189,10 @@ class AgentSession:
             skip_statuses = [RunStatus.paused]
 
         from openagent_core.memory.sessions.interrupted import interrupted_history
+        from openagent_core.memory.sessions._synth import completed_history_messages
 
         def _run_messages(run_response) -> List[Message]:
-            messages = list(run_response.messages or [])
+            messages = completed_history_messages(run_response)
             if getattr(run_response, "status", None) in (RunStatus.error, RunStatus.cancelled):
                 return interrupted_history(messages)
             return messages
