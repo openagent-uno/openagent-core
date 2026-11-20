@@ -3113,8 +3113,15 @@ class Model(ABC):
         for k, v in self.__dict__.items():
             if k in {"response_format", "_tools", "_functions"}:
                 continue
-            # Skip client objects
-            if k in {"client", "async_client", "http_client", "mistral_client", "model_client"}:
+            # Explicit transports are borrowed configuration, not SDK caches.
+            # Replacing one loses the host's in-process account binding (or
+            # custom proxy/TLS policy). Its owner closes it after the runners
+            # drain, as in close_runtime_clients.
+            if k == "http_client":
+                setattr(new_model, k, v)
+                continue
+            # Rebuild provider-owned SDK wrappers around that same transport.
+            if k in {"client", "async_client", "mistral_client", "model_client"}:
                 setattr(new_model, k, None)
                 continue
             try:

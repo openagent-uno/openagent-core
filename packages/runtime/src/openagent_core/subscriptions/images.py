@@ -72,13 +72,16 @@ async def generate_subscription_image(db, provider_id: int, *, model: str, promp
     if budget_guard is None:
         from ..core.budget_guard import BudgetGuard
         budget_guard = BudgetGuard(db, providers_config=await db.materialise_providers_config(enabled_only=False))
-        await budget_guard.refresh(emit_alerts=False)
-    allowed = {entry.runtime_id for entry in budget_guard.filter_catalog([c[2] for c in candidates])}
+    await budget_guard.ensure_fresh()
+    blocked = budget_guard.blocked_runtime_ids([c[2] for c in candidates])
+    allowed = {entry.runtime_id for _, _, entry in candidates if entry.runtime_id not in blocked}
     if candidates and not allowed:
         raise ImageGenerationError(429, "The configured budget excludes every matching image model", "budget_exceeded")
     last = None
     for provider, selected, entry in candidates:
         if entry.runtime_id not in allowed: continue
+        from ..models.catalog_routes import authorized_model_use
+        await authorized_model_use(entry.runtime_id)
         meta = provider['metadata']
         account_id = meta['account_id']
         service = subscription_for(provider, db.db_path)

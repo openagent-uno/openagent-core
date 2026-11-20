@@ -38,3 +38,20 @@ name the cause: a subscription service may answer 429 both for an exhausted
 quota and for a sign-in that has ended, and only the quoted message and
 `error_type` tell them apart. A model reading the tool result should report the
 quoted cause.
+
+## Automatic catalog selection (beta147)
+
+`generate_catalog_image` selects authorized enabled image-capable rows without a
+manual provider command, excluding strict budget blocks and temporary failure
+cooldowns. Typed image rows precede legacy image-capable LLM rows. Explicit
+`model_id` with `exact=True` keeps the exact selection. Model metadata
+`auto_fallback=false` excludes additional automatic candidates.
+
+Automatic requests can recover from explicit account/quota refusals, known
+unavailable-model responses or a failed connection before the generation POST
+was accepted. They do not repeat uncertain jobs, server errors, read timeouts,
+invalid output, content refusals or cancellation. A successful generation whose
+result URL cannot be downloaded is preserved as that failure; it must not cause
+a second paid generation. Raw `generate_image_bytes` remains an exact transport.
+The default registered `media-gen` capability uses this catalog selection;
+hosts still own enabling the capability and supplying provider credentials.

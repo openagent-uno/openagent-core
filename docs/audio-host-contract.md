@@ -65,3 +65,24 @@ The public speech-synthesis tests use a local voice fixture through
 repository. They cover exact WAV recovery, cross-tenant denial, write
 revocation, malformed input, output bounds, a host-selected deadline, and
 redacted backend errors.
+
+## Automatic configured audio recovery (beta147)
+
+`VoiceService` resolves enabled `kind=stt` and `kind=tts` catalog rows through the
+same authorization, strict budget and temporary-health gates as generation.
+Latest-edited remains the preference; other eligible rows are backups unless
+`metadata.auto_fallback=false`. Rejected credentials, quota, unavailable models
+and connection failures may move to another configured cloud row. Invalid
+requests remain errors. Isolated workers make one SDK attempt so an exhausted
+account does not delay the next route. Explicit host local adapters remain the
+last fallback; no model is downloaded or credential inferred from ambient state.
+
+`VoiceTTS.synthesize_stream` may recover before its first audio byte. It retains
+text consumed by a failed token-stream writer, including a pending input read,
+so sentence synthesis can replay that prefix once. Successful synthesis pins
+that route's voice, settings and encoding for the rest of the utterance. A
+failure after audible output never switches voice or repeats earlier speech.
+A token stream that consumes all input but produces no audio is still a failed
+attempt, rather than a successful empty answer. `SynthesizedAudio.model_ref`
+optionally identifies the actual catalog route; existing two-argument callers
+remain compatible.

@@ -358,6 +358,8 @@ async def synthesize_full(
     *,
     timeout: float = 60.0,
     language: str | None = None,
+    strict: bool = False,
+    max_retries: int | None = None,
 ) -> bytes | None:
     """Synthesize ``text`` and return the full audio blob (for Telegram).
 
@@ -386,12 +388,14 @@ async def synthesize_full(
         )
     if _litellm is None:
         return None
-    response = await _safe_aspeech(text, cfg, timeout)
+    response = await _safe_aspeech(text, cfg, timeout, strict=strict, max_retries=max_retries)
     if response is None:
         return None
     try:
         return await response.aread()
     except Exception as e:  # noqa: BLE001
+        if strict:
+            raise
         logger.warning("LiteLLM aread (%s) failed: %s", cfg.vendor, e)
         return None
     finally:
@@ -401,9 +405,12 @@ async def synthesize_full(
             pass
 
 
-async def _safe_aspeech(text: str, cfg: TTSConfig, timeout: float):
+async def _safe_aspeech(text: str, cfg: TTSConfig, timeout: float, *, strict=False, max_retries=None):
     try:
-        return await _litellm.aspeech(timeout=timeout, **_build_kwargs(text, cfg))
+        options = {"max_retries": max_retries} if max_retries is not None else {}
+        return await _litellm.aspeech(timeout=timeout, **options, **_build_kwargs(text, cfg))
     except Exception as e:  # noqa: BLE001 — soft fail, caller falls through
+        if strict:
+            raise
         logger.warning("LiteLLM aspeech (%s) failed: %s", cfg.vendor, e)
         return None

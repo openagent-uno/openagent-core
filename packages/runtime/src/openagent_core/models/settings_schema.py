@@ -41,6 +41,8 @@ def model_settings_schema(provider: dict, model: dict) -> list[dict]:
 
 def validate_settings(provider: dict, model: dict, metadata: dict) -> None:
     import math
+    if "auto_fallback" in metadata and type(metadata["auto_fallback"]) is not bool:
+        raise ValueError("auto_fallback must be boolean")
     schema = {field["key"]: field for field in model_settings_schema(provider, model)}
     for key in (SAMPLING_KEYS & metadata.keys()) | (schema.keys() & metadata.keys()):
         if key not in schema:

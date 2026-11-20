@@ -37,8 +37,10 @@ class ScriptedModel(OpenAIChat):
     delay_s: float = 0.0
     text: str = "recovered"
     closed: bool = False
+    requests: int = 0
 
     async def aresponse_stream(self, **kwargs):
+        self.requests += 1
         if self.failure is not None:
             raise self.failure
         try:
@@ -81,6 +83,17 @@ class UnresponsiveBackup(unittest.IsolatedAsyncioTestCase):
         self.assertLess(time.monotonic() - started, 2)
         self.assertTrue(silent.closed, "the abandoned stream must be closed")
         self.assertIn("silent-backup", breaker_snapshot())
+
+    async def test_automatic_primary_has_a_deadline_and_does_not_block_the_next_request(self):
+        primary = ScriptedModel(id="offline-primary", hang=True)
+        working = ScriptedModel(id="healthy-other-provider")
+        config = FallbackConfig(on_error=[working], recover_unavailable=True, first_output_timeout=.05)
+        first = await asyncio.wait_for(_collect(primary, config), 3)
+        self.assertEqual(first, ["recovered", "recovered again"])
+        self.assertTrue(primary.closed)
+        second = await asyncio.wait_for(_collect(primary, config), 3)
+        self.assertEqual(second, first)
+        self.assertEqual(primary.requests, 2, "one primary attempt and one bounded transient retry, then circuit skip")
 
     async def test_when_no_backup_answers_the_original_failure_is_reported(self):
         failure = _limit()

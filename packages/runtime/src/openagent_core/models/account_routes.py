@@ -24,7 +24,43 @@ def close_usage(token):
 
 def effective_model(requested: str, previous: dict | None = None) -> str:
     value = _USAGE.get()
-    return ((value or {}).get('selected') or previous or {}).get(requested, requested)
+    selected = ((value or {}).get('selected') or previous or {})
+    seen = set()
+    while requested not in seen and selected.get(requested, requested) != requested:
+        seen.add(requested)
+        requested = selected[requested]
+    return requested
+
+
+def record_model_result(requested: str, model: Any, response: Any, *, streaming=False):
+    """Track generic model recovery through the same per-turn account ledger.
+
+    Account adapters already record their raw reported usage. Ordinary models
+    report stream usage once at request completion, or on the complete response.
+    Selection alone never invents tokens or a monetary charge.
+    """
+    sink = _USAGE.get()
+    if sink is None:
+        return
+    actual = str(getattr(model, '_openagent_runtime_id', None) or model.id)
+    account_routed = getattr(model, '_openagent_account_routes', None) is not None
+    if account_routed:
+        actual = effective_model(actual)
+    sink['selected'][requested] = actual
+    if account_routed:
+        return
+    if streaming:
+        from .providers.response import ModelResponseEvent
+        if response.event != ModelResponseEvent.model_request_completed.value:
+            return
+        metrics = response
+    else:
+        metrics = getattr(response, 'response_usage', None)
+    if metrics is None:
+        return
+    row = sink['models'].setdefault(actual, [0, 0, 0])
+    for index, key in enumerate(('input_tokens', 'output_tokens', 'cache_read_tokens')):
+        row[index] += max(0, int(getattr(metrics, key, 0) or 0))
 
 
 def record_response(requested: str, actual: str, response: Any):
@@ -45,6 +81,11 @@ def charge_rows(sink: dict, requested: str, total: tuple[int, int, int]):
     rows = {key: list(value) for key, value in sink['models'].items()}
     remainder = [max(0, int(total[i] or 0) - sum(v[i] for v in rows.values())) for i in range(3)]
     if any(remainder):
+        selected = sink['selected']
+        seen = set()
+        while requested not in seen and selected.get(requested, requested) != requested:
+            seen.add(requested)
+            requested = selected[requested]
         previous = rows.setdefault(requested, [0, 0, 0])
         for i, value in enumerate(remainder):
             previous[i] += value

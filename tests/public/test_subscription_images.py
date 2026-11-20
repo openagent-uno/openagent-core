@@ -35,7 +35,8 @@ async def routes(tmp_path,monkeypatch):
             inference_base_url=lambda identifier,**kwargs:'https://fixture.test/accounts/'+identifier+'/v1')
         services[pid]=service
     monkeypatch.setattr('openagent_core.subscriptions.images.subscription_for',lambda row,path:services[row['id']])
-    guard=SimpleNamespace(filter_catalog=lambda entries:entries)
+    from openagent_core.core.budget_guard import BudgetGuard
+    guard=BudgetGuard(db, providers_config=await db.materialise_providers_config(enabled_only=False))
     try:yield db,pids,mids,services,clients,seen,guard
     finally:
         for client in clients:await client.aclose()
@@ -95,10 +96,15 @@ async def test_budget_filter_and_typed_shared_rows_do_not_repeat_an_account(rout
     services[duplicate]=services[pids[0]]
     await generate_subscription_image(db,pids[0],model='image-fixture',prompt='fixture',budget_guard=guard)
     assert seen==['first','second']
-    seen.clear();guard.filter_catalog=lambda entries:[e for e in entries if e.provider=='second']
+    seen.clear()
+    await db.add_budget(scope_kind='provider', scope_value='first', metric='tokens', window='day', amount=1)
+    await db.record_usage(model='first:image-fixture', input_tokens=2, output_tokens=0, cost=0)
+    await guard.refresh(emit_alerts=False)
     await generate_subscription_image(db,pids[0],model='image-fixture',prompt='fixture',budget_guard=guard)
     assert seen==['second']
-    guard.filter_catalog=lambda entries:[];seen.clear()
+    await db.add_budget(scope_kind='global', metric='tokens', window='day', amount=1)
+    await guard.refresh(emit_alerts=False)
+    seen.clear()
     with pytest.raises(ImageGenerationError,match='budget'):
         await generate_subscription_image(db,pids[0],model='image-fixture',prompt='fixture',budget_guard=guard)
     assert not seen

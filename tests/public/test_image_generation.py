@@ -45,6 +45,47 @@ class ImageCatalogTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ImageTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_natural_image_tool_recovers_through_the_enabled_catalog(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import json, os, threading
+        from openagent_core.mcp.servers.media_gen import server as media_server
+        png = b'\x89PNG\r\n\x1a\nfixture-image'
+        seen = []
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
+                key = self.headers.get('Authorization'); seen.append((key, body['model']))
+                limited = key == 'Bearer limited-fixture'
+                result = ({'error': {'type': 'rate_limit_error', 'message': 'quota'}} if limited else
+                          {'data': [{'b64_json': base64.b64encode(png).decode()}]})
+                encoded = json.dumps(result).encode()
+                self.send_response(429 if limited else 200); self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(encoded))); self.end_headers(); self.wfile.write(encoded)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                path = str(Path(temporary) / 'agent.db'); db = MemoryDB(path); await db.connect()
+                try:
+                    for name, key in [('first', 'limited-fixture'), ('second', 'healthy-fixture')]:
+                        pid = await db.upsert_provider(name=name, framework='api-based', api_key=key,
+                            base_url=f'http://127.0.0.1:{server.server_port}/v1')
+                        await db.upsert_model(provider_id=pid, model='image-fixture', kind='image')
+                    target = Path(temporary) / 'result.png'
+                    with patch.dict(os.environ, {'OPENAGENT_IMAGE_BASE_URL':'', 'OPENAI_API_KEY':''}), \
+                         patch.object(media_server._conn, 'get', AsyncMock(return_value=db._conn)), \
+                         patch('openagent_core.mcp.servers._common.db_path', return_value=path), \
+                         patch.object(media_server, '_cache_path', return_value=target):
+                        result = await media_server.generate_image('A blue circle')
+                    self.assertTrue(result['ok'], result)
+                    self.assertEqual(target.read_bytes(), png)
+                    self.assertEqual(seen, [('Bearer limited-fixture','image-fixture'), ('Bearer healthy-fixture','image-fixture')])
+                finally:
+                    await db.close()
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=2)
+
     async def test_capable_chat_model_uses_provider_image_id(self):
         from openagent_core.mcp.servers.media_gen.server import _capability_backend
         from openagent_core.mcp.servers.media_gen import server as media_server
@@ -165,3 +206,40 @@ class ImageRefusalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({"ok": False, "status": 429, "error_type": "no_available_account",
                           "reason": "image generation failed: the image provider answered HTTP 429 "
                                     "(no_available_account): The session has ended, sign in again."}, result)
+
+
+class AutomaticImageAcceptanceBoundary(unittest.IsolatedAsyncioTestCase):
+    async def test_only_preacceptance_connection_failure_and_explicit_quota_can_retry(self):
+        import httpx
+        from openagent_core.image_generation import generate_catalog_image
+        from openagent_core.models.providers.fallback import reset_breaker
+        real_client=httpx.AsyncClient
+        png=b'\x89PNG\r\n\x1a\nfixture-image'
+        for failure in ('download','connection','server','policy','quota'):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as temporary:
+                reset_breaker();posts=[]
+                db=MemoryDB(str(Path(temporary)/'state.sqlite'));await db.connect()
+                try:
+                    for name in ('first','second'):
+                        pid=await db.upsert_provider(name=name,framework='api-based',api_key='fixture',base_url=f'https://{name}.example.test/v1')
+                        await db.upsert_model(provider_id=pid,model='fixture-image',kind='image')
+                    def handle(request):
+                        if request.method=='GET':raise httpx.ConnectError('CDN unavailable',request=request)
+                        posts.append(request.url.host)
+                        if request.url.host=='first.example.test':
+                            if failure=='connection':raise httpx.ConnectError('connection unavailable',request=request)
+                            if failure=='download':return httpx.Response(200,json={'data':[{'url':'https://cdn.example.test/already-generated.png'}]})
+                            status={'server':500,'policy':403,'quota':429}[failure]
+                            return httpx.Response(status,json={'error':{'type':'content_policy' if failure=='policy' else 'fixture','message':'fixture'}})
+                        return httpx.Response(200,json={'data':[{'b64_json':base64.b64encode(png).decode()}]})
+                    def client(*args,**kwargs):return real_client(transport=httpx.MockTransport(handle))
+                    with patch('openagent_core.image_generation.httpx.AsyncClient',side_effect=client):
+                        if failure in ('connection','quota'):
+                            image=await generate_catalog_image(db,prompt='A blue circle')
+                            self.assertEqual(image.content,png)
+                            self.assertEqual(posts,['first.example.test','second.example.test'])
+                        else:
+                            with self.assertRaises((httpx.ConnectError,ImageGenerationError)):
+                                await generate_catalog_image(db,prompt='A blue circle')
+                            self.assertEqual(posts,['first.example.test'])
+                finally:await db.close();reset_breaker()

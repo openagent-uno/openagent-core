@@ -258,6 +258,8 @@ async def _transcribe_via_litellm(
     row: dict[str, Any],
     *,
     language: str | None = None,
+    strict: bool = False,
+    max_retries: int | None = None,
 ) -> str | None:
     """Dispatch to :func:`litellm.atranscription` for a resolved model row.
 
@@ -276,6 +278,7 @@ async def _transcribe_via_litellm(
     effective_lang = language or meta.get("language") or None
     try:
         with open(file_path, "rb") as f:
+            options = {"max_retries": max_retries} if max_retries is not None else {}
             resp = await _litellm.atranscription(
                 model=f"{vendor}/{model_id}",
                 file=f,
@@ -283,10 +286,13 @@ async def _transcribe_via_litellm(
                 api_base=row.get("base_url") or None,
                 language=effective_lang,
                 prompt=meta.get("prompt") or None,
+                **options,
             )
     except FileNotFoundError:
         return None
     except Exception as e:  # noqa: BLE001 — surface as soft fail
+        if strict:
+            raise
         logger.warning("LiteLLM atranscription (%s) failed: %s", vendor, e)
         return None
     text = (getattr(resp, "text", None) or "").strip()

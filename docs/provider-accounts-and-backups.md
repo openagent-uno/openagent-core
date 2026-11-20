@@ -40,8 +40,9 @@ next account of the pool:
   example a `revision` counter) so the rebuilt pool uses it again.
 - Anything else does not rotate and goes to the fallback path.
 
-Streams rotate only before the first event; after output started, a failure
-goes to the fallback path, so nothing is ever duplicated.
+Streams rotate only before provider output; local request markers are excluded.
+After provider output starts, a failure is surfaced without replay, so nothing
+is duplicated.
 
 `metadata.accounts[*].api_key` is write-only: provider rows returned by the
 management API show `api_key_display` instead, like the provider's own key.
@@ -55,7 +56,8 @@ configured in the agent configuration (`fallback.on_rate_limit`,
 `fallback.on_error`) keep precedence and are not repeated. Removing the key, or
 disabling the model or its provider, removes it from the chain at the next
 catalog rebuild; with no configured refs and no catalog backups there is no
-fallback chain at all.
+explicit fallback chain. Automatic selection has the additional catalog
+recovery policy described below.
 
 The account pool is tried first; the backup models only when every account of
 the failing provider is cooling down or retired.
@@ -79,3 +81,32 @@ provider identity and session model references. Labels contain 1 to 80 character
 The connection contract advertises `PROVIDER_UPDATE_FIELDS`. Subscription account
 responses include `account_name`, the credential account name, independently of
 the connection's editable label and the existing compatibility `name` field.
+
+## Automatic recovery (beta147)
+
+The dispatcher's automatic selection adds enabled language models as recovery
+candidates without changing session pins, configured backup chains or stored
+settings. An explicitly selected model keeps its configured policy. Explicit
+backup order comes first; additional automatic candidates prefer another
+connection before another variant of the failing connection. Set model metadata
+`auto_fallback=false` to exclude that row from additional automatic backups; primary selection and
+explicit backup policy remain usable.
+
+Each attempt rechecks `model.use`, input modalities, declared tool capability and
+the current budget snapshot. Disabled connections/models, over-budget routes
+and models in the temporary failure cooldown are skipped. A default 60-second
+first-output deadline bounds automatic requests; SDK retries are disabled in
+this lane because Core owns the retry and fallback policy. Manual requests keep
+their provider settings. A provider failure never stops the Runtime service.
+
+Automatic recovery covers quota/rate limits, connection/server failures,
+rejected credentials and known unavailable-model responses. Malformed requests,
+content refusals and arbitrary permission errors are surfaced. Local request
+markers do not count as provider output. Once provider output or a tool has been
+committed, Core does not replay the tool loop on another model. Non-streaming
+calls also refuse recovery after a newly recorded tool call/result.
+
+Reported usage is attributed to the model/connection that actually responded,
+including recovery back to the original model later in one turn. Selection does
+not invent tokens or a monetary charge. Existing account-pool policy remains a
+separate, explicit same-model contract.

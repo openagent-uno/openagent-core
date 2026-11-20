@@ -61,9 +61,7 @@ async def test_dispatcher_forget_awaits_all_providers_and_propagates_failure():
             await asyncio.sleep(0)
             finished.append(self.broken)
             if self.broken: raise RuntimeError('storage unavailable')
-    dispatcher = object.__new__(ModelDispatcher)
-    dispatcher._db = None
-    dispatcher._last_pick_by_session = {}
+    dispatcher = ModelDispatcher(providers_config=[])
     dispatcher._team_providers = {'one': Provider(True), 'two': Provider(False)}
     with pytest.raises(RuntimeError, match='storage unavailable'):
         await dispatcher.forget_session('chat-a')

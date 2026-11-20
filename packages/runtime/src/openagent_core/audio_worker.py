@@ -7,6 +7,28 @@ import os
 import sys
 
 
+def _safe_error_type(value):
+    """Only protocol-owned availability codes can leave the worker."""
+    aliases = {'model_not_found':'model_not_found', 'unsupported_model':'unsupported_model',
+               'model_decommissioned':'unsupported_model', 'invalid_api_key':'invalid_api_key',
+               'token_expired':'token_expired'}
+    if isinstance(value, str):
+        if value in aliases:
+            return aliases[value]
+        if len(value) <= 16384:
+            try:value = json.loads(value)
+            except ValueError:return ''
+    if not isinstance(value, dict):
+        return ''
+    error = value.get('error')
+    if isinstance(error, dict):
+        value = error
+    for key in ('code', 'type'):
+        if isinstance(value.get(key), str) and value[key] in aliases:
+            return aliases[value[key]]
+    return ''
+
+
 async def transcribe_openai(path, row, *, language=None):
     """Call the configured transcription endpoint without loading every SDK.
 
@@ -33,15 +55,27 @@ async def transcribe_openai(path, row, *, language=None):
         async with client.stream("POST", url,
                     headers={"Authorization": "Bearer " + row["api_key"], "Accept-Encoding": "identity"},
                     data=fields, files={"file": (source.name, content, "application/octet-stream")}) as response:
-            if response.status_code != 200:
-                raise RuntimeError("Audio provider unavailable")
             if response.headers.get("Content-Encoding", "identity").lower() != "identity":
+                if response.status_code != 200:
+                    from .audio import AudioProviderError
+                    raise AudioProviderError(response.status_code)
                 raise ValueError("Unsupported transcript encoding")
             body = bytearray()
-            async for chunk in response.aiter_raw(65536):
-                body.extend(chunk)
-                if len(body) > 256 << 10:
-                    raise ValueError("Audio transcript exceeds its bound")
+            try:
+                async for chunk in response.aiter_raw(65536):
+                    body.extend(chunk)
+                    if len(body) > 256 << 10:
+                        raise ValueError("Audio transcript exceeds its bound")
+            except Exception:
+                if response.status_code != 200:
+                    # A malformed/oversized error body cannot turn a known
+                    # request rejection into an unknown retryable failure.
+                    from .audio import AudioProviderError
+                    raise AudioProviderError(response.status_code) from None
+                raise
+            if response.status_code != 200:
+                from .audio import AudioProviderError
+                raise AudioProviderError(response.status_code, _safe_error_type(body.decode('utf-8', errors='replace')))
     result = json.loads(body)
     text = result.get("text") if isinstance(result, dict) else None
     if not isinstance(text, str):
@@ -58,7 +92,7 @@ async def execute(request):
             return {"text": await transcribe_openai(request["path"], row,
                                                    language=request.get("language"))}
         from .voice.voice import _transcribe_via_litellm
-        text=await _transcribe_via_litellm(request["path"],row,language=request.get("language"))
+        text=await _transcribe_via_litellm(request["path"],row,language=request.get("language"),strict=True,max_retries=0)
         return {"text":text}
     if operation=="synthesize":
         from .voice.tts import resolve_tts_provider,synthesize_full
@@ -66,7 +100,7 @@ async def execute(request):
             async def latest_audio_model(self,kind):return row
         config=await resolve_tts_provider(ConfiguredRow())
         if config is None:raise ValueError("Audio provider unavailable")
-        data=await synthesize_full(request["text"],config,language=request.get("language"))
+        data=await synthesize_full(request["text"],config,language=request.get("language"),strict=True,max_retries=0)
         if not data:return {"audio":None}
         if len(data)>16<<20:raise ValueError("Audio output too large")
         mime={"mp3":"audio/mpeg","wav":"audio/wav","flac":"audio/flac","opus":"audio/ogg","pcm":"audio/pcm","aac":"audio/aac"}.get(config.response_format,"application/octet-stream")
@@ -97,7 +131,26 @@ def main():
             raw=sys.stdin.buffer.read(262145)
             if len(raw)>262144:raise ValueError("Request too large")
             result=asyncio.run(execute(json.loads(raw)))
-        except BaseException:result={"error":"audio_provider_unavailable"}
+        except BaseException as error:
+            result={"error":"audio_provider_unavailable"}
+            status=getattr(error,"status_code",None) or getattr(getattr(error,"response",None),"status_code",None)
+            if isinstance(status,int):result["status"]=status
+            for field in ('error_type', 'code', 'body', 'type'):
+                kind = _safe_error_type(getattr(error, field, None))
+                if kind:
+                    result['error_type'] = kind
+                    break
+            if 'error_type' not in result:
+                # Some SDK wrappers retain the provider's structured code
+                # only on their already buffered HTTP response.
+                try:
+                    body = getattr(getattr(error, 'response', None), 'content', None)
+                    if isinstance(body, bytes) and len(body) <= 16384:
+                        kind = _safe_error_type(body.decode('utf-8', errors='replace'))
+                        if kind:
+                            result['error_type'] = kind
+                except (ValueError, RuntimeError):
+                    pass
         output.write(json.dumps(result));output.flush()
 
 

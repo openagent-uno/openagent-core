@@ -1521,6 +1521,14 @@ class NativeProvider(ProviderResources, BaseModel):
                     self._providers_config, self._db_path, self._account_budget_guard)
                 if policy is not None:
                     model._openagent_account_routes = policy
+            model._openagent_runtime_id = self.model
+            model._openagent_health_scope = str(self._db_path) if self._db_path else f'catalog:{id(self._providers_config)}'
+            source = self._provider_config()
+            meta = source.get("metadata") or {}
+            model._openagent_connection_key = (
+                (meta.get("vendor"), str(getattr(getattr(subscription, "settings", None), "creds_file", source.get("base_url"))),
+                 meta.get("account_id")) if subscription is not None else (provider_name,)
+            )
             return model
 
         from openagent_core.models.providers.utils import get_model

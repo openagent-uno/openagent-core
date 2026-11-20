@@ -7,11 +7,12 @@ import asyncio
 import os
 import threading
 import time
-from copy import deepcopy
+from copy import copy, deepcopy
+from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Iterator, List, Optional, Union
 
-from openagent_core.core.runtime_errors import ContextWindowExceededError, ModelProviderError, ModelRateLimitError
+from openagent_core.core.runtime_errors import ContextWindowExceededError, ModelAuthenticationError, ModelProviderError, ModelRateLimitError
 from openagent_core.models.credential_pool import retry_after_seconds, rotates_account
 from openagent_core.models.providers.base import Model
 from openagent_core.models.providers.response import ModelResponse, ModelResponseEvent
@@ -45,6 +46,12 @@ class FallbackConfig:
     # Optional callback invoked when a fallback model is activated.
     # Signature: callback(primary_model_id: str, fallback_model_id: str, error: Exception) -> None
     callback: Optional[Callable[[str, str, Exception], None]] = None
+    # Automatic catalog recovery is distinct from an explicit/manual chain.
+    recover_unavailable: bool = False
+    eligible: Optional[Callable[[Model, dict], bool]] = None
+    first_output_timeout: Optional[float] = None
+    prepare: Optional[Callable[[], Any]] = None
+    authorize_model: Optional[Callable[[Model], Any]] = None
 
     @property
     def has_fallbacks(self) -> bool:
@@ -107,15 +114,19 @@ def get_fallback_models(fallback_config: Optional[FallbackConfig], error: Except
     """
     if fallback_config is None:
         return None
-
     # A host may replace refs after runner initialization. Resolve a private
     # snapshot so one unsupported ref never masks the actual provider failure
     # with AttributeError, nor mutates another in-flight runner's fallback list.
     if any(isinstance(model, str) for attr in
            ("on_error", "on_rate_limit", "on_context_overflow")
            for model in getattr(fallback_config, attr)):
-        fallback_config = deepcopy(fallback_config)
+        fallback_config = copy(fallback_config)
         fallback_config.resolve_models()
+
+    if fallback_config.recover_unavailable:
+        from openagent_core.models.automatic_fallback import unavailable_model_error
+        if unavailable_model_error(error):
+            return fallback_config.on_error or None
 
     if isinstance(error, ModelRateLimitError) and fallback_config.on_rate_limit:
         return fallback_config.on_rate_limit  # type: ignore[return-value]
@@ -147,6 +158,80 @@ def get_fallback_models(fallback_config: Optional[FallbackConfig], error: Except
 # ---------------------------------------------------------------------------
 # Sync / async model calls with fallback
 # ---------------------------------------------------------------------------
+
+
+def _check_automatic_primary(model, config, kwargs):
+    if config is None or not config.recover_unavailable:
+        return
+    if ((config.eligible is not None and not config.eligible(model, kwargs))
+            or (_breaker_enabled() and _breaker_quarantined(_health_id(model), time.monotonic()))):
+        error = ModelProviderError("The selected model is temporarily unavailable", status_code=503,
+                                   model_id=_route_id(model))
+        error.routing_skip = True
+        raise error
+    # Auto owns the bounded retry/fallback policy; SDK-local retries would
+    # repeat an exhausted account before the next eligible connection.
+    if hasattr(model, 'max_retries'):
+        model.max_retries = 0
+
+
+async def _initial_response(model, config, kwargs):
+    if config is not None and config.prepare is not None:
+        await config.prepare()
+    _check_automatic_primary(model, config, kwargs)
+    await _authorize_automatic_model(model, config)
+    timeout = config.first_output_timeout if config is not None and config.recover_unavailable else None
+    try:
+        result = await asyncio.wait_for(model.aresponse(**kwargs), timeout) if timeout else await model.aresponse(**kwargs)
+        from openagent_core.models.account_routes import record_model_result
+        record_model_result(_route_id(model), model, result)
+        return result
+    except asyncio.TimeoutError:
+        raise ModelProviderError("The selected model did not answer within its routing deadline",
+                                 status_code=504, model_id=_route_id(model)) from None
+    except ModelAuthenticationError as error:
+        if config is None or not config.recover_unavailable:
+            raise
+        raise ModelProviderError(str(error), status_code=401, model_id=_route_id(model)) from error
+
+
+async def _initial_stream(model, config, kwargs):
+    if config is not None and config.prepare is not None:
+        await config.prepare()
+    _check_automatic_primary(model, config, kwargs)
+    await _authorize_automatic_model(model, config)
+    iterator = (_abounded_first_output(model, kwargs, config.first_output_timeout)
+                if config is not None and config.recover_unavailable else model.aresponse_stream(**kwargs))
+    try:
+        async for event in iterator:
+            if not _is_local_marker(event):
+                from openagent_core.models.account_routes import record_model_result
+                record_model_result(_route_id(model), model, event, streaming=True)
+            yield event
+    except ModelAuthenticationError as error:
+        if config is None or not config.recover_unavailable:
+            raise
+        raise ModelProviderError(str(error), status_code=401, model_id=_route_id(model)) from error
+    finally:
+        await iterator.aclose()
+
+
+def _record_automatic_failure(model, config, error):
+    if (config is not None and config.recover_unavailable and not getattr(error, "routing_skip", False)
+            and get_fallback_models(config, error)):
+        _breaker_record_failure(_health_id(model))
+
+
+async def _authorize_automatic_model(model, config):
+    if config is None or config.authorize_model is None:
+        return
+    try:
+        await config.authorize_model(model)
+    except PermissionError:
+        error = ModelProviderError("The selected model is not authorized for this request",
+                                   status_code=503, model_id=_route_id(model))
+        error.routing_skip = True
+        raise error from None
 
 
 def _clean_kwargs_for_fallback(kwargs: dict) -> dict:
@@ -406,12 +491,13 @@ def call_model_with_fallback(
     try:
         return model.response(**kwargs)
     except ModelProviderError as primary_error:
+        _record_automatic_failure(model, fallback_config, primary_error)
         fallbacks = get_fallback_models(fallback_config, primary_error)
         if not fallbacks:
             raise
         log_warning(f"Primary model '{model.id}' failed. Trying fallback models...: {primary_error}")
         return _try_fallback_models(
-            fallbacks, primary_error, "response", _clean_kwargs_for_fallback(kwargs), model.id, fallback_config
+            fallbacks, primary_error, "response", _clean_kwargs_for_fallback(kwargs), _route_id(model), fallback_config
         )
 
 
@@ -421,9 +507,12 @@ async def acall_model_with_fallback(
     **kwargs: Any,
 ) -> ModelResponse:
     """Async variant of call_model_with_fallback."""
+    initial_messages = len(kwargs.get('messages') or [])
     try:
-        return await model.aresponse(**kwargs)
+        return await _initial_response(model, fallback_config, kwargs)
     except ModelProviderError as primary_error:
+        if _committed_tools(kwargs, initial_messages):
+            raise
         # ── In-place deterministic recovery (additive, best-effort) ──
         # Before rotating credentials or falling over to another provider,
         # try a deterministic repair of the request and retry the SAME model
@@ -454,6 +543,8 @@ async def acall_model_with_fallback(
         if pool is not None:
             try:
                 while rotates_account(primary_error):
+                    if _committed_tools(kwargs, initial_messages):
+                        break
                     nxt = pool.mark_exhausted_and_rotate(
                         status_code=ModelProviderError.classify(primary_error).status_code,
                         api_key_hint=model.api_key,
@@ -464,7 +555,7 @@ async def acall_model_with_fallback(
                     model.api_key, model.base_url = nxt.api_key, nxt.base_url
                     model.client = model.async_client = None
                     try:
-                        return await model.aresponse(**kwargs)
+                        return await _initial_response(model, fallback_config, kwargs)
                     except ModelProviderError as e:
                         # The next account's failure decides: another limit or
                         # rejected credential keeps rotating, anything else is
@@ -473,12 +564,15 @@ async def acall_model_with_fallback(
             except Exception:
                 pass  # never let a pool bug break the fallback contract
 
+        if _committed_tools(kwargs, initial_messages):
+            raise primary_error
+        _record_automatic_failure(model, fallback_config, primary_error)
         fallbacks = get_fallback_models(fallback_config, primary_error)
         if not fallbacks:
             raise primary_error
         log_warning(f"Primary model '{model.id}' failed. Trying fallback models...: {primary_error}")
         return await _atry_fallback_models(
-            fallbacks, primary_error, "aresponse", _clean_kwargs_for_fallback(kwargs), model.id, fallback_config
+            fallbacks, primary_error, "aresponse", _clean_kwargs_for_fallback(kwargs), _route_id(model), fallback_config
         )
 
 
@@ -493,16 +587,22 @@ def call_model_stream_with_fallback(
     **kwargs: Any,
 ) -> Iterator[StreamEvent]:
     """Call the primary model stream, falling back on failure."""
+    emitted = False
     try:
-        yield from model.response_stream(**kwargs)
+        for event in model.response_stream(**kwargs):
+            emitted = emitted or not _is_local_marker(event)
+            yield event
     except ModelProviderError as primary_error:
+        if emitted:
+            raise
+        _record_automatic_failure(model, fallback_config, primary_error)
         fallbacks = get_fallback_models(fallback_config, primary_error)
         if not fallbacks:
             raise
         log_warning(f"Primary model '{model.id}' failed. Trying fallback models...: {primary_error}")
         yield ModelResponse(event=ModelResponseEvent.fallback_model_activated.value)
         yield from _try_fallback_models_stream(
-            fallbacks, primary_error, _clean_kwargs_for_fallback(kwargs), model.id, fallback_config
+            fallbacks, primary_error, _clean_kwargs_for_fallback(kwargs), _route_id(model), fallback_config
         )
 
 
@@ -515,6 +615,8 @@ TRANSIENT_STREAM_RETRY_DELAY_S = 1.0
 
 
 def _is_transient_stream_error(error: ModelProviderError) -> bool:
+    if getattr(error, "routing_skip", False):
+        return False
     try:
         classified = ModelProviderError.classify(error)
     except Exception:
@@ -533,9 +635,10 @@ async def acall_model_stream_with_fallback(
     """Async variant of call_model_stream_with_fallback."""
     any_event_emitted = False
     try:
-        async for event in model.aresponse_stream(**kwargs):
-            any_event_emitted = True
-            yield event
+        async with aclosing(_initial_stream(model, fallback_config, kwargs)) as stream:
+            async for event in stream:
+                any_event_emitted = any_event_emitted or not _is_local_marker(event)
+                yield event
         return
     except ModelProviderError as e:
         primary_error: ModelProviderError = e
@@ -552,9 +655,10 @@ async def acall_model_stream_with_fallback(
         )
         await asyncio.sleep(TRANSIENT_STREAM_RETRY_DELAY_S)
         try:
-            async for event in model.aresponse_stream(**kwargs):
-                any_event_emitted = True
-                yield event
+            async with aclosing(_initial_stream(model, fallback_config, kwargs)) as stream:
+                async for event in stream:
+                    any_event_emitted = any_event_emitted or not _is_local_marker(event)
+                    yield event
             return
         except ModelProviderError as e:
             if any_event_emitted:
@@ -578,8 +682,9 @@ async def acall_model_stream_with_fallback(
             buffered: list = []
             recovered = False
             try:
-                async for event in model.aresponse_stream(**repaired):
-                    buffered.append(event)
+                async with aclosing(model.aresponse_stream(**repaired)) as stream:
+                    async for event in stream:
+                        buffered.append(event)
                 recovered = True
             except Exception:
                 recovered = False  # discard buffer → existing path unchanged
@@ -609,9 +714,11 @@ async def acall_model_stream_with_fallback(
             model.client = model.async_client = None
             attempt_emitted = False
             try:
-                async for event in model.aresponse_stream(**kwargs):
-                    attempt_emitted = True
-                    yield event
+                async with aclosing(_initial_stream(model, fallback_config, kwargs)) as stream:
+                    async for event in stream:
+                        attempt_emitted = attempt_emitted or not _is_local_marker(event)
+                        any_event_emitted = any_event_emitted or attempt_emitted
+                        yield event
                 return  # rotated account streamed cleanly
             except ModelProviderError as e:
                 primary_error = e
@@ -623,16 +730,20 @@ async def acall_model_stream_with_fallback(
             except Exception:
                 break  # non-provider stream error → degrade to fallback
 
-    # ── existing fallback path (unchanged behaviour) ──
+    # Never replay provider output or tool calls on another model.
+    if any_event_emitted:
+        raise primary_error
+    _record_automatic_failure(model, fallback_config, primary_error)
     fallbacks = get_fallback_models(fallback_config, primary_error)
     if not fallbacks:
         raise primary_error
     log_warning(f"Primary model '{model.id}' failed. Trying fallback models...: {primary_error}")
     yield ModelResponse(event=ModelResponseEvent.fallback_model_activated.value)
-    async for event in _atry_fallback_models_stream(
-        fallbacks, primary_error, _clean_kwargs_for_fallback(kwargs), model.id, fallback_config
-    ):
-        yield event
+    async with aclosing(_atry_fallback_models_stream(
+        fallbacks, primary_error, _clean_kwargs_for_fallback(kwargs), _route_id(model), fallback_config
+    )) as stream:
+        async for event in stream:
+            yield event
 
 
 # ---------------------------------------------------------------------------
@@ -735,16 +846,50 @@ def reset_breaker() -> None:
         _breaker.clear()
 
 
-def _ordered_candidates(fallback_models: List[Model]) -> List[Model]:
+def _route_id(model):
+    return str(getattr(model, "_openagent_runtime_id", None) or getattr(model, "id", ""))
+
+
+def _health_id(model):
+    scope = getattr(model, '_openagent_health_scope', None)
+    if scope is None:
+        return _route_id(model)
+    import hashlib
+    return hashlib.sha256(str(scope).encode()).hexdigest()[:24] + ':' + _route_id(model)
+
+
+def _committed_tools(kwargs, initial_messages):
+    for message in (kwargs.get('messages') or [])[initial_messages:]:
+        value = message.get if isinstance(message, dict) else lambda key: getattr(message, key, None)
+        if value('tool_calls') or value('role') == 'tool':
+            return True
+    return False
+
+
+def _ordered_candidates(fallback_models: List[Model], *, fallback_config=None,
+                        kwargs=None, primary_model_id="") -> List[Model]:
     """I candidati non in quarantena per primi, gli altri in coda.
 
     Riordina, non filtra: nessun gradino viene mai perso.
     """
-    if not _breaker_enabled() or len(fallback_models) < 2:
-        return list(fallback_models)
+    candidates = list(fallback_models)
+    if fallback_config is not None and fallback_config.eligible is not None:
+        candidates = [model for model in candidates if fallback_config.eligible(model, kwargs or {})]
+    if fallback_config is not None and fallback_config.recover_unavailable:
+        primary = next((model for model in candidates if _route_id(model) == primary_model_id), None)
+        connection = getattr(primary, "_openagent_connection_key", None)
+        candidates = [model for model in candidates if _route_id(model) != primary_model_id
+                      and not _breaker_quarantined(_health_id(model), time.monotonic())]
+        candidates.sort(key=lambda model: (
+            bool(getattr(model, '_openagent_automatic_backup', False)),
+            (getattr(model, "_openagent_connection_key", None) == connection if connection is not None
+             else _route_id(model).split(":", 1)[0] == primary_model_id.split(":", 1)[0])
+            if getattr(model, '_openagent_automatic_backup', False) else False))
+    if not _breaker_enabled() or len(candidates) < 2:
+        return candidates
     now = time.monotonic()
-    ready = [m for m in fallback_models if not _breaker_quarantined(str(getattr(m, "id", "")), now)]
-    held = [m for m in fallback_models if _breaker_quarantined(str(getattr(m, "id", "")), now)]
+    ready = [m for m in candidates if not _breaker_quarantined(_health_id(m), now)]
+    held = [m for m in candidates if _breaker_quarantined(_health_id(m), now)]
     return ready + held
 
 
@@ -757,16 +902,16 @@ def _try_fallback_models(
     fallback_config: Optional[FallbackConfig] = None,
 ) -> ModelResponse:
     """Try each fallback model in order. Raises the primary error if all fail."""
-    candidates = _ordered_candidates(fallback_models)
+    candidates = _ordered_candidates(fallback_models, fallback_config=fallback_config, kwargs=kwargs, primary_model_id=primary_model_id)
     for i, fallback in enumerate(candidates):
         try:
             log_warning(f"Trying fallback model {i + 1}/{len(candidates)}: {fallback.id}")
             result = getattr(fallback, method_name)(**kwargs)
-            _breaker_record_success(str(fallback.id))
+            _breaker_record_success(_health_id(fallback))
             _notify_fallback(fallback_config, primary_model_id, fallback.id, primary_error)
             return result
         except ModelProviderError as e:
-            _breaker_record_failure(str(fallback.id))
+            _breaker_record_failure(_health_id(fallback))
             log_warning(f"Fallback model '{fallback.id}' also failed: {str(e)}")
             continue
     raise primary_error
@@ -781,16 +926,23 @@ async def _atry_fallback_models(
     fallback_config: Optional[FallbackConfig] = None,
 ) -> ModelResponse:
     """Async: try each fallback model in order. Raises the primary error if all fail."""
-    candidates = _ordered_candidates(fallback_models)
+    candidates = _ordered_candidates(fallback_models, fallback_config=fallback_config, kwargs=kwargs, primary_model_id=primary_model_id)
     for i, fallback in enumerate(candidates):
+        initial_messages = len(kwargs.get('messages') or [])
         try:
             log_warning(f"Trying fallback model {i + 1}/{len(candidates)}: {fallback.id}")
-            result = await getattr(fallback, method_name)(**kwargs)
-            _breaker_record_success(str(fallback.id))
+            result = (await _initial_response(fallback, fallback_config, kwargs)
+                      if method_name == "aresponse" else await getattr(fallback, method_name)(**kwargs))
+            from openagent_core.models.account_routes import record_model_result
+            # _initial_response already captured this model's reported usage.
+            record_model_result(primary_model_id, fallback, ModelResponse())
+            _breaker_record_success(_health_id(fallback))
             _notify_fallback(fallback_config, primary_model_id, fallback.id, primary_error)
             return result
         except ModelProviderError as e:
-            _breaker_record_failure(str(fallback.id))
+            if _committed_tools(kwargs, initial_messages):
+                raise
+            _breaker_record_failure(_health_id(fallback))
             log_warning(f"Fallback model '{fallback.id}' also failed: {str(e)}")
             continue
     raise primary_error
@@ -804,16 +956,21 @@ def _try_fallback_models_stream(
     fallback_config: Optional[FallbackConfig] = None,
 ) -> Iterator[StreamEvent]:
     """Try each fallback model stream in order. Raises the primary error if all fail."""
-    candidates = _ordered_candidates(fallback_models)
+    candidates = _ordered_candidates(fallback_models, fallback_config=fallback_config, kwargs=kwargs, primary_model_id=primary_model_id)
     for i, fallback in enumerate(candidates):
+        emitted = False
         try:
             log_warning(f"Trying fallback model {i + 1}/{len(candidates)}: {fallback.id}")
-            yield from fallback.response_stream(**kwargs)
-            _breaker_record_success(str(fallback.id))
+            for event in fallback.response_stream(**kwargs):
+                emitted = emitted or not _is_local_marker(event)
+                yield event
+            _breaker_record_success(_health_id(fallback))
             _notify_fallback(fallback_config, primary_model_id, fallback.id, primary_error)
             return
         except ModelProviderError as e:
-            _breaker_record_failure(str(fallback.id))
+            if emitted:
+                raise
+            _breaker_record_failure(_health_id(fallback))
             log_warning(f"Fallback model '{fallback.id}' also failed: {str(e)}")
             continue
     raise primary_error
@@ -848,9 +1005,9 @@ def _is_local_marker(event: StreamEvent) -> bool:
     return isinstance(event, ModelResponse) and event.event in _LOCAL_MARKER_EVENTS
 
 
-async def _abounded_first_output(model: Model, kwargs: dict) -> AsyncIterator[StreamEvent]:
+async def _abounded_first_output(model: Model, kwargs: dict, timeout_seconds=None) -> AsyncIterator[StreamEvent]:
     """Stream ``model``; fail if no provider output arrives within the bound."""
-    timeout = _fallback_first_output_timeout_s()
+    timeout = timeout_seconds if timeout_seconds is not None else _fallback_first_output_timeout_s()
     iterator = model.aresponse_stream(**kwargs).__aiter__()
     waiting = timeout is not None
     try:
@@ -886,17 +1043,29 @@ async def _atry_fallback_models_stream(
     fallback_config: Optional[FallbackConfig] = None,
 ) -> AsyncIterator[StreamEvent]:
     """Async: try each fallback model stream in order. Raises the primary error if all fail."""
-    candidates = _ordered_candidates(fallback_models)
+    candidates = _ordered_candidates(fallback_models, fallback_config=fallback_config, kwargs=kwargs, primary_model_id=primary_model_id)
     for i, fallback in enumerate(candidates):
+        emitted = False
         try:
             log_warning(f"Trying fallback model {i + 1}/{len(candidates)}: {fallback.id}")
-            async for event in _abounded_first_output(fallback, kwargs):
-                yield event
-            _breaker_record_success(str(fallback.id))
+            iterator = (_initial_stream(fallback, fallback_config, kwargs)
+                        if fallback_config is not None and fallback_config.recover_unavailable
+                        else _abounded_first_output(fallback, kwargs))
+            async with aclosing(iterator):
+                async for event in iterator:
+                    emitted = emitted or not _is_local_marker(event)
+                    if not _is_local_marker(event):
+                        from openagent_core.models.account_routes import record_model_result
+                        record_model_result(primary_model_id, fallback, event,
+                                            streaming=not (fallback_config is not None and fallback_config.recover_unavailable))
+                    yield event
+            _breaker_record_success(_health_id(fallback))
             _notify_fallback(fallback_config, primary_model_id, fallback.id, primary_error)
             return
         except ModelProviderError as e:
-            _breaker_record_failure(str(fallback.id))
+            if emitted:
+                raise
+            _breaker_record_failure(_health_id(fallback))
             log_warning(f"Fallback model '{fallback.id}' also failed: {str(e)}")
             continue
     raise primary_error

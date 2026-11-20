@@ -647,6 +647,13 @@ class BudgetGuard:
 
     # ── refresh scheduling ────────────────────────────────────────────
 
+    async def ensure_fresh(self) -> None:
+        """Await a due snapshot before admitting a new provider request."""
+        self.maybe_schedule_refresh()
+        task = self._refresh_task
+        if task is not None and not task.done():
+            await asyncio.shield(task)
+
     def maybe_schedule_refresh(self) -> None:
         """TTL backstop: if the snapshot is stale, kick an async refresh. Cheap
         (a monotonic subtraction); safe to call on every hot-path pass."""

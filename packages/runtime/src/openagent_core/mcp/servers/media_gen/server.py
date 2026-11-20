@@ -73,7 +73,7 @@ def _images_url(base_url: str) -> str:
     return f"{base}/v1/images/generations"
 
 
-async def _capability_backend(requested_model: str = "") -> Optional[tuple[str, str, str]]:
+async def _capability_backend(requested_model: str = "", *, catalog_reference=False) -> Optional[tuple[str, str, str]]:
     """Find an enabled model that declares image generation.
 
     Returns ``(images_url, api_key, model_id)`` or None. The capability lives
@@ -116,6 +116,8 @@ async def _capability_backend(requested_model: str = "") -> Optional[tuple[str, 
             continue
         from openagent_core.image_generation import images_endpoint
         provider_metadata = _json.loads(row["provider_metadata_json"] or "{}")
+        if catalog_reference:
+            return f"catalog://{int(row['provider_id'])}/{int(row['model_row_id'])}", "", provider_image_model_id(str(row["model"] or ""), meta)
         if provider_metadata.get("access") == "subscription":
             # An opaque local reference, resolved only inside Core at invocation.
             image_model_id = provider_image_model_id(str(row["model"] or ""), meta)
@@ -142,7 +144,7 @@ async def _image_backend(model: str) -> tuple[Optional[tuple[str, str, str]], Op
             (runtime_environment().get("OPENAGENT_IMAGE_MODEL") or model or "").strip(),
         ), None
 
-    backend = await _capability_backend(model)
+    backend = await _capability_backend(model, catalog_reference=True)
     if backend:
         return backend, None
 
@@ -208,17 +210,22 @@ async def generate_image(
     url, api_key, backend_model = backend
     from openagent_core.image_generation import ImageGenerationError, generate_image_bytes
     try:
-        if url.startswith("subscription://"):
+        if url.startswith(("catalog://", "subscription://")):
             from openagent_core.engine import MemoryDB
             from openagent_core.mcp.servers._common import db_path
             from openagent_core.subscriptions.images import generate_subscription_image
-            reference = url.removeprefix("subscription://").split('/')
+            reference = url.split("://", 1)[1].split('/')
             db = MemoryDB(db_path())
             await db.connect()
             try:
-                image = await generate_subscription_image(db, int(reference[0]),
-                    model_id=int(reference[1]) if len(reference) > 1 else None,
-                    model=backend_model or model or "gpt-image-1", prompt=prompt, size=size, quality=quality)
+                if url.startswith("catalog://"):
+                    from openagent_core.image_generation import generate_catalog_image
+                    image = await generate_catalog_image(db, model_id=int(reference[1]), exact=bool(model),
+                                                         prompt=prompt, size=size, quality=quality)
+                else:
+                    image = await generate_subscription_image(db, int(reference[0]),
+                        model_id=int(reference[1]) if len(reference) > 1 else None,
+                        model=backend_model or model or "gpt-image-1", prompt=prompt, size=size, quality=quality)
             finally:
                 await db.close()
         else:

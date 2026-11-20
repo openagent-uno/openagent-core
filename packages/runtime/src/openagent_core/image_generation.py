@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urlparse
 
 import httpx
@@ -115,7 +115,14 @@ async def generate_image_bytes(
             async with httpx.AsyncClient(timeout=600.0, follow_redirects=False) as owned:
                 yield owned
     async with route() as routed_client:
-        response = await routed_client.post(endpoint, headers=headers, json=payload)
+        try:
+            response = await routed_client.post(endpoint, headers=headers, json=payload)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as error:
+            # Only a failed generation connection is safe to move elsewhere.
+            # An accepted generation whose result URL fails to download must
+            # retain that job rather than silently purchasing another image.
+            error.generation_not_accepted = True
+            raise
         if response.status_code >= 400:
             raise _provider_error(response)
         body = response.json()
@@ -156,3 +163,61 @@ async def generate_image_bytes(
         raise ValueError("The image backend returned an unsupported image format")
     return GeneratedImage(content, mime, model, str(item.get("size") or size),
                           remote_url if isinstance(remote_url, str) else None)
+
+
+async def generate_catalog_image(db, *, prompt, size="1024x1024", quality="auto",
+                                 model_id=None, exact=False, budget_guard=None):
+    """Recover an automatic image request through authorized typed catalog rows."""
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 4000:
+        raise ValueError("An image prompt of at most 4000 characters is required")
+    if size not in {"1024x1024", "1536x1024", "1024x1536"}:
+        raise ValueError("Unsupported image size")
+    if quality not in {"auto", "low", "medium", "high", "xhigh", "max"}:
+        raise ValueError("Unsupported image quality")
+    from .models.catalog_routes import catalog_routes, route_failed, route_succeeded
+    rows = await catalog_routes(db, "image", preferred_id=model_id, guard=budget_guard)
+    if exact:
+        rows = [row for row in rows if row["id"] == model_id]
+    last = None
+    for row in rows:
+        provider = await db.get_provider(row["provider_id"])
+        metadata = provider.get("metadata") or {}
+        wire_model = provider_image_model_id(row["model"], row.get("metadata"))
+        if metadata.get("access") != "subscription":
+            try:
+                endpoint = images_endpoint(provider.get("base_url") or "", metadata.get("vendor") or provider["name"])
+            except ValueError as error:
+                if exact:
+                    raise
+                last = error
+                continue
+        try:
+            if metadata.get("access") == "subscription":
+                from .subscriptions.images import generate_subscription_image
+                image = await generate_subscription_image(db, provider["id"], model_id=row["id"],
+                    model=wire_model, prompt=prompt, size=size, quality=quality, budget_guard=budget_guard)
+            else:
+                image = await generate_image_bytes(endpoint=endpoint, api_key=provider.get("api_key") or "",
+                    model=wire_model, prompt=prompt, size=size, quality=quality)
+                image = replace(image, connection=provider["name"], connection_label=metadata.get("label") or provider["name"])
+        except ImageGenerationError as error:
+            from types import SimpleNamespace
+            from .models.automatic_fallback import unavailable_model_error
+            recoverable = (error.status in {401,429,529} or
+                unavailable_model_error(SimpleNamespace(status_code=error.status, message=str(error))))
+            if exact or not recoverable:
+                raise
+            last = error
+            route_failed(db, "image", row)
+            continue
+        except (httpx.ConnectError, httpx.ConnectTimeout) as error:
+            if exact or not getattr(error, 'generation_not_accepted', False):
+                raise
+            last = error
+            route_failed(db, "image", row)
+            continue
+        route_succeeded(db, "image", row)
+        return image
+    if last is not None:
+        raise last
+    raise ImageGenerationError(429, "No enabled image model is eligible for this request", "image_model_unavailable")

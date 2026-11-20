@@ -226,6 +226,7 @@ def _status_code(error: BaseException) -> int | None:
 # Diagnostics are inspected locally; only an allowlisted code and constant
 # message are published. Never return provider JSON, keys or request bodies.
 def _model_diagnostic_code(text: str) -> str | None:
+    from .runtime_errors import ModelProviderError
     patterns = (
         ("auth_expired", ("invalid_grant", "refresh token expired", "refresh_token expired", "token has expired", "token is expired", "token expired", "authentication expired", "authentication has expired", "credentials have expired", "credentials expired", "token was revoked")),
         ("provider_not_configured", ("provider_not_configured", "no ai account is configured", "no claude ai account", "no provider configured", "provider is not configured", "api key is required", "no api key", "api_key must be set", "missing api key", "missing api_key")),
@@ -237,7 +238,7 @@ def _model_diagnostic_code(text: str) -> str | None:
         ("budget_exhausted", ("budget exceeded", "budget exhausted", "budget has been reached", "excluded by its budget")),
         ("auth", ("authentication_error", "modelauthenticationerror", "invalid_api_key", "invalid api key", "incorrect api key", "invalid bearer token", "unauthorized", "authentication is invalid")),
         ("model_unavailable", ("model_not_found", "model not found", "model does not exist", "model is not available", "pinned model is unavailable", "pinned model is not configured")),
-        ("rate_limit", ("rate_limit_error", "modelratelimiterror", "rate limit", "rate_limit_exceeded", "too many requests", "tokens per minute", "requests per minute")),
+        ("rate_limit", ("rate_limit_error", "modelratelimiterror", "rate limit", "rate_limit_exceeded", "too many requests", "tokens per minute", "requests per minute", *ModelProviderError.RATE_LIMIT_MESSAGE_PATTERNS)),
     )
     for code, markers in patterns:
         if any(marker in text for marker in markers):

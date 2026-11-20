@@ -1907,6 +1907,7 @@ class ModelDispatcher(BaseModel):
         # True while ``_fallback_config`` exists only because catalog models
         # declare ``metadata.fallback_priority`` (no configured chain).
         self._catalog_fallback_owned = False
+        self._automatic_fallback_config: Any = None
         self._local_fallback = LocalFallbackPolicy()
 
         # Per-entry-model TeamRouterProvider. The provider's session
@@ -1920,6 +1921,7 @@ class ModelDispatcher(BaseModel):
         # by ``effective_model_id`` so the chat UI's model badge always
         # has something to render.
         self._last_pick_by_session: dict[str, str] = {}
+        self._last_provider_by_session: dict[str, BaseModel] = {}
 
     def rebuild_routing(self, providers_config: Any = None) -> None:
         """Called by the hot-reload loop when the ``models`` DB table changes.
@@ -1952,7 +1954,7 @@ class ModelDispatcher(BaseModel):
                 fn(providers_config=self._providers_config)
             # La catena appena ricostruita deve arrivare anche ai membri del
             # Team: e' il loro Agent che la consulta su un ModelRateLimitError.
-            wire_model_runtime(provider, fallback_config=self._fallback_config)
+            wire_model_runtime(provider, fallback_config=self._fallback_for_provider(provider))
         elog("router.rebuilt")
 
     # ── runtime wiring ───────────────────────────────────────────────
@@ -1963,10 +1965,11 @@ class ModelDispatcher(BaseModel):
         # Hand the guard the providers view so it can warn when a cost_usd rule
         # is scoped to a $0-priced provider (e.g. a proxy row) that it can't cap.
         self._budget_guard = BudgetGuard(db, providers_config=self._providers_config)
+        self._automatic_fallback_config = None
         if self._budget_seed is not None:
             self._budget_guard.set_seed_rules(self._budget_seed)
         for provider in self._team_providers.values():
-            wire_model_runtime(provider, db=db)
+            wire_model_runtime(provider, db=db, fallback_config=self._fallback_for_provider(provider))
             # A provider built before the db arrived would otherwise bill into
             # the void for the rest of the process's life.
             provider._budget = self._budget
@@ -2014,7 +2017,7 @@ class ModelDispatcher(BaseModel):
         self._fallback_config = fallback_config
         self._refresh_fallback_config()
         for provider in self._team_providers.values():
-            wire_model_runtime(provider, fallback_config=self._fallback_config)
+            wire_model_runtime(provider, fallback_config=self._fallback_for_provider(provider))
 
     def _refresh_fallback_config(self) -> None:
         """Resolve catalog fallback refs through the normal provider runtime.
@@ -2026,6 +2029,7 @@ class ModelDispatcher(BaseModel):
         URLs, and per-model sampling), so it is the only correct resolver.
         Non-catalog refs are retained for the generic built-in resolver.
         """
+        self._automatic_fallback_config = None
         catalog_refs = self._catalog_fallback_refs()
         sources = self._configured_fallback_refs
         if sources is None:
@@ -2118,6 +2122,17 @@ class ModelDispatcher(BaseModel):
             ranked.append((priority, entry.runtime_id))
         return [runtime_id for _, runtime_id in sorted(ranked)]
 
+    def _fallback_for_provider(self, provider):
+        if not getattr(provider, "_automatic_fallback", False):
+            return self._fallback_config
+        if self._automatic_fallback_config is None:
+            from openagent_core.models.automatic_fallback import automatic_fallback_config
+            self._automatic_fallback_config = automatic_fallback_config(
+                self._providers_config, self._fallback_config,
+                db_path=_runtime_db_path(self._db), guard=self._budget_guard,
+            )
+        return self._automatic_fallback_config
+
     def set_local_fallback_policy(self, raw: Any) -> None:
         """Configure cloud/local standby routing before Agent.initialize()."""
         self._local_fallback = LocalFallbackPolicy(raw)
@@ -2154,6 +2169,7 @@ class ModelDispatcher(BaseModel):
         if not session_id:
             return
         self._last_pick_by_session.pop(session_id, None)
+        self._last_provider_by_session.pop(session_id, None)
         await self._fan_out_async("close_session", session_id)
 
     async def invalidate_session_context(self, session_id: str) -> None:
@@ -2173,6 +2189,7 @@ class ModelDispatcher(BaseModel):
         if not session_id:
             return
         self._last_pick_by_session.pop(session_id, None)
+        self._last_provider_by_session.pop(session_id, None)
         if self._db is not None:
             # delete_sdk_session is kept callable for back-compat with
             # gateway/clear code; the runtime-side persistence no longer
@@ -2214,7 +2231,7 @@ class ModelDispatcher(BaseModel):
         runtime_id = self._last_pick_by_session.get(session_id)
         if not runtime_id:
             return None
-        return self._team_providers.get(runtime_id)
+        return self._last_provider_by_session.get(session_id) or self._team_providers.get(runtime_id)
 
     async def _fan_out_async(self, method_name: str, *args: Any, strict: bool = False) -> None:
         """Invoke ``method_name`` on every cached TeamRouterProvider
@@ -2329,11 +2346,12 @@ class ModelDispatcher(BaseModel):
             )
         return self._get_team_provider(runtime_id)
 
-    def _get_team_provider(self, entry_runtime_id: str) -> BaseModel:
+    def _get_team_provider(self, entry_runtime_id: str, *, automatic: bool = False) -> BaseModel:
         """Per-entry-model TeamRouterProvider. Cached so subsequent
         sessions on the same entry model reuse the same Team builder.
         """
-        if entry_runtime_id not in self._team_providers:
+        cache_key = entry_runtime_id if automatic else "manual:" + entry_runtime_id
+        if cache_key not in self._team_providers:
             provider = TeamRouterProvider(
                 entry_runtime_id=entry_runtime_id,
                 providers_config=self._providers_config,
@@ -2346,14 +2364,15 @@ class ModelDispatcher(BaseModel):
                 local_fallback=self._local_fallback,
                 video_frame_extractor=self._video_frame_extractor,
             )
+            provider._automatic_fallback = automatic
             wire_model_runtime(
                 provider,
                 db=self._db,
                 mcp_pool=self._mcp_pool,
-                fallback_config=self._fallback_config,
+                fallback_config=self._fallback_for_provider(provider),
             )
-            self._team_providers[entry_runtime_id] = provider
-        return self._team_providers[entry_runtime_id]
+            self._team_providers[cache_key] = provider
+        return self._team_providers[cache_key]
 
     async def _resolve_entry_model(
         self,
@@ -2366,6 +2385,8 @@ class ModelDispatcher(BaseModel):
         "default team leader" hint (set in the model_manager UI); the
         first-enabled fallback only kicks in when no model is flagged.
         """
+        if self._budget_guard is not None:
+            await self._budget_guard.ensure_fresh()
         if session_id and self._db is not None:
             try:
                 pinned_id = await self._db.get_session_pin(session_id)
@@ -2385,7 +2406,8 @@ class ModelDispatcher(BaseModel):
                     # before local policy removes standby models.
                     pin_catalog = self._configured_enabled_catalog()
                     if self._budget_guard is not None:
-                        pin_catalog = self._budget_guard.filter_catalog(pin_catalog)
+                        blocked = self._budget_guard.blocked_runtime_ids(pin_catalog)
+                        pin_catalog = [entry for entry in pin_catalog if entry.runtime_id not in blocked]
                     enabled_ids = {entry.runtime_id for entry in pin_catalog}
                     if pinned_id not in enabled_ids:
                         raise PermissionError('The pinned model is currently excluded by its budget')
@@ -2397,6 +2419,13 @@ class ModelDispatcher(BaseModel):
                 )
 
         catalog = self._enabled_catalog()
+        if self._budget_guard is not None:
+            blocked = self._budget_guard.blocked_runtime_ids(catalog)
+            permitted = [entry for entry in catalog if entry.runtime_id not in blocked]
+            if catalog and not permitted:
+                from openagent_core.core.public_errors import RunTurnError, PUBLIC_MESSAGES
+                raise RunTurnError(PUBLIC_MESSAGES["budget_exhausted"], code="budget_exhausted")
+            catalog = permitted
         if not catalog:
             return RoutingDecision(
                 reason="no_enabled_model",
@@ -2541,7 +2570,9 @@ class ModelDispatcher(BaseModel):
             model=runtime_id,
         )
 
-        provider = self._get_team_provider(runtime_id)
+        provider = self._get_team_provider(runtime_id, automatic=decision.reason != "session_pin")
+        if session_id:
+            self._last_provider_by_session[session_id] = provider
         resp = await provider.generate(
             messages, system=system, tools=tools,
             on_status=on_status, session_id=session_id,
@@ -2649,7 +2680,9 @@ class ModelDispatcher(BaseModel):
 
         # The provider opens its own usage sink and bills the turn — see
         # TeamRouterProvider.stream / .record_cost.
-        provider = self._get_team_provider(runtime_id)
+        provider = self._get_team_provider(runtime_id, automatic=decision.reason != "session_pin")
+        if session_id:
+            self._last_provider_by_session[session_id] = provider
         async for chunk in provider.stream(
             messages, system=system, tools=tools,
             on_status=on_status, session_id=session_id,

@@ -86,7 +86,7 @@ class ScriptedProviderIO:
         # Inspect the real, already constructed Team to choose the same member
         # ID a provider sees. Underscores/colons in canonical refs must not be
         # reverse-engineered from the tool-facing normalized identifier.
-        router = runtime.services.executor.agent.model._team_providers[LEADER_REF]
+        router = runtime.services.executor.agent.model.build_override_model(LEADER_REF)
         team = router._session_runtime[context.session_id]
         from openagent_core.core._runner.utils.team import get_member_id
         selected = [member for member in team.members

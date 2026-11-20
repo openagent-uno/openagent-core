@@ -259,3 +259,16 @@ async def test_concurrent_turns_do_not_share_usage_or_effective_account():
             A.close_usage(token)
     one, two = await asyncio.gather(run('one'), run('two'))
     assert one == [('one', 100, 5, 40)] and two == [('two', 100, 5, 40)]
+
+
+def test_primary_recovery_in_one_turn_resets_a_prior_fallback_identity_and_billing():
+    a=SimpleNamespace(id='a',_openagent_runtime_id='first:a')
+    b=SimpleNamespace(id='b',_openagent_runtime_id='second:b')
+    sink,token=A.open_usage()
+    try:
+        A.record_model_result('first:a',b,response())
+        A.record_model_result('first:a',a,response())
+        assert A.effective_model('first:a')=='first:a'
+        assert A.charge_rows(sink,'first:a',(200,10,80))==[
+            ('second:b',100,5,40),('first:a',100,5,40)]
+    finally:A.close_usage(token)

@@ -33,6 +33,10 @@ async def provider_io(request):
  await asyncio.sleep(0)
  subprocess.run([sys.executable,'-I','-c',"import os\nfor fd in range(3,16):\n try:os.write(fd,b'vendor-grandchild-inherited-pipe')\n except OSError:pass"],close_fds=False,check=True)
  if request.get('operation')=='fail':raise ValueError('fixture-private-configuration')
+ if request.get('operation')=='known-model-failure':
+  error=RuntimeError('fixture-private-configuration');error.status_code=404
+  error.body={'error':{'code':'model_not_found','message':'fixture-private-configuration'}}
+  raise error
  return {'text':'Il quarzo sette è già pronto.'}
 audio_worker.execute=provider_io
 print('vendor-buffered-before-main',end='')
@@ -57,6 +61,10 @@ class AudioWorkerProtocol(unittest.TestCase):
 
     def test_shutdown_logs_cannot_pollute_or_disclose_provider_errors(self):
         self.assertEqual({'error':'audio_provider_unavailable'},self.invoke(b'{"operation":"fail"}'))
+
+    def test_known_model_code_survives_without_provider_details(self):
+        self.assertEqual({'error':'audio_provider_unavailable','status':404,'error_type':'model_not_found'},
+                         self.invoke(b'{"operation":"known-model-failure"}'))
 
     def test_invalid_and_oversize_input_keep_the_single_error_protocol(self):
         for request in (b'{invalid',b'x'*262145):

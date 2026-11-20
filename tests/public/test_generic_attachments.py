@@ -211,7 +211,7 @@ def test_dispatcher_generate_and_stream_receive_preview_references_not_unsupport
                                       'models': [{'id': 1, 'model': 'text-only', 'enabled': True, 'is_classifier': True,
                                                   'metadata': {'input_modalities': ['text']}}]}])
         capture = Capture()
-        dispatcher._get_team_provider = lambda _runtime_id: capture
+        dispatcher._get_team_provider = lambda _runtime_id, **_routing: capture
         files = [File(filepath=FIXTURES / 'importi-progetti.xlsx', filename='importi-progetti.xlsx', id='xlsx-id', mime_type='application/octet-stream'),
                  File(content=b'\x00DO-NOT-SEND', filename='unknown.bin', id='binary-id', mime_type='application/octet-stream')]
         result = await dispatcher.generate(MESSAGES, session_id='attachment-generate', files=files)

@@ -11,7 +11,7 @@ class ModelPins(unittest.IsolatedAsyncioTestCase):
         dispatcher._configured_enabled_catalog=lambda: [SimpleNamespace(runtime_id='alternative')]
         with self.assertRaises(LookupError):await dispatcher._resolve_entry_model('session')
         dispatcher._configured_enabled_catalog=lambda: [SimpleNamespace(runtime_id='selected')]
-        dispatcher._budget_guard=SimpleNamespace(filter_catalog=lambda entries: [])
+        dispatcher._budget_guard=SimpleNamespace(ensure_fresh=AsyncMock(), blocked_runtime_ids=lambda entries: {'selected'})
         with self.assertRaises(PermissionError):await dispatcher._resolve_entry_model('session')
         dispatcher._db.unpin_session.assert_not_awaited()
         dispatcher._budget_guard=None
