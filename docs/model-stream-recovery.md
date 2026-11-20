@@ -23,8 +23,10 @@ The outer native provider adapter treats a parent runtime error or cancellation
 event as terminal. It propagates the original safe failure category instead of
 turning a failed zero-output stream into a second complete run. Visible output,
 tool activity and a failed empty-stream generate attempt also prevent replay.
-After a terminal event its iterator is drained under one 15-second cleanup
-deadline, then closed before the failure crosses the host boundary. This lets
+After a terminal event its iterator is drained in the same task, with a
+cooperative cancellation request after 15 seconds, then closed before the
+failure crosses the host boundary. Native finalizers retain their existing
+shutdown contract and can extend that interval; this is not a hard kill. This lets
 native cancellation persist its final run and session after yielding the event.
 Later content and completion events are suppressed; failed or cancelled runs
 do not attest a completed final answer. Cleanup failure or expiry preserves the

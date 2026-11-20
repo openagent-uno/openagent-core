@@ -2269,7 +2269,8 @@ class NativeProvider(ProviderResources, BaseModel):
                                 terminal_error = run_error_from_runtime(getattr(event, "content", None), getattr(event, "error_type", None))
                             # Cancellation may be yielded before the native runner
                             # persists its final run/session. Drain its cleanup in
-                            # this task, with one total deadline and no more output.
+                            # this task, requesting cooperative cancellation after
+                            # 15s. Native finalizers retain their shutdown contract.
                             cleanup_deadline.reschedule(asyncio.get_running_loop().time() + 15.0)
                             continue
                         if isinstance(event, tool_started_types + tool_completed_types + tool_error_types):
