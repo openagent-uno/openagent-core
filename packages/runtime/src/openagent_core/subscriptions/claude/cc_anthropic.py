@@ -252,7 +252,7 @@ def _post_curl_cffi(
                 raise AnthropicHTTPError(r.status_code, _error_body(r.content), dict(r.headers))
             return r.status_code, r.json(), None
     curl_options = None
-    idle_timeout = float(chunk_timeout)
+    idle_timeout = 0.0 if chunk_timeout is None else float(chunk_timeout)
     if idle_timeout > 0:
         # curl_cffi does not expose a cancellable Response until headers arrive.
         # libcurl's native low-speed timer bounds that pre-header/no-byte window
@@ -321,7 +321,7 @@ class ClaudeCodeClient:
         impersonate: str = "chrome",
         cc_version: Optional[str] = None,
         timeout: float = 600.0,
-        chunk_timeout: float = 30.0,
+        chunk_timeout: Optional[float] = 30.0,
     ):
         self._token_provider = token_provider
         self.transport = _select_transport(transport)

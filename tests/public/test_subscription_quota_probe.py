@@ -83,7 +83,8 @@ async def test_concurrent_probes_keep_observers_separate_and_missing_headers_are
 @pytest.mark.asyncio
 @pytest.mark.parametrize('stream',[True,False])
 @pytest.mark.parametrize('transport',['httpx','curl_cffi'])
-async def test_quota_observation_uses_both_native_transports_and_ephemeral_grants(tmp_path,monkeypatch,stream,transport):
+@pytest.mark.parametrize('chunk_timeout',[None,30.0])
+async def test_quota_observation_uses_both_native_transports_and_ephemeral_grants(tmp_path,monkeypatch,stream,transport,chunk_timeout):
     from types import SimpleNamespace
     headers={'anthropic-ratelimit-unified-7d-utilization':'0.45'}
     body={'id':'m','content':[{'type':'text','text':'ok'}],'usage':{},'stop_reason':'end_turn'}
@@ -106,7 +107,7 @@ async def test_quota_observation_uses_both_native_transports_and_ephemeral_grant
                 json=lambda:body,iter_lines=lambda:iter(wire.splitlines()),close=lambda:None)
         monkeypatch.setattr(requests,'Session',Session)
     service=SubscriptionService.from_access_token('claude','fixture',account_id='a',admission_path=tmp_path/'admission',
-        settings={'transport':transport,'upstream_min_interval':0})
+        settings={'transport':transport,'upstream_min_interval':0,'chunk_timeout':chunk_timeout})
     try:
         response=await service.inference_client('a').post('/v1/chat/completions',json={
             'model':'fixture','messages':[{'role':'user','content':'hi'}],'stream':stream})

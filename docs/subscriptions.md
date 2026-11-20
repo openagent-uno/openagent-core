@@ -313,3 +313,10 @@ The offline `localize_subscription_accounts(..., store_layout="provider")` opera
 sets the layout while preserving reviewed provider/model IDs and settings. Stop
 all writers first; never change an active connection's layout without migrating
 its store. The host retains responsibility for mounts, permissions and custody.
+
+### Disabled streaming idle timeout
+
+A subscription connection may set `subscription_settings.chunk_timeout` to
+`null` to disable its streaming idle timeout. Both native Claude transports
+honor this value, including curl-based streaming. Finite positive values keep
+the configured idle bound. The overall request timeout still applies.

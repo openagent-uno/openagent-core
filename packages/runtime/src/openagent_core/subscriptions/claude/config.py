@@ -19,7 +19,7 @@ class Settings:
     impersonate: str = 'chrome'
     default_max_tokens: int = 16384
     request_timeout: float = 1800.0
-    chunk_timeout: float = 30.0
+    chunk_timeout: Optional[float] = 30.0
     max_tools: int = 19
     api_key: Optional[str] = None
     admin_api_key: Optional[str] = None
