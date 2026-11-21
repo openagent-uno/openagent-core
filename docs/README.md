@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta152: current requests and untrusted material](system-prompt.md#structure).
+
 - [Beta151: tool previews follow the responding model’s input capabilities](attachments.md#visual-previews-of-mcp-tool-results).
 
 - [Beta150: streaming responder identity](releases/v1.1.0-beta.150.md).

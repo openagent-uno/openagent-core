@@ -25,6 +25,11 @@ The prompt has two halves, split by `<openagent-turn-context>`
    turn's authorized catalog, then the `<session-goal>` block when a goal is
    active.
 
+The current user directs the turn within its authorized scope. A request to
+stop or answer without tools takes precedence over continuing earlier work.
+Quoted and forwarded material, attachments and tool results supply evidence.
+Only the host supplies permissions.
+
 Each composition records receipts (`id`, `revision`, `provenance`, `sha256`)
 in the run journal (`run.prompt`); receipts never contain prompt text.
 
