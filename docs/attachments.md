@@ -67,6 +67,12 @@ stricter limits or disable the extractor.
 
 ### Visual previews of MCP tool results
 
+Catalog-backed models apply their own input modalities to media returned by
+tools during a run. A text-only responder receives the tool receipt and a
+notice identifying unavailable previews. A compatible responder receives
+the supported previews. This applies when a backup takes over the turn.
+The tool executes once and its result retains the original media for delivery.
+
 An authenticated engine host can also opt into in-turn visual previews of
 videos returned by an authorized MCP tool. Bind the same public extractor in
 the host's `RuntimeServices` before starting the runtime:

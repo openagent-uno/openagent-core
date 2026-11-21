@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta151: tool previews follow the responding model’s input capabilities](attachments.md#visual-previews-of-mcp-tool-results).
+
 - [Beta150: streaming responder identity](releases/v1.1.0-beta.150.md).
 
 - [Beta149: SQLite commits and conversation history](releases/v1.1.0-beta.149.md),

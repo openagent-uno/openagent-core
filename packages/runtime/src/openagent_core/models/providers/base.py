@@ -194,6 +194,9 @@ class Model(ABC):
     # Set the number of times to retry the model invocation with guidance.
     retry_with_guidance_limit: int = 1
 
+    # Set by catalog-backed runtimes. Direct SDK models retain their native behavior.
+    tool_input_modalities: Optional[frozenset[str]] = field(default=None, init=False, repr=False)
+
     def __post_init__(self):
         if self.provider is None and self.name is not None:
             self.provider = f"{self.name} ({self.id})"
@@ -3073,19 +3076,29 @@ class Model(ABC):
                 all_files.extend(result_message.files)
                 result_message.files = None
 
-        # Only add media message if we should send media to model
-        if send_media_to_model and (all_images or all_videos or all_audio or all_files):
-            # If we have media artifacts, add a follow-up "user" message instead of a "tool"
-            # message with the media artifacts which throws error for some models
-            media_message = Message(
-                role="user",
-                content="Take note of the following content",
-                images=all_images if all_images else None,
-                videos=all_videos if all_videos else None,
-                audio=all_audio if all_audio else None,
-                files=all_files if all_files else None,
-            )
-            messages.append(media_message)
+        if not send_media_to_model:
+            return
+
+        previews = (("images", "image", all_images), ("videos", "video", all_videos),
+                    ("audio", "audio", all_audio), ("files", "file", all_files))
+        supported = self.tool_input_modalities
+        included = {}
+        omitted = []
+        for key, modality, items in previews:
+            if not items:
+                continue
+            if supported is None or modality in supported:
+                included[key] = items
+            else:
+                omitted.append(f"{len(items)} {modality}")
+
+        if included or omitted:
+            notice = "Take note of the following content" if included else ""
+            if omitted:
+                notice += (" Tool previews unavailable to this model: " + ", ".join(omitted)
+                           + ". Use the tool's text result or an authorized alternative. "
+                             "Do not infer the contents of an unavailable preview.")
+            messages.append(Message(role="user", content=notice.strip(), **included))
 
     def get_system_message_for_model(self, tools: Optional[List[Any]] = None) -> Optional[str]:
         return self.system_prompt

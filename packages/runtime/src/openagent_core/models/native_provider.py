@@ -55,6 +55,7 @@ from openagent_core.models.catalog import (
     RUNTIME_SESSION_USER_ID,
     _iter_provider_entries,
     compute_cost,
+    iter_configured_models,
     model_id_from_runtime,
     normalize_runtime_model_id,
     split_runtime_id,
@@ -1521,6 +1522,13 @@ class NativeProvider(ProviderResources, BaseModel):
                     self._providers_config, self._db_path, self._account_budget_guard)
                 if policy is not None:
                     model._openagent_account_routes = policy
+            # A fallback owns its tool loop. Its model can accept different
+            # input from the primary which admitted the original user turn.
+            from .media_capabilities import input_modalities_for
+            for entry in iter_configured_models([self._provider_config()]):
+                if entry.runtime_id == self.model:
+                    model.tool_input_modalities = input_modalities_for(entry)
+                    break
             model._openagent_runtime_id = self.model
             model._openagent_health_scope = str(self._db_path) if self._db_path else f'catalog:{id(self._providers_config)}'
             source = self._provider_config()

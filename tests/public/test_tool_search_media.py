@@ -370,3 +370,53 @@ class ToolSearchMediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(messages[0].tool_call_error)
         self.assertIn("Error from MCP tool.", messages[0].content)
         self.assertEqual(messages[0].images[0].content, png)
+
+    async def test_catalog_backup_continues_after_a_screenshot_from_a_tool(self):
+        import httpx
+        from openagent_core.models.automatic_fallback import automatic_fallback_config
+
+        # Both backups speak the same wire protocol and receive the same tool result.
+        for modalities in (["text"], ["text", "image"]):
+            with self.subTest(modalities=modalities):
+                rows = [{"name": "custom", "base_url": "https://example.invalid/v1",
+                         "models": [{"model": "fixture", "metadata": {"input_modalities": modalities}}]}]
+                model, = automatic_fallback_config(rows, None).on_error
+                receipt = {"content": [{"type": "text", "text": "Frame captured."},
+                                       {"type": "image", "mimeType": "image/png", "data": "AQID"}]}
+                calls = []
+                async def capture():
+                    calls.append(1)
+                    return await _model_visible_result(receipt)
+
+                requests = []
+                def provider(request):
+                    body = json.loads(request.content)
+                    requests.append(body)
+                    if len(requests) == 1:
+                        delta = {"tool_calls": [{"index": 0, "id": "call_frame", "type": "function",
+                                 "function": {"name": "capture", "arguments": "{}"}}]}
+                        finish = "tool_calls"
+                    else:
+                        followup = body["messages"][-1]
+                        if "image" in modalities:
+                            self.assertEqual(followup["content"][-1]["type"], "image_url")
+                        else:
+                            self.assertIn("1 image", followup["content"])
+                            self.assertNotIn("data:image", json.dumps(body))
+                        self.assertIn("Frame captured.", body["messages"][-2]["content"])
+                        delta, finish = {"content": "Completed."}, "stop"
+                    chunk = {"id": "fixture", "object": "chat.completion.chunk", "created": 1,
+                             "model": "fixture", "choices": [{"index": 0, "delta": delta,
+                                                               "finish_reason": finish}]}
+                    return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                                          text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n")
+
+                async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+                    model.http_client = http
+                    messages = [Message(role="user", content="Capture a frame.")]
+                    events = [event async for event in model.aresponse_stream(
+                        messages, tools=[Function(name="capture", entrypoint=capture)])]
+                self.assertEqual(messages[-1].content, "Completed.")
+                self.assertEqual(len(requests), 2)
+                self.assertEqual(calls, [1])
+                self.assertTrue(any(event.images for event in events))
