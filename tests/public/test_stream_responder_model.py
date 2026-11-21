@@ -48,7 +48,7 @@ async def test_fallback_responder_reaches_the_stream_and_channel_collector(tmp_p
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
     db = MemoryDB(str(tmp_path / "agent.sqlite")); await db.connect()
-    agent = session = None
+    agent = channel_stream = None
     try:
         for name in ("primary", "backup"):
             pid = await db.upsert_provider(name=name, framework="api-based", api_key=name,
@@ -57,14 +57,14 @@ async def test_fallback_responder_reaches_the_stream_and_channel_collector(tmp_p
         dispatcher = ModelDispatcher(await db.materialise_providers_config(enabled_only=False))
         dispatcher.set_db(db)
         agent = Agent(name="fixture", model=dispatcher, memory=None, system_prompt="Answer the question.")
-        session = StreamSession(agent, client_id="channel", session_id="conversation", coalesce_window_ms=0)
+        channel_stream = StreamSession(agent, client_id="channel", session_id="conversation", coalesce_window_ms=0)
         async def no_audio(_db): return None
-        await session.start(stt_factory=no_audio, tts_factory=no_audio)
-        await session.push_in(TextFinal(session_id="conversation", seq=1, ts_ms=now_ms(), text="Hello"))
+        await channel_stream.start(stt_factory=no_audio, tts_factory=no_audio)
+        await channel_stream.push_in(TextFinal(session_id="conversation", seq=1, ts_ms=now_ms(), text="Hello"))
         collector = StreamCollector()
         async with asyncio.timeout(20):
             while True:
-                event = await session.outbound.get()
+                event = await channel_stream.outbound.get()
                 if fold_outbound_event(collector, event):
                     break
         reply = collector.to_legacy_reply()
@@ -74,7 +74,7 @@ async def test_fallback_responder_reaches_the_stream_and_channel_collector(tmp_p
         assert requests[:2] == ["Bearer primary", "Bearer backup"]
         assert requests.count("Bearer backup") == 1
     finally:
-        if session is not None: await session.close()
+        if channel_stream is not None: await channel_stream.close()
         if agent is not None: await agent.shutdown()
         await db.close()
         server.shutdown(); server.server_close(); thread.join(timeout=2)
