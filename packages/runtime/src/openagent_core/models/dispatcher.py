@@ -2272,25 +2272,18 @@ class ModelDispatcher(BaseModel):
         """Return the runtime_id of the model that actually handled the
         most recent turn for ``session_id``.
 
-        Resolution order:
-        1. Last delegation target recorded by any TeamRouterProvider for
-           this session — i.e. the specialist the leader routed to.
-        2. Last entry pick (the session's leader) — for turns the leader
-           answered directly without delegating.
-
-        Without step 1 the chat UI badge stays pinned to the leader
-        (e.g. ``deepseek-v4-flash``) even when a heavyweight specialist
-        actually wrote the response, masking the team-as-router from
-        the user.
+        Ask only the provider that handled this session. Its resolution
+        includes delegation, account rotation and backup models. Scanning
+        every cached provider can reuse an older delegation, and returning
+        the raw delegation target loses recovery to a different model.
+        Before a provider reports a result, retain the last entry pick.
         """
-        if session_id:
-            for tp in self._team_providers.values():
-                fn = getattr(tp, "last_delegation_for_session", None)
-                if callable(fn):
-                    delegated = fn(session_id)
-                    if delegated:
-                        return delegated
         key = session_id or "__default__"
+        provider = self._provider_for_session(key)
+        if provider is not None:
+            actual = provider.effective_model_id(session_id)
+            if actual:
+                return actual
         return self._last_pick_by_session.get(key)
 
     # ── dispatch plumbing ───────────────────────────────────────────

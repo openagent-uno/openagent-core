@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta150: streaming responder identity](releases/v1.1.0-beta.150.md).
+
 - [Beta149: SQLite commits and conversation history](releases/v1.1.0-beta.149.md),
   [journal/state concurrency](sqlite-commit-concurrency.md) and
   [fallback history](fallback-conversation-history.md).

@@ -62,6 +62,13 @@ recovery policy described below.
 The account pool is tried first; the backup models only when every account of
 the failing provider is cooling down or retired.
 
+Streaming terminal metadata names the model that answered, including account
+rotation and backup recovery. The dispatcher asks the provider that handled
+that session; it does not reuse another cached provider's older delegation or
+report the initial delegation before recovery. Channel collectors inherit the
+same model identity as other stream clients. This does not change the session's
+selected model, provider configuration or budgets.
+
 A streaming backup that sends no provider output within
 `OPENAGENT_FALLBACK_FIRST_OUTPUT_TIMEOUT_S` seconds (default 120) counts as
 failed: its stream is closed and the next backup is tried. When none answers,

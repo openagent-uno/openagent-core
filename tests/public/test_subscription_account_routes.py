@@ -167,7 +167,7 @@ async def test_real_sdk_uses_each_candidates_own_model_settings_and_preserves_to
 @pytest.mark.parametrize('stream', [False, True])
 async def test_router_records_actual_account_once_and_preserves_badge(stream):
     from openagent_core.models.base import BaseModel, ModelResponse as Result
-    from openagent_core.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.dispatcher import ModelDispatcher, TeamRouterProvider
     from openagent_core.models import stream_usage
     a, b = Script(ModelProviderError(message='quota', status_code=429)), Script()
     a._openagent_account_routes = policy(a, b)
@@ -191,6 +191,28 @@ async def test_router_records_actual_account_once_and_preserves_badge(stream):
         cache_read_tokens=40, session_id='one', runtime_id='second:fixture')
     assert router.effective_model_id('one') == 'second:fixture'
     assert router.effective_model_id('other') == 'first:fixture'
+    # The stream's terminal frame and channel footer read the dispatcher,
+    # which must retain the provider's actual-account resolution.
+    dispatcher = ModelDispatcher()
+    dispatcher._last_pick_by_session['one'] = 'first:fixture'
+    dispatcher._last_provider_by_session['one'] = router
+    assert dispatcher.effective_model_id('one') == 'second:fixture'
+
+
+def test_dispatcher_badge_uses_only_the_latest_provider_for_each_session():
+    from openagent_core.models.dispatcher import ModelDispatcher, TeamRouterProvider
+    old = TeamRouterProvider('old:leader')
+    old._last_delegation_by_session['one'] = 'old:specialist'
+    current = TeamRouterProvider('current:leader')
+    current._last_delegation_by_session['one'] = 'current:specialist'
+    current._account_models_by_session['one'] = {'current:specialist': 'backup:answer'}
+    dispatcher = ModelDispatcher()
+    dispatcher._team_providers = {'old:leader': old, 'current:leader': current}
+    dispatcher._last_pick_by_session = {'one': 'current:leader', 'other': 'old:leader'}
+    dispatcher._last_provider_by_session['one'] = current
+    assert dispatcher.effective_model_id('one') == 'backup:answer'
+    assert dispatcher.effective_model_id('other') == 'old:leader'
+    assert dispatcher.effective_model_id('unknown') is None
 
 
 def test_mixed_usage_charges_only_the_unattributed_remainder():
