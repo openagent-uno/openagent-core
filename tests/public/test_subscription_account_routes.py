@@ -215,6 +215,30 @@ def test_dispatcher_badge_uses_only_the_latest_provider_for_each_session():
     assert dispatcher.effective_model_id('unknown') is None
 
 
+def test_dispatcher_retains_entry_when_the_provider_is_evicted_or_unresolved():
+    from openagent_core.models.base import BaseModel
+    from openagent_core.models.dispatcher import ModelDispatcher
+    class Unresolved(BaseModel):
+        async def generate(self, *args, **kwargs):
+            raise AssertionError('Identity lookup must not invoke inference')
+    dispatcher = ModelDispatcher()
+    dispatcher._remember_pick('one', 'first:fixture')
+    assert dispatcher.effective_model_id('one') == 'first:fixture'
+    dispatcher._last_provider_by_session['one'] = Unresolved()
+    assert dispatcher.effective_model_id('one') == 'first:fixture'
+
+
+@pytest.mark.parametrize('session_id', [None, ''])
+def test_dispatcher_preserves_the_providers_default_session_normalization(session_id):
+    from openagent_core.models.dispatcher import ModelDispatcher, TeamRouterProvider
+    router = TeamRouterProvider('first:fixture')
+    router._account_models_by_session['default'] = {'first:fixture': 'second:fixture'}
+    dispatcher = ModelDispatcher()
+    dispatcher._remember_pick(session_id, 'first:fixture')
+    dispatcher._last_provider_by_session['__default__'] = router
+    assert dispatcher.effective_model_id(session_id) == 'second:fixture'
+
+
 def test_mixed_usage_charges_only_the_unattributed_remainder():
     sink = {'models': {'second:fixture': [100, 5, 40]}, 'selected': {}}
     assert A.charge_rows(sink, 'first:fixture', (120, 8, 41)) == [
