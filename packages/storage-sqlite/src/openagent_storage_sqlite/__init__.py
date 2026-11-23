@@ -23,7 +23,7 @@ from openagent_core.content_privacy import PrivacyConflict,PrivacyFence
 from openagent_core.configuration import sqlite_busy_timeout_ms, sqlite_busy_timeout_s
 
 from .search import enqueue_source, restore_runtime_search_intents
-from . import dream_activity
+from . import dream_activity, legacy_continuation
 from .ancestry import ensure_delegated_ancestry
 from .tool_invocation import read_tool_invocation as _read_saved_tool_invocation, read_tool_invocation_binding as _read_tool_binding
 
@@ -37,6 +37,7 @@ def _serialized(method):
         async with self._operation_lock:
             return await run_sync(method, self, *args, **kwargs)
     return invoke
+
 
 
 class SqliteRuntimeStore:
@@ -142,6 +143,7 @@ class SqliteRuntimeStore:
                              CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)
                       FROM sessions_v2 WHERE id=NEW.session_id;
                     END""")
+                legacy_continuation.initialize(db)
                 ensure_delegated_ancestry(db)
                 restore_runtime_search_intents(db, int(time.time()*1000))
         except BaseException:
@@ -213,15 +215,16 @@ class SqliteRuntimeStore:
         with self._transaction() as db:
             from openagent_core.workspace_administration import require_session_not_quarantined
             require_session_not_quarantined(db.execute('SELECT visibility FROM sessions_v2 WHERE id=?', (request.session_id,)).fetchone())
+            historical = legacy_continuation.admit(db,context)
             rows=db.execute('SELECT * FROM session_runs WHERE id=? OR (session_id=? AND idempotency_key=?)',
                             (request.run_id,request.session_id,request.idempotency_key)).fetchall()
             if rows:
                 if len(rows)!=1 or rows[0]['id']!=request.run_id or self._record(rows[0]).request_digest!=digest:
                     raise IdempotencyConflict('Idempotency key or run ID already belongs to a different request or author')
                 sess=db.execute('SELECT agent_id FROM sessions_v2 WHERE id=?',(request.session_id,)).fetchone()
-                if sess and sess[0] is not None and sess[0]!=context.agent_id:
+                if sess and sess[0] is not None and sess[0]!=context.agent_id and not historical:
                     raise PermissionError('Session belongs to another agent')
-                if sess and sess[0] is None:
+                if sess and sess[0] is None and not historical:
                     db.execute("UPDATE sessions_v2 SET agent_id=? WHERE id=? AND agent_id IS NULL",(context.agent_id,request.session_id))
                 return self._record(rows[0]),False
             reservation=db.execute("SELECT tenant_id,session_id FROM domain_events WHERE run_id=? AND event_type='run.cancel_reserved' ORDER BY sequence LIMIT 1",(request.run_id,)).fetchone()
@@ -231,7 +234,7 @@ class SqliteRuntimeStore:
             existing=db.execute('SELECT tenant_id,parent_session_id,agent_id FROM sessions_v2 WHERE id=?',(request.session_id,)).fetchone()
             if existing and existing[0]!=context.tenant_id:
                 raise PermissionError('Session belongs to another tenant')
-            if existing and existing[2] is not None and existing[2]!=context.agent_id:
+            if existing and existing[2] is not None and existing[2]!=context.agent_id and not historical:
                 raise PermissionError('Session belongs to another agent')
             if not existing:
                 db.execute('''INSERT INTO sessions_v2(id,tenant_id,owner_principal_id,visibility,session_type,kind,
@@ -247,7 +250,7 @@ class SqliteRuntimeStore:
                             principal_id,permission,acl_version,granted_by_principal_id,granted_at_ms)
                             VALUES(?,?,?,?,?,?,?,?,?)''',(context.tenant_id,'session',request.session_id,kind,
                             recipient.key,permission,1,context.authority.key,now))
-            else:
+            elif not historical:
                 # This acceptance is the explicit transition to the public run
                 # writer. Claim agent_id on first runtime acceptance (NULL →
                 # context.agent_id); preserve existing non-NULL agent_id
@@ -951,11 +954,16 @@ class SqliteRuntimeStore:
         if not current or current["status"] != "running":
             raise PermissionError("Provider history requires the current admitted turn")
         members = [p.key for p in {context.initiator, context.authority, *context.audience}]
-        # Historic/imported rows without a canonical admitted audience cannot
-        # participate in the native model history window via this adapter.
-        rows = self.connection.execute("""
-            WITH recent AS (
-                SELECT r.id,r.ordinal,m.sequence,m.role,m.text FROM session_runs r
+        legacy_rows = ""
+        arguments = [context.tenant_id, context.agent_id, context.session_id, current["ordinal"],canonical_json(members)]
+        if legacy_continuation.bound(self.connection,context):
+            legacy_rows = legacy_continuation.HISTORY_ROWS
+            arguments.extend([context.session_id,context.tenant_id,current["ordinal"]])
+        rows = self.connection.execute(f"""
+            WITH eligible AS (
+                SELECT r.id,r.ordinal,m.sequence,m.role,m.text,NULL AS body_digest,
+                       NULL AS author_kind,NULL AS author_principal_id,NULL AS author_device_id,
+                       NULL AS agent_id,NULL AS parent_run_id,NULL AS metadata_json FROM session_runs r
                 JOIN session_messages m ON m.run_id=r.id
                 WHERE r.tenant_id=? AND r.agent_id=? AND r.session_id=? AND r.ordinal<?
                   AND m.role IN ('user','assistant') AND m.status='complete' AND m.visibility='user_visible'
@@ -966,12 +974,14 @@ class SqliteRuntimeStore:
                      WHERE p.value <> json_extract(r.metadata_json,'$.execution_context.authority')
                      AND p.value <> json_extract(r.metadata_json,'$.execution_context.initiator')
                      AND p.value NOT IN (SELECT value FROM json_each(r.metadata_json,'$.execution_context.audience')))
-                ORDER BY r.ordinal DESC,m.sequence DESC LIMIT ?
+                {legacy_rows}
+            ), recent AS (
+                SELECT * FROM eligible ORDER BY ordinal DESC,sequence DESC LIMIT ?
             ), bounded AS (
                 SELECT *,sum(length(CAST(text AS blob))) OVER (ORDER BY ordinal DESC,sequence DESC) AS n FROM recent
-            ) SELECT id,role,text FROM bounded WHERE n<=? ORDER BY ordinal,sequence
-            """, (context.tenant_id, context.agent_id, context.session_id, current["ordinal"],
-                  canonical_json(members), limit, max_bytes)).fetchall()
+            ) SELECT * FROM bounded WHERE n<=? ORDER BY ordinal,sequence
+            """, (*arguments,limit,max_bytes)).fetchall()
+        legacy_continuation.verify_bodies(rows)
         return tuple(ProviderHistoryMessage(r["role"],r["text"],r["id"]) for r in rows)
 
     @_serialized

@@ -128,7 +128,8 @@ def _inspect_verified_source(root, database, vault, expected_tenant, require_git
             "SELECT COUNT(*) FROM session_runs WHERE finished_at_ms IS NULL "
             "AND json_extract(metadata_json,'$.runtime_contract')=1"
         ).fetchone()[0]
-        for table in ("oa_document_run_sources", "oa_vault_read_receipts"):
+        for table in ("oa_document_run_sources", "oa_vault_read_receipts",
+                      "oa_private_legacy_sessions", "oa_private_legacy_messages"):
             if table in tables:
                 counts[table] = db.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
         if counts.get("oa_document_run_sources"):
@@ -141,6 +142,8 @@ def _inspect_verified_source(root, database, vault, expected_tenant, require_git
             if any(db.execute(f'SELECT 1 FROM "{table}" LIMIT 1').fetchone() is not None
                    for table in tables & document_tables):
                 issues.append("database_vault_requires_separate_migration")
+        if counts.get("oa_private_legacy_sessions") or counts.get("oa_private_legacy_messages"):
+            issues.append("runtime_private_continuation_projection_required")
         if counts["unfinished_runtime_runs"]:
             issues.append("unfinished_runtime_runs")
         if db.execute("PRAGMA foreign_key_check").fetchone() is not None:

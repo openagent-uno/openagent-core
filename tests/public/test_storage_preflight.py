@@ -187,6 +187,7 @@ class MigrationInventory(unittest.IsolatedAsyncioTestCase):
         db = self.store.connection
         db.execute("CREATE TABLE IF NOT EXISTS oa_document_run_sources(run_id,session_id,source_id,PRIMARY KEY(run_id,source_id))")
         db.execute("INSERT INTO oa_document_run_sources VALUES ('run-secret','session-secret','opaque-source')")
+        db.execute("INSERT INTO oa_private_legacy_sessions VALUES ('hidden','tenant','old','new','owner',1,'digest','instance','hash','lineage')")
         self.git("init", "-b", "main")
         (self.vault / "readme.md").write_text("fixture")
         self.git("add", ".")
@@ -195,6 +196,8 @@ class MigrationInventory(unittest.IsolatedAsyncioTestCase):
         evidence = self.inspect()
         self.assertEqual(evidence["counts"]["oa_document_run_sources"], 1)
         self.assertIn("runtime_document_lineage_projection_required", evidence["issues"])
+        self.assertEqual(evidence["counts"]["oa_private_legacy_sessions"], 1)
+        self.assertIn("runtime_private_continuation_projection_required", evidence["issues"])
         self.assertNotIn("opaque-source", str(evidence))
 
     async def test_unversioned_vault_and_checked_input(self):
