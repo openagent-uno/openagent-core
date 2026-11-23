@@ -1,4 +1,4 @@
-"""Bind archived single-turn engine runs to independently admitted canonical history."""
+"""Bind archived engine runs to independently admitted canonical history."""
 
 import hashlib
 import json
@@ -60,7 +60,62 @@ def _matches(engine, row, canonical):
     )
 
 
-def associations(db, agent, tenants):
+def _record_bytes(record):
+    try:
+        return json.dumps(
+            record,
+            ensure_ascii=True,
+            sort_keys=True,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("ascii")
+    except (TypeError, ValueError) as exc:
+        raise StageMismatch("Invalid canonical engine envelope") from exc
+
+
+def _matches_admitted_envelope(engine, row, canonical, agent):
+    if (
+        canonical is None
+        or not {"raw_envelope_json", "raw_envelope_schema"} <= set(canonical.keys())
+        or canonical["raw_envelope_schema"] != 1
+        or not canonical["raw_envelope_json"]
+    ):
+        return False
+    envelope = _parse(canonical["raw_envelope_json"])
+    if not isinstance(envelope, dict) or _record_bytes(envelope) != _record_bytes(
+        engine
+    ):
+        return False
+    metadata = _parse(canonical["metadata_json"])
+    owner = _parse(canonical["owner_principal_id"])
+    context = metadata.get("execution_context") if isinstance(metadata, dict) else None
+    statuses = {"COMPLETED": "success", "ERROR": "failed", "CANCELLED": "cancelled"}
+    return (
+        isinstance(context, dict)
+        and isinstance(owner, dict)
+        and type(metadata.get("runtime_contract")) is int
+        and metadata["runtime_contract"] == 1
+        and owner.get("tenant_id") == canonical["tenant_id"]
+        and context.get("authority")
+        == context.get("author")
+        == context.get("initiator")
+        == owner
+        and context.get("audience") == [owner]
+        and context.get("agent_id") == agent
+        and context.get("session_id")
+        == canonical["session_id"]
+        == row["session_id"]
+        == engine.get("session_id")
+        and canonical["id"] == engine.get("run_id")
+        and isinstance(engine.get("status"), str)
+        and canonical["status"] == statuses.get(engine["status"])
+        and isinstance(engine.get("agent_id"), str)
+        and bool(engine["agent_id"])
+        and engine.get("user_id") == row["user_id"]
+    )
+
+
+def associations(db, agent, tenants, *, canonical_envelopes=False):
     """The sealed raw stage owns all engine payloads. Candidate rows contain references and digests only."""
     tenants = (tenants,) if isinstance(tenants, str) else tenants
     required = {
@@ -106,6 +161,19 @@ def associations(db, agent, tenants):
             separators=(",", ":"),
         )
         archived = _digest((raw + "\n").encode("ascii"))
+        if canonical_envelopes:
+            if not any(
+                isinstance(record, dict) and record.get("agent_id") == row["agent_id"]
+                for record in legacy
+            ):
+                raise StageMismatch("Unbound archived engine identity")
+            if "agent_data" in row.keys() and row["agent_data"] is not None:
+                identity = _parse(row["agent_data"])
+                if (
+                    not isinstance(identity, dict)
+                    or identity.get("agent_id") != row["agent_id"]
+                ):
+                    raise StageMismatch("Conflicting archived engine identity")
         seen = set()
         for ordinal, engine in enumerate(legacy):
             run_id = engine.get("run_id") if isinstance(engine, dict) else None
@@ -119,23 +187,20 @@ def associations(db, agent, tenants):
                 AND s.status='active' AND s.deleted_at_ms IS NULL""",
                 (run_id, row["session_id"], agent),
             ).fetchone()
+            matches = (
+                _matches_admitted_envelope(engine, row, canonical, agent)
+                if canonical_envelopes
+                else _matches(engine, row, canonical)
+            )
             if (
-                not _matches(engine, row, canonical)
+                not matches
                 or canonical["tenant_id"] not in tenants
                 or canonical["finished_at_ms"] is None
             ):
                 raise StageMismatch(
                     "Archived engine run differs from its canonical session, input or output"
                 )
-            engine_hash = _digest(
-                json.dumps(
-                    engine,
-                    ensure_ascii=True,
-                    sort_keys=True,
-                    allow_nan=False,
-                    separators=(",", ":"),
-                ).encode("ascii")
-            )
+            engine_hash = _digest(_record_bytes(engine))
             yield (
                 agent,
                 canonical["tenant_id"],

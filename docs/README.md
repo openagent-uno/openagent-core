@@ -2,6 +2,7 @@
 
 ## Architecture and use
 
+- [Beta158 exact engine envelope attestation](releases/v1.1.0-beta.158.md).
 - [Beta157 archived engine history and canonical run associations](releases/v1.1.0-beta.157.md).
 
 - [Beta156 scoped HTTP MCP grants](releases/v1.1.0-beta.156.md).

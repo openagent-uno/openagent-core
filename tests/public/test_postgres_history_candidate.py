@@ -64,12 +64,12 @@ class RuntimeCandidate(unittest.IsolatedAsyncioTestCase):
                                     dsn=self.dsn, schema=self.stage_schema, require_git_history=history_only,
                                     history_only=history_only)
 
-    def build(self, verify=False, *, history_only=False, tenants=None, attest_engine_history=False):
+    def build(self, verify=False, *, history_only=False, tenants=None, attest_engine_history=False, attest_canonical_engine_envelopes=False):
         return self.candidate.build_runtime_candidate(self.snapshot, "state.sqlite", "notes", expected_tenant=None if tenants else "tenant",
                     expected_tenants=tenants,
                     agent_id="agent", dsn=self.dsn, stage_schema=self.stage_schema, candidate_schema=self.schema,
                     verify_only=verify, require_git_history=history_only, history_only=history_only,
-                    attest_engine_history=attest_engine_history)
+                    attest_engine_history=attest_engine_history, attest_canonical_engine_envelopes=attest_canonical_engine_envelopes)
 
     def create_archived_engine_session(self):
         import json
@@ -127,6 +127,74 @@ class RuntimeCandidate(unittest.IsolatedAsyncioTestCase):
         db.execute("UPDATE sessions SET runs=?",(json.dumps([engine]),))
         with self.assertRaises(self.stage.StageMismatch):
             list(associations(db,"agent",("another-tenant",)))
+
+    async def test_exact_canonical_envelopes_cover_tool_and_failed_turns_without_publishing_raw_payloads(self):
+        import json
+        from psycopg import sql
+        db = self.store.connection
+        first = self.create_archived_engine_session()
+        first["messages"][2:2] = [
+            {"role":"assistant","tool_calls":[{"id":"call","name":"lookup","arguments":{"n":1}}]},
+            {"role":"tool","tool_call_id":"call","content":"private tool result"},
+        ]
+        first["tools"] = [{"id":"call","result":"private historical detailed result"}]
+        second = dict(session_id="thread", run_id="error", agent_id="another-instance", user_id="internal-alias",
+                      status="ERROR", content="internal error", messages=[])
+        await self.store.accept(RunRequest("error","thread","other-key","a second question"),self.ctx)
+        await self.store.transition("error","running")
+        await self.store.transition("error","failed",output={"error":"public error"})
+        db.execute("UPDATE sessions SET runs=?", (json.dumps([first,second]),))
+        for engine in (first,second):
+            db.execute("UPDATE session_runs SET raw_envelope_json=?,raw_envelope_schema=1 WHERE id=?",
+                       (json.dumps(engine,sort_keys=True),engine["run_id"]))
+        await self.seal()
+        with self.assertRaises(self.stage.StageMismatch):
+            self.build(attest_engine_history=True)
+        report=self.build(attest_canonical_engine_envelopes=True)
+        self.assertEqual(report["verified_rows"]["migration_engine_runs"],2)
+        self.assertEqual(self.build(verify=True,attest_canonical_engine_envelopes=True),report)
+        with self.assertRaises(self.stage.StageMismatch):
+            self.build(verify=True,attest_engine_history=True)
+        linked=self.pg.execute(sql.SQL("SELECT tenant,session_id,run_id FROM {} ORDER BY run_id")
+                .format(sql.Identifier(self.schema,"migration_engine_runs"))).fetchall()
+        self.assertEqual(linked,[("tenant","thread","error"),("tenant","thread","run")])
+        payloads=self.pg.execute(sql.SQL("SELECT to_jsonb(r)::text FROM {} r").format(sql.Identifier(self.schema,"runs"))).fetchall()
+        self.assertNotIn("private historical detailed result",str(payloads))
+
+    async def test_full_envelope_rejects_any_conflict_even_when_public_text_agrees(self):
+        import json
+        from openagent_storage_sqlite.engine_history_archive import associations
+        db=self.store.connection
+        engine=self.create_archived_engine_session()
+        engine["tools"]=[{"name":"lookup","arguments":{"n":1},"result":"secret value"}]
+        db.execute("UPDATE sessions SET runs=?",(json.dumps([engine]),))
+        raw=json.dumps(engine)
+        def associations_now():
+            return list(associations(db,"agent",("tenant",),canonical_envelopes=True))
+        for changed in (
+            raw.replace("secret value","different"),raw.replace('"n": 1','"n": true'),
+            raw.replace("private policy","other"),raw.replace('"run_id": "run"','"run_id": "other"'),
+            raw.replace('"session_id": "thread"','"session_id": "other"'),raw.replace("internal-alias","other user"),
+            raw.replace("COMPLETED","ERROR"),raw.replace('"tools":','"tools":[], "tools":'),"{}",
+        ):
+            with self.subTest(case=changed[:20]):
+                db.execute("UPDATE session_runs SET raw_envelope_json=?",(changed,))
+                with self.assertRaises(self.stage.StageMismatch):
+                    associations_now()
+        db.execute("UPDATE session_runs SET raw_envelope_json=?,raw_envelope_schema=2",(raw,))
+        with self.assertRaises(self.stage.StageMismatch):associations_now()
+        db.execute("UPDATE session_runs SET raw_envelope_schema=1")
+        self.assertEqual(len(associations_now()),1)
+        saved=db.execute("SELECT metadata_json FROM session_runs").fetchone()[0]
+        for field in ("authority","author","initiator","audience","agent_id","session_id"):
+            with self.subTest(context=field):
+                altered=json.loads(saved)
+                altered["execution_context"][field]={"tenant_id":"outsider"} if field in ("authority","author","initiator") else "outsider"
+                db.execute("UPDATE session_runs SET metadata_json=?",(json.dumps(altered),))
+                with self.assertRaises(self.stage.StageMismatch):associations_now()
+        db.execute("UPDATE session_runs SET metadata_json=?",(saved,))
+        db.execute("UPDATE sessions SET agent_id='unrelated'")
+        with self.assertRaises(self.stage.StageMismatch):associations_now()
 
     async def test_history_only_stage_and_native_candidate_retry_and_reader(self):
         from openagent_storage_postgres import PostgresRuntimeStore

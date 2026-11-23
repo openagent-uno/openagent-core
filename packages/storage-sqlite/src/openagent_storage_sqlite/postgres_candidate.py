@@ -330,12 +330,13 @@ def _schema(pg, name, receipt, verify_only):
 
 def build_runtime_candidate(snapshot, database, vault, *, expected_tenant=None, expected_tenants=None, agent_id, dsn, stage_schema,
                             candidate_schema, verify_only=False, require_git_history=True, history_only=False,
-                            artifact_archive_schema=None, attest_engine_history=False):
+                            artifact_archive_schema=None, attest_engine_history=False, attest_canonical_engine_envelopes=False):
     """Build or independently re-read an atomic candidate, without runtime admission or cutover."""
     if not isinstance(agent_id, str) or not agent_id.strip():
         raise ValueError("An exact agent ID is required")
-    if type(attest_engine_history) is not bool:
+    if type(attest_engine_history) is not bool or type(attest_canonical_engine_envelopes) is not bool:
         raise ValueError("Select engine history attestation explicitly")
+    attest_engine_history = attest_engine_history or attest_canonical_engine_envelopes
     selected = _tenant_selection(expected_tenant, expected_tenants)
     staged = transfer_history(snapshot, database, vault, expected_tenant=expected_tenant, expected_tenants=expected_tenants, dsn=dsn,
                               schema=stage_schema, verify_only=True, require_git_history=require_git_history,
@@ -347,7 +348,7 @@ def build_runtime_candidate(snapshot, database, vault, *, expected_tenant=None, 
     if artifact_archive_schema is not None:
         receipt_data.extend(["artifact_archive", artifact_archive_schema])
     if attest_engine_history:
-        receipt_data.append("archived_engine_bindings_v1")
+        receipt_data.append("canonical_engine_envelopes_v1" if attest_canonical_engine_envelopes else "archived_engine_bindings_v1")
     receipt = canonical_json(receipt_data)
     source = Path(snapshot).resolve() / _relative(database)
     with closing(sqlite3.connect(source.as_uri() + "?mode=ro&immutable=1", uri=True)) as db, psycopg.connect(dsn) as pg:
@@ -377,7 +378,7 @@ def build_runtime_candidate(snapshot, database, vault, *, expected_tenant=None, 
                 pg.execute(TABLE)
             else:
                 pg.execute("LOCK TABLE migration_engine_runs IN SHARE MODE")
-            rows = partial(associations, db, agent_id, selected)
+            rows = partial(associations, db, agent_id, selected, canonical_envelopes=attest_canonical_engine_envelopes)
             if fresh:
                 _compare(pg, "migration_engine_runs", rows(), True)
             counts["migration_engine_runs"] = _compare(pg, "migration_engine_runs", rows(), False)
@@ -405,6 +406,7 @@ def main(argv=None):
         parser.add_argument("--" + key, required=True)
     parser.add_argument("--artifact-archive-schema")
     parser.add_argument("--attest-engine-history",action="store_true")
+    parser.add_argument("--attest-canonical-engine-envelopes",action="store_true")
     parser.add_argument("--verify-only", action="store_true")
     _vault_options(parser)
     args = vars(parser.parse_args(argv))
