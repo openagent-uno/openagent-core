@@ -24,6 +24,31 @@ Older frames may omit the field. Neither case authorizes a consumer to extract
 the last line, classify paragraphs, strip progress by regex, or substitute the
 aggregate `text` as an attested final answer.
 
+## Reading the final answer directly
+
+`GET /api/v1/runs/{id}/final-answer` requires the same read and replay grants
+as the event history. The response contains the requested `run_id`, the
+producing `segment_run_id`, and the stored `final_answer` envelope. The field
+is null until that run succeeds and whenever its latest done frame lacks an
+attestation. Plain-text executors can continue returning their ordinary output
+through the run status endpoint. A durable origin uses its current segment;
+attachment references resolve against that segment under the host's existing
+artifact authorization. These identifiers confer no additional grants.
+
+The Python and TypeScript clients expose `final_answer` and `finalAnswer`.
+For full transcripts, `events_page` and `eventsPage` return `events`, `cursor`
+and `has_more`. The HTTP events route accepts the exclusive `after` cursor
+and an optional `limit` from 1 to 1000 (default 1000). An empty page returns
+the caller's cursor. Continue with the returned cursor while `has_more` is
+true. The original SDK `events` methods still return one page's events.
+
+SQLite uses indexed cursor ranges with one lookahead row. A custom runtime
+store may implement `event_window(run_id, after, limit)` and
+`durable_operation_event_window(origin_run_id, after, limit)` to bound its
+reads. These store limits already include the lookahead. Its optional
+`final_answer_for_run(run_id)` returns the latest done frame's attested
+envelope or null. Existing adapters retain their historical replay behavior.
+
 The boundary comes from the completed run's terminal structured assistant
 message, with no outstanding tool calls and `from_history` false. Agent and Team
 completion events carry it separately from their accumulated `content`. Missing

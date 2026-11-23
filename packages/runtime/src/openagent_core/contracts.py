@@ -255,6 +255,38 @@ class RunEvent:
     payload: Mapping[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class RunEventPage:
+    events: tuple[RunEvent, ...]
+    cursor: int
+    has_more: bool
+
+    @staticmethod
+    def validate(after: int, limit: int) -> None:
+        if type(after) is not int or not 0 <= after <= 2**63 - 1:
+            raise ValueError("Invalid event cursor")
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError("Event page limit must be between 1 and 1000")
+
+    @classmethod
+    def from_window(cls, rows: tuple[RunEvent, ...], after: int, limit: int) -> RunEventPage:
+        page = rows[:limit]
+        return cls(page, page[-1].cursor if page else after, len(rows) > limit)
+
+
+@dataclass(frozen=True, slots=True)
+class RunFinalAnswer:
+    run_id: str
+    segment_run_id: str
+    final_answer: Mapping[str, Any] | None
+
+
+class RunReplayReader(Protocol):
+    """Optional indexed reads on a runtime store. Window limits include lookahead."""
+    async def event_window(self, run_id: str, after: int, limit: int) -> tuple[RunEvent, ...]: ...
+    async def final_answer_for_run(self, run_id: str) -> Mapping[str, Any] | None: ...
+
+
 class RuntimeStore(SessionStore, Protocol):
     async def start(self) -> None: ...
     async def close(self) -> None: ...

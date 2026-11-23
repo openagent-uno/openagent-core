@@ -2,6 +2,7 @@
 from __future__ import annotations
 from contextlib import contextmanager, asynccontextmanager
 from contextvars import ContextVar
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -16,7 +17,7 @@ from .modules import (CapabilityContribution, ModuleCatalog,
     ModuleContext, ModuleContribution, ModuleReconfigurationError, ModuleReferenceConflict,
     ModuleStatus, ReconfigureReceipt, RuntimeProfile, ServiceRegistry)
 from .contracts import (AgentExecutor, Authorizer, DelegationService, ExecutionContext,
-    ResourceRef, RunEvent, RunRecord, RunRequest, RuntimeStore, SessionStore,
+    ResourceRef, RunEvent, RunEventPage, RunFinalAnswer, RunRecord, RunRequest, RuntimeStore, SessionStore,
     ModelCatalog, PrincipalRef, require_authorized)
 
 _UNSET = object()
@@ -821,10 +822,42 @@ class Runtime:
         await self._authorize(context,'run.read',record.session_id,record.tenant_id)
         return record
 
-    async def events(self, run_id: str, after: int, context: ExecutionContext) -> tuple[RunEvent,...]:
+    async def authorize_replay(self, run_id: str, context: ExecutionContext) -> RunRecord:
         record=await self.get_run(run_id,context)
         await self._authorize(context,'run.replay',record.session_id,record.tenant_id)
+        return record
+
+    async def events(self, run_id: str, after: int, context: ExecutionContext) -> tuple[RunEvent,...]:
+        await self.authorize_replay(run_id, context)
         return await self.services.store.events(run_id,after)
+
+    async def events_page(self, run_id: str, after: int, context: ExecutionContext, *, limit: int = 1000) -> RunEventPage:
+        RunEventPage.validate(after, limit)
+        await self.authorize_replay(run_id, context)
+        store = self.services.store
+        window = getattr(store, "event_window", None)
+        rows = await window(run_id, after, limit + 1) if window else await store.events(run_id, after)
+        return RunEventPage.from_window(rows, after, limit)
+
+    async def final_answer(self, run_id: str, context: ExecutionContext) -> RunFinalAnswer:
+        record = await self.authorize_replay(run_id, context)
+        answer = None
+        if record.status == "success":
+            store = self.services.store
+            read = getattr(store, "final_answer_for_run", None)
+            if read:
+                answer = await read(run_id)
+            else:
+                for event in reversed(await store.events(run_id)):
+                    if event.kind != "run.stream":
+                        continue
+                    if event.payload.get("privacy_redacted"):
+                        break
+                    if event.payload.get("kind") == "done":
+                        answer = event.payload.get("final_answer")
+                        break
+            await self._authorize(context, 'run.replay', record.session_id, record.tenant_id)
+        return RunFinalAnswer(run_id, run_id, dict(answer) if isinstance(answer, Mapping) else None)
 
     async def record_delivery(self, delivery, context: ExecutionContext, *, source_run_id: str | None = None):
         """File a host-verified provider receipt in the recipient's session.

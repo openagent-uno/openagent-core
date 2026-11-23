@@ -97,6 +97,10 @@ segment returns that exact run and its verified `origin_run_id`. Domain asset
 adapters can check this provenance when an artifact belongs to a later segment.
 They must verify that the origin belongs to the authorized project or resource.
 
+The HTTP gateway pages the combined event stream across segments. Its
+[final-answer endpoint](final-answer.md#reading-the-final-answer-directly)
+returns the attestation from the successful producing segment when present.
+
 Logical events retain the store's monotonic global cursor. They identify the
 physical segment in `payload.segment_run_id`. Intermediate timeout and
 interruption events use `run.operation.segment.*`, so they do not report the

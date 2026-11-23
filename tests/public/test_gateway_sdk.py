@@ -68,6 +68,70 @@ class GatewaySDK(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RunHTTPError) as error: await bad.submit(RunRequest('bad','session','bad','x'))
         self.assertEqual(error.exception.status,403);self.assertEqual(self.calls,[])
 
+    async def test_bounded_event_pages_and_authorized_final_answer(self):
+        await self.client.submit(RunRequest('run','session','key','hello'))
+        await self.client.wait('run',interval=.01)
+        store = self.runtime.services.store
+        after = (await self.client.events('run'))[-1].cursor
+        answer = {'text':'ready','parts':[{'kind':'attachment','attachment':{'artifact_id':'art-1'}}]}
+        with store._transaction() as db:
+            for n in range(2499):
+                store._event(db, 'run', 'run.progress', {'n':n})
+            store._event(db, 'run', 'run.stream', {'kind':'done','text':'other progress','final_answer':answer})
+
+        sizes = []
+        window = store.event_window
+        async def measured(*args):
+            rows = await window(*args)
+            sizes.append(len(rows))
+            return rows
+        store.event_window = measured
+        async def unbounded(*args):
+            self.fail('Indexed replay must not read the complete transcript')
+        store.events = unbounded
+        cursors = []
+        while True:
+            page = await self.client.events_page('run', after)
+            cursors.extend(e.cursor for e in page.events)
+            after = page.cursor
+            if not page.has_more:
+                break
+        self.assertEqual(sizes, [1001,1001,500])
+        self.assertEqual(len(set(cursors)), 2500)
+        empty = await self.client.events_page('run', after, limit=1)
+        self.assertEqual((empty.events,empty.cursor,empty.has_more), ((),after,False))
+        final = await self.client.final_answer('run')
+        self.assertEqual((final.segment_run_id,final.final_answer), ('run',answer))
+        await store.append_event('run','run.stream',{'privacy_redacted':True})
+        self.assertIsNone((await self.client.final_answer('run')).final_answer)
+        await store.append_event('run','run.stream',{'kind':'done','text':'unattested'})
+        self.assertIsNone((await self.client.final_answer('run')).final_answer)
+        self.allowed.clear()
+        for read in (self.client.events_page, self.client.final_answer):
+            with self.assertRaises(RunHTTPError) as denied:
+                await read('run')
+            self.assertEqual(denied.exception.status,403)
+
+    async def test_invalid_event_windows_rejected_at_the_gateway(self):
+        async with ClientSession(headers={'Authorization':'Bearer test-alice'}) as http:
+            for query in ('limit=0','limit=1001','limit=x','after=-1','after=9223372036854775808','drop=1'):
+                async with http.get(self.url + '/api/v1/runs/run/events?' + query) as response:
+                    self.assertEqual(response.status,400,query)
+
+    async def test_existing_store_without_optional_replay_readers(self):
+        store = self.runtime.services.store
+        store.event_window = None
+        store.final_answer_for_run = None
+        await self.client.submit(RunRequest('legacy','session','key','hello'))
+        await self.client.wait('legacy',interval=.01)
+        events = await store.events('legacy')
+        page = await self.client.events_page('legacy', limit=1)
+        self.assertEqual((page.events, page.has_more), (events[:1], True))
+        await store.append_event('legacy','run.stream',{'kind':'done','final_answer':{'text':'done'}})
+        self.assertEqual((await self.client.final_answer('legacy')).final_answer, {'text':'done'})
+        await store.append_event('legacy','run.stream',{'privacy_redacted':True})
+        self.assertIsNone((await self.client.final_answer('legacy')).final_answer)
+
     async def test_typescript_sdk_against_same_live_gateway(self):
         root=Path(__file__).resolve().parents[2]
         node=shutil.which('node')

@@ -4,7 +4,7 @@ Optional engine, provider, gateway and storage implementations are imported only
 when selected by the host. Importing this package performs no I/O.
 """
 from .contracts import (PrincipalRef, ExecutionContext, CapabilityLease, ResourceRef,
-    RunRequest, AcceptedRunRequest, RunRecord, RunEvent, Authorizer, IdentityDirectory, RuntimeStore,
+    RunRequest, AcceptedRunRequest, RunRecord, RunEvent, RunEventPage, RunFinalAnswer, RunReplayReader, Authorizer, IdentityDirectory, RuntimeStore,
     ModelCatalog, CredentialResolver, DelegationService, IdempotencyConflict, SessionRef, SessionStore)
 from .runtime import Runtime, RuntimeSettings, RuntimeServices
 from .deliveries import ConfirmedDelivery
@@ -23,7 +23,7 @@ from .modules import (MODULE_API_VERSION, MODULE_SURFACES, CapabilityContributio
 
 __version__ = '1.1.0b152'
 __all__ = ['Runtime','RuntimeSettings','RuntimeServices','PrincipalRef','ExecutionContext',
-    'CapabilityLease','ResourceRef','RunRequest','AcceptedRunRequest','RunRecord','RunEvent','Authorizer','ConfirmedDelivery',
+    'CapabilityLease','ResourceRef','RunRequest','AcceptedRunRequest','RunRecord','RunEvent','RunEventPage','RunFinalAnswer','RunReplayReader','Authorizer','ConfirmedDelivery',
     'IdentityDirectory','RuntimeStore','SessionRef','SessionStore','ModelCatalog','CredentialResolver','DelegationService',
     'CapabilityCatalog','CapabilitySource','ToolExecutor','ToolDefinition','ToolDescriptor',
     'FunctionSource','CapabilityUnavailable','IdempotencyConflict','EngineExtensions',

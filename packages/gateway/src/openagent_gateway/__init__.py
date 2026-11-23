@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 from aiohttp import web
-from openagent_core import RunRequest, IdempotencyConflict
+from openagent_core import RunEventPage, RunRequest, IdempotencyConflict
 from .compression import json_compression
 
 _REQUEST_FIELDS={'run_id','session_id','idempotency_key','input','deadline_seconds','model_ref','attachments','steer_run_id'}
@@ -66,14 +66,19 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
 
     async def events(request):
         run_id=_id(request.match_info['run_id'])
-        if set(request.query)-{'after'}: raise ValueError('Unknown event query')
+        if set(request.query)-{'after','limit'}: raise ValueError('Unknown event query')
         after=int(request.query.get('after','0'))
-        if after<0: raise ValueError('Invalid event cursor')
+        limit=int(request.query.get('limit','1000'))
+        RunEventPage.validate(after, limit)
         async with resolve_context(request,'run.replay',run_id,None) as context:
-            rows=await runs.events(run_id,after,context)
-            page=rows[:1000]
-            return web.json_response({'events':[asdict(row) for row in page],
-                'cursor':page[-1].cursor if page else after,'has_more':len(rows)>len(page)})
+            page=await runs.events_page(run_id,after,context,limit=limit)
+            return web.json_response(asdict(page))
+
+    async def final_answer(request):
+        run_id=_id(request.match_info['run_id'])
+        async with resolve_context(request,'run.replay',run_id,None) as context:
+            return web.json_response(asdict(await runs.final_answer(run_id,context)),
+                                     headers={'Cache-Control':'no-store'})
 
     async def cancel(request):
         run_id=_id(request.match_info['run_id'])
@@ -87,7 +92,8 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
 
     app=web.Application(middlewares=[json_compression,boundary],client_max_size=1<<20)
     app.add_routes([web.post(prefix,submit),web.get(prefix+'/{run_id}',read),
-        web.get(prefix+'/{run_id}/events',events),web.post(prefix+'/{run_id}/cancel',cancel),
+        web.get(prefix+'/{run_id}/events',events),web.get(prefix+'/{run_id}/final-answer',final_answer),
+        web.post(prefix+'/{run_id}/cancel',cancel),
         web.get(prefix+'/{run_id}/children',children)])
     if manage_lifecycle:
         async def lifecycle(app):

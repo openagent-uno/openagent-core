@@ -599,6 +599,34 @@ class DurableOperationsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((segment.run_id, segment.origin_run_id), (result.segment_run_id, 'run-a'))
         events = await client.events('run-a')
         self.assertTrue(any(event.kind == 'run.success' for event in events))
+        store = runtime.services.store
+        window = store.durable_operation_event_window
+        sizes = []
+        async def measured(*args):
+            rows = await window(*args)
+            sizes.append(len(rows))
+            return rows
+        store.durable_operation_event_window = measured
+        async def unbounded(*args):
+            self.fail('An origin request must not materialize individual or aggregate transcripts')
+        store.events = store.durable_operation_events = unbounded
+        seen, cursor = [], 0
+        while True:
+            page = await client.events_page('run-a', cursor, limit=3)
+            seen.extend(page.events)
+            cursor = page.cursor
+            if not page.has_more:
+                break
+        self.assertEqual(tuple(seen), events)
+        self.assertLessEqual(max(sizes), 4)
+        self.assertEqual({row.payload['segment_run_id'] for row in seen}, {'run-a',segment.run_id})
+        # An earlier segment's attestation must never appear on the logical result.
+        await store.append_event('run-a', 'run.stream', {'kind':'done','final_answer':{'text':'old'}})
+        self.assertIsNone((await client.final_answer('run-a')).final_answer)
+        answer = {'text':'ready','attachments':[{'artifact_id':'qualified-fixture'}]}
+        await store.append_event(segment.run_id, 'run.stream', {'kind':'done','final_answer':answer})
+        final = await client.final_answer('run-a')
+        self.assertEqual((final.run_id, final.segment_run_id, final.final_answer), ('run-a',segment.run_id,answer))
         async with ClientSession() as http:
             async with http.post(url + '/api/v1/runs', json={
                 'run_id': 'forged', 'session_id': 'session-a', 'idempotency_key': 'forged', 'input': '{}',

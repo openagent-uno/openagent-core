@@ -115,6 +115,13 @@ class SqliteRuntimeStore:
                 source_run_id TEXT PRIMARY KEY REFERENCES session_runs(id) ON DELETE CASCADE,
                 origin_run_id TEXT NOT NULL REFERENCES session_runs(id) ON DELETE CASCADE)''')
             with self._transaction() as db:
+                db.execute('CREATE INDEX IF NOT EXISTS idx_runtime_event_sequence ON domain_events(run_id, sequence)')
+                db.execute("""CREATE INDEX IF NOT EXISTS idx_runtime_done_frame ON domain_events(run_id, sequence)
+                    WHERE event_type='run.stream' AND (json_extract(metadata_json,'$.kind')='done'
+                    OR json_extract(metadata_json,'$.privacy_redacted')=1)""")
+                db.execute("""CREATE INDEX IF NOT EXISTS idx_runtime_operation_origin ON session_runs(
+                    json_extract(metadata_json,'$.operation_continuation.origin_run_id'))
+                    WHERE json_extract(metadata_json,'$.operation_continuation.origin_run_id') IS NOT NULL""")
                 ensure_delegated_ancestry(db)
                 restore_runtime_search_intents(db, int(time.time()*1000))
         except BaseException:
@@ -494,10 +501,22 @@ class SqliteRuntimeStore:
                 else:
                     publisher.record_completed_tool(db,run_id,call_id,())
 
-    def _events(self,run_id: str,after: int=0) -> tuple[RunEvent,...]:
+    def _events(self,run_id: str,after: int=0,limit: int=-1) -> tuple[RunEvent,...]:
         self._require_run_not_quarantined(run_id)
-        rows=self.connection.execute('SELECT sequence,event_type,metadata_json FROM domain_events WHERE run_id=? AND sequence>? ORDER BY sequence',(run_id,after))
+        rows=self.connection.execute('SELECT sequence,event_type,metadata_json FROM domain_events WHERE run_id=? AND sequence>? ORDER BY sequence LIMIT ?',(run_id,after,limit))
         return tuple(RunEvent(r[0],run_id,r[1],json.loads(r[2])) for r in rows)
+
+    def _final_answer_for_run(self, run_id: str):
+        self._require_run_not_quarantined(run_id)
+        row = self.connection.execute("""SELECT CASE WHEN json_type(metadata_json,'$.final_answer')='object'
+                AND json_extract(metadata_json,'$.kind')='done'
+                AND coalesce(json_extract(metadata_json,'$.privacy_redacted'),0)=0
+                THEN json_extract(metadata_json,'$.final_answer') END
+            FROM domain_events WHERE run_id=? AND event_type='run.stream'
+            AND (json_extract(metadata_json,'$.kind')='done'
+                 OR json_extract(metadata_json,'$.privacy_redacted')=1)
+            ORDER BY sequence DESC LIMIT 1""", (run_id,)).fetchone()
+        return json.loads(row[0]) if row and row[0] is not None else None
 
     def _start_operation(self, run_id: str, payload: Mapping[str, Any]) -> RunEvent:
         from openagent_core.operations import STARTED
@@ -558,12 +577,19 @@ class SqliteRuntimeStore:
                             {'status':'cancelled' if state=='cancelled' else 'failed',
                              'reason':'operation_'+state,'retry_allowed':False})
 
-    def _durable_operation_events(self,origin_run_id,after):
+    def _durable_operation_events(self,origin_run_id,after,limit=1001):
         self._require_run_not_quarantined(origin_run_id)
-        rows=self.connection.execute('''SELECT e.sequence,e.run_id,e.event_type,e.metadata_json
-            FROM domain_events e JOIN session_runs r ON r.id=e.run_id
-            WHERE json_extract(r.metadata_json,'$.operation_continuation.origin_run_id')=? AND e.sequence>?
-            ORDER BY e.sequence LIMIT 1001''',(origin_run_id,after))
+        segments = self.connection.execute("""SELECT id FROM session_runs
+            WHERE json_extract(metadata_json,'$.operation_continuation.origin_run_id')=?""",
+            (origin_run_id,)).fetchall()
+        if not segments:
+            return ()
+        # At most eight segments. Merge their indexed ranges in cursor order;
+        # the logical origin can also receive events after a later segment.
+        select = 'SELECT sequence,run_id,event_type,metadata_json FROM domain_events WHERE run_id=? AND sequence>?'
+        query = ' UNION ALL '.join(select for _ in segments) + ' ORDER BY sequence LIMIT ?'
+        parameters = [value for segment in segments for value in (segment[0], after)]
+        rows = self.connection.execute(query, (*parameters, limit))
         return tuple(RunEvent(row[0],row[1],row[2],json.loads(row[3])) for row in rows)
 
     def _recover(self) -> None:
@@ -832,12 +858,15 @@ class SqliteRuntimeStore:
     begin_tool = _serialized(_begin_tool)
     finish_tool = _serialized(_finish_tool)
     events = _serialized(_events)
+    event_window = _serialized(_events)
+    final_answer_for_run = _serialized(_final_answer_for_run)
     start_operation = _serialized(_start_operation)
     operation_events = _serialized(_operation_events)
     durable_operation = _serialized(_durable_operation)
     durable_operations = _serialized(_durable_operations)
     stop_durable_operation = _serialized(_stop_durable_operation)
     durable_operation_events = _serialized(_durable_operation_events)
+    durable_operation_event_window = _serialized(_durable_operation_events)
     recover = _serialized(_recover)
     children = _serialized(_children)
     accepted_request = _serialized(_accepted_request)

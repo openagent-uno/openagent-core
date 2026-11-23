@@ -12,7 +12,7 @@ from typing import Callable, Mapping, Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
-from openagent_core import RunRequest, RunRecord, RunEvent
+from openagent_core import RunRequest, RunRecord, RunEvent, RunEventPage, RunFinalAnswer
 
 
 class RunHTTPError(RuntimeError):
@@ -80,9 +80,19 @@ class RunClient:
         return _record(await self._request('GET','/'+quote(run_id,safe='')))
 
     async def events(self,run_id: str,after: int=0) -> tuple[RunEvent,...]:
-        if after<0: raise ValueError('Cursor cannot be negative')
-        result=await self._request('GET','/'+quote(run_id,safe='')+'/events?after='+str(after))
-        return tuple(RunEvent(**event) for event in result['events'])
+        return (await self.events_page(run_id,after)).events
+
+    async def events_page(self,run_id: str,after: int=0,*,limit: int=1000) -> RunEventPage:
+        RunEventPage.validate(after, limit)
+        path='/'+quote(run_id,safe='')+'/events?after='+str(after)
+        if limit != 1000:
+            path+='&limit='+str(limit)
+        result=await self._request('GET',path)
+        return RunEventPage(tuple(RunEvent(**event) for event in result['events']),
+                            result['cursor'],result['has_more'])
+
+    async def final_answer(self,run_id: str) -> RunFinalAnswer:
+        return RunFinalAnswer(**await self._request('GET','/'+quote(run_id,safe='')+'/final-answer'))
 
     async def cancel(self,run_id: str) -> RunRecord:
         return _record(await self._request('POST','/'+quote(run_id,safe='')+'/cancel'))
@@ -99,4 +109,4 @@ class RunClient:
             await asyncio.sleep(interval)
 
 
-__all__=['RunClient','RunRequest','RunRecord','RunEvent','RunHTTPError','AcceptanceUncertain']
+__all__=['RunClient','RunRequest','RunRecord','RunEvent','RunEventPage','RunFinalAnswer','RunHTTPError','AcceptanceUncertain']

@@ -9,7 +9,7 @@ import time
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
-from .contracts import ExecutionContext, ResourceRef, RunEvent, RunRecord, RunRequest
+from .contracts import ExecutionContext, ResourceRef, RunEvent, RunEventPage, RunFinalAnswer, RunRecord, RunRequest
 from .operations import STARTED, OperationError, OperationInvocation, StagedOperation, _digest, _resume, resolve_operation, run_operation
 
 
@@ -292,11 +292,26 @@ class DurableOperationRunner:
         return await self.get_run(row['origin_run_id'], context)
 
     async def events(self, run_id, after, context):
-        await self.runtime.events(run_id, after, context)
+        await self.runtime.authorize_replay(run_id, context)
+        store = self.runtime.services.store
+        row = await store.durable_operation(run_id)
+        if row is None or run_id != row['origin_run_id']:
+            return await store.events(run_id, after)
+        return self._origin_events(run_id, await store.durable_operation_events(run_id, after))
+
+    async def events_page(self, run_id, after, context, *, limit=1000):
+        RunEventPage.validate(after, limit)
+        await self.runtime.authorize_replay(run_id, context)
         row = await self.runtime.services.store.durable_operation(run_id)
         if row is None or run_id != row['origin_run_id']:
-            return await self.runtime.events(run_id, after, context)
-        events = await self.runtime.services.store.durable_operation_events(row['origin_run_id'], after)
+            return await self.runtime.events_page(run_id, after, context, limit=limit)
+        store = self.runtime.services.store
+        window = getattr(store, 'durable_operation_event_window', None)
+        rows = await window(run_id, after, limit + 1) if window else await store.durable_operation_events(run_id, after)
+        return RunEventPage.from_window(self._origin_events(run_id, rows[:limit + 1]), after, limit)
+
+    @staticmethod
+    def _origin_events(origin_id, events):
         result = []
         for event in events:
             kind = event.kind
@@ -304,9 +319,18 @@ class DurableOperationRunner:
                 kind = 'run.operation.segment.' + kind.removeprefix('run.')
             elif kind == 'run.operation.finished':
                 kind = 'run.' + event.payload['status']
-            result.append(RunEvent(event.cursor, row['origin_run_id'], kind,
+            result.append(RunEvent(event.cursor, origin_id, kind,
                                    {**event.payload, 'segment_run_id': event.run_id}))
         return tuple(result)
+
+    async def final_answer(self, run_id, context):
+        await self.runtime.authorize_replay(run_id, context)
+        record = await self.get_run(run_id, context)
+        segment_id = getattr(record, 'segment_run_id', run_id)
+        if record.status != 'success':
+            return RunFinalAnswer(run_id, segment_id, None)
+        answer = await self.runtime.final_answer(segment_id, context)
+        return replace(answer, run_id=run_id)
 
     async def tick(self):
         if self.runtime is None or self.runtime._closing or not self.runtime._started:

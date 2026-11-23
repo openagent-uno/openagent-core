@@ -26,6 +26,16 @@ export interface RunEvent {
   kind: string;
   payload: Record<string, unknown>;
 }
+export interface RunEventPage {
+  events: RunEvent[];
+  cursor: number;
+  has_more: boolean;
+}
+export interface RunFinalAnswer {
+  run_id: string;
+  segment_run_id: string;
+  final_answer: Record<string, unknown> | null;
+}
 const terminal = new Set(["success", "failed", "cancelled", "rejected", "interrupted", "skipped", "timed_out"]);
 export class RunHTTPError extends Error {
   constructor(readonly status: number) { super(`Run service returned HTTP ${status}`); }
@@ -79,9 +89,16 @@ export class RunClient {
     return this.request("GET", "/" + encodeURIComponent(runId), undefined, signal);
   }
   async events(runId: string, after = 0, signal?: AbortSignal): Promise<RunEvent[]> {
+    return (await this.eventsPage(runId, after, 1000, signal)).events;
+  }
+  eventsPage(runId: string, after = 0, limit = 1000, signal?: AbortSignal): Promise<RunEventPage> {
     if (!Number.isSafeInteger(after) || after < 0) throw new Error("Invalid event cursor");
-    const page = await this.request<{events: RunEvent[]}>("GET", "/" + encodeURIComponent(runId) + "/events?after=" + after, undefined, signal);
-    return page.events;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new Error("Invalid event limit");
+    const path = "/" + encodeURIComponent(runId) + "/events?after=" + after;
+    return this.request("GET", limit === 1000 ? path : path + "&limit=" + limit, undefined, signal);
+  }
+  finalAnswer(runId: string, signal?: AbortSignal): Promise<RunFinalAnswer> {
+    return this.request("GET", "/" + encodeURIComponent(runId) + "/final-answer", undefined, signal);
   }
   cancel(runId: string, signal?: AbortSignal): Promise<RunRecord> {
     return this.request("POST", "/" + encodeURIComponent(runId) + "/cancel", undefined, signal);
