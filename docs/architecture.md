@@ -226,9 +226,10 @@ route. Python and TypeScript export `PersonalClient`.
 With automatic recall enabled, the document backend searches for bounded lexical
 overlap in the caller’s authorized space before the provider request. Explicit
 `vault_search` keeps its exact all-term query and pagination. Automatic recall
-uses up to 12 literal terms, 128 candidates per term and eight result references.
-Equal overlap is ordered by path. This lexical search requires some shared terms;
-it does not infer concept similarity with zero lexical overlap.
+uses up to 12 literal terms. The database counts distinct matching terms across
+the authorized space before returning up to eight references. Equal scores are
+ordered by path. A lookup with one term reads results directly in path order.
+This lexical search requires at least one shared term.
 
 An embedded host can bind `openagent_core.memory_access.DocumentRecallQuery`
 in its service registry and implement `async select_query(context, raw_input)`.

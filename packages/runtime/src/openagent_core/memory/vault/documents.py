@@ -308,27 +308,37 @@ class SqlDocumentVault:
         if not terms:
             return []
         postgres = self.engine.dialect.name == "postgresql"
-        if postgres:
-            body = """SELECT path,title,revision FROM oa_vault_notes
-                  WHERE tenant=:tenant AND agent=:agent AND space=:space AND content IS NOT NULL
-                  AND to_tsvector('simple',content) @@ plainto_tsquery('simple',:term)
-                  ORDER BY path LIMIT 128"""
-        else:
-            body = """SELECT n.path,n.title,n.revision FROM oa_vault_search s
-                  JOIN oa_vault_notes n ON n.id=s.rowid
-                  WHERE n.tenant=:tenant AND n.agent=:agent AND n.space=:space
-                  AND n.content IS NOT NULL AND oa_vault_search MATCH :term
-                  ORDER BY n.path LIMIT 128"""
-        # Count distinct matched terms in at most 12 x 128 scoped candidates
-        # in one round trip. Ranking does not consult other tenants' statistics.
-        branches = ["SELECT * FROM (" + body.replace(":term", ":term" + str(i)) + ") AS hits"
-                    for i in range(len(terms))]
-        statement = ("SELECT path,title,revision FROM (" + " UNION ALL ".join(branches)
-                     + ") AS candidates GROUP BY path,title,revision ORDER BY count(*) DESC,path LIMIT :limit")
-        args = {**scope, "limit": limit, **{"term"+str(i): w if postgres else '"'+w+'"'
-                                            for i,w in enumerate(terms)}}
+        source = "oa_vault_notes n"
+        predicate = "to_tsvector('simple', n.content) @@ plainto_tsquery('simple', :term)"
+        if not postgres:
+            source = "oa_vault_search JOIN oa_vault_notes n ON n.id=oa_vault_search.rowid"
+            predicate = "oa_vault_search MATCH :term"
+        scoped = (f" FROM {source} WHERE n.tenant=:tenant AND n.agent=:agent AND n.space=:space "
+                  f"AND n.content IS NOT NULL AND {predicate}")
+        args = {**scope, "limit": limit}
+        # When enough documents match every term, their path order already
+        # determines the top results. Buffer a small index window so a small
+        # output limit does not favor scanning every path for a rare word.
+        exact_term = " ".join(terms) if postgres else " AND ".join(f'"{term}"' for term in terms)
+        exact = ("WITH exact AS MATERIALIZED (SELECT n.path,n.title,n.revision"
+                 + scoped + " ORDER BY n.path LIMIT 128) "
+                 "SELECT path,title,revision FROM exact ORDER BY path LIMIT :limit")
         async with self.engine.connect() as con:
-            rows = (await con.execute(sa.text(statement), args)).mappings().all()
+            rows = (await con.execute(sa.text(exact), {**args, "term": exact_term})).mappings().all()
+            if len(terms) > 1 and len(rows) < limit:
+                # Rank documents before limiting. A per-term path cutoff can
+                # discard the only note with several matches from every list.
+                postings = []
+                for index, term in enumerate(terms):
+                    key = f"term{index}"
+                    postings.append("SELECT n.id" + scoped.replace(":term", ":" + key))
+                    args[key] = term if postgres else f'"{term}"'
+                statement = ("WITH hits AS (" + " UNION ALL ".join(postings) + "), "
+                             "scores AS (SELECT id,count(*) AS overlap FROM hits GROUP BY id) "
+                             "SELECT n.path,n.title,n.revision FROM scores "
+                             "JOIN oa_vault_notes n ON n.id=scores.id "
+                             "ORDER BY scores.overlap DESC,n.path LIMIT :limit")
+                rows = (await con.execute(sa.text(statement), args)).mappings().all()
         await self._recheck(context, "memory.read", scope)
         await saw_notes(self, context, scope, rows)
         return [{"kind":"note", **dict(row)} for row in rows]

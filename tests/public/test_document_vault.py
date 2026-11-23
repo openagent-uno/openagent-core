@@ -172,6 +172,21 @@ class DocumentVault(unittest.IsolatedAsyncioTestCase):
         saved = await self.store.read(self.a, "Case.MD")
         self.assertEqual((saved["content"], saved["revision"]), ("unchanged", 1))
 
+    async def test_recall_ranks_overlapping_terms_before_limiting_by_path(self):
+        for term in ("calendar", "reviewer"):
+            for index in range(130):
+                await self.store.write(self.a, f"archive/{term}-{index:03}.md", term, expected_revision=0)
+        await self.store.write(self.a, "z/decision.md", "Calendar reviewer", expected_revision=0)
+        await self.store.write(self.b, "private.md", "Calendar reviewer", expected_revision=0)
+
+        # An unmatched term exercises partial overlap on a natural question.
+        hits = await self.store.recall(self.a, query="calendar reviewer preferred", limit=2)
+        self.assertEqual([row["path"] for row in hits], ["z/decision.md", "archive/calendar-000.md"])
+        own = await self.store.recall(self.b, query="calendar reviewer", limit=2)
+        self.assertEqual([row["path"] for row in own], ["private.md"])
+        single = await self.store.recall(self.a, query="reviewer", limit=1)
+        self.assertEqual([row["path"] for row in single], ["archive/reviewer-000.md"])
+
     async def test_bounded_question_recall_precedes_provider_and_rechecks_its_note(self):
         from dataclasses import replace
         from openagent_core.memory_access import DocumentRecallQuery
