@@ -589,6 +589,11 @@ async def _publish_model_media(media, kind):
 
 
 def _unique_output_media(source, emitted):
+    from openagent_core.dream_evidence import is_document_dream
+    from openagent_core.runtime import current_execution_context
+
+    if is_document_dream(current_execution_context()):
+        return
     seen = emitted if emitted is not None else set()
     fields = (
         ("image", "images"),

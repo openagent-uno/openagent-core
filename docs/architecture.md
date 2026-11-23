@@ -264,6 +264,67 @@ operation rechecks its bound space and live delegation. The maintenance
 session records the engine's answer under the same audience. Note edits
 retain the observed revision and run provenance in the vault history.
 
+
+### Reviewing canonical activity in a document dream
+
+For a second mission, bind `openagent_core.dream_evidence.DocumentDreamEvidence`
+under its type on the worker and every API replica that serves dream history.
+The constructor takes an async `resolve_sessions(context, scope)` callback.
+The scope contains `tenant`, `agent` and `space`. The context is the original
+deferred grant with the maintenance session ID and the complete result audience.
+
+Return `None` for an opted-out space, or a tuple of `SessionRef` objects for
+that occurrence. An empty tuple authorizes a review with no sources. Select
+the references using trusted host ownership and sharing records. Materialize
+a stable selection per occurrence when choosing recent sessions. Perform live
+consent checks on every resolution, including when an API worker reconstructs
+the original grant after a restart. Grant `memory.dream.review` on the vault
+space and `session.read` and `run.replay` on each source for the full audience.
+
+```python
+from openagent_core.dream_evidence import DocumentDreamEvidence
+
+registry.bind(DocumentDreamEvidence, DocumentDreamEvidence(
+    resolve_sessions,
+    max_sessions=4,
+    runs_per_session=4,
+    lookback_seconds=86400,
+    max_bytes=16384,
+))
+```
+
+The second mission uses one parameterless tool, `vault_review_activity`. Its
+queue receipt serializes the transition from editing notes to reviewing
+activity. Further note mutations and duplicate reads in that pass fail.
+The catalog confines document dreams to the native vault source for the whole
+turn. Workflow and schedule proposals are text for the authorized recipient.
+The runtime withholds intermediate model output after the review begins and
+publishes the authorized conclusion in the maintenance session.
+
+SQLite and PostgreSQL examine each selected session's last 16 admitted turns
+and return eligible terminal runs inside the lookback window. Each run
+contributes up to four recent user/assistant excerpts of 256 characters and
+eight recent lifecycle/tool event kinds with classified outcomes. Both stores
+enforce the session and original turn audience. SQLite skips legacy turns
+without admission identity. Provider diagnostics, tool arguments, tool result
+bodies and private reasoning fields are excluded from the projection. The
+sample covers the selected conversations. It can establish an observed
+failure, while a fleet-wide failure rate requires separate telemetry.
+
+Hosts may choose 1–8 sessions, 1–8 returned runs per session, 256–65,536
+encoded response bytes and a 1-second to 7-day window. Whole runs are omitted
+when they would exceed the byte limit. The response signals truncation.
+Each occurrence consumes at most one review budget across competing tools.
+Source authorization and bounded checks may reread those same rows for
+publication or replay. A durable receipt records the binding and hashes of
+the exact excerpts and outcomes shown. The personal catalog, session search,
+run/event APIs and final answer check the original delegation, the current
+viewer, the live selection, source ACLs and current sample before returning
+evidence. Redacting a sampled message or withdrawing the grant makes the
+derived history unavailable. New unrelated turns leave the receipt readable.
+Serve this history through the authorized run and session APIs. The legacy
+operational search index and saved application displays omit dream content.
+
 ## Automations
 
 The existing scheduling, timezone/DST, workflow, and delivery algorithms remain.

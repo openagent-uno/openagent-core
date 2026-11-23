@@ -254,6 +254,12 @@ class CapabilityCatalog:
         return self._active_generation, self._revision
 
     def _available(self, registration: _Registration, context: ExecutionContext) -> bool:
+        from .dream_evidence import DreamVaultSource, is_document_dream
+        if is_document_dream(context) and not (
+            registration.managed and registration.source_id == "vault"
+            and isinstance(registration.source, DreamVaultSource)
+        ):
+            return False
         generation, revision = self._execution_snapshot()
         return (not registration.revoked and
                 registration.partition == getattr(context, "catalog_partition", None) and

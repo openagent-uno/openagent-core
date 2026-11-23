@@ -531,6 +531,7 @@ def _put_document(
 
 
 async def _source_row(conn: Any, source_kind: str, source_id: str) -> tuple[dict[str, Any], str, str, str, str] | None:
+    from openagent_core.dream_evidence import dream_run_id
     if source_kind == "session":
         row = await (
             await conn.execute(
@@ -538,7 +539,7 @@ async def _source_row(conn: Any, source_kind: str, source_id: str) -> tuple[dict
                 (source_id,),
             )
         ).fetchone()
-        if row is None:
+        if row is None or dream_run_id(source_id):
             return None
         kind = "delegated_session" if row["parent_session_id"] else "chat"
         metadata = dict(row)
@@ -562,7 +563,7 @@ async def _source_row(conn: Any, source_kind: str, source_id: str) -> tuple[dict
                 (source_id,),
             )
         ).fetchone()
-        if row is None or str(row["visibility"]) != "user_visible":
+        if row is None or dream_run_id(row["session_id"]) or str(row["visibility"]) != "user_visible":
             return None
         root_kind = "delegated_session" if row["parent_session_id"] else "chat"
         # ``redacted_reasoning_content`` is provider-private opaque
@@ -597,7 +598,7 @@ async def _source_row(conn: Any, source_kind: str, source_id: str) -> tuple[dict
                 (source_id,),
             )
         ).fetchone()
-        if row is None or row["message_id"] is None:
+        if row is None or dream_run_id(row["session_id"]) or row["message_id"] is None:
             return None
         root_kind = "delegated_session" if row["parent_session_id"] else "chat"
         structure = " ".join((_safe_structure_tokens(row["args_json"]), _safe_structure_tokens(row["result_json"])))

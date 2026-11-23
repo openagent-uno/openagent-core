@@ -89,6 +89,9 @@ class SessionInspection:
         self.db,self.authorizer,self.agent=db,authorizer,agent
 
     async def authorize(self,context,session_id):
+        from .dream_evidence import dream_run_id
+        if dream_run_id(session_id):
+            raise PermissionError("Use the authorized sessions service for document maintenance history")
         await require_authorized(self.authorizer,context,"session.read",ResourceRef("session",context.tenant_id,session_id))
         conn=await self.db._ensure_connected()
         row=await (await conn.execute("SELECT * FROM sessions_v2 WHERE id=? AND deleted_at_ms IS NULL",(session_id,))).fetchone()

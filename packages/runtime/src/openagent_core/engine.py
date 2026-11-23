@@ -7,7 +7,8 @@ authorization, cancellation and durable execution identity.
 from __future__ import annotations
 from typing import Any
 from .contracts import ExecutionContext, RunRequest, ResourceRef, ModelCatalog, require_authorized
-from .runtime import Runtime, current_execution_context, current_runtime
+from .runtime import Runtime, check_current_publication, current_execution_context, current_runtime, has_current_publication_guard
+from .dream_evidence import is_document_dream
 
 
 def __getattr__(name: str):
@@ -141,9 +142,14 @@ class AgentExecutor:
         from .stream.content_parts import ContentMarkerStreamFilter
         marker_filter = ContentMarkerStreamFilter()
         async def can_publish() -> None:
+            await check_current_publication()
             await require_authorized(runtime.services.authorizer, context, "run.publish",
                 ResourceRef("session",context.tenant_id,context.session_id),audience=context.audience)
+        def final_only() -> bool:
+            return is_document_dream(context) and has_current_publication_guard()
         async def status(text: str) -> None:
+            if final_only():
+                return
             await can_publish()
             await runtime.services.store.append_event(request.run_id,"run.status",{"text":text})
         final_text = None
@@ -164,8 +170,14 @@ class AgentExecutor:
             async for event in self.agent.run_stream(request.input,session_id=request.session_id,
                     attachments=list(request.attachments),on_status=status,model_override=model,
                     author={"kind":context.author.kind,"handle":context.author.key}):
-                await can_publish()
                 kind = event.get("kind")
+                if final_only() and kind not in {"done", "error"}:
+                    # Background proposals publish one authorized conclusion.
+                    # Keep the normal fallback for models that only emit deltas.
+                    if kind == "delta":
+                        chunks.append(event.get("text") or "")
+                    continue
+                await can_publish()
                 if kind == "done" and event.get("errored"):
                     # Agent.run_stream reports provider failures as a terminal
                     # frame so channel clients can display them. A durable run
@@ -181,6 +193,20 @@ class AgentExecutor:
                     attachment_bindings = []
                     from .stream.content_parts import parse_response_content
                     parsed = parse_response_content(final_text, allow_inline_ui=False)
+                    if is_document_dream(context):
+                        from .stream.final_answer import canonical_final_answer
+                        # Maintenance produces a report. A model-authored media
+                        # marker cannot publish a file into another surface.
+                        final_text = parsed.text
+                        attested = event.get("final_answer")
+                        report = canonical_final_answer(attested["text"]) if (
+                            isinstance(attested, dict) and isinstance(attested.get("text"), str)
+                        ) else None
+                        await runtime.services.store.append_event(request.run_id, "run.stream", {
+                            "kind": "done", "content_format": "openagent.canonical-content/v1",
+                            **canonical_final_answer(final_text), "final_answer": report,
+                        })
+                        continue
                     if parsed.attachments:
                         from .artifacts import SESSION_ARTIFACT_PREFIX, session_output_reference, is_native_output, canonical_artifact_id
                         db = getattr(self.agent, "memory_db", None)
@@ -287,6 +313,9 @@ class AgentExecutor:
                     raise RunTurnError(failure.public_message, code=failure.code)
                 await runtime.services.store.append_event(request.run_id,"run.stream",event)
         result = final_text if final_text is not None else "".join(chunks)
+        if final_text is None and is_document_dream(context):
+            from .stream.content_parts import parse_response_content
+            result = parse_response_content(result, allow_inline_ui=False).text
         failure = take_run_failure()
         if failure:
             from .core.public_errors import RunTurnError, classify_run_error

@@ -23,6 +23,7 @@ from openagent_core.content_privacy import PrivacyConflict,PrivacyFence
 from openagent_core.configuration import sqlite_busy_timeout_ms, sqlite_busy_timeout_s
 
 from .search import enqueue_source, restore_runtime_search_intents
+from . import dream_activity
 from .ancestry import ensure_delegated_ancestry
 from .tool_invocation import read_tool_invocation as _read_saved_tool_invocation
 
@@ -115,6 +116,8 @@ class SqliteRuntimeStore:
                 source_run_id TEXT PRIMARY KEY REFERENCES session_runs(id) ON DELETE CASCADE,
                 origin_run_id TEXT NOT NULL REFERENCES session_runs(id) ON DELETE CASCADE)''')
             with self._transaction() as db:
+                db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_dream_evidence_receipt
+                    ON domain_events(run_id) WHERE event_type='run.dream.evidence'""")
                 db.execute('CREATE INDEX IF NOT EXISTS idx_runtime_event_sequence ON domain_events(run_id, sequence)')
                 db.execute("""CREATE INDEX IF NOT EXISTS idx_runtime_done_frame ON domain_events(run_id, sequence)
                     WHERE event_type='run.stream' AND (json_extract(metadata_json,'$.kind')='done'
@@ -911,6 +914,9 @@ class SqliteRuntimeStore:
     list_sessions = _serialized(_list_sessions)
     search_sessions = _serialized(_search_sessions)
     read_tool_invocation = _serialized(_read_saved_tool_invocation)
+    check_dream_session = _serialized(dream_activity.check_dream_session)
+    dream_session_activity = _serialized(dream_activity.dream_session_activity)
+    dream_evidence_receipt = _serialized(dream_activity.dream_evidence_receipt)
     read_session = _serialized(_read_session)
     record_delivery = _serialized(_record_delivery)
     delivery_context = _serialized(_delivery_context)

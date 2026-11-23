@@ -34,6 +34,9 @@ def current_application_context() -> Mapping[str, Any]:
 
 async def saved_invocation_display(store, authorizer, context, selector, tool_ref):
     """Read only the original invocation in the currently authorized session."""
+    from .dream_evidence import dream_run_id
+    if dream_run_id(context.session_id):
+        raise PermissionError("Maintenance sessions have no application surface")
     read = getattr(store, "read_tool_invocation", None)
     if not callable(read):
         raise CapabilityUnavailable("Saved invocation unavailable")

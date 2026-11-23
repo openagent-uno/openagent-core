@@ -130,16 +130,21 @@ def current_admission():
 
 
 def require_async_admission(model):
+    from .runtime import has_current_publication_guard
+    if has_current_publication_guard():
+        raise PermissionError("Source-bound model requests require asynchronous reauthorization")
     if current_admission() is not None or getattr(model, "_openagent_requires_admission", False):
         raise RuntimeError("Distributed provider admission requires asynchronous inference")
 
 
 @asynccontextmanager
 async def provider_attempt(model):
+    from .runtime import check_current_publication
     policy = current_admission()
     if policy is None:
         if getattr(model, "_openagent_requires_admission", False):
             raise PermissionError("Provider admission was revoked")
+        await check_current_publication()
         yield model
         return
     from .runtime import current_runtime, current_execution_context, current_run_id
@@ -196,6 +201,7 @@ async def provider_attempt(model):
             if not isinstance(latest, ProviderRoute) or latest != live:
                 raise PermissionError("Provider account changed while resolving credentials")
             try:
+                await check_current_publication()
                 yield candidate
             except Exception as error:
                 if secret in str(error):

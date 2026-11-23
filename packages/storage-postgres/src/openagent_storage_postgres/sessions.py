@@ -229,6 +229,76 @@ class Sessions:
             next_cursor=_encode(page[-1]["session_seq"]) if len(records) > limit else None,
         )
 
+    async def check_dream_session(self, ref, context):
+        self._boundary(ref, context)
+        async with self._db() as db:
+            await self._session(db, ref.session_id, context, lock=False)
+
+    async def dream_evidence_receipt(self, ident):
+        async with self._db() as db:
+            row = await (await db.execute(
+                "SELECT payload FROM events "
+                "WHERE agent=%s AND run_id=%s AND kind='run.dream.evidence' LIMIT 1",
+                (self.agent_id, ident),
+            )).fetchone()
+            return row["payload"] if row else None
+
+    async def dream_session_activity(self, ref, context, *, since_ms, limit, run_ids=None):
+        from openagent_core.dream_evidence import (
+            CANDIDATE_RUNS, EVENT_KINDS, EVENTS_PER_RUN, MESSAGE_CHARS, MESSAGES_PER_RUN,
+        )
+        if type(limit) is not int or not 1 <= limit <= 8 or type(since_ms) is not int:
+            raise ValueError("Invalid activity query")
+        self._boundary(ref, context)
+        async with self._db() as db:
+            await self._session(db, ref.session_id, context, lock=False)
+            params = [ref.agent_id, ref.tenant_id, ref.session_id]
+            selected = ""
+            if run_ids is not None:
+                if not isinstance(run_ids, tuple) or len(run_ids) > limit:
+                    raise ValueError("Invalid activity selection")
+                if not run_ids:
+                    return []
+                selected = " AND id=ANY(%s)"
+                params.append(list(run_ids))
+            # Fetch all selected runs and both bounded suffixes in a single
+            # snapshot/round trip. The inner limits apply before payload filtering.
+            cursor = await db.execute(
+                f"""
+                WITH recent AS MATERIALIZED (
+                    SELECT agent,id,status,ordinal,finished_at,context FROM runs
+                    WHERE agent=%s AND tenant=%s AND session_id=%s {selected}
+                    ORDER BY ordinal DESC LIMIT %s
+                ), visible AS (
+                    SELECT agent,id,status,ordinal,finished_at FROM recent r WHERE {RUN_AUDIENCE}
+                    AND finished_at >= to_timestamp(%s::double precision / 1000)
+                    AND octet_length(id)<=200 ORDER BY ordinal DESC LIMIT %s
+                )
+                SELECT r.id AS run_id,r.status,r.finished_at,
+                    (SELECT coalesce(jsonb_agg(jsonb_build_object(
+                        'role',m.role,'excerpt',left(m.body#>>'{{}}',%s)
+                    ) ORDER BY m.session_seq),'[]'::jsonb)
+                     FROM (SELECT role,status,body,session_seq FROM messages
+                           WHERE agent=r.agent AND run_id=r.id ORDER BY session_seq DESC LIMIT %s) m
+                     WHERE m.role IN ('user','assistant') AND m.status='complete'
+                       AND jsonb_typeof(m.body)='string') AS messages,
+                    (SELECT coalesce(jsonb_agg(jsonb_build_object(
+                        'kind',e.kind,'outcome',CASE WHEN e.kind='tool.completed'
+                          AND e.payload->>'status' IN ('success','error') THEN e.payload->>'status' END
+                    ) ORDER BY e.seq),'[]'::jsonb)
+                     FROM (SELECT kind,payload,seq FROM events
+                           WHERE agent=r.agent AND run_id=r.id ORDER BY seq DESC LIMIT %s) e
+                     WHERE e.kind=ANY(%s)) AS events
+                FROM visible r ORDER BY r.ordinal DESC
+                """,
+                (*params, CANDIDATE_RUNS, _audience(context), since_ms, limit, MESSAGE_CHARS,
+                 MESSAGES_PER_RUN, EVENTS_PER_RUN, list(EVENT_KINDS)),
+            )
+            rows = await cursor.fetchall()
+            for row in rows:
+                row["finished_at_ms"] = _ms(row.pop("finished_at"))
+            return rows
+
     async def provider_history(self, context, run_id, *, limit, max_bytes):
         from openagent_core.provider_history import ProviderHistoryMessage
 

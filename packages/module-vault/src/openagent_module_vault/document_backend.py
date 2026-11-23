@@ -1,4 +1,5 @@
 """Native agent capabilities for a host-owned document vault."""
+from openagent_core.dream_evidence import DocumentDreamEvidence, DreamVaultSource, REVIEW_TOOL
 from openagent_core.capabilities import FunctionSource, ToolDefinition
 from openagent_core.module_adapters import NativeCapabilityDescriptor
 from openagent_core.modules import CapabilityContribution, ModuleContribution, ServiceBinding
@@ -41,6 +42,18 @@ Keep credentials and transient errors out of the vault.""",
 )
 
 
+class DocumentSource(FunctionSource, DreamVaultSource):
+    def __init__(self, definitions, functions, vault, evidence):
+        super().__init__(definitions, functions)
+        self.vault, self.evidence = vault, evidence
+
+    async def discover(self, context):
+        if self.evidence is not None and await self.evidence.enabled(self.vault, context):
+            return self.tools
+        return tuple(t for t in self.tools if t.name != REVIEW_TOOL)
+
+
+
 class DocumentModule:
     domain = "vault"
 
@@ -79,7 +92,19 @@ class DocumentModule:
             }))
             functions[name] = self._handler(operation)
             self.effects[name] = frozenset(effects)
-        self.source = FunctionSource(tuple(definitions), functions)
+        evidence = context.services.optional(DocumentDreamEvidence)
+        if evidence is not None:
+            if self.store.dream_queue is None:
+                raise ValueError("Dream evidence requires a durable document queue")
+            definitions.append(ToolDefinition(REVIEW_TOOL, "Review the recent activity selected for this dream once.", {
+                "type": "object", "properties": {}, "required": [], "additionalProperties": False,
+            }))
+            async def read_evidence(arguments, execution):
+                if arguments:
+                    raise ValueError("Dream sources and budgets belong to the host")
+                return await evidence.read(self.store, execution)
+            functions[REVIEW_TOOL] = read_evidence
+        self.source = DocumentSource(tuple(definitions), functions, self.store, evidence)
 
     @staticmethod
     def _handler(operation):

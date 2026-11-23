@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS events (
     seq bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, agent text NOT NULL,
     run_id text NOT NULL, kind text NOT NULL, payload jsonb NOT NULL,
     FOREIGN KEY (agent,run_id) REFERENCES runs(agent,id) ON DELETE CASCADE);
+CREATE UNIQUE INDEX IF NOT EXISTS dream_evidence_receipt ON events(agent,run_id) WHERE kind='run.dream.evidence';
 CREATE INDEX IF NOT EXISTS events_page ON events(agent,run_id,seq);
 CREATE TABLE IF NOT EXISTS tool_calls (
     agent text NOT NULL, run_id text NOT NULL, id text NOT NULL, intent jsonb NOT NULL,

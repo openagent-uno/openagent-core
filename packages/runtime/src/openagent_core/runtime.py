@@ -13,6 +13,7 @@ import inspect
 from .capabilities import CapabilityCatalog
 from .code_execution import CodeExecutor
 from .memory_access import MemoryAccess
+from .dream_evidence import authorize_dream_history, dream_run_id, is_document_dream
 from .modules import (CapabilityContribution, ModuleCatalog,
     ModuleContext, ModuleContribution, ModuleReconfigurationError, ModuleReferenceConflict,
     ModuleStatus, ReconfigureReceipt, RuntimeProfile, ServiceRegistry)
@@ -21,6 +22,26 @@ from .contracts import (AdmissionCapacityExceeded, IdempotencyConflict, AgentExe
     ModelCatalog, PrincipalRef, require_authorized)
 
 _UNSET = object()
+
+_publication_checks: ContextVar[list | None] = ContextVar('openagent_publication_checks', default=None)
+
+
+def guard_current_publication(recheck) -> None:
+    """Bind a live source-authorization check to every subsequent output of this run."""
+    checks = _publication_checks.get()
+    if checks is None:
+        raise PermissionError('A running publication scope is required')
+    checks.append(recheck)
+
+
+def has_current_publication_guard() -> bool:
+    return bool(_publication_checks.get())
+
+
+async def check_current_publication() -> None:
+    for recheck in _publication_checks.get() or ():
+        await recheck()
+
 
 _current_context: ContextVar[ExecutionContext | None] = ContextVar('openagent_execution_context', default=None)
 _current_runtime: ContextVar[Runtime | None] = ContextVar('openagent_runtime', default=None)
@@ -70,6 +91,10 @@ def provider_tool_call_scope(call_id: str | None):
 def execution_scope(runtime: Runtime, context: ExecutionContext, run_id: str | None, *,
                     module_generation: int | None = None,
                     capability_revision: int | None = None):
+    inherited = _publication_checks.get()
+    same_run = (run_id is not None and current_runtime() is runtime
+                and current_run_id() == run_id and current_execution_context() == context)
+    checks = _publication_checks.set(inherited if same_run and inherited is not None else [])
     tokens = (_current_runtime.set(runtime), _current_context.set(context), _current_run.set(run_id),
               _current_module_generation.set(module_generation),
               _current_capability_revision.set(capability_revision),
@@ -79,6 +104,7 @@ def execution_scope(runtime: Runtime, context: ExecutionContext, run_id: str | N
         with document_turn(runtime, context, run_id):
             yield
     finally:
+        _publication_checks.reset(checks)
         _current_provider_tool_call.reset(tokens[5])
         _current_capability_revision.reset(tokens[4])
         _current_module_generation.reset(tokens[3])
@@ -670,6 +696,12 @@ class Runtime:
             if delegations is None or not await delegations.validate(context):
                 raise PermissionError('Execution delegation is missing or revoked')
         await require_authorized(self.services.authorizer,context,action,resource,audience=audience)
+        if resource.kind == "session" and dream_run_id(resource.resource_id) and action in {
+            "run.read", "run.replay", "session.read", "session.list", "session.search", "session.publish",
+        }:
+            await authorize_dream_history(self, context, resource.resource_id)
+        if action in {"run.publish", "tool.publish"}:
+            await check_current_publication()
 
     @asynccontextmanager
     async def _credentials(self, context: ExecutionContext):
@@ -724,6 +756,9 @@ class Runtime:
         request = copy.deepcopy(request)
         if request.session_id != context.session_id:
             raise ValueError('Request and verified context must identify the same session')
+        dream_id = dream_run_id(request.session_id)
+        if dream_id and (request.run_id != dream_id or not context.deferred or not is_document_dream(context)):
+            raise PermissionError("Only its admitted maintenance run may use a dream session")
         async with self._credentials(context):
             await self._authorize(context,'run.submit',request.session_id,context.tenant_id)
             if request.steer_run_id is not None:
@@ -902,15 +937,20 @@ class Runtime:
         return record
 
     async def events(self, run_id: str, after: int, context: ExecutionContext) -> tuple[RunEvent,...]:
-        await self.authorize_replay(run_id, context)
-        return await self.services.store.events(run_id,after)
+        record = await self.authorize_replay(run_id, context)
+        rows = await self.services.store.events(run_id,after)
+        if dream_run_id(record.session_id):
+            await self.authorize_replay(run_id, context)
+        return rows
 
     async def events_page(self, run_id: str, after: int, context: ExecutionContext, *, limit: int = 1000) -> RunEventPage:
         RunEventPage.validate(after, limit)
-        await self.authorize_replay(run_id, context)
+        record = await self.authorize_replay(run_id, context)
         store = self.services.store
         window = getattr(store, "event_window", None)
         rows = await window(run_id, after, limit + 1) if window else await store.events(run_id, after)
+        if dream_run_id(record.session_id):
+            await self.authorize_replay(run_id, context)
         return RunEventPage.from_window(rows, after, limit)
 
     async def final_answer(self, run_id: str, context: ExecutionContext) -> RunFinalAnswer:
