@@ -56,3 +56,47 @@ public-wheel prefix also completed a real embedding startup callback against
 an isolated coherent copied store while preserving its canonical history and
 access metadata. Neither check activates a live store or qualifies a native
 product or provider.
+
+## Inventory of a fenced migration source
+
+`openagent_storage_sqlite.preflight` inspects an existing snapshot produced by
+`prepare_migration`. Have the host fence every writer when taking the snapshot.
+The existing SQLite backup API includes committed WAL data. The vault, its Git
+directory and any associated state must come from the same fence. Treat the
+complete snapshot and manifest as private. An online database read or a copy
+of the main SQLite file alone does not satisfy this input contract.
+
+```sh
+python -m openagent_storage_sqlite.preflight /private/verified-snapshot \
+  --database state.sqlite3 --vault memories --expected-tenant "$ATTESTED_TENANT"
+```
+
+The trusted host supplies the storage tenant. The inspector verifies manifest
+hashes, checks that the selected database is declared, opens the sealed SQLite
+backup read-only and checks its tenant using the startup ownership rules. The
+existing privacy guard rejects snapshots requiring managed provenance. The
+operator must keep the snapshot immutable throughout inspection.
+
+The JSON response gives aggregate counts of canonical sessions, runs, messages,
+tool invocations, events, search intents and artifacts. It includes tombstoned
+and quarantined session counts; these sets can overlap. For databases retaining
+legacy sessions, it also reports the legacy and canonical live projection
+counts, missing live projections, and pending or failed reconciliation.
+Keep the legacy and canonical totals separate because their identifiers can
+overlap. Unfinished runtime runs and invalid foreign keys are flagged.
+
+The vault inventory counts regular Markdown files, including derived Markdown.
+Its tree digest covers their relative paths and bytes. With Git history enabled
+the inspector checks object integrity and reports the count and digest of
+commits reachable through refs and reflogs. A shallow, partial or external
+object store is rejected. For an intentionally unversioned vault, pass
+`--allow-unversioned-vault`. The CLI emits no raw file names, note text,
+session identifiers, Git commit messages, tenant identifiers or credentials.
+
+Exit 0 means these source checks found no listed anomalies. Exit 1 includes
+aggregate findings to reconcile. Exit 2 rejects the input without emitting
+sensitive diagnostics. A successful inventory does not attest destination
+parity, file permissions, provider credentials, engine context reconstruction
+or a successful restore. Reconcile source and target data under the same fence,
+verify scope, history, content, attached bytes and permissions using the
+target adapter, and qualify restore before activating the target.

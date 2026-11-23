@@ -164,16 +164,20 @@ def check_storage_tenant(database: str|Path, expected_tenant: str) -> None:
     if not path.exists():return
     with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as db:
         db.execute('BEGIN')
-        tables=[row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-        foreign=False
-        for table in tables:
-            quoted='"'+table.replace('"','""')+'"'
-            if 'tenant_id' not in {row[1] for row in db.execute('PRAGMA table_info('+quoted+')')}:continue
-            tenants={str(row[0]) for row in db.execute('SELECT DISTINCT tenant_id FROM '+quoted+' WHERE tenant_id IS NOT NULL') if row[0]}
-            if tenants-{expected_tenant}:
-                foreign=True
-        if foreign and not _verified_legacy_projection_domain(db, tables, expected_tenant):
-            raise PermissionError('Canonical storage tenant requires an attested host identity mapping')
+        _check_transaction_tenant(db, expected_tenant)
+
+
+def _check_transaction_tenant(db, expected_tenant: str) -> None:
+    tables=[row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+    foreign=False
+    for table in tables:
+        quoted='"'+table.replace('"','""')+'"'
+        if 'tenant_id' not in {row[1] for row in db.execute('PRAGMA table_info('+quoted+')')}:continue
+        tenants={str(row[0]) for row in db.execute('SELECT DISTINCT tenant_id FROM '+quoted+' WHERE tenant_id IS NOT NULL') if row[0]}
+        if tenants-{expected_tenant}:
+            foreign=True
+    if foreign and not _verified_legacy_projection_domain(db, tables, expected_tenant):
+        raise PermissionError('Canonical storage tenant requires an attested host identity mapping')
 
 
 def _verified_legacy_projection_domain(db, tables, expected_tenant):
