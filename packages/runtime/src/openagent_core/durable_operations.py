@@ -316,8 +316,11 @@ class DurableOperationRunner:
         store = self.runtime.services.store
         row = await store.durable_operation(run_id)
         if row is None or run_id != row['origin_run_id']:
-            return await store.events(run_id, after)
-        return self._origin_events(run_id, await store.durable_operation_events(run_id, after))
+            return await self.runtime.events(run_id, after, context)
+        rows = await store.durable_operation_events(run_id, after)
+        for ident in {event.run_id for event in rows}:
+            await self.runtime.authorize_replay(ident, context)
+        return self._origin_events(run_id, rows)
 
     async def events_page(self, run_id, after, context, *, limit=1000):
         RunEventPage.validate(after, limit)
@@ -328,7 +331,10 @@ class DurableOperationRunner:
         store = self.runtime.services.store
         window = getattr(store, 'durable_operation_event_window', None)
         rows = await window(run_id, after, limit + 1) if window else await store.durable_operation_events(run_id, after)
-        return RunEventPage.from_window(self._origin_events(run_id, rows[:limit + 1]), after, limit)
+        rows = rows[:limit + 1]
+        for ident in {event.run_id for event in rows}:
+            await self.runtime.authorize_replay(ident, context)
+        return RunEventPage.from_window(self._origin_events(run_id, rows), after, limit)
 
     @staticmethod
     def _origin_events(origin_id, events):

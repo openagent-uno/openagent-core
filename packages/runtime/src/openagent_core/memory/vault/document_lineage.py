@@ -2,7 +2,7 @@
 import sqlalchemy as sa
 
 from .document_history import edits, native_commit
-from .documents import dependencies, import_origins, notes, refresh_indexes, versions
+from .documents import dependencies, import_origins, notes, read_receipts, refresh_indexes, versions
 
 
 async def forget_derivations(con, vault, scope, head, context, root):
@@ -19,6 +19,7 @@ async def forget_derivations(con, vault, scope, head, context, root):
     recovered = []
     for path, cutoff in cutoffs:
         key = {**scope, "path": path}
+        await con.execute(read_receipts.delete().filter_by(**key).where(read_receipts.c.revision >= cutoff))
         if path != root:
             # Later edits can have inherited text without reading a second source.
             # Preserve all independent earlier revisions and restore their latest state.

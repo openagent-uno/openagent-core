@@ -4,6 +4,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from pathlib import PurePosixPath
 
+from uuid import uuid4
+
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -44,6 +46,14 @@ versions = sa.Table("oa_vault_revisions", metadata, *identity_columns(),
     sa.Column("author", sa.Text, nullable=False),
     sa.Column("session_id", sa.Text, nullable=False),
     sa.Column("run_id", sa.Text),
+)
+read_receipts = sa.Table("oa_vault_read_receipts", metadata, *identity_columns(),
+    sa.Column("revision", sa.BigInteger, primary_key=True),
+    sa.Column("token", sa.String(32), nullable=False, unique=True),
+    sa.ForeignKeyConstraint(
+        ["tenant","agent","space","path","revision"],
+        ["oa_vault_revisions." + key for key in ("tenant","agent","space","path","revision")],
+        ondelete="CASCADE"),
 )
 links = sa.Table("oa_vault_links", metadata, *identity_columns(),
     sa.Column("target", sa.String(700), primary_key=True),
@@ -151,6 +161,51 @@ class SqlDocumentVault:
         if await self._scope(context, action) != scope:
             raise PermissionError("The selected vault space changed")
 
+    async def note_receipts(self, scope, keys):
+        """An opaque lifetime per observed revision, shared by repeats and replicas."""
+        from sqlalchemy.dialects import postgresql, sqlite
+        insert = postgresql.insert if self.engine.dialect.name == "postgresql" else sqlite.insert
+        tokens = []
+        keys = sorted(keys)
+        async with self.engine.connect() as con:
+            for start in range(0, len(keys), 100):
+                batch = keys[start:start + 100]
+                rows = await con.scalars(sa.select(read_receipts.c.token).filter_by(**scope).where(
+                    sa.tuple_(read_receipts.c.path, read_receipts.c.revision).in_(batch)))
+                tokens.extend(rows.all())
+        if len(tokens) == len(keys):
+            # The final live recheck joins every token to its surviving
+            # revision just before releasing bytes to the model.
+            return tuple(tokens)
+        tokens.clear()
+        async with self.engine.begin() as con:
+            for start in range(0, len(keys), 100):
+                batch = keys[start:start + 100]
+                matching = sa.tuple_(versions.c.path, versions.c.revision).in_(batch)
+                existing = (await con.execute(sa.select(versions.c.path, versions.c.revision)
+                            .filter_by(**scope).where(matching))).all()
+                if len(existing) != len(batch):
+                    raise PermissionError("A source note revision is no longer available")
+                await con.execute(insert(read_receipts).on_conflict_do_nothing(), [
+                    {**scope, "path": path, "revision": revision, "token": uuid4().hex}
+                    for path, revision in batch])
+                tokens.extend((await con.scalars(sa.select(read_receipts.c.token).filter_by(**scope).where(
+                    sa.tuple_(read_receipts.c.path, read_receipts.c.revision).in_(batch)))).all())
+        return tuple(tokens)
+
+    async def resolve_note_receipts(self, scope, tokens):
+        # Always join the revision, including on SQLite installations where
+        # foreign-key enforcement is owned by the embedding engine.
+        join = versions.join(read_receipts, sa.and_(*(versions.c[k] == read_receipts.c[k]
+                             for k in (*scope, "path", "revision"))))
+        stmt = sa.select(versions.c.path, versions.c.revision).select_from(join).where(
+            *(versions.c[k] == v for k, v in scope.items()))
+        ids, rows = tuple(tokens), []
+        async with self.engine.connect() as con:
+            for start in range(0, len(ids), 256):
+                rows.extend((await con.execute(stmt.where(read_receipts.c.token.in_(ids[start:start + 256])))).all())
+        return rows
+
     async def read(self, context, path, *, revision=None):
         scope = await self._scope(context, "memory.read")
         async with self.engine.connect() as con:
@@ -165,7 +220,7 @@ class SqlDocumentVault:
         await self._recheck(context, "memory.read", scope)
         if row is None:
             raise LookupError("Note not found")
-        saw_notes(scope, [row])
+        await saw_notes(self, context, scope, [row])
         return dict(row)
 
     async def list_notes(self, context, *, after=None, limit=50):
@@ -179,7 +234,7 @@ class SqlDocumentVault:
         async with self.engine.connect() as con:
             rows = (await con.execute(stmt.order_by(notes.c.path).limit(limit + 1))).mappings().all()
         await self._recheck(context, "memory.read", scope)
-        saw_notes(scope, rows[:limit])
+        await saw_notes(self, context, scope, rows[:limit])
         return {"notes": [dict(row) for row in rows[:limit]],
                 "next_cursor": rows[limit - 1]["path"] if len(rows) > limit else None}
 
@@ -223,7 +278,7 @@ class SqlDocumentVault:
         async with self.engine.connect() as con:
             rows = (await con.execute(sa.text(stmt), params)).mappings().all()
         await self._recheck(context, "memory.read", scope)
-        saw_notes(scope, rows[:limit])
+        await saw_notes(self, context, scope, rows[:limit])
         result = {"hits": [{"kind": "note", **dict(row)} for row in rows[:limit]]}
         if paginate:
             result["next_cursor"] = rows[limit - 1]["path"] if len(rows) > limit else None
@@ -239,11 +294,11 @@ class SqlDocumentVault:
             raise ValueError("Unknown vault inspection")
         scope = await self._scope(context, "memory.read")
         async with self.engine.connect() as con:
-            records = (await con.execute(sa.select(notes.c.path, notes.c.content)
+            records = (await con.execute(sa.select(notes.c.path, notes.c.content, notes.c.revision)
                        .filter_by(**scope).where(notes.c.content.is_not(None)))).all()
 
         def inspect():
-            index = VaultIndex.from_documents(records)
+            index = VaultIndex.from_documents([(r.path, r.content) for r in records])
             try:
                 if operation == "gate":
                     return run_gate(index, config).to_dict()
@@ -260,6 +315,7 @@ class SqlDocumentVault:
 
         result = await asyncio.to_thread(inspect)
         await self._recheck(context, "memory.read", scope)
+        await saw_notes(self, context, scope, [r._mapping for r in records])
         return result
 
     async def backlinks(self, context, path, *, after=None, limit=50):
@@ -276,7 +332,7 @@ class SqlDocumentVault:
         async with self.engine.connect() as con:
             rows = (await con.execute(stmt.order_by(links.c.path).limit(limit + 1))).mappings().all()
         await self._recheck(context, "memory.read", scope)
-        saw_notes(scope, rows[:limit])
+        await saw_notes(self, context, scope, rows[:limit])
         return {"paths": [r["path"] for r in rows[:limit]], "next_cursor": rows[limit - 1]["path"] if len(rows) > limit else None}
 
     async def history(self, context, path, *, before=None, limit=50):
@@ -292,6 +348,7 @@ class SqlDocumentVault:
         async with self.engine.connect() as con:
             rows = (await con.execute(stmt.order_by(versions.c.revision.desc()).limit(limit + 1))).scalars().all()
         await self._recheck(context, "memory.read", scope)
+        await saw_notes(self, context, scope, [{"path": path, "revision": rev} for rev in rows[:limit]])
         return {"revisions": list(rows[:limit]), "next_cursor": rows[limit - 1] if len(rows) > limit else None}
 
     async def revision_origin(self, context, path, *, revision):
@@ -304,6 +361,8 @@ class SqlDocumentVault:
             facts = (await con.execute(sa.select(import_origins.c.facts).filter_by(
                 **scope, path=note_path(path), revision=revision))).scalar_one_or_none()
         await self._recheck(context, "memory.read", scope)
+        if facts is not None:
+            await saw_notes(self, context, scope, [{"path": path, "revision": revision}])
         return json.loads(facts) if facts is not None else None
 
     async def write(self, context, path, content, *, expected_revision, before_commit=None):

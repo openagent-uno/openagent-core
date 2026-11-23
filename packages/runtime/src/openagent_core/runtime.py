@@ -689,6 +689,21 @@ class Runtime:
 
     async def authorize(self, context: ExecutionContext, action: str, resource: ResourceRef, *, audience=()) -> None:
         """Revalidate delegation and current host policy at every operation."""
+        await self._authorize_policy(context, action, resource, audience=audience)
+        if resource.kind == "session" and dream_run_id(resource.resource_id) and action in {
+            "run.read", "run.replay", "session.read", "session.list", "session.search", "session.publish",
+        }:
+            await authorize_dream_history(self, context, resource.resource_id)
+        if resource.kind == "session" and action in {"session.read", "session.list", "session.search", "session.publish"}:
+            from .memory.document_exposure import authorize_document_history
+            await authorize_document_history(self, context, session_id=resource.resource_id)
+        if resource.kind in {"agent", "session"} and action in {"session.create", "session.rename"}:
+            from .memory.document_exposure import require_unexposed_turn
+            require_unexposed_turn("Session title")
+        if action in {"run.publish", "tool.publish", "tool.call", "model.use", "run.delegate", "operation.continue"}:
+            await check_current_publication()
+
+    async def _authorize_policy(self, context, action, resource, *, audience):
         if context.agent_id != self.settings.agent_id:
             raise PermissionError('Context belongs to a different agent runtime')
         if context.delegation_id:
@@ -696,12 +711,6 @@ class Runtime:
             if delegations is None or not await delegations.validate(context):
                 raise PermissionError('Execution delegation is missing or revoked')
         await require_authorized(self.services.authorizer,context,action,resource,audience=audience)
-        if resource.kind == "session" and dream_run_id(resource.resource_id) and action in {
-            "run.read", "run.replay", "session.read", "session.list", "session.search", "session.publish",
-        }:
-            await authorize_dream_history(self, context, resource.resource_id)
-        if action in {"run.publish", "tool.publish"}:
-            await check_current_publication()
 
     @asynccontextmanager
     async def _credentials(self, context: ExecutionContext):
@@ -878,6 +887,8 @@ class Runtime:
                             await self.services.store.transition(request.run_id,'cancelled')
                             return
                         await self.services.store.transition(request.run_id,'running')
+                        from .memory.document_exposure import authorize_document_history
+                        await authorize_document_history(self, context, run_id=request.run_id)
                         from .content_privacy import ToolResultPrivacyPublisher
                         privacy=self.service(ToolResultPrivacyPublisher)
                         if privacy is not None:
@@ -931,6 +942,8 @@ class Runtime:
         check_run = getattr(self.services.store, 'check_run_access', None)
         if check_run is not None:
             await check_run(context, run_id)
+        from .memory.document_exposure import authorize_document_history
+        await authorize_document_history(self, context, run_id=run_id)
         return record
 
     async def authorize_replay(self, run_id: str, context: ExecutionContext) -> RunRecord:
@@ -939,20 +952,18 @@ class Runtime:
         return record
 
     async def events(self, run_id: str, after: int, context: ExecutionContext) -> tuple[RunEvent,...]:
-        record = await self.authorize_replay(run_id, context)
+        await self.authorize_replay(run_id, context)
         rows = await self.services.store.events(run_id,after)
-        if dream_run_id(record.session_id):
-            await self.authorize_replay(run_id, context)
+        await self.authorize_replay(run_id, context)
         return rows
 
     async def events_page(self, run_id: str, after: int, context: ExecutionContext, *, limit: int = 1000) -> RunEventPage:
         RunEventPage.validate(after, limit)
-        record = await self.authorize_replay(run_id, context)
+        await self.authorize_replay(run_id, context)
         store = self.services.store
         window = getattr(store, "event_window", None)
         rows = await window(run_id, after, limit + 1) if window else await store.events(run_id, after)
-        if dream_run_id(record.session_id):
-            await self.authorize_replay(run_id, context)
+        await self.authorize_replay(run_id, context)
         return RunEventPage.from_window(rows, after, limit)
 
     async def final_answer(self, run_id: str, context: ExecutionContext) -> RunFinalAnswer:
@@ -972,7 +983,7 @@ class Runtime:
                     if event.payload.get("kind") == "done":
                         answer = event.payload.get("final_answer")
                         break
-            await self._authorize(context, 'run.replay', record.session_id, record.tenant_id)
+            await self.authorize_replay(run_id, context)
         return RunFinalAnswer(run_id, run_id, dict(answer) if isinstance(answer, Mapping) else None)
 
     async def record_delivery(self, delivery, context: ExecutionContext, *, source_run_id: str | None = None):
@@ -1001,6 +1012,8 @@ class Runtime:
         except IdempotencyConflict:
             pass
         await self._authorize(context, "run.publish", context.session_id, context.tenant_id)
+        from .memory.document_exposure import require_unexposed_turn
+        require_unexposed_turn("Confirmed delivery")
         return await operation(reference, context, delivery, source_run_id=source_run_id)
 
     async def accepted_request(self, run_id: str, context: ExecutionContext):
@@ -1011,7 +1024,9 @@ class Runtime:
         """
         record=await self.get_run(run_id,context)
         await self._authorize(context,'run.replay',record.session_id,record.tenant_id)
-        return await self.services.store.accepted_request(run_id)
+        request = await self.services.store.accepted_request(run_id)
+        await self.authorize_replay(run_id, context)
+        return request
 
     async def cancel(self, run_id: str, context: ExecutionContext, *, reserve: bool = False) -> RunRecord:
         if reserve and await self.services.store.get(run_id) is None:

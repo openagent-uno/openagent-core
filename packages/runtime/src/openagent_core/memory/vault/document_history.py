@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 from ...contracts import canonical_json
 from ...runtime import current_run_id
-from .documents import identity_columns, notes, versions, note_path
+from .documents import identity_columns, notes, read_receipts, versions, note_path
 
 meta = sa.MetaData()
 
@@ -489,6 +489,7 @@ async def restore(store, context, digest, *, authorize, reset=False):
                     )
                 ).all()
                 for path, rev in values:
+                    await con.execute(sa.delete(read_receipts).filter_by(**scope, path=path, revision=rev))
                     await con.execute(
                         sa.delete(versions).filter_by(**scope, path=path, revision=rev)
                     )

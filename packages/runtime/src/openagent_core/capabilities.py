@@ -635,14 +635,21 @@ class CapabilityCatalog:
                 await privacy_publisher.publish_tool_result(context,run_id,call_id,envelope,origins)
             else:
                 await runtime.services.store.finish_tool(run_id,call_id,result=envelope)
+        from .runtime import check_current_publication, has_current_publication_guard
         for observer in self.observers:
+            if durable and has_current_publication_guard():
+                await check_current_publication()
             await observer(descriptor, arguments, result, context, call_id)
         # Optional trusted executor acknowledgement, after the normal result
         # has passed publication authorization, persistence and observers.
         # It cannot replace a result or grant authority to a later event.
         observe_published = getattr(registration.executor, "observe_published_result", None)
         if callable(observe_published):
+            if durable and has_current_publication_guard():
+                await check_current_publication()
             await observe_published(definition.name, copy.deepcopy(dict(arguments)), result, context)
+        if durable and has_current_publication_guard():
+            await check_current_publication()
         return result
 
 

@@ -17,6 +17,9 @@ async def require_unprotected_execution(surface: str) -> None:
         return
     if runtime is None or context is None:
         raise PrivacyConflict("A canonical writer requires the exact execution context")
+    if surface != "Document vault":
+        from ..document_exposure import require_unexposed_turn
+        require_unexposed_turn(surface)
     publisher = runtime.service(ToolResultPrivacyPublisher)
     if publisher is None:
         # A runtime without a provenance publisher cannot admit protected

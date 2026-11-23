@@ -229,6 +229,42 @@ class Sessions:
             next_cursor=_encode(page[-1]["session_seq"]) if len(records) > limit else None,
         )
 
+    async def bind_document_sources(self, context, run_id, source_ids):
+        async with self._db() as db:
+            row = await self._owned(db, run_id)
+            if (row["tenant"], row["session_id"], row["status"]) != (context.tenant_id, context.session_id, "running"):
+                raise PermissionError("Document provenance requires an admitted running turn")
+            await db.execute(
+                """INSERT INTO oa_document_run_sources(agent,run_id,session_id,source_id)
+                   SELECT %s,%s,%s,unnest(%s::text[]) ON CONFLICT DO NOTHING""",
+                (self.agent_id, run_id, context.session_id, list(source_ids)))
+            count = await (await db.execute(
+                "SELECT count(*) AS n FROM oa_document_run_sources WHERE agent=%s AND run_id=%s",
+                (self.agent_id, run_id))).fetchone()
+            if count["n"] > 2048:
+                raise PermissionError("Document provenance exceeds the admitted turn budget")
+
+    async def document_source_runs(self, context, session_id):
+        async with self._db() as db:
+            rows = await (await db.execute(
+                """SELECT DISTINCT d.run_id FROM oa_document_run_sources d
+                   JOIN runs r ON r.agent=d.agent AND r.id=d.run_id
+                   WHERE d.agent=%s AND d.session_id=%s AND r.tenant=%s LIMIT 2049""",
+                (self.agent_id, session_id, context.tenant_id))).fetchall()
+            return tuple(r["run_id"] for r in rows)
+
+    async def document_sources(self, context, *, run_id=None, session_id=None):
+        if (run_id is None) == (session_id is None):
+            raise ValueError("Expected one document-history selector")
+        key, value = ("d.run_id", run_id) if run_id is not None else ("d.session_id", session_id)
+        async with self._db() as db:
+            rows = await (await db.execute(
+                f"""SELECT DISTINCT d.source_id FROM oa_document_run_sources d
+                    JOIN runs r ON r.agent=d.agent AND r.id=d.run_id
+                    WHERE d.agent=%s AND {key}=%s AND r.tenant=%s LIMIT 2049""",
+                (self.agent_id, value, context.tenant_id))).fetchall()
+            return tuple(r["source_id"] for r in rows)
+
     async def check_dream_session(self, ref, context):
         self._boundary(ref, context)
         async with self._db() as db:
@@ -325,7 +361,7 @@ class Sessions:
                 await db.execute(
                     f"""
                 WITH recent AS MATERIALIZED (
-                    SELECT r.ordinal, m.session_seq, m.role, m.body #>> '{{}}' AS content
+                    SELECT r.id AS run_id, r.ordinal, m.session_seq, m.role, m.body #>> '{{}}' AS content
                     FROM runs r JOIN messages m ON m.agent=r.agent AND m.run_id=r.id
                     WHERE r.agent=%s AND r.session_id=%s AND r.ordinal<%s AND {RUN_AUDIENCE}
                       AND m.role IN ('user','assistant') AND m.status='complete'
@@ -335,7 +371,7 @@ class Sessions:
                     SELECT *,sum(octet_length(content)) OVER (ORDER BY ordinal DESC,session_seq DESC) AS total
                     FROM recent
                 )
-                SELECT role, content FROM bounded WHERE total<=%s ORDER BY ordinal,session_seq
+                SELECT run_id, role, content FROM bounded WHERE total<=%s ORDER BY ordinal,session_seq
                 """,
                     (
                         self.agent_id,
@@ -347,7 +383,7 @@ class Sessions:
                     ),
                 )
             ).fetchall()
-            return tuple(ProviderHistoryMessage(row["role"], row["content"]) for row in rows)
+            return tuple(ProviderHistoryMessage(row["role"], row["content"], row["run_id"]) for row in rows)
 
     async def _edit(self, reference, context, field, value):
         self._boundary(reference, context)

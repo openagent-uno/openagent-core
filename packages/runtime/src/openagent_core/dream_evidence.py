@@ -149,7 +149,9 @@ class DocumentDreamEvidence:
                 for ref in refs:
                     resource = ResourceRef("session", ref.tenant_id, ref.session_id)
                     for action in ("session.read", "run.replay"):
-                        await runtime.authorize(ctx, action, resource, audience=ctx.audience)
+                        # Authorize the exact admitted sample below; private
+                        # unrelated turns in a shared room are never selected.
+                        await runtime._authorize_policy(ctx, action, resource, audience=ctx.audience)
                     await runtime.services.store.check_dream_session(ref, ctx)
             return refs
 
@@ -165,6 +167,11 @@ class DocumentDreamEvidence:
                     or any(not isinstance(i, str) or len(i.encode()) > 200 for i in ids)
                 ):
                     raise PermissionError("Invalid dream activity references")
+                from .memory.document_exposure import authorize_document_history
+                for ident in ids:
+                    await authorize_document_history(runtime, original, run_id=ident)
+                    if reader != original:
+                        await authorize_document_history(runtime, reader, run_id=ident)
                 turns = await runtime.services.store.dream_session_activity(
                     ref,
                     original,

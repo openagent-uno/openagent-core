@@ -88,16 +88,20 @@ class DocumentVault(unittest.IsolatedAsyncioTestCase):
         return result.output
 
     async def test_forget_removes_transitive_copies_and_restores_independent_revision(self):
-        from openagent_core.runtime import execution_scope
         store, actor = self.store, self.a
         await store.write(actor, "source.md", "private sample", expected_revision=0)
         await store.write(actor, "guide.md", "public instructions", expected_revision=0)
-        with execution_scope(self.runtime, actor, "first"):
-            await store.read(actor, "source.md")
-            await store.write(actor, "guide.md", "private sample plus instructions", expected_revision=1)
-        with execution_scope(self.runtime, actor, "second"):
-            await store.read(actor, "guide.md")
-            await store.write(actor, "copy.md", "private sample", expected_revision=0)
+        async def copy(request, context, runtime):
+            if request.input == "first":
+                await store.read(context, "source.md")
+                await store.write(context, "guide.md", "private sample plus instructions", expected_revision=1)
+            else:
+                await store.read(context, "guide.md")
+                await store.write(context, "copy.md", "private sample", expected_revision=0)
+            return "copied"
+        with patch.object(self.runtime.services.executor, "execute", copy):
+            await self.turn(actor, "first")
+            await self.turn(actor, "second")
         result = await store.forget(actor, "source.md", expected_revision=1)
         self.assertTrue(result["forgotten"])
         self.assertEqual((await store.read(actor, "guide.md"))["content"], "public instructions")

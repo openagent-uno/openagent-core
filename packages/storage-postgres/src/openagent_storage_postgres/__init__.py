@@ -358,6 +358,15 @@ class PostgresRuntimeStore(Sessions, Operations, ProviderSlots):
             row = await cur.fetchone()
             if isinstance(request, OperationRunRequest):
                 await self._admit_segment(db, request, context, snapshot, bool(reservation))
+            continuation = getattr(request, "continuation", None)
+            ancestors = [v for v in (context.parent_run_id, getattr(continuation,"previous_run_id",None),
+                                     getattr(continuation,"handoff_run_id",None)) if v]
+            if ancestors:
+                await db.execute("""INSERT INTO oa_document_run_sources(agent,run_id,session_id,source_id)
+                    SELECT d.agent,%s,%s,d.source_id FROM oa_document_run_sources d
+                    JOIN runs r ON r.id=d.run_id AND r.agent=d.agent WHERE r.tenant=%s AND d.agent=%s
+                    AND d.run_id=ANY(%s) ON CONFLICT DO NOTHING""",
+                    (request.run_id,request.session_id,context.tenant_id,self.agent_id,ancestors))
             await self._message(db, row, "user", context.author, request.input)
             await self._event(
                 db, request.run_id, "run.accepted", dict(status=status, request_digest=digest)

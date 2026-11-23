@@ -139,3 +139,11 @@ The beta 22 / product beta 39 candidates still require exact installed dependenc
 closure and release review. Common Shopify enrollment remains disabled until
 product-local actions and the real two-server/provider gates pass. No source-unit
 receipt alone authorizes activation.
+
+## SQL document revisions in a run
+
+The SQLite and PostgreSQL runtime stores commit opaque revision receipts before a document read, search result, graph, backlink or revision list reaches an admitted turn. The vault owns the mapping from each receipt to a tenant, agent, space, path and immutable revision. Writes derived from a protected conversation inherit the revisions verified for that turn. Child and durable continuation admissions copy their parent's receipts in the transaction that records the new mission. A restart reloads these bindings before execution.
+
+Core rechecks the current vault binding, space, audience, authority and surviving revisions when publishing, replaying and returning a final answer. Forgetting a revision, including a derived revision, blocks historical run output and tool replay. A rolled-back forget leaves both the note and the authorized history accessible. Whole-session projections and search hits require every contributing document grant. Native model history checks individual earlier turns, omits inaccessible turns and can continue with independent messages in the same session. A model using a retained earlier turn inherits its receipts before receiving its text. SQL document profiles use this canonical conversation history on both storage adapters, including when the worker has a local workspace.
+
+The host must route readers through these Core services. Backups, database administrators, external recipients, arbitrary custom observers and model-provider retention have separate custody. The canonical run ledger retains the original payload behind the live authorization checks. A backup restore or binary downgrade must retain the vault mappings, run receipts, current revocations and a reader that enforces them before reopening access.

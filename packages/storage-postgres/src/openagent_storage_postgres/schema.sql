@@ -18,6 +18,10 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS runs_queue ON runs(agent,session_id,ordinal) WHERE status IN ('queued','running');
 CREATE INDEX IF NOT EXISTS runs_history ON runs(agent,session_id,ordinal);
 CREATE INDEX IF NOT EXISTS runs_owner ON runs(worker) WHERE status IN ('queued','running');
+CREATE TABLE IF NOT EXISTS oa_document_run_sources (
+    agent text NOT NULL, run_id text NOT NULL, session_id text NOT NULL, source_id text NOT NULL,
+    PRIMARY KEY(agent,run_id,source_id), FOREIGN KEY(agent,run_id) REFERENCES runs(agent,id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS oa_document_session_sources ON oa_document_run_sources(agent,session_id,source_id);
 CREATE TABLE IF NOT EXISTS reservations (
     agent text NOT NULL,id text NOT NULL,tenant text NOT NULL,session_id text NOT NULL,participants text[] NOT NULL,PRIMARY KEY(agent,id));
 CREATE TABLE IF NOT EXISTS messages (

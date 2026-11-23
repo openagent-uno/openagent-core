@@ -125,6 +125,23 @@ class SqliteRuntimeStore:
                 db.execute("""CREATE INDEX IF NOT EXISTS idx_runtime_operation_origin ON session_runs(
                     json_extract(metadata_json,'$.operation_continuation.origin_run_id'))
                     WHERE json_extract(metadata_json,'$.operation_continuation.origin_run_id') IS NOT NULL""")
+                db.execute("""CREATE TABLE IF NOT EXISTS oa_document_run_sources(
+                    run_id TEXT NOT NULL REFERENCES session_runs(id) ON DELETE CASCADE,
+                    session_id TEXT NOT NULL, source_id TEXT NOT NULL,
+                    PRIMARY KEY(run_id,source_id))""")
+                db.execute("""CREATE INDEX IF NOT EXISTS oa_document_session_sources
+                    ON oa_document_run_sources(session_id,source_id)""")
+                db.execute("""CREATE TRIGGER IF NOT EXISTS oa_document_session_search_invalidate
+                    BEFORE INSERT ON oa_document_run_sources
+                    WHEN NOT EXISTS(SELECT 1 FROM oa_document_run_sources WHERE session_id=NEW.session_id)
+                    BEGIN
+                      UPDATE sessions_v2 SET source_version=source_version+1 WHERE id=NEW.session_id;
+                      INSERT INTO search_outbox
+                        (tenant_id,source_kind,source_id,operation,source_version,acl_version,committed_at_ms)
+                      SELECT tenant_id,'session',id,'upsert',source_version,acl_version,
+                             CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)
+                      FROM sessions_v2 WHERE id=NEW.session_id;
+                    END""")
                 ensure_delegated_ancestry(db)
                 restore_runtime_search_intents(db, int(time.time()*1000))
         except BaseException:
@@ -311,6 +328,13 @@ class SqliteRuntimeStore:
                          continuation.previous_run_id,continuation.segment-1)).rowcount
                     if changed != 1:
                         raise IdempotencyConflict('The operation continuation was cancelled or already claimed')
+            for ancestor in (context.parent_run_id, getattr(continuation, "previous_run_id", None),
+                             getattr(continuation, "handoff_run_id", None)):
+                if ancestor:
+                    db.execute("""INSERT INTO oa_document_run_sources(run_id,session_id,source_id)
+                        SELECT ?,?,d.source_id FROM oa_document_run_sources d JOIN session_runs r ON r.id=d.run_id
+                        WHERE r.tenant_id=? AND r.agent_id=? AND d.run_id=? ON CONFLICT DO NOTHING""",
+                        (request.run_id,request.session_id,context.tenant_id,context.agent_id,ancestor))
             if self._content_privacy_publication is not None:
                 self._content_privacy_publication.inherit(db,request.run_id,request.session_id,context.parent_run_id)
             if reservation:
@@ -914,6 +938,71 @@ class SqliteRuntimeStore:
     list_sessions = _serialized(_list_sessions)
     search_sessions = _serialized(_search_sessions)
     read_tool_invocation = _serialized(_read_saved_tool_invocation)
+    @_serialized
+    def provider_history(self, context, run_id, *, limit, max_bytes):
+        from openagent_core.provider_history import ProviderHistoryMessage
+
+        if not (type(limit) is int and 1 <= limit <= 128 and type(max_bytes) is int and 1 <= max_bytes <= 65536):
+            raise ValueError("Invalid provider history budget")
+        current = self.connection.execute(
+            "SELECT ordinal,status FROM session_runs WHERE id=? AND session_id=? AND agent_id=? AND tenant_id=?",
+            (run_id, context.session_id, context.agent_id, context.tenant_id)).fetchone()
+        if not current or current["status"] != "running":
+            raise PermissionError("Provider history requires the current admitted turn")
+        members = [p.key for p in {context.initiator, context.authority, *context.audience}]
+        # Historic/imported rows without a canonical admitted audience cannot
+        # participate in the native model history window via this adapter.
+        rows = self.connection.execute("""
+            WITH recent AS (
+                SELECT r.id,r.ordinal,m.sequence,m.role,m.text FROM session_runs r
+                JOIN session_messages m ON m.run_id=r.id
+                WHERE r.tenant_id=? AND r.agent_id=? AND r.session_id=? AND r.ordinal<?
+                  AND m.role IN ('user','assistant') AND m.status='complete' AND m.visibility='user_visible'
+                  AND m.text IS NOT NULL AND json_type(r.metadata_json,'$.execution_context.audience')='array'
+                  AND json_type(r.metadata_json,'$.execution_context.authority')='object'
+                  AND json_type(r.metadata_json,'$.execution_context.initiator')='object'
+                  AND NOT EXISTS (SELECT 1 FROM json_each(?) p
+                     WHERE p.value <> json_extract(r.metadata_json,'$.execution_context.authority')
+                     AND p.value <> json_extract(r.metadata_json,'$.execution_context.initiator')
+                     AND p.value NOT IN (SELECT value FROM json_each(r.metadata_json,'$.execution_context.audience')))
+                ORDER BY r.ordinal DESC,m.sequence DESC LIMIT ?
+            ), bounded AS (
+                SELECT *,sum(length(CAST(text AS blob))) OVER (ORDER BY ordinal DESC,sequence DESC) AS n FROM recent
+            ) SELECT id,role,text FROM bounded WHERE n<=? ORDER BY ordinal,sequence
+            """, (context.tenant_id, context.agent_id, context.session_id, current["ordinal"],
+                  canonical_json(members), limit, max_bytes)).fetchall()
+        return tuple(ProviderHistoryMessage(r["role"],r["text"],r["id"]) for r in rows)
+
+    @_serialized
+    def bind_document_sources(self, context, run_id, source_ids):
+        with self._transaction() as db:
+            row = db.execute("SELECT session_id,status FROM session_runs WHERE id=? AND tenant_id=? AND agent_id=?",
+                             (run_id, context.tenant_id, context.agent_id)).fetchone()
+            if not row or row["session_id"] != context.session_id or row["status"] != "running":
+                raise PermissionError("Document provenance requires an admitted running turn")
+            db.executemany("INSERT INTO oa_document_run_sources VALUES(?,?,?) ON CONFLICT DO NOTHING",
+                           [(run_id, context.session_id, token) for token in source_ids])
+            count = db.execute("SELECT count(*) FROM oa_document_run_sources WHERE run_id=?", (run_id,)).fetchone()[0]
+            if count > 2048:
+                raise PermissionError("Document provenance exceeds the admitted turn budget")
+
+    @_serialized
+    def document_source_runs(self, context, session_id):
+        return tuple(r[0] for r in self.connection.execute(
+            """SELECT DISTINCT d.run_id FROM oa_document_run_sources d JOIN session_runs r ON r.id=d.run_id
+               WHERE d.session_id=? AND r.tenant_id=? AND r.agent_id=? LIMIT 2049""",
+            (session_id, context.tenant_id, context.agent_id)))
+
+    @_serialized
+    def document_sources(self, context, *, run_id=None, session_id=None):
+        if (run_id is None) == (session_id is None):
+            raise ValueError("Expected one document-history selector")
+        key, value = ("d.run_id", run_id) if run_id is not None else ("d.session_id", session_id)
+        return tuple(r[0] for r in self.connection.execute(
+            f"""SELECT DISTINCT d.source_id FROM oa_document_run_sources d JOIN session_runs r ON r.id=d.run_id
+                WHERE {key}=? AND r.tenant_id=? AND r.agent_id=? LIMIT 2049""",
+            (value, context.tenant_id, context.agent_id)))
+
     check_dream_session = _serialized(dream_activity.check_dream_session)
     dream_session_activity = _serialized(dream_activity.dream_session_activity)
     dream_evidence_receipt = _serialized(dream_activity.dream_evidence_receipt)
