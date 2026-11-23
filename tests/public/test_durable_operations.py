@@ -105,8 +105,8 @@ class DurableOperationsTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(runtime.close)
         return runtime, runner
 
-    async def finished(self, runner, run_id='run-a'):
-        async with asyncio.timeout(4):
+    async def finished(self, runner, run_id='run-a', *, timeout=4):
+        async with asyncio.timeout(timeout):
             while True:
                 record = await runner.get_run(run_id, self.context)
                 if record.terminal:
@@ -118,18 +118,21 @@ class DurableOperationsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_timeout_continues_without_user_turn_or_repeating_submission(self):
         reads = []
+        reading = asyncio.Event()
 
         async def read(args, context):
             self.assertEqual(args, {'id': 'receipt-a'})
             reads.append(args)
             if len(reads) == 1:
+                reading.set()
                 await asyncio.Future()
             return {'ready': True}
 
-        runtime, runner = await self.runtime(read, policy=DurableOperationPolicy(segment_seconds=.15))
+        runtime, runner = await self.runtime(read, policy=DurableOperationPolicy(segment_seconds=2))
         accepted = await runner.submit(self.request(), self.context)
         self.assertEqual(accepted.run_id, 'run-a')
-        result = await self.finished(runner)
+        await asyncio.wait_for(reading.wait(), 4)
+        result = await self.finished(runner, timeout=10)
         self.assertEqual((result.run_id, result.status, result.output, result.segment),
                          ('run-a', 'success', 'Record ready', 1))
         self.assertNotEqual(result.segment_run_id, result.run_id)
