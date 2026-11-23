@@ -141,6 +141,59 @@ and browser cookie through new generations. It uses a deterministic model
 boundary and fixture infrastructure on one OS account. A deployment qualifies
 its own VM isolation, certified transport, cancellation and snapshot provider.
 
+### Lima virtual machines
+
+`openagent_core.lima_computers.LimaComputerProvider` is an opt-in reference
+adapter for an operator-owned hypervisor. It clones a stopped Lima base for
+each allocation. A private Lima home holds the guest disks, reservations,
+host-key pins, generation counters and review artifacts. Point an API worker
+at the provider on the machine that owns that storage. Multiple independent
+Lima homes represent separate providers. The adapter requires POSIX file locks,
+Lima, OpenSSH and PyYAML on the controller.
+
+Register approved `(project, base_version)` pairs with a sealed base instance
+and its full Git commit hash. Set up a nonprivileged `oawork` account, a Git
+working tree at `/srv/workspace`, `sudo`, `nft`, and a root-owned
+`/usr/local/bin/oa-computer-stdio` launcher in the base image. The launcher
+must enter that workspace, select the guest's authorized desktop, and speak
+the existing host-tools NDJSON protocol. Install the capabilities and private
+desktop/browser profiles in the guest. The operator configures guest consent
+when authorizing the base and tool inventory. A client message cannot select
+a base VM path, command, SSH identity or shell on the controller.
+
+```python
+provider = LimaComputerProvider(private_lima_home, approved_bases)
+broker = TaskComputerBroker(engine, authorizer, provider, provider, delegations=grants)
+provider.bind(broker)
+await broker.initialize()
+```
+
+Each clone uses Lima plain mode, private disks, a distinct pinned Ed25519 SSH
+host key, no host filesystem mounts and no SSH agent forwarding. The provisioner
+keeps its client credential on the controller. Guest tools run as `oawork`.
+Firewall admission limits outbound traffic from that account to guest loopback
+and an optional explicit proxy endpoint supplied as an IP and port through
+`egress_proxy`. Configure the corresponding browser or application proxy in
+the base. Use a dedicated hypervisor network for infrastructure-level filtering.
+
+A heartbeat verifies the host key and the guest boot ID. Reattachment after
+shutdown advances the persistent generation while preserving the task disk.
+The RPC checks the exact boot again on the same authenticated connection before
+forwarding any guest command. `revoke` first closes durable broker admission,
+then shuts down the matching VM to stop active guest processes. Redelivery
+completes an interrupted shutdown. An effect admitted before revocation may
+already have reached the task disk. Saved data survives shutdown.
+
+Within a mounted turn, `broker.checkpoint(context, lease, request_id)` stores
+a bounded binary Git patch, the selected Git tree, original commit, assignment,
+generation, epoch and SHA-256 receipt. The same request ID returns the same
+checkpoint across restarts. A new checkpoint reads the current working tree,
+including untracked additions and tracked deletions, through a temporary Git
+index. `broker.read_checkpoint(context, task, request_id)` checks the host's
+`computer.review` and base-version permissions before returning the saved
+receipt and patch. Checkpoint creation needs `computer.checkpoint`. Applying a
+reviewed patch to a project remains an explicit host operation.
+
 Release cohort: `1.1.0b48`. The public contract suite passed 720 tests and
 97 subtests (two optional tests skipped). Package publication, host deployment
 and real-device acceptance are recorded separately.

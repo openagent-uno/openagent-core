@@ -343,6 +343,40 @@ class TaskComputerBroker:
             if row["base_version"] != task.base_version:
                 raise IdempotencyConflict("A task already owns another immutable base version")
             await self._authorize(context, allocation.key, "computer.revoke")
+        fence = getattr(self.provider, "fence", None)
+        if callable(fence):
+            # Commit the admission fence first. Redelivery retries a provider
+            # shutdown interrupted after the durable revocation.
+            await fence(allocation)
+
+    async def checkpoint(self, context, lease, request_id):
+        """Freeze a reviewable diff of the exact mounted assignment."""
+        if (
+            not isinstance(request_id, str)
+            or not 0 < len(request_id.encode()) <= 200
+            or await self._lease(context, "computer.checkpoint") != lease
+        ):
+            raise CapabilityUnavailable("A mounted task and stable checkpoint request ID are required")
+        result = await self.provider.checkpoint(lease, request_id)
+        await self._lease(context, "computer.publish")
+        return result
+
+    async def read_checkpoint(self, context, task, request_id):
+        """Return a saved authorized checkpoint, including after the VM stops."""
+        if not isinstance(request_id, str) or not 0 < len(request_id.encode()) <= 200:
+            raise ValueError("Expected a stable checkpoint request ID")
+        allocation = ComputerAllocation.for_context(context, task)
+        await self._authorize(
+            context, allocation.key, "computer.review", base=(task.project, task.base_version)
+        )
+        row = await self._row(allocation.key)
+        if not row or row["base_version"] != task.base_version:
+            raise CapabilityUnavailable("Computer task is unavailable")
+        result = await self.provider.read_checkpoint(allocation, request_id)
+        await self._authorize(
+            context, allocation.key, "computer.review", base=(task.project, task.base_version)
+        )
+        return result
 
     async def _lease(self, context, action):
         partition = context.catalog_partition or ""
