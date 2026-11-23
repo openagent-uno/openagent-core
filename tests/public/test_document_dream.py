@@ -156,6 +156,26 @@ class DocumentDream(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((outcome.status,outcome.output), ("success","success"))
         self.assertEqual(self.agent.turns, 1)
 
+    async def test_enrollment_does_not_queue_other_spaces_or_replay_withdrawn_requests(self):
+        enabled = False
+
+        async def enrolled(con, scope):
+            self.assertTrue(con.in_transaction())
+            self.assertEqual(scope["space"], self.p.subject_id)
+            return enabled
+
+        self.queue.enrolled = enrolled
+        await self.vault.write(self.user, "private.md", "Private.", expected_revision=0)
+        with self.assertRaises(PermissionError):
+            await self.queue.request_now(self.vault, self.user, "same")
+        self.now += 4000
+        self.assertIsNone(await self.worker.run_due_once(self.runtime))
+        enabled = True
+        await self.queue.request_now(self.vault, self.user, "same")
+        enabled = False
+        with self.assertRaises(PermissionError):
+            await self.queue.request_now(self.vault, self.user, "same")
+
     async def test_manual_receipt_and_scheduled_completion(self):
         await self.vault.write(self.user, "manual.md", "manual", expected_revision=0)
         self.assertIsNone(await self.worker.run_due_once(self.runtime))

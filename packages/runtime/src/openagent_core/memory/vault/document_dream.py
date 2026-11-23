@@ -113,7 +113,7 @@ change settings, create a workflow or schedule a task. If the sample is partial,
 class DocumentDreamQueue:
     """SQL queue owned by the host. Dirty marks share the document transaction."""
 
-    def __init__(self, engine, *, delay_seconds=3600, lease_seconds=30, clock=time.time, next_due=None):
+    def __init__(self, engine, *, delay_seconds=3600, lease_seconds=30, clock=time.time, next_due=None, enrolled=None):
         if engine.dialect.name not in {"sqlite", "postgresql"}:
             raise ValueError("Document dreams require SQLite or PostgreSQL")
         if (
@@ -125,6 +125,7 @@ class DocumentDreamQueue:
             raise ValueError("Invalid document dream timing")
         self.engine, self.delay, self.lease, self.clock = engine, delay_seconds, lease_seconds, clock
         self.next_due = next_due
+        self.enrolled = enrolled
 
     def _next_due(self, scope):
         now = self.clock()
@@ -137,7 +138,16 @@ class DocumentDreamQueue:
         async with self.engine.begin() as con:
             await con.run_sync(metadata.create_all)
 
+    async def _enrolled(self, con, scope):
+        # The host checks scope consent in the same transaction as the note.
+        return self.enrolled is None or await self.enrolled(con, scope)
+
     async def mark_changed(self, con, scope, *, only_if_idle=False):
+        if not await self._enrolled(con, scope):
+            return
+        await self._mark_changed(con, scope, only_if_idle=only_if_idle)
+
+    async def _mark_changed(self, con, scope, *, only_if_idle=False):
         builder = pg_insert if self.engine.dialect.name == "postgresql" else sqlite_insert
         first_due = self._next_due(scope)
         insert = builder(spaces).values(**scope, dirty=1, completed=0, due_at=first_due, status="dirty")
@@ -202,10 +212,12 @@ class DocumentDreamQueue:
         digest = _digest([scope, context.initiator.key, request_id])
         builder = pg_insert if self.engine.dialect.name == "postgresql" else sqlite_insert
         async with self.engine.begin() as con:
+            if not await self._enrolled(con, scope):
+                raise PermissionError("This space has not enabled document maintenance")
             receipt = builder(manual).values(request_digest=digest).on_conflict_do_nothing()
             inserted = (await con.execute(receipt.returning(manual.c.request_digest))).scalar_one_or_none()
             if inserted is not None:
-                await self.mark_changed(con, scope, only_if_idle=True)
+                await self._mark_changed(con, scope, only_if_idle=True)
                 await con.execute(
                     spaces.update()
                     .filter_by(**scope)
@@ -231,10 +243,12 @@ class DocumentDreamQueue:
         new_id = uuid4().hex
         builder = pg_insert if self.engine.dialect.name == "postgresql" else sqlite_insert
         async with self.engine.begin() as con:
+            if not await self._enrolled(con, scope):
+                raise PermissionError("This space has not enabled document maintenance")
             created = await con.scalar(builder(occurrences).values(receipt=key,run_id=new_id)
                 .on_conflict_do_nothing().returning(occurrences.c.receipt))
             if created:
-                await self.mark_changed(con, scope, only_if_idle=True)
+                await self._mark_changed(con, scope, only_if_idle=True)
                 updated = await con.execute(spaces.update().filter_by(**scope).values(
                     run_id=sa.case((spaces.c.target.is_(None),new_id),else_=spaces.c.run_id),
                     target=sa.func.coalesce(spaces.c.target,spaces.c.dirty),

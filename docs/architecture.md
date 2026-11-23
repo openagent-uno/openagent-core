@@ -239,6 +239,13 @@ worker surface on an API-only instance. A host-managed task pool can call
 most one eligible space. Configure fleet capacity, model account and token
 budget through the host's normal admission policy.
 
+Hosts that require individual opt-in can pass an asynchronous
+`enrolled(connection, scope)` callback to the queue. It checks a trusted consent
+record in the same transaction as the document mutation. Ineligible edits create
+no queue rows. Manual requests and scheduled occurrences recheck this consent
+even on retries. The worker's live delegation remains authoritative for already
+queued or in-flight work after consent changes.
+
 Document changes mark their space dirty inside the same transaction. Writes
 in one maintenance pass share a generation. A foreground edit or deletion
 invalidates pending derived writes from that pass. The next pass observes
