@@ -62,6 +62,34 @@ class DocumentRunLineageTests(unittest.IsolatedAsyncioTestCase):
         self.secret = "synthetic-private-phrase"
         await self.vault.write(self.user, "source.md", self.secret, expected_revision=0)
 
+    async def test_unlinked_sqlite_output_revalidates_its_original_revision(self):
+        if self.backend != "sqlite":
+            self.skipTest("SQLite filesystem attachment repository")
+        from types import SimpleNamespace
+        from openagent_core.artifacts import ArtifactRepository
+
+        db = SimpleNamespace(db_path=str(self.rt.services.store.path))
+        repository = ArtifactRepository(db, self.policy, runtime=self.rt)
+        files = []
+
+        async def stream(prompt, **kwargs):
+            ctx = current_execution_context()
+            text = (await self.vault.read(ctx, "source.md"))["content"]
+            files.append(await repository.upload(ctx, text.encode(), filename="derived.txt"))
+            yield {"kind": "done", "text": "Ready"}
+
+        self.agent.run_stream = stream
+        self.assertEqual((await self.turn(self.user, "publish")).status, "success")
+        artifact = files[0]["artifact_id"]
+        independent = await repository.upload(self.user, b"other", filename="independent.txt")
+        self.assertEqual((await repository.read(self.user, artifact_id=artifact)).content, self.secret.encode())
+        with self.assertRaises(LookupError):
+            await ArtifactRepository(db, self.policy).read(self.user, artifact_id=artifact)
+        await self.vault.forget(self.user, "source.md", expected_revision=1)
+        with self.assertRaises(LookupError):
+            await repository.read(self.user, artifact_id=artifact)
+        self.assertEqual((await repository.read(self.user, artifact_id=independent["artifact_id"])).content, b"other")
+
     async def cold_runtime(self):
         if self.backend == "sqlite":
             await self.rt.close()

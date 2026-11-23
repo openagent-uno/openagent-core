@@ -34,8 +34,8 @@ class ArtifactContent:
 
 
 class ArtifactRepository:
-    def __init__(self, db: Any, authorizer: Any, *, max_input_bytes=64 << 20, max_output_bytes=256 << 20):
-        self.db, self.authorizer = db, authorizer
+    def __init__(self, db: Any, authorizer: Any, *, max_input_bytes=64 << 20, max_output_bytes=256 << 20, runtime=None):
+        self.db, self.authorizer, self.runtime = db, authorizer, runtime
         self.max_input_bytes, self.max_output_bytes = max_input_bytes, max_output_bytes
         self._writes = asyncio.Lock()
 
@@ -87,6 +87,23 @@ class ArtifactRepository:
             if row is None:
                 raise LookupError("Artifact not found")
             row = dict(row)
+            from .memory.artifact_document_history import visible
+            from .memory.legacy_document_history import SessionProjectionGuard
+            from .runtime import current_runtime
+            runtime = self.runtime or current_runtime()
+
+            async def authorize_source(session_id):
+                from .contracts import ExecutionContext
+                from .workspace_administration import SessionInspection
+                if (not isinstance(context, ExecutionContext) or runtime is None or
+                        (self.runtime is None and runtime.services.authorizer is not self.authorizer)):
+                    raise PermissionError("Document-dependent attachments require their runtime")
+                await self._authorize(context, "artifact.read", "session", session_id)
+                inspector = SessionInspection(self.db, runtime.services.authorizer, runtime=runtime)
+                await inspector.authorize(context, session_id, connection=conn)
+
+            if not await visible(conn, row, SessionProjectionGuard(authorize_source)):
+                raise LookupError("Artifact not found")
             links = await (await conn.execute(
                 "SELECT l.display_name, s.id AS session_id FROM artifact_links l "
                 "JOIN sessions_v2 s ON s.tenant_id=l.tenant_id AND s.deleted_at_ms IS NULL AND "

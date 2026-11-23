@@ -18,3 +18,20 @@ Verification lives in `tests/public/test_memory_access.py` and `test_runtime_sea
 A session that used a document revision carries its source receipts across restarts. A viewer opening that session through the standalone compatibility API must pass the current document and audience checks. The HTTP host installs a request-scoped session projection guard and checks again before publishing the response. MCP App results use the originating run. A text-only conversation fork cannot preserve these receipts and is refused for protected sessions.
 
 The standalone operational full-text index and the older transcript and vector caches do not have an authenticated viewer. They exclude document-dependent sessions. The first protected read invalidates older indexed session entries, and the canonical reader checks already-issued search candidates before returning their snippets. Authorized clients can still open the conversation through the runtime.
+
+
+### SQLite attachments
+
+A document-dependent tool or model turn persists its revision receipts with the
+content-addressed artifact in the same SQLite transaction. The artifact ID can
+be read only while the original session and revisions remain authorized,
+including when it has no chat link. For historical rows the attachment resolver
+also checks session, message and tool links against the source ledger. A
+different presentation link to identical bytes preserves these requirements.
+The standalone HTTP gateway checks metadata, filename and bytes at delivery.
+
+An embedded host reading these historical attachments through
+`ArtifactRepository` can pass its canonical `runtime` explicitly when it
+wraps provider or channel authorization. Its actor still needs ordinary
+artifact and session access. Repositories without a verifiable runtime withhold
+document-dependent bytes.

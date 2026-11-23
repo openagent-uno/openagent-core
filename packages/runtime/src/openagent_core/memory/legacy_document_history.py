@@ -84,7 +84,15 @@ class SessionProjectionGuard:
             self._read.setdefault(conn, set()).update(allowed)
         return allowed
 
-    async def recheck(self):
+    async def recheck(self, *, resolve_connection=None):
+        if self._read and resolve_connection is not None:
+            # Individual handlers may use dedicated SQLite transactions that
+            # close before HTTP publication. Reopen the same canonical source.
+            conn = await resolve_connection()
+            session_ids = set().union(*self._read.values())
+            if await self.visible(conn, session_ids, remember=False) != session_ids:
+                raise PermissionError("Session sources changed before publication")
+            return
         for conn, session_ids in self._read.items():
             if await self.visible(conn, session_ids, remember=False) != session_ids:
                 raise PermissionError("Session sources changed before publication")

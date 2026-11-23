@@ -479,6 +479,8 @@ async def _ensure_link(
     display_name: str,
     existing_link_id: str | None,
 ) -> str | None:
+    from .artifact_document_history import record_origin
+    await record_origin(conn, artifact)
     if not session_id:
         return None
     # ``artifact_links`` is deliberately polymorphic and has no FK to its
@@ -562,6 +564,9 @@ async def _artifact_access_on_connection(
     from openagent_core.memory.operational.access import resource_is_visible
 
     if str(artifact["tenant_id"]) != access.tenant_id:
+        return False, None
+    from .artifact_document_history import visible
+    if not await visible(conn, artifact, getattr(access, "projection", None)):
         return False, None
     owner = str(artifact["owner_principal_id"] or "")
     if owner and owner in access.principal_ids:
@@ -1117,12 +1122,8 @@ async def artifact_for_legacy_path(
     return result, canonical
 
 
-async def artifact_authorized_row(
-    db: Any,
-    artifact_id: str,
-    access: Any,
-) -> tuple[dict[str, Any], Path]:
-    """Return ACL-checked metadata, presentation filename, and CAS path."""
+async def artifact_authorized_metadata(db: Any, artifact_id: str, access: Any) -> dict[str, Any]:
+    """Resolve current source access and the authorized presentation filename."""
 
     normalized_access = _access_context(access)
     if normalized_access is None:
@@ -1146,6 +1147,16 @@ async def artifact_authorized_row(
         result["authorized_filename"] = safe_attachment_filename(
             display_name or result["original_filename"] or artifact_id
         )
+    return result
+
+
+async def artifact_authorized_row(
+    db: Any,
+    artifact_id: str,
+    access: Any,
+) -> tuple[dict[str, Any], Path]:
+    """Return ACL-checked metadata, presentation filename, and CAS path."""
+    result = await artifact_authorized_metadata(db, artifact_id, access)
     path = _cas_path(artifact_store_root(db), str(result["sha256"]))
     if not await asyncio.to_thread(
         _path_matches_digest,
@@ -1204,6 +1215,7 @@ __all__ = [
     "ArtifactNotFound",
     "AttachmentTooLarge",
     "UntrustedAttachmentPath",
+    "artifact_authorized_metadata",
     "artifact_authorized_row",
     "artifact_for_legacy_path",
     "artifact_is_visible",
