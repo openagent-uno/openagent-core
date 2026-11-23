@@ -79,6 +79,20 @@ class MigrationInventory(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PermissionError):
             inspect_migration_source(self.backup, "state.sqlite", "vault", expected_tenant="foreign")
 
+    async def test_document_run_sources_require_an_equivalent_destination(self):
+        db = self.store.connection
+        db.execute("CREATE TABLE IF NOT EXISTS oa_document_run_sources(run_id,session_id,source_id,PRIMARY KEY(run_id,source_id))")
+        db.execute("INSERT INTO oa_document_run_sources VALUES ('run-secret','session-secret','opaque-source')")
+        self.git("init", "-b", "main")
+        (self.vault / "readme.md").write_text("fixture")
+        self.git("add", ".")
+        self.git("commit", "-m", "fixture")
+        await self.snapshot()
+        evidence = self.inspect()
+        self.assertEqual(evidence["counts"]["oa_document_run_sources"], 1)
+        self.assertIn("runtime_document_lineage_projection_required", evidence["issues"])
+        self.assertNotIn("opaque-source", str(evidence))
+
     async def test_unversioned_vault_and_checked_input(self):
         (self.vault / "name-secret.md").write_text("body-secret")
         await self.store.transition("run-secret", "running")

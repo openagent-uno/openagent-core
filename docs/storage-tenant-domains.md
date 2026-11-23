@@ -145,6 +145,8 @@ those domains separately, together with other databases and private files.
 Verify access rules, original public identifiers, history reconstruction and
 destination APIs before switching applications.
 
+A source with document-derived session output carries opaque per-run tokens bound to exact vault revisions. The private stage also transfers and verifies the original run bindings, read receipts and revision table when present. A native activation needs the destination to resolve the same tokens under each run's exact tenant, agent, space and audience, including later revocation. Until that projection is qualified, preflight reports `runtime_document_lineage_projection_required` and native candidate creation stops before publication.
+
 ### Private PostgreSQL runtime candidate
 
 After staging, the optional native projection creates a fresh, owner-only schema for a single agent and tenant. Install the SQLite migration extra and the matching PostgreSQL storage adapter. Keep runtime workers disconnected while materializing or verifying the candidate.

@@ -107,6 +107,13 @@ def _inspect_verified_source(root, database, vault, expected_tenant, require_git
             "SELECT COUNT(*) FROM session_runs WHERE finished_at_ms IS NULL "
             "AND json_extract(metadata_json,'$.runtime_contract')=1"
         ).fetchone()[0]
+        for table in ("oa_document_run_sources", "oa_vault_read_receipts"):
+            if table in tables:
+                counts[table] = db.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+        if counts.get("oa_document_run_sources"):
+            # The native PG projection does not yet bind the same destination
+            # vault revision lifetimes to its session, run and audience readers.
+            issues.append("runtime_document_lineage_projection_required")
         if counts["unfinished_runtime_runs"]:
             issues.append("unfinished_runtime_runs")
         if db.execute("PRAGMA foreign_key_check").fetchone() is not None:

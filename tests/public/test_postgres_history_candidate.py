@@ -66,6 +66,22 @@ class RuntimeCandidate(unittest.IsolatedAsyncioTestCase):
                     agent_id="agent", dsn=self.dsn, stage_schema=self.stage_schema, candidate_schema=self.schema,
                     verify_only=verify, require_git_history=False)
 
+    async def test_staged_document_lifetimes_require_native_authorization_parity(self):
+        db = self.store.connection
+        db.execute("CREATE TABLE IF NOT EXISTS oa_document_run_sources(run_id,session_id,source_id,PRIMARY KEY(run_id,source_id))")
+        db.execute("INSERT INTO oa_document_run_sources VALUES ('run','thread','token')")
+        db.execute("CREATE TABLE oa_vault_read_receipts(path,revision,token)")
+        db.execute("INSERT INTO oa_vault_read_receipts VALUES ('private.md',1,'token')")
+        await self.seal()
+        checked = self.stage.transfer_history(self.snapshot, "state.sqlite", "notes",
+            expected_tenant="tenant", dsn=self.dsn, schema=self.stage_schema,
+            verify_only=True, require_git_history=False)
+        self.assertEqual(checked["verified_rows"]["oa_document_run_sources"], 1)
+        self.assertEqual(checked["verified_rows"]["oa_vault_read_receipts"], 1)
+        with self.assertRaisesRegex(self.stage.StageMismatch, "unresolved issues"):
+            self.build()
+        self.assertIsNone(self.pg.execute("SELECT to_regnamespace(%s)", (self.schema,)).fetchone()[0])
+
     async def test_public_reader_preserves_acls_ids_sequence_content_and_requests(self):
         from openagent_storage_postgres import PostgresRuntimeStore
         await self.seal()

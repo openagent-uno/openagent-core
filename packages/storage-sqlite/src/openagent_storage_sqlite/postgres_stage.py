@@ -27,6 +27,7 @@ HISTORY = (
     "artifact_links", "context_snapshots", "domain_events", "activity_items",
     "search_outbox", "search_outbox_consumers", "legacy_session_changes",
     "storage_migration_state", "storage_migration_journal", "schema_migrations",
+    "oa_document_run_sources", "oa_vault_read_receipts", "oa_vault_revisions",
     "operational_resource_owners", "operational_automation_projection",
     "operational_automation_changes", "durable_operations", "durable_operation_handoffs",
 )
