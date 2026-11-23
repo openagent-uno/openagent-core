@@ -318,3 +318,9 @@ requires checking the desktop before issuing another input. The routes do
 not start or renew a machine. The optional `prefix` argument selects a
 different session-route prefix, and omitting `computer_viewer` leaves the
 routes unregistered.
+
+### Scoped HTTP MCP credentials
+
+For a shared HTTP tool service, register `ScopedHttpMcpSource` from `openagent_core.mcp.scoped_http` as the source and executor in the runtime capability catalog. Supply the service URL from trusted deployment configuration. Implement `McpGrantResolver.issue(context, tool)` to issue a short-lived `McpHttpGrant` for the authenticated caller, tenant, session and operation. A discovery request passes `None`. The remote service verifies the bearer and constrains discovery, tool arguments and effects to that grant.
+
+The resolver's `valid(context, tool, binding)` checks the same authorization generation before the exchange and before publication. Each exchange uses its own authenticated MCP session, including when concurrent turns use the same endpoint. A deferred run resolves its current grant when it resumes. Tool references continue to use the runtime catalog's ordinary caller, policy and revision checks.
