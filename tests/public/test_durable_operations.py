@@ -210,11 +210,12 @@ class DurableOperationsTests(unittest.IsolatedAsyncioTestCase):
         async def read(args, context):
             nonlocal reads
             reads += 1
-            if reads > 1:
-                second_segment.set()
+            if reads == 1:
+                raise OperationPending(retry_after_seconds=.1)
+            second_segment.set()
             await asyncio.Future()
 
-        runtime, runner = await self.runtime(read, policy=DurableOperationPolicy(segment_seconds=.15))
+        runtime, runner = await self.runtime(read, policy=DurableOperationPolicy(segment_seconds=30))
         await runner.submit(self.request(), self.context)
         await asyncio.wait_for(second_segment.wait(), 3)
         current = await runner.get_run('run-a', self.context)
