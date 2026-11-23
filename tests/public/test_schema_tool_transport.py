@@ -49,6 +49,23 @@ class StructuredTools(unittest.IsolatedAsyncioTestCase):
         return {"messages": [Message(role="system", content="Use authorized notes"), Message(role="user", content="Save it")],
                 "assistant_message": Message(role="assistant"), "tools": [TOOL], **kwargs}
 
+    async def test_standing_operations_reach_the_wire_with_the_declaration_in_the_user_role(self):
+        instruction = "Record lasting preferences the user shares in conversation."
+        declaration = "I always prefer a blue notebook."
+        context = [Message(role="system", content=instruction), Message(role="user", content=declaration)]
+        self.replies = [json.dumps({"next": {"action": "save_note", "arguments": ARGUMENTS}})]
+        result = await self.model.ainvoke(**self.ask(messages=context))
+
+        self.assertEqual(result.tool_calls[0]["function"]["name"], "save_note")
+        system, user = self.wire[-1]["messages"]
+        self.assertEqual(context[0].content, instruction)
+        self.assertEqual(system["role"], "system")
+        self.assertIn(instruction, system["content"])
+        self.assertIn("Standing instructions can require an authorized operation", system["content"])
+        self.assertIn(TOOL["function"]["description"], system["content"])
+        self.assertEqual((user["role"], user["content"]), ("user", declaration))
+        self.assertNotIn(declaration, system["content"])
+
     async def test_stream_returns_one_validated_tool_then_final_with_receipt_and_usage(self):
         self.replies = [json.dumps({"next": {"action": "save_note", "arguments": ARGUMENTS}}),
                         json.dumps({"next": {"action":"reply", "answer": "Saved"}})]
