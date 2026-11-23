@@ -5,6 +5,7 @@ import base64
 import hashlib
 import re
 from collections.abc import AsyncIterable
+from contextlib import nullcontext
 from dataclasses import replace
 from typing import Protocol
 
@@ -255,21 +256,28 @@ class SqlObjectArtifacts:
             raise PermissionError("Model attachments require an admitted execution")
         if max_bytes is not None and (type(max_bytes) is not int or max_bytes < 0):
             raise ValueError("Invalid model attachment budget")
+        attachment = dict(attachment)
         ident = attachment.get("artifact_id")
-        if "path" in attachment:
-            if self.archive is None:
-                raise PermissionError("A historical path requires its verified original request")
-            await self.archive.require_request(context, current_run_id(), attachment)
+        run_id = current_run_id()
+        has_path = "path" in attachment
+        if has_path and self.archive is None:
+            raise PermissionError("A historical path requires its verified original request")
+        source = (self.archive.admitted_request(context, run_id, attachment, required=has_path)
+                  if self.archive is not None else nullcontext(False))
         limit = self.max_model_input_bytes if max_bytes is None else min(max_bytes, self.max_model_input_bytes)
-        item = await self._read_bounded(context, ident, limit)
+        async with source as historical:
+            item = await self._read_bounded(context, ident, limit)
         facts = dict(mime_type=item.mime_type, sha256=item.sha256, size_bytes=len(item.content),
                      url=f"/api/artifacts/{ident}/content")
         if any(attachment[k] != v for k,v in facts.items() if k in attachment):
             raise ValueError("Admitted attachment metadata differs from storage")
         async def recheck():
-            await self.resolve(context, ident)
+            if historical:
+                await self.archive.require_request(context, run_id, attachment)
+            else:
+                await self.resolve(context, ident)
         guard_current_publication(recheck)
-        if "path" in attachment and "filename" in attachment:
+        if historical and "filename" in attachment:
             return replace(item, filename=safe_attachment_filename(attachment["filename"]))
         return item
 

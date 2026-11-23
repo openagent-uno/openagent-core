@@ -316,6 +316,15 @@ contains the artifact ID, MIME, filename, byte count, digest and download URL.
 A historical path-bearing request needs its original run, session and exact
 archived reference fingerprint. Cloud model ingestion never opens that path.
 
+A host may share a principal across project sessions and deny
+`artifact.read` on the principal itself. A verified historical session
+link authorizes scoped delivery to its eligible audience. An immutable
+attachment on an original model request also has a narrow read grant while
+that run, session, exact reference and current authorization all match.
+The archive rechecks every source session, document lineage and publish
+decision during each read. Direct retrieval outside that model turn uses
+the current session link or a separately authorized principal read.
+
 ### Reverting the serving build after PostgreSQL accepts writes
 
 A cloud deployment can revert its HTTP and domain behavior while keeping the current

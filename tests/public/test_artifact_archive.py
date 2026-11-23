@@ -118,7 +118,14 @@ class ArtifactArchive(unittest.IsolatedAsyncioTestCase):
             )
 
         class Policy:
+            allow_principal_read = True
+            denied_origin = None
+
             async def authorize(self, ctx, action, resource, *, audience=()):
+                if resource.kind == "principal" and action == "artifact.read":
+                    return self.allow_principal_read
+                if resource.kind == "session" and action == "session.read" and resource.resource_id == self.denied_origin:
+                    return False
                 return ctx.tenant_id == resource.tenant_id
 
         policy = Policy()
@@ -187,6 +194,8 @@ class ArtifactArchive(unittest.IsolatedAsyncioTestCase):
                     url=f"/api/artifacts/{ident}/content",
                     path="/original/artifacts/" + key,
                 )
+                if i == 14:
+                    ref.pop("path")
                 req = RunRequest(
                     "run-" + str(i),
                     ctx.session_id,
@@ -338,6 +347,17 @@ class ArtifactArchive(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("path", ref)
         for reader in ("foreign", "unknown", "bob"):
             self.assertIn((await get(15, reader))[0], (403, 404))
+        # A host can share one principal across projects while granting only
+        # the specific session link or the exact input of an admitted turn.
+        policy.allow_principal_read = False
+        identities["other-project"] = context("unrelated-session")
+        identities["original-project"] = context("thread-15")
+        self.assertEqual(await get(0, "owner"), (200, originals[0]))
+        self.assertEqual((await get(0, "other-project"))[0], 403)
+        self.assertEqual((await get(15, "original-project"))[0], 403)
+        policy.denied_origin = "thread-12"
+        self.assertEqual((await get(12, "owner"))[0], 403)
+        policy.denied_origin = None
         from openagent_core.artifacts import ModelAttachmentReader
         from openagent_core.core.agent import Agent
         from openagent_core.runtime import execution_scope
@@ -363,6 +383,24 @@ class ArtifactArchive(unittest.IsolatedAsyncioTestCase):
                              "alternate.mp4")
             with self.assertRaises(PermissionError):
                 await publisher.model_content(context("thread-15"), {**ref, "path": "/unauthorized/other"})
+            from openagent_core.runtime import check_current_publication
+            await check_current_publication()
+            policy.denied_origin = "thread-15"
+            with self.assertRaises(PermissionError):
+                await check_current_publication()
+            policy.denied_origin = None
+        with execution_scope(runtime, context("thread-14"), "run-14"):
+            pathless = historical_refs["run-14"]
+            self.assertNotIn("path", pathless)
+            self.assertEqual((await publisher.model_content(context("thread-14"), pathless)).content, originals[14])
+        with execution_scope(runtime, context("thread-15"), "another-run"):
+            with self.assertRaises(PermissionError):
+                await publisher.model_content(context("thread-15"), ref)
+        with execution_scope(runtime, context("another-project"), "run-15"):
+            with self.assertRaises(PermissionError):
+                await publisher.model_content(context("another-project"), ref)
+        self.assertEqual((await get(15, "original-project"))[0], 403)
+        policy.allow_principal_read = True
         # The gateway resolves the host's resource before run admission. The
         # same runtime executes a normal agent turn and delivers its scoped output.
         class RenderTurn:

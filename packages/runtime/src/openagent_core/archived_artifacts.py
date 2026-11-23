@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 import hashlib
 import re
@@ -12,6 +14,10 @@ from .contracts import ResourceRef, canonical_json
 from .memory.artifacts import safe_attachment_filename
 from .memory.document_exposure import authorize_document_history
 from .object_artifacts import SqlObjectArtifacts
+from .runtime import current_execution_context, current_run_id, current_runtime
+
+
+_admitted_origin = ContextVar('openagent_archived_input_origin', default=None)
 
 
 def archive_schema_name(value):
@@ -89,7 +95,15 @@ class SqlArtifactArchive:
             and readers.issubset(origin["audience"])
             for origin in item["origins"]
         )
-        if readers == {owner}:
+        permit = _admitted_origin.get()
+        if match is not None and eligible:
+            filename = match["display_name"]
+        elif (permit and permit.get("archive") is self and current_runtime() is runtime
+              and current_execution_context() == ctx and current_run_id() == permit["run"]
+              and permit["id"] == item["record"]["id"] and permit["context"] == ctx
+              and readers.issubset(permit["audience"])):
+            filename = item["record"]["original_filename"]
+        elif readers == {owner}:
             await runtime.authorize(
                 ctx,
                 "artifact.read",
@@ -97,8 +111,6 @@ class SqlArtifactArchive:
                 audience=ctx.audience,
             )
             filename = item["record"]["original_filename"]
-        elif match is not None and eligible:
-            filename = match["display_name"]
         else:
             raise LookupError("Artifact not found")
         await runtime.authorize(ctx, "artifact.publish", session, audience=ctx.audience)
@@ -121,15 +133,37 @@ class SqlArtifactArchive:
         found = await self._find(ctx, ident)
         return None if found is None else await self._access(ctx, found[0])
 
+    @asynccontextmanager
+    async def admitted_request(self, ctx, run_id, reference, *, required=True):
+        """Reopen this exact sealed input only during its admitted model turn."""
+        if (not run_id or current_run_id() != run_id or current_runtime() is not self.runtime()
+                or current_execution_context() != ctx):
+            raise PermissionError("A matching admitted execution is required")
+        ident = reference.get("artifact_id")
+        found = await self._find(ctx, ident)
+        digest = hashlib.sha256(canonical_json(reference).encode()).hexdigest()
+        origins = found[0]["origins"] if found is not None else ()
+        match = next((origin for origin in origins if origin["run_id"] == run_id
+                      and origin["session_id"] == ctx.session_id
+                      and origin.get("request_sha256") == digest), None)
+        if match is None:
+            if required:
+                raise PermissionError("The admitted attachment differs from its sealed request")
+            yield False
+            return
+        permit = dict(archive=self, run=run_id, id=ident, context=ctx, audience=match["audience"])
+        token = _admitted_origin.set(permit)
+        try:
+            await self._access(ctx, found[0])
+            yield True
+        finally:
+            # Context copies made while reading the source lose the same short-lived permit.
+            permit.clear()
+            _admitted_origin.reset(token)
+
     async def require_request(self, ctx, run_id, reference):
-        found = await self._find(ctx, reference.get("artifact_id"))
-        if found is not None:
-            digest = hashlib.sha256(canonical_json(reference).encode()).hexdigest()
-            if any(origin["run_id"] == run_id and origin["session_id"] == ctx.session_id
-                   and origin.get("request_sha256") == digest for origin in found[0]["origins"]):
-                await self._access(ctx, found[0])
-                return
-        raise PermissionError("The admitted attachment differs from its sealed request")
+        async with self.admitted_request(ctx, run_id, reference):
+            pass
 
     async def archived_stream(self, ctx, ident):
         found = await self._find(ctx, ident)
