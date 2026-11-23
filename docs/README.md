@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta157 archived engine history and canonical run associations](releases/v1.1.0-beta.157.md).
+
 - [Beta156 scoped HTTP MCP grants](releases/v1.1.0-beta.156.md).
 
 - [Beta155 document-backed run mirrors and vault editor metadata](releases/v1.1.0-beta.155.md).

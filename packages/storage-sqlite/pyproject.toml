@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 [project]
 name = "openagent-storage-sqlite"
-version = "1.1.0b156"
+version = "1.1.0b157"
 requires-python = ">=3.11"
-dependencies = ["openagent-core==1.1.0b156"]
+dependencies = ["openagent-core==1.1.0b157"]
 [project.optional-dependencies]
 postgres-migration = ["psycopg>=3.2,<4"]
 
