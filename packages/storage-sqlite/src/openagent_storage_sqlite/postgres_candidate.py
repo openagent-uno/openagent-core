@@ -35,6 +35,8 @@ PROJECTION = {
              "cancel_requested output parent_run_id", 'id COLLATE "C"'),
     "messages": ("agent id session_id session_seq run_id role author body call_id status created_at", 'id COLLATE "C"'),
     "events": ("agent seq run_id kind payload", "seq"),
+    "operations": ("agent origin_run_id current_run_id segment state due_at", 'origin_run_id COLLATE "C"'),
+    "handoffs": ("agent source_id origin_run_id", 'source_id COLLATE "C"'),
     "tool_calls": ("agent run_id id invocation_id intent result error finished", 'run_id COLLATE "C",id COLLATE "C"'),
 }
 JSON_COLUMNS = {"request", "context", "output", "body", "payload", "intent", "result", "error"}
@@ -82,17 +84,24 @@ def _run_rows(db, agent, tenants):
         tenant = _source_tenant(row, tenants)
         if (meta.get("runtime_contract") != 1 or row["owner_principal_id"] is None or row["agent_id"] != agent
                 or row["status"] not in TERMINAL_STATUSES or row["finished_at_ms"] is None
-                or row["input_json"] is None or meta.get("operation_continuation") or meta.get("attachments")
+                or row["input_json"] is None or meta.get("attachments")
                 or meta.get("steer_run_id") or row["delegated_parent_run_id"] or row["parent_run_id"]):
             raise StageMismatch("Run requires an unsupported execution or retention mapping")
         accepted = SqliteRuntimeStore._decode_accepted_request(row)
         owner = _principal(row["owner_principal_id"], tenant)
+        continuation = getattr(accepted.request, "continuation", None)
+        if continuation:
+            operation = db.execute("SELECT segment FROM durable_operations WHERE origin_run_id=?",
+                                   (continuation.origin_run_id,)).fetchone()
+            if operation is None or continuation.segment > operation[0]:
+                raise StageMismatch("Operation segment has no matching durable origin")
         if (accepted.author != owner or accepted.authority != owner or accepted.initiator != owner
-                or accepted.audience != (owner,) or accepted.parent_run_id or accepted.deferred
-                or accepted.delegation_id or meta["execution_context"].get("capabilities")):
+                or accepted.audience != (owner,) or accepted.parent_run_id
+                or bool(continuation) != accepted.deferred or bool(continuation) != bool(accepted.delegation_id)
+                or meta["execution_context"].get("capabilities")):
             raise StageMismatch("Run has a distinct admission or execution authority")
         ctx = ExecutionContext(owner, owner, owner, row["session_id"], agent, (owner,), accepted.scopes,
-                               ingress_id=accepted.ingress_id)
+                               ingress_id=accepted.ingress_id, deferred=accepted.deferred, delegation_id=accepted.delegation_id)
         if (canonical_json(ctx.snapshot()) != canonical_json(meta["execution_context"])
                 or accepted.request.fingerprint(ctx) != meta.get("request_digest")):
             raise StageMismatch("Source request digest or execution context differs")
@@ -172,10 +181,74 @@ def _tool_rows(db, agent, tenants):
         yield agent, run, call, ident, intent, result, error, True
 
 
+def _has_table(db, name):
+    return db.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
+def _operation_rows(db, agent, tenants):
+    if not _has_table(db, "durable_operations"):
+        return
+    terminal = {"success", "failed", "cancelled", "rejected", "skipped", "expired", "exhausted", "revoked"}
+    for op in db.execute("SELECT * FROM durable_operations ORDER BY origin_run_id"):
+        if op["state"] not in terminal or not 0 <= op["segment"] < 8:
+            raise StageMismatch("An active operation requires its fenced scheduler and authority")
+        segments = db.execute("""SELECT * FROM session_runs
+            WHERE json_extract(metadata_json,'$.operation_continuation.origin_run_id')=?
+            ORDER BY json_extract(metadata_json,'$.operation_continuation.segment') LIMIT 9""",
+            (op["origin_run_id"],)).fetchall()
+        if (len(segments) != op["segment"] + 1 or segments[0]["id"] != op["origin_run_id"]
+                or segments[-1]["id"] != op["current_run_id"]):
+            raise StageMismatch("Operation segment sequence is incomplete")
+        previous = None
+        admission = None
+        for index, row in enumerate(segments):
+            _source_tenant(row, tenants)
+            accepted = SqliteRuntimeStore._decode_accepted_request(row)
+            request = accepted.request
+            descriptor = asdict(request.continuation)
+            segment = descriptor.pop("segment")
+            previous_id = descriptor.pop("previous_run_id")
+            identity = (row["session_id"], row["tenant_id"], row["agent_id"], request.input, request.attachments,
+                        request.model_ref, json.loads(row["metadata_json"])["execution_context"], descriptor)
+            if (row["agent_id"] != agent or row["status"] not in TERMINAL_STATUSES or segment != index
+                    or previous_id != (previous["id"] if previous else None)
+                    or previous and previous["status"] not in {"timed_out", "interrupted"}
+                    or admission is not None and admission != identity):
+                raise StageMismatch("Operation continuation differs from its admitted history")
+            previous, admission = row, identity
+        handoff = segments[0]
+        descriptor = json.loads(handoff["metadata_json"])["operation_continuation"]
+        if descriptor.get("handoff_run_id") and not db.execute("""SELECT 1 FROM durable_operation_handoffs
+                WHERE origin_run_id=? AND source_run_id=?""", (op["origin_run_id"], descriptor["handoff_run_id"])).fetchone():
+            raise StageMismatch("Operation has no durable handoff claim")
+        yield agent, op["origin_run_id"], op["current_run_id"], op["segment"], op["state"], None
+
+
+def _handoff_rows(db, agent, tenants):
+    if not _has_table(db, "durable_operation_handoffs"):
+        return
+    for row in db.execute("""SELECT h.*,s.status,s.tenant_id,s.session_id,s.agent_id,
+            s.metadata_json AS source_meta,o.metadata_json AS origin_meta
+            FROM durable_operation_handoffs h LEFT JOIN session_runs s ON h.source_run_id=s.id
+            LEFT JOIN session_runs o ON h.origin_run_id=o.id AND s.tenant_id=o.tenant_id
+                AND s.session_id=o.session_id AND s.agent_id=o.agent_id ORDER BY h.source_run_id"""):
+        _source_tenant(row, tenants)
+        if row["origin_meta"] is None or row["agent_id"] != agent or row["status"] not in {"timed_out", "interrupted"}:
+            raise StageMismatch("Handoff source is outside the admitted operation")
+        source, origin = json.loads(row["source_meta"]), json.loads(row["origin_meta"])
+        before, after = source["execution_context"], origin["execution_context"]
+        fields = ("author", "initiator", "authority", "session_id", "agent_id", "audience", "scopes", "parent_run_id")
+        if (source.get("operation_continuation") or before.get("deferred") or before.get("delegation_id")
+                or any(before.get(key) != after.get(key) for key in fields)
+                or (origin.get("operation_continuation") or {}).get("handoff_run_id") != row["source_run_id"]):
+            raise StageMismatch("Handoff differs from the original session authority")
+        yield agent, row["source_run_id"], row["origin_run_id"]
+
+
 def _source_scope(db):
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
     restricted = ("sessions", "resource_acl", "artifacts", "artifact_links",
-                  "session_message_parts", "context_snapshots", "durable_operations", "durable_operation_handoffs")
+                  "session_message_parts", "context_snapshots")
     for table in restricted:
         if table in tables and db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
             raise StageMismatch("Source requires additional runtime adapters for staged history")
@@ -243,7 +316,7 @@ def _schema(pg, name, receipt, verify_only):
         raise StageMismatch("Candidate belongs to another source or scope")
     if not fresh:
         pg.execute("LOCK TABLE workers,sessions,runs,messages,events,reservations,operations,handoffs,tool_calls IN SHARE MODE")
-        for table in ("workers", "reservations", "operations", "handoffs"):
+        for table in ("workers", "reservations"):
             if pg.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
                 raise StageMismatch("Candidate has runtime or historical state outside the offline receipt")
     return fresh
@@ -269,7 +342,8 @@ def build_runtime_candidate(snapshot, database, vault, *, expected_tenant=None, 
         db.execute("BEGIN")
         _source_scope(db)
         fresh = _schema(pg, candidate_schema, receipt, verify_only)
-        sources = dict(sessions=_session_rows, runs=_run_rows, messages=_message_rows, events=_event_rows, tool_calls=_tool_rows)
+        sources = dict(sessions=_session_rows, runs=_run_rows, messages=_message_rows, events=_event_rows, tool_calls=_tool_rows,
+                       operations=_operation_rows, handoffs=_handoff_rows)
         counts = {}
         for table, generate in sources.items():
             if fresh:

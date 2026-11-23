@@ -50,20 +50,23 @@ class RuntimeCandidate(unittest.IsolatedAsyncioTestCase):
         with sqlite3.connect(self.path) as db:
             db.execute("UPDATE sqlite_sequence SET seq=100 WHERE name='domain_events'")
 
-    async def seal(self, *, history_only=False):
+    async def seal(self, *, history_only=False, tenants=None):
         @asynccontextmanager
         async def fence():
             yield "sealed"
         async def idle(_):
             pass
         await prepare_migration(self.source, self.snapshot, self.clone, databases=("state.sqlite",),
-                                quiesce=fence, migrate=idle, absent_vault="notes" if history_only else None)
-        self.stage.transfer_history(self.snapshot, "state.sqlite", "notes", expected_tenant="tenant",
+                                quiesce=fence, migrate=idle, absent_vault="notes" if history_only else None,
+                                expected_tenants_by_database={"state.sqlite": tenants} if tenants else None)
+        self.stage.transfer_history(self.snapshot, "state.sqlite", "notes", expected_tenant=None if tenants else "tenant",
+                                    expected_tenants=tenants,
                                     dsn=self.dsn, schema=self.stage_schema, require_git_history=history_only,
                                     history_only=history_only)
 
-    def build(self, verify=False, *, history_only=False):
-        return self.candidate.build_runtime_candidate(self.snapshot, "state.sqlite", "notes", expected_tenant="tenant",
+    def build(self, verify=False, *, history_only=False, tenants=None):
+        return self.candidate.build_runtime_candidate(self.snapshot, "state.sqlite", "notes", expected_tenant=None if tenants else "tenant",
+                    expected_tenants=tenants,
                     agent_id="agent", dsn=self.dsn, stage_schema=self.stage_schema, candidate_schema=self.schema,
                     verify_only=verify, require_git_history=history_only, history_only=history_only)
 
@@ -111,7 +114,7 @@ class RuntimeCandidate(unittest.IsolatedAsyncioTestCase):
         from openagent_storage_postgres import PostgresRuntimeStore
         await self.seal()
         report = self.build()
-        self.assertEqual(report["verified_rows"], dict(sessions=1, runs=1, messages=2, events=3, tool_calls=0))
+        self.assertEqual(report["verified_rows"], dict(sessions=1, runs=1, messages=2, events=3, tool_calls=0, operations=0, handoffs=0))
         self.assertEqual(self.build(True), report)
         self.assertEqual(self.build(), report)
         pg = PostgresRuntimeStore(self.dsn, agent_id="agent", schema=self.schema)
@@ -170,6 +173,62 @@ class RuntimeCandidate(unittest.IsolatedAsyncioTestCase):
         actor = PrincipalRef("host", "tenant", "other")
         with self.assertRaises(PermissionError):
             await pg.read_tool_invocation(self.ref, "provider-call", replace(self.ctx, authority=actor))
+
+    async def test_native_readers_share_storage_but_keep_two_tenant_catalogs_separate(self):
+        from openagent_storage_postgres import PostgresRuntimeStore
+        other = PrincipalRef("host", "another", "owner")
+        ctx = ExecutionContext(other, other, other, "other-thread", "agent", (other,))
+        ref = SessionRef("host", "another", "agent", "other-thread")
+        await self.store.accept(RunRequest("other", ref.session_id, "key", "another tenant"), ctx)
+        await self.store.transition("other", "success", output="private answer")
+        tenants = ("tenant", "another")
+        await self.seal(tenants=tenants)
+        self.assertEqual(self.build(tenants=tenants)["verified_rows"]["sessions"], 2)
+        self.build(True, tenants=tuple(reversed(tenants)))
+        pg = PostgresRuntimeStore(self.dsn, agent_id="agent", schema=self.schema)
+        await pg.start()
+        self.addAsyncCleanup(pg.close)
+        for person, session, other_ref in ((ctx, ref, self.ref), (self.ctx, self.ref, ref)):
+            self.assertEqual(await pg.read_session(session, person, limit=10),
+                             await self.store.read_session(session, person, limit=10))
+            sessions = await pg.list_sessions(person, include_archived=False, limit=10)
+            self.assertEqual([item["session_id"] for item in sessions["sessions"]], [session.session_id])
+            with self.assertRaises(PermissionError):
+                await pg.read_session(other_ref, person, limit=10)
+
+    async def test_terminal_handoff_preserves_grant_binding_without_rescheduling_work(self):
+        from openagent_core.durable_operations import OperationContinuation, OperationRunRequest
+        from openagent_storage_postgres import PostgresRuntimeStore
+        await self.store.accept(RunRequest("source", "thread", "source", "task"), self.ctx)
+        await self.store.transition("source", "timed_out")
+        ctx = replace(self.ctx, deferred=True, delegation_id="captured")
+        desc = OperationContinuation("op", "inspect", 1, 2000000000, 10, 2,
+                                     handoff_run_id="source", checkpoint_origin_run_id="source")
+        for run, descriptor, status in (
+                ("op", desc, "timed_out"), ("next", replace(desc, segment=1, previous_run_id="op"), "success")):
+            await self.store.accept(OperationRunRequest(run, "thread", run, "task", continuation=descriptor), ctx)
+            await self.store.transition(run, status)
+        await self.store.stop_durable_operation("op", "success")
+        await self.seal()
+        self.assertEqual(self.build()["verified_rows"]["operations"], 1)
+        self.assertEqual(self.build(True)["verified_rows"]["handoffs"], 1)
+        pg = PostgresRuntimeStore(self.dsn, agent_id="agent", schema=self.schema)
+        await pg.start()
+        self.addAsyncCleanup(pg.close)
+        self.assertEqual((await pg.durable_operation("op"))["current_run_id"], "next")
+        self.assertEqual(await pg.accepted_request("next"), await self.store.accepted_request("next"))
+        self.assertFalse(await pg.ready_operations(2100000000))
+
+    async def test_active_operation_cannot_start_a_new_worker_from_an_offline_receipt(self):
+        from openagent_core.durable_operations import OperationContinuation, OperationRunRequest
+        descriptor = OperationContinuation("op", "inspect", 1, 2000000000, 10, 2)
+        await self.store.accept(OperationRunRequest("op", "thread", "op", "task", continuation=descriptor),
+                                replace(self.ctx, deferred=True, delegation_id="captured"))
+        await self.store.transition("op", "timed_out")
+        await self.seal()
+        with self.assertRaisesRegex(self.stage.StageMismatch, "active operation"):
+            self.build()
+        self.assertIsNone(self.pg.execute("SELECT to_regnamespace(%s)", (self.schema,)).fetchone()[0])
 
     async def test_rejects_modified_request_without_partial_candidate(self):
         with sqlite3.connect(self.path) as db:
