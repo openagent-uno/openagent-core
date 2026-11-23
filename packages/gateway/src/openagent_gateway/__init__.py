@@ -4,7 +4,7 @@ from dataclasses import asdict
 from typing import Any
 from aiohttp import web
 from openagent_core import RunEventPage, RunRequest, IdempotencyConflict
-from openagent_core.contracts import AdmissionCapacityExceeded
+from openagent_core.contracts import AdmissionCapacityExceeded, ServingUnavailable
 from .compression import json_compression
 from .computers import ComputerViewerGateway
 
@@ -19,7 +19,8 @@ def _id(value):
 
 def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lifecycle=True,
                prefix='/api/v1/runs', durable_operations=None, resolve_personal_context=None,
-               personal_prefix='/api/v1/me', resolve_artifact_context=None, computer_viewer=None):
+               personal_prefix='/api/v1/me', resolve_artifact_context=None, computer_viewer=None,
+               serving_generation=None):
     """Build routes without starting a listener or creating identities.
 
     `resolve_context(request, action, run_id, session_id)` must return an async
@@ -112,6 +113,18 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
             try: yield
             finally: await runtime.close()
         app.cleanup_ctx.append(lifecycle)
+    if serving_generation is not None:
+        if serving_generation.store is not runtime.services.store:
+            raise ValueError('The serving fence must use the active runtime store')
+        @web.middleware
+        async def serving_fence(request, handler):
+            try:
+                async with serving_generation.serving():
+                    return await handler(request)
+            except ServingUnavailable:
+                return web.json_response({'error': 'serving_generation_unavailable'}, status=503,
+                                         headers={'Retry-After': '1', 'Cache-Control': 'no-store'})
+        app.middlewares.insert(0, serving_fence)
     if computer_viewer is not None:
         computer_viewer.install(app, runtime, resolve_context)
     return app

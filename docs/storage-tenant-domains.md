@@ -315,3 +315,93 @@ identifiers can bind the typed reader independently. The public wire reference
 contains the artifact ID, MIME, filename, byte count, digest and download URL.
 A historical path-bearing request needs its original run, session and exact
 archived reference fingerprint. Cloud model ingestion never opens that path.
+
+### Reverting the serving build after PostgreSQL accepts writes
+
+A cloud deployment can revert its HTTP and domain behavior while keeping the current
+ledger, artifact objects, document revisions and grant authority. Prepare a
+standby build of the previous public contract with the same PostgreSQL and
+object-store adapters. Pin both image digests. Preserve the host's credential
+issuer, grant store, tenant and space mapping, scheduler definitions and policy
+semantics. A binary that hardcodes the original SQLite directory cannot serve
+this rollback. Its sealed source remains an offline recovery point at cutover.
+
+The optional operator is in `openagent_storage_postgres.serving`. Install the
+matching gateway and PostgreSQL adapter, the Core engine dependencies and an
+asynchronous S3 client. The deployment controller supplies an authenticated
+binding digest covering the sealed candidate receipt, immutable schema and
+object namespace, and the identities of the current authorization,
+grant, document and archive services. Use stable identities for subscribable
+grant and revocation stores so the standby reads the latest decisions.
+
+1. Construct a `PostgresServingGeneration` from each build's actual runtime
+   store, immutable deployment ID, expected generation and binding SHA-256.
+   Call `await generation.open()`. During initial provisioning, the operator
+   calls `await active.install()` once for generation one. The private route
+   and change receipts live under the runtime schema and agent ID. A bootstrap
+   attempt using an old generation fails after the first change.
+2. Call `create_app(..., serving_generation=generation)` for the public gateway.
+   Hold `async with generation.serving()` around separate host entry points
+   that write, publish or perform external actions. The gateway holds a PostgreSQL
+   share lock through the response. Overlapping requests share one lock and
+   connection per replica. Reserve a second connection for operators. The
+   prospective generation returns HTTP 503 on its public routes until selected.
+   Stage the prospective scheduler, dream workers, background jobs and channels
+   stopped. Keep its private acceptance probes authenticated and read-only.
+3. Provide one `CloudServingTarget(route, artifacts, documents, probe)` per
+   deployment. Use the repositories wired to that build. Each `probe()`
+   returns `ContractEvidence(allowed_reads_sha256, denied_reads_sha256,
+   effect_receipts_sha256)` from independent current reads through its previous
+   or current contract. Include data accepted since cutover, event ordering,
+   tenant denial, forgotten memory, grant withdrawal, artifact bytes, and
+   durable tool/operation receipts. Canonicalize responses before hashing.
+   The host asserts the expected authorization and outcomes before returning
+   each digest. Keep request bodies, personal IDs, tokens and raw evidence
+   in the host's private acceptance environment.
+4. Supply an async context manager `writer_fence(source_generation,
+   target_generation)`. It drains ingress, external effect dispatch, grant
+   writers, vault ingestion, dream and continuation schedulers, device jobs
+   and maintenance on both builds and across prefix-sharing replicas. It must
+   keep them drained through the database commit and yield the SHA-256 of its
+   private attestation. The owner must reconcile ambiguous provider effects
+   before attesting. A host can use deployed replica scaling, an existing
+   scheduler lease and the grant store's own fence to implement this step.
+   If independent writers or roles cannot be fenced, keep the active build.
+
+```python
+receipt = await switch_serving_generation(
+    active_target, standby_target,
+    change_id=deployment_change_uuid, writer_fence=fence, timeout_seconds=60,
+)
+assert receipt == await standby_target.route.receipt(deployment_change_uuid)
+```
+
+The operator takes an exclusive, nonblocking route lock and rejects queued or
+running turns, unfinished tool calls, active durable operations and held provider
+slots. It challenges both ledger connections and both SQLAlchemy indexes using
+fresh PostgreSQL advisory locks, physical relation identity, writable connections
+and required role privileges. It checks the
+history archive when present and exchanges two private random 32-byte witness
+objects through each pair of S3 clients. Configure retention for the
+`serving-witness/` prefix according to the deployment audit period. Evidence
+mismatch, namespace mismatch or timeout before commit leaves the source
+selected. Run an authenticated read on the public destination and direct
+traffic and background writers to its selected generation. The old gateway
+returns 503. Operator change IDs are private UUIDs. Reuse the same UUID after
+an ambiguous response to retrieve the committed receipt. After a subsequent
+switch, query `receipt(uuid)` for the historical outcome.
+
+For a return to the newer build, construct it with the next generation and
+another change UUID, then repeat the same fenced qualification. Nothing is
+copied back or replayed. Every build serves the current PostgreSQL state,
+document tombstones, grant decisions and S3 bytes. Database/PITR recovery
+and loss of the object-store service have separate recovery procedures.
+
+`tests/public/test_postgres_serving_rollback.py` exercises three independent
+HTTP gateway instances, PostgreSQL and S3. It creates durable operations with
+non-idempotent tool calls and artifacts for two tenants, withdraws a grant
+and forgets a document, switches back, retries an original request, writes a
+new operation, and switches forward. It compares event, artifact, document
+and effect receipts and exercises stale, in-flight and failed qualifications.
+The application-specific previous HTTP contract and production writer fence
+must pass their host's own acceptance run before activation.
