@@ -55,6 +55,17 @@ read_receipts = sa.Table("oa_vault_read_receipts", metadata, *identity_columns()
         ["oa_vault_revisions." + key for key in ("tenant","agent","space","path","revision")],
         ondelete="CASCADE"),
 )
+folders = sa.Table("oa_vault_folders", metadata, *identity_columns())
+
+moves = sa.Table("oa_vault_moves", metadata, *identity_columns(),
+    sa.Column("first_revision", sa.BigInteger, nullable=False),
+    sa.Column("last_revision", sa.BigInteger, primary_key=True),
+    sa.Column("destination", sa.String(700), nullable=False),
+    sa.Column("destination_revision", sa.BigInteger, nullable=False))
+sa.Index("oa_vault_move_destinations", moves.c.tenant, moves.c.agent, moves.c.space,
+         moves.c.destination, moves.c.destination_revision)
+
+
 links = sa.Table("oa_vault_links", metadata, *identity_columns(),
     sa.Column("target", sa.String(700), primary_key=True),
 )
@@ -88,7 +99,9 @@ async def refresh_indexes(con, key, note_id, parsed, content):
                               {"id": note_id, "content": content})
 
 
-def note_path(value: str) -> str:
+def note_path(value: str, *, allow_generated=False) -> str:
+    if allow_generated and value == "llms.txt":
+        return value
     if (not isinstance(value, str) or len(value.encode()) > 700 or "\\" in value
             or ":" in value or "\0" in value or PurePosixPath(value).suffix.lower() != ".md"
             or any(not part or part.startswith(".") for part in value.split("/"))):
@@ -210,7 +223,7 @@ class SqlDocumentVault:
         scope = await self._scope(context, "memory.read")
         async with self.engine.connect() as con:
             stmt = sa.select(notes.c.path, notes.c.title, notes.c.content, notes.c.revision).filter_by(
-                **scope, path=note_path(path)).where(notes.c.content.is_not(None))
+                **scope, path=note_path(path, allow_generated=True)).where(notes.c.content.is_not(None))
             if revision is not None:
                 if type(revision) is not int or not 1 <= revision < (1 << 63):
                     raise ValueError("Invalid note revision")
@@ -230,7 +243,7 @@ class SqlDocumentVault:
         stmt = sa.select(notes.c.path, notes.c.title, notes.c.revision).filter_by(**scope).where(
             notes.c.content.is_not(None))
         if after is not None:
-            stmt = stmt.where(notes.c.path > note_path(after))
+            stmt = stmt.where(notes.c.path > note_path(after, allow_generated=True))
         async with self.engine.connect() as con:
             rows = (await con.execute(stmt.order_by(notes.c.path).limit(limit + 1))).mappings().all()
         await self._recheck(context, "memory.read", scope)
@@ -271,7 +284,7 @@ class SqlDocumentVault:
             path, rank = "n.path", "rank"
         params = {**scope, "query": query, "limit": limit + int(paginate)}
         if after is not None:
-            params["after"] = note_path(after)
+            params["after"] = note_path(after, allow_generated=True)
             stmt += f" AND {path} > :after"
         order = path if paginate else f"{rank}, {path}"
         stmt += f" ORDER BY {order} LIMIT :limit"
@@ -295,7 +308,8 @@ class SqlDocumentVault:
         scope = await self._scope(context, "memory.read")
         async with self.engine.connect() as con:
             records = (await con.execute(sa.select(notes.c.path, notes.c.content, notes.c.revision)
-                       .filter_by(**scope).where(notes.c.content.is_not(None)))).all()
+                       .filter_by(**scope).where(notes.c.content.is_not(None),
+                           notes.c.path.not_in(("llms.txt", "_showcase/showcase.md"))))).all()
 
         def inspect():
             index = VaultIndex.from_documents([(r.path, r.content) for r in records])
@@ -328,7 +342,7 @@ class SqlDocumentVault:
             links.join(notes, sa.and_(*(links.c[k] == notes.c[k] for k in (*scope, "path"))))
         ).where(links.c.target == target, *(links.c[k] == v for k, v in scope.items()))
         if after is not None:
-            stmt = stmt.where(links.c.path > note_path(after))
+            stmt = stmt.where(links.c.path > note_path(after, allow_generated=True))
         async with self.engine.connect() as con:
             rows = (await con.execute(stmt.order_by(links.c.path).limit(limit + 1))).mappings().all()
         await self._recheck(context, "memory.read", scope)
@@ -340,7 +354,7 @@ class SqlDocumentVault:
         scope = await self._scope(context, "memory.read")
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("Invalid vault page size")
-        stmt = sa.select(versions.c.revision).filter_by(**scope, path=note_path(path))
+        stmt = sa.select(versions.c.revision).filter_by(**scope, path=note_path(path, allow_generated=True))
         if before is not None:
             if type(before) is not int or before < 1:
                 raise ValueError("Invalid revision cursor")
@@ -359,7 +373,7 @@ class SqlDocumentVault:
         scope = await self._scope(context, "memory.read")
         async with self.engine.connect() as con:
             facts = (await con.execute(sa.select(import_origins.c.facts).filter_by(
-                **scope, path=note_path(path), revision=revision))).scalar_one_or_none()
+                **scope, path=note_path(path, allow_generated=True), revision=revision))).scalar_one_or_none()
         await self._recheck(context, "memory.read", scope)
         if facts is not None:
             await saw_notes(self, context, scope, [{"path": path, "revision": revision}])
@@ -413,7 +427,7 @@ class SqlDocumentVault:
                 await before_commit()
         return {"path":path,"revision":revision,"forgotten":erase,"commit":digest}
 
-    async def _apply(self,con,context,scope,path,content,expected,*,erase=False,historical=False):
+    async def _apply(self,con,context,scope,path,content,expected,*,erase=False,historical=False,regenerate=False):
         key = {**scope,"path":path}
         parsed = parse_note_text(path, content) if content is not None else None
         if parsed and not parsed.frontmatter_valid and not historical:
@@ -435,6 +449,10 @@ class SqlDocumentVault:
                 saved = sa.select(versions.c.revision).filter_by(**key).exists()
                 origin = sa.select(import_origins.c.revision).filter_by(**key).exists()
                 mutable = sa.or_(mutable, saved, origin)
+            if regenerate and path in {"llms.txt", "_showcase/showcase.md"}:
+                # A fresh derivation can repopulate an erased output from live
+                # source revisions. Ordinary reads/writes cannot replay it.
+                mutable = sa.true()
             stmt = sa.update(notes).filter_by(**key, revision=expected).where(mutable).values(**values)
         changed = (await con.execute(stmt.returning(notes.c.id))).scalar_one_or_none()
         if changed is None:

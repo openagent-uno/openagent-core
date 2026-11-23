@@ -478,6 +478,10 @@ async def restore(store, context, digest, *, authorize, reset=False):
             rev = await store._apply(
                 con, context, scope, path, new, row.revision, historical=True
             )
+            if new is not None:
+                from .documents import dependencies
+                await con.execute(dependencies.insert().values(**scope, path=path, revision=rev,
+                                  source_path=path, source_revision=desired[path]))
             changed.append((path, rev, new is not None))
         if reset:
             for removed in discarded:

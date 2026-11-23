@@ -167,6 +167,108 @@ class DocumentVault(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(LookupError):
             await self.store.read(self.a, "topics/color.md", revision=1)
 
+    def administration(self, actor, **kwargs):
+        from openagent_core.administration import ManagementContext
+        from openagent_core.memory.vault.document_admin import DocumentVaultAdministration
+        service = DocumentVaultAdministration(self.store, self.policy, actor, **kwargs)
+        context = ManagementContext(actor.authority, actor.agent_id)
+        async def call(operation, **fields):
+            return await service.execute(context, operation, **fields)
+        return call
+
+    async def test_folder_move_backlinks_history_forget_and_independent_path_reuse(self):
+        admin = self.administration(self.a)
+        async def write(path, text, revision=0):
+            return await self.store.write(self.a, path, text, expected_revision=revision)
+        await write("old/a.md", "privateword")
+        await write("old/b.md", "[[old/a#top|one]]")
+        await write("ref.md", "[[old/a#heading|two]] [[old/b^here]]")
+        await self.store.write(self.b, "old/a.md", "another space", expected_revision=0)
+        token = await self.store.note_receipts(await self.store._scope(self.a, "memory.read"), [("old/a.md",1)])
+        result = await admin("move", body={"from": "old", "to": "new"})
+        self.assertEqual((result["notes_moved"], result["notes_updated"], result["links_rewritten"]), (2,2,3))
+        self.assertEqual((await self.store.read(self.a, "ref.md"))["content"], "[[new/a#heading|two]] [[new/b^here]]")
+        detail = await admin("commit", query={"hash":result["commit"]})
+        self.assertEqual(detail["author"], self.a.author.key)
+        self.assertEqual((await self.store.read(self.b, "old/a.md"))["content"], "another space")
+        await write("old/a.md", "different lifetime", 2)
+        await admin("move", body={"from":"new/a.md","to":"end.md"})
+        await self.store.forget(self.a, "end.md", expected_revision=1)
+        self.assertEqual((await self.store.read(self.a, "old/a.md"))["content"], "different lifetime")
+        self.assertEqual(await self.store.resolve_note_receipts(await self.store._scope(self.a, "memory.read"),token), [])
+        for path in ("old/a.md", "new/a.md", "end.md"):
+            with self.assertRaises(LookupError):
+                await self.store.read(self.a, path, revision=1)
+        self.assertEqual((await self.store.search(self.a, query="privateword"))["hits"], [])
+
+    async def test_competing_moves_serialize_and_preserve_ownership(self):
+        admin = self.administration(self.a)
+        await self.store.write(self.a, "source.md", "sample", expected_revision=0)
+        responses = await asyncio.gather(*[admin("move", body={"from": "source.md", "to": target})
+                                           for target in ("first.md", "second.md")])
+        self.assertEqual(sum(response.get("notes_moved",0) for response in responses), 1)
+        self.assertEqual(sum("error" in response for response in responses), 1)
+        self.assertEqual(len((await self.store.list_notes(self.a))["notes"]), 1)
+        other = self.context("different")
+        self.assertEqual((await self.store.list_notes(other))["notes"], [])
+
+    async def test_maintenance_scaffold_repair_generated_outputs_and_forget(self):
+        admin = self.administration(self.a)
+        created = await admin("init")
+        self.assertIn("concepts/", created["created"])
+        self.assertIn("workspace/_templates/note.md", created["created"])
+        self.assertEqual((await admin("init"))["created"], [])
+        content = "---\ntitle: A\nsummary: secretword\n---\n[[ b ]]"
+        await self.store.write(self.a, "a.md", content, expected_revision=0)
+        dry = await admin("doctor")
+        self.assertIn("a.md", {r["path"] for r in dry["fix"]["fixed"]})
+        self.assertEqual((await self.store.read(self.a,"a.md"))["revision"],1)
+        repaired = await admin("doctor",query={"apply":True})
+        self.assertIn("a.md", {r["path"] for r in repaired["fix"]["fixed"]})
+        self.assertIsNotNone(repaired["commit"])
+        generated = await admin("derived")
+        self.assertIsNotNone(generated["commit"])
+        self.assertIn("secretword", (await admin("read", path="llms.txt"))["content"])
+        self.assertIsNone((await admin("derived"))["commit"])
+        await self.store.forget(self.a, "a.md", expected_revision=2)
+        for path in ("llms.txt", "_showcase/showcase.md"):
+            with self.assertRaises(LookupError):
+                await admin("read", path=path)
+        self.assertIsNotNone((await admin("derived"))["commit"])
+        self.assertNotIn("secretword", (await admin("read", path="llms.txt"))["content"])
+        self.assertEqual((await self.store.search(self.a, query="secretword"))["hits"], [])
+
+    async def test_sync_heals_index_and_rejected_move_rolls_back_every_note(self):
+        from openagent_core.memory.vault.documents import links
+        admin = self.administration(self.a)
+        await self.store.write(self.a, "a.md", "old", expected_revision=0)
+        await self.store.write(self.a, "ref.md", "[[a]]", expected_revision=0)
+        scope = await self.store._scope(self.a, "memory.read")
+        async with self.engine.begin() as con:
+            await con.execute(links.delete().filter_by(**scope))
+        self.assertEqual((await self.store.backlinks(self.a, "a.md"))["paths"], [])
+        res = await admin("index/sync", query={"force":True})
+        self.assertEqual((res["updated"],res["links"],res["total"]), (2,1,2))
+        self.assertEqual((await self.store.backlinks(self.a, "a.md"))["paths"], ["ref.md"])
+        original = self.policy.authorize
+        calls = 0
+        async def changing(ctx, action, resource, *, audience=()):
+            nonlocal calls
+            if action == "vault.write":
+                calls += 1
+                return calls == 1
+            return await original(ctx,action,resource,audience=audience)
+        with patch.object(self.policy, "authorize", changing), self.assertRaises(PermissionError):
+            await admin("move", body={"from":"a.md","to":"b.md"})
+        self.assertEqual((await self.store.read(self.a,"ref.md"))["content"], "[[a]]")
+        with self.assertRaises(LookupError):
+            await self.store.read(self.a, "b.md")
+        with self.assertRaisesRegex(ValueError,"budget"):
+            await self.administration(self.a,max_maintenance_bytes=1)("derived")
+        for value in ("../bad", "/bad", "a//b"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                await admin("move",body={"from":"a.md","to":value})
+
     async def test_personal_and_shared_spaces_with_the_same_note_path_are_distinct(self):
         from dataclasses import replace
         from openagent_core.memory.personal_catalog import PersonalMemoryCatalog, PersonalMemorySpace

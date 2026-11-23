@@ -341,15 +341,7 @@ def fix_note_content(content: str, note: Note, rules: set[str],
 
 # ── orchestration ─────────────────────────────────────────────────────
 
-def apply_mechanical_fixes(vault_root: Path, report: GateReport, index,
-                           apply: bool = False, today: str | None = None) -> FixResult:
-    """Walk the gate report, apply every mechanical fix, and collect the
-    rest as suggestions. With ``apply=False`` this is a dry run — it reports
-    what *would* change without writing."""
-    t0 = time.monotonic()
-    today = today or datetime.date.today().isoformat()
-    result = FixResult(dry_run=not apply)
-
+def classify_violations(report: GateReport, result: FixResult) -> dict[str, set[str]]:
     # Group fixable violations by note path -> set of rules.
     by_path: dict[str, set[str]] = {}
     for v in report.violations:
@@ -364,6 +356,20 @@ def apply_mechanical_fixes(vault_root: Path, report: GateReport, index,
                 "suggestion": v.suggestion or "",
                 "related_path": v.related_path,
             })
+
+    return by_path
+
+
+def apply_mechanical_fixes(vault_root: Path, report: GateReport, index,
+                           apply: bool = False, today: str | None = None) -> FixResult:
+    """Walk the gate report, apply every mechanical fix, and collect the
+    rest as suggestions. With ``apply=False`` this is a dry run — it reports
+    what *would* change without writing."""
+    t0 = time.monotonic()
+    today = today or datetime.date.today().isoformat()
+    result = FixResult(dry_run=not apply)
+
+    by_path = classify_violations(report, result)
 
     for rel, rules in by_path.items():
         abs_path = vault_root / rel

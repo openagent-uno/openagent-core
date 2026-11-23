@@ -37,3 +37,30 @@ cases. The historical checks now target the public service for graph, path and
 frontmatter behavior. Commit-count expectations explicitly include the initial
 baseline and separately verify the first note's provenance. These tests do not
 qualify a real provider or deployment.
+
+## Hosts using a SQL document vault
+
+Construct `DocumentVaultAdministration(store, authorizer, execution)` with the
+verified execution for the management caller. Its operations use the space
+selected by the host. The same canonical notes, revisions, ACL and full-text
+index serve both management requests and model tools. Each maintenance request
+requires live read, publication and write permission. After planning a change,
+the service verifies both the space and the management grant inside the
+transaction. The space head serializes moves with other writes. Every changed
+note and backlink in the move receives one attributed commit.
+
+The doctor previews mechanical repairs by default and applies them with
+`apply=true`. Taxonomy initialization creates virtual folders and missing
+templates. Regeneration writes `llms.txt` and `_showcase/showcase.md` with
+dependencies on the current source revisions. Forgetting a source also removes
+affected generated revisions, invalidates read receipts and follows renames in
+both directions. Independently recreated documents at an earlier name survive
+forgetting the moved document. Run regeneration to publish updated outputs.
+Normal SQL writes maintain search and links in the same transaction.
+`index/sync?force=true` rebuilds these indexes from the canonical contents
+without writing a new content revision.
+
+Whole-space maintenance plans execute in memory. Defaults admit up to 100,000
+live documents and 64 MiB of UTF-8 contents per space. Hosts can configure
+`max_maintenance_notes` and `max_maintenance_bytes` at construction. Exceeding
+the budget fails the request before loading the corpus or changing notes.

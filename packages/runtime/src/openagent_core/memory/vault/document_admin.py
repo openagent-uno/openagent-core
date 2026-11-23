@@ -5,22 +5,40 @@ from .parser import extract_wikilinks, load_frontmatter_yaml, split_frontmatter
 
 
 class DocumentVaultAdministration:
-    def __init__(self, store, authorizer, execution):
+    def __init__(self, store, authorizer, execution, *, max_maintenance_bytes=64 << 20, max_maintenance_notes=100_000):
+        if min(max_maintenance_bytes, max_maintenance_notes) < 1:
+            raise ValueError("Invalid maintenance budget")
+        self.maintenance_budget = max_maintenance_notes, max_maintenance_bytes
         self.store = store
         self.authorizer = authorizer
         self.execution = execution
 
     async def authorize(self, context, action):
+        from ...administration import ManagementContext
         from ...contracts import ResourceRef, require_authorized
+        if not isinstance(context, ManagementContext):
+            raise TypeError("A verified management context is required")
         if context.authority != self.execution.authority or context.agent_id != self.execution.agent_id:
             raise PermissionError("Different vault authority")
         target = ResourceRef("agent", context.tenant_id, context.agent_id)
         await require_authorized(self.authorizer, context, action, target)
 
     async def execute(self, context, operation, *, path=None, query=None, body=None):
-        query, body = query or {}, body or {}
+        query = {} if query is None else query
+        body = {} if body is None else body
+        if not isinstance(query, dict) or not isinstance(body, dict):
+            raise ValueError("Expected object")
+        allowed_query = {"search": {"q", "limit"}, "search/files": {"q", "limit"},
+            "search/in-file": {"path", "q", "regex"}, "gate": {"strict", "limit"},
+            "history": {"path", "limit"}, "commit": {"hash"}, "doctor": {"apply"}, "index/sync": {"force"}}
+        allowed_body = {"write": {"content","expected_revision"}, "delete": {"expected_revision"},
+                        "restore": {"hash"}, "reset": {"hash","confirm"}, "move": {"from","to"}}
+        if set(query) - allowed_query.get(operation, set()) or set(body) - allowed_body.get(operation, set()):
+            raise ValueError("Unknown vault fields")
+        if path is not None and operation not in {"read","write","delete"}:
+            raise ValueError("Unexpected note path")
         readable = {"notes", "read", "graph", "stats", "gate", "search", "search/files", "search/in-file","history","commit"}
-        if operation not in readable | {"write", "delete","restore","reset"}:
+        if operation not in readable | {"write", "delete", "restore", "reset", "move", "doctor", "derived", "init", "index/sync"}:
             raise NotImplementedError("This operation requires version-history administration")
         action = "vault.read" if operation in readable else "vault.write"
         await self.authorize(context, action)
@@ -37,6 +55,9 @@ class DocumentVaultAdministration:
 
     async def _execute(self, operation, path, query, body, before_commit):
         execution = self.execution
+        if operation in {"move", "doctor", "derived", "init", "index/sync"}:
+            from .document_maintenance import maintain
+            return await maintain(self.store, execution, operation, query, body, before_commit, self.maintenance_budget)
         if operation in {"history","commit"}:
             from . import document_history
             if operation == "history":

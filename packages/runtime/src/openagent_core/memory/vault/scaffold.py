@@ -90,6 +90,17 @@ related:
 """
 
 
+def scaffold_contents(journal_root: str = "workspace/journal"):
+    folders = (*taxonomy.ALL_FOLDERS, f"{journal_root}/sessions", f"{journal_root}/daily", "workspace/_canon")
+    documents = {
+        f"{journal_root}/_templates/sessione.md": _SESSION_TEMPLATE,
+        f"{journal_root}/_templates/daily.md": _DAILY_TEMPLATE,
+        "workspace/_canon/README.md": _CANON_README,
+        "workspace/_templates/note.md": _NOTE_TEMPLATE.format(folder="self"),
+    }
+    return folders, documents
+
+
 def scaffold(vault_root: Path, journal_root: str = "workspace/journal") -> dict:
     """Create the canonical folder system + canon + journal templates.
     Returns the list of paths created (idempotent — skips what exists)."""
@@ -108,20 +119,10 @@ def scaffold(vault_root: Path, journal_root: str = "workspace/journal") -> dict:
             p.write_text(content)
             created.append(rel)
 
-    for folder in taxonomy.ALL_FOLDERS:
+    folders, documents = scaffold_contents(journal_root)
+    for folder in folders:
         _mkdir(folder)
-
-    # Journal sub-tree (Prompt 13) + reusable templates.
-    _mkdir(f"{journal_root}/sessions")
-    _mkdir(f"{journal_root}/daily")
-    _write(f"{journal_root}/_templates/sessione.md", _SESSION_TEMPLATE)
-    _write(f"{journal_root}/_templates/daily.md", _DAILY_TEMPLATE)
-
-    # Canon workspace (Prompt 2).
-    _mkdir("workspace/_canon")
-    _write("workspace/_canon/README.md", _CANON_README)
-
-    # A generic note template per content folder.
-    _write("workspace/_templates/note.md", _NOTE_TEMPLATE.format(folder="self"))
+    for path, content in documents.items():
+        _write(path, content)
 
     return {"created": created, "count": len(created)}
