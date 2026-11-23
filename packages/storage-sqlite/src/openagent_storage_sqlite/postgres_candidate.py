@@ -5,6 +5,7 @@ import argparse
 from contextlib import closing
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from importlib.resources import files
 from itertools import zip_longest
 import json
@@ -76,7 +77,7 @@ def _session_rows(db, agent, tenants):
                _time(row["last_activity_at_ms"]))
 
 
-def _run_rows(db, agent, tenants):
+def _run_rows(db, agent, tenants, *, artifact_runs):
     for row in db.execute("""SELECT r.*,s.owner_principal_id, ROW_NUMBER() OVER
             (ORDER BY r.session_id,r.ordinal) AS import_ordinal FROM session_runs r
             LEFT JOIN sessions_v2 s ON r.session_id=s.id AND r.tenant_id=s.tenant_id ORDER BY r.id"""):
@@ -84,7 +85,7 @@ def _run_rows(db, agent, tenants):
         tenant = _source_tenant(row, tenants)
         if (meta.get("runtime_contract") != 1 or row["owner_principal_id"] is None or row["agent_id"] != agent
                 or row["status"] not in TERMINAL_STATUSES or row["finished_at_ms"] is None
-                or row["input_json"] is None or meta.get("attachments")
+                or row["input_json"] is None or meta.get("attachments") and row["id"] not in artifact_runs
                 or meta.get("steer_run_id") or row["delegated_parent_run_id"] or row["parent_run_id"]):
             raise StageMismatch("Run requires an unsupported execution or retention mapping")
         accepted = SqliteRuntimeStore._decode_accepted_request(row)
@@ -245,10 +246,11 @@ def _handoff_rows(db, agent, tenants):
         yield agent, row["source_run_id"], row["origin_run_id"]
 
 
-def _source_scope(db):
+def _source_scope(db, *, archive_verified):
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
-    restricted = ("sessions", "resource_acl", "artifacts", "artifact_links",
-                  "session_message_parts", "context_snapshots")
+    restricted = ("sessions", "resource_acl", "session_message_parts", "context_snapshots")
+    if not archive_verified:
+        restricted += ("artifacts", "artifact_links")
     for table in restricted:
         if table in tables and db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
             raise StageMismatch("Source requires additional runtime adapters for staged history")
@@ -323,7 +325,8 @@ def _schema(pg, name, receipt, verify_only):
 
 
 def build_runtime_candidate(snapshot, database, vault, *, expected_tenant=None, expected_tenants=None, agent_id, dsn, stage_schema,
-                            candidate_schema, verify_only=False, require_git_history=True, history_only=False):
+                            candidate_schema, verify_only=False, require_git_history=True, history_only=False,
+                            artifact_archive_schema=None):
     """Build or independently re-read an atomic candidate, without runtime admission or cutover."""
     if not isinstance(agent_id, str) or not agent_id.strip():
         raise ValueError("An exact agent ID is required")
@@ -334,15 +337,24 @@ def build_runtime_candidate(snapshot, database, vault, *, expected_tenant=None, 
     if staged["source_issues"]:
         raise StageMismatch("Source inventory has unresolved issues")
     digest = staged["source_manifest_sha256"]
-    receipt = canonical_json([2 if history_only or expected_tenants is not None else 1, digest, database, vault, selected, agent_id, stage_schema])
+    receipt_data = [2 if history_only or expected_tenants is not None else 1, digest, database, vault, selected, agent_id, stage_schema]
+    if artifact_archive_schema is not None:
+        receipt_data.extend(["artifact_archive", artifact_archive_schema])
+    receipt = canonical_json(receipt_data)
     source = Path(snapshot).resolve() / _relative(database)
     with closing(sqlite3.connect(source.as_uri() + "?mode=ro&immutable=1", uri=True)) as db, psycopg.connect(dsn) as pg:
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA query_only=ON")
         db.execute("BEGIN")
-        _source_scope(db)
+        artifact_runs = frozenset()
+        if artifact_archive_schema is not None:
+            from .artifact_archive import verify_artifact_candidate
+            artifact_runs = verify_artifact_candidate(pg, db, schema=artifact_archive_schema,
+                manifest_sha256=digest, database_sha256=staged["source_database_sha256"],
+                agent_id=agent_id, tenants=selected)
+        _source_scope(db, archive_verified=artifact_archive_schema is not None)
         fresh = _schema(pg, candidate_schema, receipt, verify_only)
-        sources = dict(sessions=_session_rows, runs=_run_rows, messages=_message_rows, events=_event_rows, tool_calls=_tool_rows,
+        sources = dict(sessions=_session_rows, runs=partial(_run_rows, artifact_runs=artifact_runs), messages=_message_rows, events=_event_rows, tool_calls=_tool_rows,
                        operations=_operation_rows, handoffs=_handoff_rows)
         counts = {}
         for table, generate in sources.items():
@@ -371,6 +383,7 @@ def main(argv=None):
     parser.add_argument("--expected-tenant", required=True, action="append")
     for key in ("database", "vault", "agent-id", "stage-schema", "candidate-schema"):
         parser.add_argument("--" + key, required=True)
+    parser.add_argument("--artifact-archive-schema")
     parser.add_argument("--verify-only", action="store_true")
     _vault_options(parser)
     args = vars(parser.parse_args(argv))

@@ -68,7 +68,9 @@ class ArtifactArchive(unittest.IsolatedAsyncioTestCase):
             "oa_archive_" + uuid4().hex,
             "oa_runtime_" + uuid4().hex,
         )
-        for schema in (archive_schema, ledger_schema):
+        stage_schema = "oa_stage_" + uuid4().hex
+        candidate_schema = "oa_candidate_" + uuid4().hex
+        for schema in (archive_schema, ledger_schema, stage_schema, candidate_schema):
             self.addCleanup(
                 lambda name=schema: pg.execute(
                     sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
@@ -269,6 +271,24 @@ class ArtifactArchive(unittest.IsolatedAsyncioTestCase):
                 )
                 with self.assertRaisesRegex(StageMismatch, "metadata differs"):
                     verify_artifact_candidate(pg, db, **verify)
+
+        from openagent_storage_sqlite.postgres_candidate import build_runtime_candidate
+        from openagent_storage_sqlite.postgres_stage import transfer_history
+        selection = dict(expected_tenant=owner.tenant_id, dsn=dsn, history_only=True)
+        source_args = (snapshot, "state.sqlite", "memories")
+        transfer_history(*source_args, schema=stage_schema, **selection)
+        candidate_args = dict(agent_id="agent", stage_schema=stage_schema, candidate_schema=candidate_schema, **selection)
+        with self.assertRaises(StageMismatch):
+            build_runtime_candidate(*source_args, **candidate_args)
+        candidate_args["artifact_archive_schema"] = archive_schema
+        native = build_runtime_candidate(*source_args, **candidate_args)
+        self.assertEqual(native["verified_rows"]["runs"], len(saved_runs))
+        self.assertEqual(native, build_runtime_candidate(*source_args, verify_only=True, **candidate_args))
+        active = PostgresRuntimeStore(dsn, agent_id="agent", schema=candidate_schema)
+        await active.start()
+        self.addAsyncCleanup(active.close)
+        for ident in saved_runs:
+            self.assertEqual(await active.accepted_request(ident), await store.accepted_request(ident))
 
         # Exercise ordinary authenticated download for linked and owner-only source attachments.
         class Host:
