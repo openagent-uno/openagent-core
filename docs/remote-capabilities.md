@@ -178,8 +178,20 @@ the base. Use a dedicated hypervisor network for infrastructure-level filtering.
 
 A heartbeat verifies the host key and the guest boot ID. Reattachment after
 shutdown advances the persistent generation while preserving the task disk.
-The RPC checks the exact boot again on the same authenticated connection before
-forwarding any guest command. `revoke` first closes durable broker admission,
+Each control channel checks the guest boot ID as it connects. All RPCs for the
+allocation and lease epoch use that pinned, multiplexed channel, including
+concurrent foreground and background requests. The host-tools broker holds
+one connection for the lifetime of the active browser and shell handles.
+The controller derives the browser account, network and profile scope from
+the authenticated owner, tenant and assignment. Reattachment opens the
+same private browser profile on disk. A new browser process may allocate
+new tab IDs. Discover its tabs again after reattachment.
+
+Route calls for an active allocation to its owning controller. A host-local
+lock rejects a second controller while the first still has a live channel.
+Connections retire after a lease duration without traffic. Call
+`await provider.close()` when the controller exits to release its transports.
+`revoke` first closes durable broker admission,
 then shuts down the matching VM to stop active guest processes. Redelivery
 completes an interrupted shutdown. An effect admitted before revocation may
 already have reached the task disk. Saved data survives shutdown.

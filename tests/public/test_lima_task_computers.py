@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import json
 from contextlib import AsyncExitStack
 import os
 from pathlib import Path
@@ -41,6 +42,7 @@ class LimaComputers(unittest.IsolatedAsyncioTestCase):
         policy = Policy()
         broker = TaskComputerBroker(engine, policy, provider, provider)
         provider.bind(broker)
+        self.addAsyncCleanup(provider.close)
         await broker.initialize()
         runtime = Runtime(
             RuntimeSettings("agent"), RuntimeServices(SqliteRuntimeStore(temp / "runs.db"), None, policy)
@@ -68,6 +70,18 @@ class LimaComputers(unittest.IsolatedAsyncioTestCase):
             )
             return result
 
+        async def browser(ctx, user, *, initialize):
+            page = os.environ.get("OPENAGENT_TEST_LIMA_BROWSER_PAGE")
+            if not page:
+                return
+            tabs = await call(ctx, "tabs_context_mcp", createIfEmpty=True)
+            tab = json.loads(tabs["content"][0]["text"].splitlines()[0])["availableTabs"][0]["tabId"]
+            if initialize:
+                await call(ctx, "navigate", tabId=tab, url=page + "?owner=" + user)
+            await call(ctx, "navigate", tabId=tab, url=page)
+            text = await call(ctx, "get_page_text", tabId=tab)
+            self.assertEqual(text["content"][0]["text"].splitlines()[-1], "Session workspace=" + user)
+
         async def prove(ctx, user, lease):
             self.assertEqual(
                 (await call(ctx, "read_text_file", path="seed.txt"))["content"][0]["text"], "sealed\n"
@@ -93,6 +107,7 @@ class LimaComputers(unittest.IsolatedAsyncioTestCase):
             await interact("key", text="Return")
             typed = await call(ctx, "read_text_file", path="viewer-input.txt")
             self.assertEqual(typed["content"][0]["text"].strip(), user)
+            await browser(ctx, user, initialize=True)
             return await broker.checkpoint(ctx, lease, "review")
 
         async with AsyncExitStack() as stack:
@@ -111,6 +126,8 @@ class LimaComputers(unittest.IsolatedAsyncioTestCase):
                 (await call(active, "read_text_file", path="seed.txt"))["content"][0]["text"], "alpha"
             )
             self.assertEqual(await broker.checkpoint(active, new, "review"), receipts[0])
+            await browser(active, "alpha", initialize=False)
+            await browser(cb, "bravo", initialize=False)
             shell = next(t for t in await runtime.capabilities.discover(active) if t.name == "shell_exec")
             running = asyncio.create_task(
                 runtime.capabilities.call_tool(

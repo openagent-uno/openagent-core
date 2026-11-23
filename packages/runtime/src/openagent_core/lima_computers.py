@@ -15,10 +15,11 @@ import re
 import shlex
 import tempfile
 import time
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import yaml
 
+from ._guest_channel import GuestChannel
 from .capabilities import CapabilityUnavailable
 from .computer_tasks import ComputerConnection
 from .contracts import canonical_json
@@ -117,6 +118,8 @@ class LimaComputerProvider:
         self.private.mkdir(mode=0o700, exist_ok=True)
         self.env = {**os.environ, "LIMA_HOME": str(self.home)}
         self.broker = None
+        self._channels = {}
+        self._opening = asyncio.Lock()
 
     def bind(self, broker):
         if broker.provider is not self or broker.transport is not self:
@@ -156,40 +159,39 @@ class LimaComputerProvider:
             raise CapabilityUnavailable("Lima inventory changed")
         return row["status"]
 
-    async def _ssh(self, key, command, *, data=b"", limit=_CAP, timeout=120):
+    def _ssh_argv(self, key, command):
         name = self._machine(key)
+        return (
+            self.ssh,
+            "-F",
+            str(self.home / name / "ssh.config"),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ForwardAgent=no",
+            "-o",
+            "ClearAllForwardings=yes",
+            "-o",
+            "ControlMaster=no",
+            "-o",
+            "ControlPath=none",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "GlobalKnownHostsFile=/dev/null",
+            "-o",
+            "HostKeyAlgorithms=ssh-ed25519",
+            "-o",
+            "HostKeyAlias=" + name,
+            "-o",
+            "UserKnownHostsFile=" + str(self._dir(key) / "known_hosts"),
+            "lima-" + name,
+            command,
+        )
+
+    async def _ssh(self, key, command, *, data=b"", limit=_CAP, timeout=120):
         return await _command(
-            (
-                self.ssh,
-                "-F",
-                str(self.home / name / "ssh.config"),
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ForwardAgent=no",
-                "-o",
-                "ClearAllForwardings=yes",
-                "-o",
-                "ControlMaster=no",
-                "-o",
-                "ControlPath=none",
-                "-o",
-                "StrictHostKeyChecking=yes",
-                "-o",
-                "GlobalKnownHostsFile=/dev/null",
-                "-o",
-                "HostKeyAlgorithms=ssh-ed25519",
-                "-o",
-                "HostKeyAlias=" + name,
-                "-o",
-                "UserKnownHostsFile=" + str(self._dir(key) / "known_hosts"),
-                "lima-" + name,
-                command,
-            ),
-            env=self.env,
-            data=data,
-            limit=limit,
-            timeout=timeout,
+            self._ssh_argv(key, command), env=self.env, data=data, limit=limit, timeout=timeout
         )
 
     async def _pin(self, directory, name):
@@ -322,8 +324,14 @@ if [ -s /run/sshd.pid ]; then kill -HUP "$(cat /run/sshd.pid)"; fi
                 machine_id, machine_id, prior["generation"], time.time() + self.lease_seconds
             )
 
+    async def close(self):
+        """Release control connections while leaving VM disks and power state under host control."""
+        await asyncio.gather(*(channel.close() for channel in tuple(self._channels.values())))
+
     async def suspend(self, allocation):
         async with self._locked(allocation.key):
+            if channel := self._channels.get(allocation.key):
+                await channel.close()
             name = self._machine(allocation.key)
             if await self._status(name) == "Running":
                 await self._lima("stop", name)
@@ -351,6 +359,23 @@ if [ -s /run/sshd.pid ]; then kill -HUP "$(cat /run/sshd.pid)"; fi
 
     async def _rpc(self, context, scope, body):
         lease, boot = await self._entry(context, scope)
+        if body["type"] in {"call", "read_resource"}:
+            # The device protocol expects a certified account, network and
+            # instance. Only the trusted context and enrollment supply these.
+            body = {
+                **body,
+                "principal": {
+                    "kind": context.initiator.kind,
+                    "account_id": hashlib.sha256(context.initiator.key.encode()).hexdigest(),
+                    "network_id": hashlib.sha256(
+                        canonical_json([context.initiator.authority, context.tenant_id]).encode()
+                    ).hexdigest(),
+                    "client_instance_id": lease.host_id,
+                    "device_id": lease.machine_id,
+                    "generation": lease.generation,
+                    "browser_scope": lease.allocation,
+                },
+            }
         # The pinned SSH host key verifies the machine. A check within this
         # same session rejects a reboot before passing any input to the broker.
         command = (
@@ -358,17 +383,30 @@ if [ -s /run/sshd.pid ]; then kill -HUP "$(cat /run/sshd.pid)"; fi
             + shlex.quote(boot)
             + " && exec sudo -n -u oawork /usr/local/bin/oa-computer-stdio"
         )
-        rid = uuid4().hex
-        wire = await self._ssh(
-            lease.allocation, command, data=(canonical_json({"id": rid, **body}) + "\n").encode()
-        )
-        for raw in wire.splitlines():
-            frame = json.loads(raw)
-            if frame.get("id") == rid and frame.get("type") == "response":
-                if not frame.get("ok"):
-                    raise CapabilityUnavailable("The assigned guest rejected the operation")
-                return frame["result"]
-        raise CapabilityUnavailable("The guest did not acknowledge this request")
+        key = lease.allocation
+        identity = (boot, lease.epoch)
+        async with self._opening:
+            channel = self._channels.get(key)
+            if channel is not None and (channel.identity != identity or channel.proc.stdin.is_closing()):
+                await channel.close()
+                channel = None
+            if channel is None:
+
+                def remove(closed):
+                    if self._channels.get(key) is closed:
+                        self._channels.pop(key)
+
+                channel = await GuestChannel.open(
+                    self._ssh_argv(key, command),
+                    self.env,
+                    self._dir(key),
+                    identity,
+                    self.lease_seconds,
+                    remove,
+                    _CAP,
+                )
+                self._channels[key] = channel
+        return await channel.request(body)
 
     async def catalog(self, context, selectors):
         result = await self._rpc(context, selectors, {"type": "catalog"})
@@ -404,7 +442,6 @@ if [ -s /run/sshd.pid ]; then kill -HUP "$(cat /run/sshd.pid)"; fi
                 "server": scope["server"],
                 "tool": name,
                 "args": arguments,
-                "principal": context.initiator.key,
             },
         )
 
@@ -417,7 +454,6 @@ if [ -s /run/sshd.pid ]; then kill -HUP "$(cat /run/sshd.pid)"; fi
                 "type": "read_resource",
                 "server": scope["server"],
                 "uri": uri,
-                "principal": context.initiator.key,
             },
         )
 
