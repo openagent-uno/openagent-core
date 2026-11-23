@@ -355,3 +355,71 @@ class DocumentImport(unittest.IsolatedAsyncioTestCase):
                 await vault_import.require_import_receipt(
                     self.engine, **{**proof, k: v}
                 )
+
+    async def test_standalone_rollback_keeps_new_session_and_note_together(self):
+        from openagent_core.contracts import SessionRef
+        from openagent_storage_sqlite.migration import restore_to_new_directory
+
+        candidate = self.root / "standalone"
+        restore_to_new_directory(self.sealed, candidate)
+        path = candidate / "state.db"
+        engine = create_async_engine("sqlite+aiosqlite:///" + str(path))
+        self.addAsyncCleanup(engine.dispose)
+        vault = SqlDocumentVault(
+            engine, self.vault.authorizer, self.vault.resolve_space
+        )
+        await vault.initialize()
+        await vault_import.import_vault(vault, self.ctx, self.src, "state.db")
+        await vault.write(self.ctx, "later.md", "durable", expected_revision=0)
+        current = SqliteRuntimeStore(path)
+        await current.start()
+        request = RunRequest("later-run", "later-session", "later-key", "question")
+        ctx = replace(self.ctx, session_id="later-session")
+        await current.accept(request, ctx)
+        await current.transition(request.run_id, "running")
+        await current.transition(request.run_id, "success", output="answer")
+        await current.close()
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from openagent_core.administration import ManagementContext
+        from openagent_core.artifacts import ArtifactRepository
+
+        policy = SimpleNamespace(authorize=AsyncMock(return_value=True))
+        artifacts = ArtifactRepository(SimpleNamespace(db_path=str(path)), policy)
+        authenticated = ManagementContext(self.person, "agent")
+        uploaded = await artifacts.upload(
+            authenticated,
+            b"later attachment",
+            filename="later.txt",
+            session_id="later-session",
+        )
+        target = self.root / "return-to-files"
+        report = await vault_import.restore_standalone_memory_and_sessions(
+            vault,
+            ctx,
+            self.src,
+            "state.db",
+            target,
+            new_paths=["later.md"],
+            quiesce=fence,
+        )
+        self.assertEqual(report["session_counts"]["sessions_v2"], 2)
+        self.assertEqual((target / "state/notes/later.md").read_bytes(), b"durable")
+        self.assertEqual(report["verified_artifact_blobs"], 1)
+        restored_artifacts = ArtifactRepository(
+            SimpleNamespace(db_path=str(target / "state/state.db")), policy
+        )
+        result = await restored_artifacts.read(
+            authenticated, artifact_id=uploaded["artifact_id"]
+        )
+        self.assertEqual(result.content, b"later attachment")
+        recovered = SqliteRuntimeStore(target / "state/state.db")
+        await recovered.start()
+        self.addAsyncCleanup(recovered.close)
+        self.assertEqual((await recovered.get(request.run_id)).output, "answer")
+        info = await recovered.read_session(
+            SessionRef("host", self.person.tenant_id, "agent", "later-session"),
+            ctx,
+            limit=30,
+        )
+        self.assertEqual([m["text"] for m in info["messages"]], ["question", "answer"])

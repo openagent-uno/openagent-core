@@ -6,6 +6,7 @@ from hashlib import sha256
 from itertools import islice
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import sqlite3
@@ -592,3 +593,170 @@ async def require_import_receipt(
         ):
             return
     raise VaultImportMismatch("The configured import receipt is unavailable")
+
+
+async def restore_standalone_memory_and_sessions(
+    vault, context, src, database, destination, *, new_paths=(), quiesce
+):
+    """Restore files and the *current* standalone SQLite sessions under the same host writer fence."""
+    from contextlib import asynccontextmanager
+
+    if (
+        vault.engine.dialect.name != "sqlite"
+        or not vault.engine.url.database
+        or not callable(quiesce)
+    ):
+        raise VaultImportMismatch(
+            "Standalone rollback requires its current SQLite engine and host fence"
+        )
+    active = Path(vault.engine.url.database).resolve(strict=True)
+    destination = Path(destination).resolve()
+    declared = _relative(database)
+    if (
+        active == src.root / declared
+        or destination.is_relative_to(src.root)
+        or destination == active
+        or destination.is_relative_to(active)
+    ):
+        raise VaultImportMismatch(
+            "An independent active writer and new private rollback directory are required"
+        )
+    async with quiesce() as stamp:
+        if not isinstance(stamp, str) or not stamp.strip():
+            raise VaultImportMismatch("A host writer fence is required")
+
+        def admit_current():
+            with (
+                closing(
+                    sqlite3.connect(active.as_uri() + "?mode=ro", uri=True)
+                ) as source,
+                closing(
+                    sqlite3.connect(
+                        (src.root / declared).as_uri() + "?mode=ro&immutable=1",
+                        uri=True,
+                    )
+                ) as sealed,
+            ):
+                source.execute("BEGIN")
+                guard_snapshot_transaction(source)
+                _check_transaction_tenant(source, context.tenant_id)
+                identity_query = "SELECT db_instance_id FROM operational_storage_state WHERE singleton_id=1"
+                original = sealed.execute(identity_query).fetchone()
+                if (
+                    original is None
+                    or not original[0]
+                    or source.execute(identity_query).fetchone() != original
+                ):
+                    raise VaultImportMismatch(
+                        "The active standalone database differs from the admitted installation"
+                    )
+
+        await asyncio.to_thread(admit_current)
+
+        @asynccontextmanager
+        async def held():
+            yield stamp
+
+        receipt = await restore_vault(
+            vault,
+            context,
+            src,
+            database,
+            destination,
+            new_paths=new_paths,
+            quiesce=held,
+        )
+        target = destination / "state" / declared
+
+        def backup():
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with target.open("xb"):
+                pass
+            os.chmod(target, 0o600)
+            with (
+                closing(
+                    sqlite3.connect(active.as_uri() + "?mode=ro", uri=True)
+                ) as source,
+                closing(sqlite3.connect(target)) as clone,
+            ):
+                source.execute("PRAGMA query_only=ON")
+                source.execute("BEGIN")
+                guard_snapshot_transaction(source)
+                _check_transaction_tenant(source, context.tenant_id)
+                source.backup(clone)
+                if clone.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+                    raise VaultImportMismatch(
+                        "Standalone rollback database failed integrity check"
+                    )
+                _check_transaction_tenant(clone, context.tenant_id)
+                tables = (
+                    "sessions_v2",
+                    "session_runs",
+                    "session_messages",
+                    "domain_events",
+                    "tool_invocations",
+                    "artifacts",
+                )
+                totals = {}
+                for table in tables:
+                    n = source.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                    if (
+                        clone.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                        != n
+                    ):
+                        raise VaultImportMismatch(
+                            "Current session history counts differ"
+                        )
+                    totals[table] = n
+                object_dir = active.parent / "artifacts"
+                referenced = 0
+                unavailable = 0
+                for key, digest, size, status in source.execute(
+                    "SELECT storage_key,sha256,size_bytes,storage_state FROM artifacts ORDER BY sha256"
+                ):
+                    if (
+                        not isinstance(digest, str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                        or key != f"sha256/{digest[:2]}/{digest}"
+                    ):
+                        raise VaultImportMismatch(
+                            "Unsupported standalone artifact address"
+                        )
+                    blob = object_dir / key
+                    if blob != blob.resolve():
+                        raise VaultImportMismatch(
+                            "A referenced artifact crosses a symbolic link"
+                        )
+                    if not blob.is_file():
+                        if status == "available":
+                            raise VaultImportMismatch(
+                                "An available referenced artifact is missing"
+                            )
+                        unavailable += 1
+                        continue
+                    output = target.parent / "artifacts" / key
+                    if not output.exists():
+                        output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                        with blob.open("rb") as origin, output.open("xb") as restored:
+                            shutil.copyfileobj(origin, restored, length=1 << 20)
+                        os.chmod(output, 0o600)
+                        referenced += 1
+                    if output.stat().st_size != size or _digest(output) != digest:
+                        raise VaultImportMismatch(
+                            "Restored artifact bytes differ from their reference"
+                        )
+                return totals, referenced, unavailable
+
+        counts, referenced, unavailable = await asyncio.to_thread(backup)
+        scope = await vault._scope(context, "memory.import")
+        await vault._recheck(context, "memory.import", scope)
+        proof = {
+            "scope": "standalone_memory_and_current_sessions",
+            "vault": receipt,
+            "current_sqlite_sha256": _digest(target),
+            "session_counts": counts,
+            "verified_artifact_blobs": referenced,
+            "unavailable_artifact_references": unavailable,
+        }
+        (destination / "state-complete.json").write_text(canonical_json(proof) + "\n")
+        return proof
