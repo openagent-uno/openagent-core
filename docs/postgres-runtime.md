@@ -28,7 +28,9 @@ PostgreSQL commits the accepted run and its profile event together. A queued
 turn observes its own cancellation and the immediately preceding live turn.
 After a predecessor changes, the worker queries the durable queue again.
 `benchmarks/session_load.py` measures these paths with distinct sessions or one
-contended session, and reports latency, RSS and retained runtime resources.
+contended session, and reports latency, RSS and retained runtime resources. The mixed scenario drives a noisy shared session alongside another tenant’s independent sessions and times the first authenticated read of persisted output.
+
+On a local PostgreSQL 17 instance with 24 concurrent clients, 360 mixed turns per run, eight pool connections per worker and a controlled 12 ms executor, one, two and four worker instances in the same process reached 158, 158 and 156 turns/second. First visible output p95 was 376, 363 and 372 ms respectively. Every sampled worker drained its tasks and database connections in use after traffic stopped. In a separate two-worker, 32-client comparison, bounded concurrent admission improved admission p95 from 101 to 59 ms while end-to-end p95 for independent sessions with a fast policy increased from 127 to 164 ms. The shared-session p95 decreased from 585 to 407 ms. These measurements exclude the network and model provider.
 
 Admission records an idempotency key, request digest, user message and acceptance event in a single transaction. The original process runs the request. Workers execute turns of one session in admission order and can run separate sessions concurrently. Host authorization is checked before submission, execution, replay and publication. Database checks additionally bind session access to tenant, authority, agent and the admitted participants. Session listings, searches and public transcript pages share these boundaries. Session-scoped message IDs and sequences support stable history; event replay uses a separate increasing cursor. Text search uses an authorized substring scan and its cost grows with the selected user’s history.
 

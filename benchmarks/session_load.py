@@ -7,10 +7,14 @@ From the repository root, with the runtime, PostgreSQL adapter and psutil instal
 
     python benchmarks/session_load.py distinct --runs 1024 --concurrency 32
     python benchmarks/session_load.py hot --runs 160 --concurrency 32
+    python benchmarks/session_load.py mixed --runs 512 --concurrency 32 --workers 4
 
 Two worker objects run in the same Python process with independent stores. Half
 of the clients wait on another worker when two workers are configured. The
-executor only sleeps. --submit-policy-ms models latency of an external
+executor uses a controlled delay. In the mixed scenario a third of turns share
+one tenant and session, and the rest run independently in another tenant.
+Mixed clients measure the first persisted output through an authorized read,
+with an in-process notification to the observer. --submit-policy-ms models latency of an external
 submission authorizer. Wall latency includes admission, owner checks, execution
 and confirmation of the terminal receipt. RSS excludes the database process.
 """
@@ -50,6 +54,7 @@ class Policy:
 class Executor:
     def __init__(self, hold):
         self.hold = hold
+        self.first_output = {}
         self.active = set()
         self.peak = 0
 
@@ -59,7 +64,15 @@ class Executor:
         self.active.add(request.session_id)
         self.peak = max(self.peak, len(self.active))
         try:
-            await asyncio.sleep(self.hold)
+            published = self.first_output.get(request.run_id)
+            if published is None:
+                await asyncio.sleep(self.hold)
+            else:
+                await asyncio.sleep(self.hold / 2)
+                await runtime.services.store.append_event(request.run_id, "run.stream",
+                                                         {"kind": "text", "text": request.run_id})
+                published.set()
+                await asyncio.sleep(self.hold / 2)
             return request.run_id
         finally:
             self.active.remove(request.session_id)
@@ -113,18 +126,33 @@ async def run(args):
 
     async def turn(index, warmup=False):
         session = f"warmup-{index}" if warmup else "hot" if args.scenario == "hot" else f"session-{index}"
-        principal = PrincipalRef("bench", "synthetic", session)
+        noisy = args.scenario == "mixed" and not warmup and index % 3 == 0
+        if noisy:
+            session = "hot"
+        principal = PrincipalRef("bench", "noisy" if noisy else "synthetic", session)
         ctx = ExecutionContext(principal, principal, principal, session, "bench", (principal,))
         ident = uuid4().hex
         request = RunRequest(ident, session, ident, "noop")
+        observe_output = args.scenario == "mixed"
+        if observe_output:
+            executor.first_output[ident] = asyncio.Event()
         start = time.perf_counter()
         record = await workers[index % len(workers)].submit(request, ctx)
         accepted = time.perf_counter()
         observer = workers[(index + 1) % len(workers)] if index % 2 else workers[index % len(workers)]
+        first = None
+        if observe_output:
+            async with asyncio.timeout(30):
+                await executor.first_output[ident].wait()
+            page = await observer.events_page(ident, 0, ctx, limit=50)
+            if not any(e.kind == "run.stream" and e.payload.get("text") == ident for e in page.events):
+                raise AssertionError("Missing first output at the authenticated reader")
+            first = time.perf_counter() - start
+            del executor.first_output[ident]
         record = await observer.wait(record.run_id, ctx)
         if record.status != "success" or record.output != ident:
             raise RuntimeError(f"Unexpected terminal receipt: {record.status}")
-        return accepted - start, time.perf_counter() - start
+        return accepted - start, time.perf_counter() - start, first, noisy
 
     sampler = None
     try:
@@ -189,6 +217,12 @@ async def run(args):
             "idle": idle,
             "pool_delta": {k: after[k] - before[k] for k in before},
         }
+        if args.scenario == "mixed":
+            result["first_visible_output_ms"] = percentiles([t[2] for t in timings])
+            result["tenant_terminal_ms"] = {
+                label: percentiles(values) for label, noisy in (("shared_session", True), ("independent", False))
+                if (values := [t[1] for t in timings if t[3] == noisy])
+            }
     finally:
         if sampler:
             sampler.cancel()
@@ -201,7 +235,7 @@ async def run(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("scenario", choices=("distinct", "hot"))
+    parser.add_argument("scenario", choices=("distinct", "hot", "mixed"))
     parser.add_argument("--runs", type=int, default=1024)
     parser.add_argument("--concurrency", type=int, default=32)
     parser.add_argument("--workers", type=int, default=2)
