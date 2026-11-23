@@ -25,7 +25,7 @@ from openagent_core.configuration import sqlite_busy_timeout_ms, sqlite_busy_tim
 from .search import enqueue_source, restore_runtime_search_intents
 from . import dream_activity
 from .ancestry import ensure_delegated_ancestry
-from .tool_invocation import read_tool_invocation as _read_saved_tool_invocation
+from .tool_invocation import read_tool_invocation as _read_saved_tool_invocation, read_tool_invocation_binding as _read_tool_binding
 
 from openagent_core.contracts import (AcceptedRunRequest, PrincipalRef, ExecutionContext, IdempotencyConflict, RunEvent,
     RunRecord, RunRequest, SessionRef, TERMINAL_STATUSES, canonical_json)
@@ -938,6 +938,7 @@ class SqliteRuntimeStore:
     list_sessions = _serialized(_list_sessions)
     search_sessions = _serialized(_search_sessions)
     read_tool_invocation = _serialized(_read_saved_tool_invocation)
+    read_tool_invocation_binding = _serialized(_read_tool_binding)
     @_serialized
     def provider_history(self, context, run_id, *, limit, max_bytes):
         from openagent_core.provider_history import ProviderHistoryMessage
