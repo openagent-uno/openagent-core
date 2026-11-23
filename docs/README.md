@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta153 embedding, document memory and scoped computers](releases/v1.1.0-beta.153.md).
+
 - [PostgreSQL run and session storage for embedding hosts](postgres-runtime.md)
 
 - [Beta152: current requests and untrusted material](system-prompt.md#structure).

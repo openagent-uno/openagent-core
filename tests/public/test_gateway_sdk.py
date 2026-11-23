@@ -72,7 +72,7 @@ class GatewaySDK(unittest.IsolatedAsyncioTestCase):
         await self.client.submit(RunRequest('run','session','key','hello'))
         await self.client.wait('run',interval=.01)
         store = self.runtime.services.store
-        after = (await self.client.events('run'))[-1].cursor
+        start = after = (await self.client.events('run'))[-1].cursor
         answer = {'text':'ready','parts':[{'kind':'attachment','attachment':{'artifact_id':'art-1'}}]}
         with store._transaction() as db:
             for n in range(2499):
@@ -98,6 +98,11 @@ class GatewaySDK(unittest.IsolatedAsyncioTestCase):
                 break
         self.assertEqual(sizes, [1001,1001,500])
         self.assertEqual(len(set(cursors)), 2500)
+        sizes.clear()
+        streamed = [event.cursor async for event in self.client.iter_events('run', start, limit=200)]
+        self.assertEqual(streamed, cursors)
+        self.assertEqual(len(sizes), 13)
+        self.assertLessEqual(max(sizes), 201)
         empty = await self.client.events_page('run', after, limit=1)
         self.assertEqual((empty.events,empty.cursor,empty.has_more), ((),after,False))
         final = await self.client.final_answer('run')
@@ -127,6 +132,7 @@ class GatewaySDK(unittest.IsolatedAsyncioTestCase):
         events = await store.events('legacy')
         page = await self.client.events_page('legacy', limit=1)
         self.assertEqual((page.events, page.has_more), (events[:1], True))
+        self.assertEqual(tuple([event async for event in self.client.iter_events('legacy', limit=1)]), events)
         await store.append_event('legacy','run.stream',{'kind':'done','final_answer':{'text':'done'}})
         self.assertEqual((await self.client.final_answer('legacy')).final_answer, {'text':'done'})
         await store.append_event('legacy','run.stream',{'privacy_redacted':True})
@@ -140,7 +146,10 @@ class GatewaySDK(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(compiler.is_file(), 'Install the locked SDK compiler: npm --prefix sdk/typescript ci')
         process=await asyncio.create_subprocess_exec(node,str(compiler),'-p',str(root/'sdk/typescript/tsconfig.json'),stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT)
         output=await process.communicate();self.assertEqual(process.returncode,0,output)
-        script=root/'sdk/typescript/test/live-gateway.mjs'
+        import os
+        # Wheel qualification installs the npm archive in an empty application
+        # and copies the same live HTTP fixture next to its node_modules.
+        script=Path(os.environ.get('OPENAGENT_TEST_INSTALLED_JS_FIXTURE',root/'sdk/typescript/test/live-gateway.mjs'))
         process=await asyncio.create_subprocess_exec(node,str(script),self.url,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT)
         stdout,_=await asyncio.wait_for(process.communicate(),20)
         self.assertEqual(process.returncode,0,stdout.decode())

@@ -18,3 +18,18 @@ test('a lost acceptance does not resubmit a possible external effect', async () 
     assert.equal(submissions,1);
   } finally { await new Promise(resolve=>server.close(resolve)); }
 });
+
+test('replay stops when cancelled or when the server repeats a cursor', async () => {
+  const client = new RunClient('http://localhost', () => ({}));
+  let pages = 0;
+  client.eventsPage = async (_id, after) => {
+    pages++;
+    return {events: [{cursor: after + 1}], cursor: after + 1, has_more: true};
+  };
+  for await (const event of client.iterEvents('run')) {
+    if (event.cursor === 12) break;
+  }
+  assert.equal(pages, 12);
+  client.eventsPage = async () => ({events: [], cursor: 0, has_more: true});
+  await assert.rejects(() => client.iterEvents('run').next(), /did not advance/);
+});

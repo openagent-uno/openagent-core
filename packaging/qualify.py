@@ -11,6 +11,7 @@ import argparse
 from email.parser import BytesParser
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -152,6 +153,23 @@ assert not {'yaml', 'aiosqlite', 'sqlalchemy', 'mcp', 'rich'} & sys.modules.keys
 """, cwd=minimal)
     run(npm, "--prefix", root / "sdk/typescript", "ci", "--ignore-scripts", "--no-audit", "--no-fund")
     run(npm, "--prefix", root / "sdk/typescript", "test")
+    sdk_dir = root / "sdk/typescript"
+    sdk_package = json.loads((sdk_dir / "package.json").read_text())
+    tarballs = json.loads(subprocess.check_output(
+        [npm, "pack", "--json", "--ignore-scripts", "--pack-destination", str(directory)],
+        cwd=sdk_dir, text=True,
+    ))
+    packed, = tarballs
+    if (packed["name"], packed["version"]) != (sdk_package["name"], sdk_package["version"]):
+        raise ValueError("Packed SDK identity differs from the tested package")
+    archive = directory / packed["filename"]
+    sdk_app = environment / "sdk-application"
+    sdk_app.mkdir()
+    (sdk_app / "package.json").write_text('{"private":true,"type":"module"}')
+    run(npm, "install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", archive, cwd=sdk_app)
+    fixture = sdk_app / "live-gateway.mjs"
+    shutil.copyfile(sdk_dir / "test/live-gateway.mjs", fixture)
+    os.environ["OPENAGENT_TEST_INSTALLED_JS_FIXTURE"] = str(fixture)
     # The development pytest config adds every source package to sys.path.
     # Qualification must exercise the installed cohort, including its optional
     # modules and package data, rather than importing those source directories.
@@ -162,6 +180,8 @@ assert not {'yaml', 'aiosqlite', 'sqlalchemy', 'mcp', 'rich'} & sys.modules.keys
                "manifest_sha256": hashlib.sha256((directory / "manifest.json").read_bytes()).hexdigest(),
                "dirty_source": manifest["dirty_snapshot"], "dependency_check": "passed",
                "typescript": "locked SDK build, unit test and live gateway fixture passed",
+               "javascript_sdk": {"name": packed["name"], "version": packed["version"], "file": archive.name,
+                                  "sha256": hashlib.sha256(archive.read_bytes()).hexdigest()},
                "subscription_host": "isolated subscription-only installation and both service lifecycles passed",
                "python_suites": ["tests/public", "tests/prompts"],
                "models_or_live_channels_qualified": False}

@@ -173,3 +173,6 @@ responsibility; byte-blind Iroh tunnels need no protocol change.
 
 Payload reduction is not an end-to-end session-opening speedup. Measure projection,
 transfer and client rendering separately on the intended authenticated route.
+
+
+The 1.1.0-beta.153 release carries `openagent-sdk-1.0.0-beta.3.tgz`. Install the release asset in a JavaScript or TypeScript host, and retain its integrity in the application's package lock. The SHA-256 is in `engine-qualification.json`. Use `RunClient.iterEvents(runId, after, limit, signal)` or Python's `RunClient.iter_events(run_id, after, limit=...)` for sequential replay. The cursor advances after each page, and a viewer can stop iterating without fetching later pages.

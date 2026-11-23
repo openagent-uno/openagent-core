@@ -115,6 +115,18 @@ class RunClient(_HTTPClient):
         return RunEventPage(tuple(RunEvent(**event) for event in result['events']),
                             result['cursor'],result['has_more'])
 
+    async def iter_events(self, run_id: str, after: int = 0, *, limit: int = 1000):
+        """Page through available events, retaining at most one authorized page."""
+        while True:
+            page = await self.events_page(run_id, after, limit=limit)
+            if page.has_more and (type(page.cursor) is not int or page.cursor <= after):
+                raise ValueError("Run event page did not advance its cursor")
+            for event in page.events:
+                yield event
+            if not page.has_more:
+                return
+            after = page.cursor
+
     async def final_answer(self,run_id: str) -> RunFinalAnswer:
         return RunFinalAnswer(**await self._request('GET','/'+quote(run_id,safe='')+'/final-answer'))
 

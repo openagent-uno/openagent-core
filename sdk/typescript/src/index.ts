@@ -140,6 +140,17 @@ export class RunClient extends HttpClient {
     const path = "/" + encodeURIComponent(runId) + "/events?after=" + after;
     return this.request("GET", limit === 1000 ? path : path + "&limit=" + limit, undefined, signal);
   }
+  async *iterEvents(runId: string, after = 0, limit = 1000, signal?: AbortSignal): AsyncGenerator<RunEvent> {
+    for (;;) {
+      const page = await this.eventsPage(runId, after, limit, signal);
+      if (page.has_more && (!Number.isSafeInteger(page.cursor) || page.cursor <= after)) {
+        throw new Error("Run event page did not advance its cursor");
+      }
+      yield* page.events;
+      if (!page.has_more) return;
+      after = page.cursor;
+    }
+  }
   finalAnswer(runId: string, signal?: AbortSignal): Promise<RunFinalAnswer> {
     return this.request("GET", "/" + encodeURIComponent(runId) + "/final-answer", undefined, signal);
   }
