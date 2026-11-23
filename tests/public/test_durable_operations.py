@@ -579,14 +579,17 @@ class DurableOperationsTests(unittest.IsolatedAsyncioTestCase):
             if reads == 1:
                 await runtime.services.store.append_event(current_run_id(), "run.stream",
                     {"kind": "done", "final_answer": {"text": "old"}})
-                await asyncio.Future()
+                # This SDK test needs exactly two genuine segments. Signal
+                # a pending read so an HTTP observer cannot expire the next
+                # segment simply by taking longer than a test-only deadline.
+                raise OperationPending(retry_after_seconds=.1)
             second_running.set()
             await complete_second.wait()
             await runtime.services.store.append_event(current_run_id(), "run.stream",
                 {"kind": "done", "final_answer": answer})
             return {'ready': True}
 
-        runtime, runner = await self.runtime(read, policy=DurableOperationPolicy(segment_seconds=.15))
+        runtime, runner = await self.runtime(read)
 
         @asynccontextmanager
         async def identity(request, action, run_id, session_id):
