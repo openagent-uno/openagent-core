@@ -226,3 +226,60 @@ contents and permissions, the complete file set and any declared vault absence.
 Each restore targets a fresh directory. These operations verify state at the
 fence. After new writes on a destination, reconcile those writes, cursors,
 objects and external-effect receipts under a new fence before switching back.
+
+### Serving preserved input attachments
+
+The private historical stage retains original SQLite records and CAS bytes. To
+make supported private input attachments available on the normal authenticated
+download URL, use a separate PostgreSQL archive schema and a private object
+store. The following example uses an async S3 client supplied by the host. The
+migration role must own the new schema. Hold the source fence and keep the
+archive offline during preparation and independent verification.
+
+```python
+from openagent_core.object_artifacts import S3Chunks, SqlObjectArtifacts
+from openagent_core.archived_artifacts import SqlArtifactArchive
+from openagent_storage_sqlite.artifact_archive import import_artifact_archive
+
+blobs = S3Chunks(async_s3_client, private_bucket, prefix=private_prefix)
+settings = dict(
+    expected_tenant=tenant, agent_id=agent_id, schema=archive_schema,
+    legacy_cas_root=original_cas_directory, dsn=migration_dsn, blobs=blobs,
+    history_only=True,
+)
+receipt = await import_artifact_archive(snapshot, "state.sqlite3", "memories", **settings)
+verified = await import_artifact_archive(snapshot, "state.sqlite3", "memories", verify_only=True, **settings)
+archive = SqlArtifactArchive(engine, blobs, schema=archive_schema, runtime=lambda: runtime)
+publisher = SqlObjectArtifacts(engine, blobs, policy, archive=archive)
+```
+
+Use an `oa_archive_` schema name, with up to 40 lowercase letters, digits or
+underscores after the prefix. The source must have a clean migration inventory.
+The importer compares the original artifact ID, tenant, principal, input
+direction, visibility, availability, digest, size, metadata and exact session
+links. It binds each admitted attachment to its original run, ordinal, audience
+and complete request-reference hash. Historic absolute CAS paths are compared
+as strings with the host-attested original directory. Bytes are read only from
+the sealed snapshot. Supported shapes are owner-private inputs and private,
+active session input links. Other shapes require explicit mappings.
+
+The importer independently reads back all S3 chunks, records their digest and
+order, and atomically publishes the PostgreSQL index. Interrupted transfers may
+leave private content-addressed chunks; retries conditionally create or verify
+them. A verify-only pass reads the source, index and object bytes. A candidate
+builder can call `verify_artifact_candidate` from the same migration module,
+using its current PostgreSQL connection, immutable SQLite connection, archive
+schema, manifest and database digests, agent ID and attested tenants. Only the
+returned run IDs qualify for projection with their original attachment request.
+Promote the verified read path before accepting new writes. The offline
+preparation role checks its private schema privileges until qualification; give
+the runtime only read access to the historical index after that check.
+
+Bind the publisher under `attachments.publisher` and pass the host's
+authenticated artifact-context resolver to `openagent_gateway.create_app`.
+Each historical read checks the live origin sessions, admitted audience, host
+policy and protected document receipts, including after each object read.
+The owner must still have access to every linked origin. Forgetting a source or
+revoking access stops later chunks. The download keeps the original public ID
+and any matching session-link ID. Historical input links cannot establish that
+a run produced an output. The artifact archive does not activate a runtime.

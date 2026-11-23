@@ -87,6 +87,15 @@ class Sessions:
             except LookupError:
                 pass  # Run submission and pre-admission cancellation can precede the session.
 
+    async def require_artifact_origin(self, context, session_id, run_id):
+        async with self._db() as db:
+            await self._session(db, session_id, context, lock=False)
+            if run_id is not None and not await (await db.execute(
+                "SELECT 1 FROM runs WHERE agent=%s AND tenant=%s AND session_id=%s AND id=%s",
+                (self.agent_id, context.tenant_id, session_id, run_id),
+            )).fetchone():
+                raise LookupError("Artifact origin is unavailable")
+
     async def _session(self, db, ident, ctx, *, write=False, lock=True):
         row = await (
             await db.execute(

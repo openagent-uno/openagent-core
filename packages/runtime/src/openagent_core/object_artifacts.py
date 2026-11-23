@@ -46,6 +46,18 @@ class S3Chunks:
         await self.client.put_object(Bucket=self.bucket, Key=self.prefix + key, Body=data,
                                      ContentMD5=base64.b64encode(hashlib.md5(data, usedforsecurity=False).digest()).decode())
 
+    async def put_immutable(self, key, data):
+        """Create a private chunk or verify the exact pre-existing content."""
+        from botocore.exceptions import ClientError
+        try:
+            await self.client.put_object(Bucket=self.bucket, Key=self.prefix + key, Body=data, IfNoneMatch="*",
+                ContentMD5=base64.b64encode(hashlib.md5(data, usedforsecurity=False).digest()).decode())
+        except ClientError as exc:
+            if exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") != 412:
+                raise
+        if await self.get(key, len(data)) != data:
+            raise IOError("Existing archive chunk differs")
+
     async def get(self, key, size):
         result = await self.client.get_object(Bucket=self.bucket, Key=self.prefix + key)
         async with result["Body"] as stream:
@@ -58,6 +70,11 @@ def _digest(value):
     return hashlib.sha256(value).hexdigest()
 
 
+def artifact_chunk_key(tenant_id, agent_id, digest):
+    namespace = _digest(canonical_json([tenant_id, agent_id]).encode())
+    return namespace + "/sha256/" + digest
+
+
 def _public(row):
     ident = row["artifact_id"]
     kind = attachment_kind(row["mime_type"])
@@ -68,13 +85,14 @@ def _public(row):
 
 class SqlObjectArtifacts:
     """The SQL row is the publication boundary. Chunks have no public URL."""
-    def __init__(self, engine, blobs: ChunkStore, authorizer, *, chunk_bytes=4 << 20, max_bytes=256 << 20):
+    def __init__(self, engine, blobs: ChunkStore, authorizer, *, chunk_bytes=4 << 20, max_bytes=256 << 20, archive=None):
         if not 1 <= chunk_bytes <= 16 << 20 or max_bytes < chunk_bytes or max_bytes > 4096 * chunk_bytes:
             raise ValueError("Invalid artifact byte limits")
         if engine.dialect.name not in {"postgresql", "sqlite"}:
             raise ValueError("Unsupported artifact index database")
         self.engine, self.blobs, self.authorizer = engine, blobs, authorizer
         self.chunk_bytes, self.max_bytes = chunk_bytes, max_bytes
+        self.archive = archive
 
     async def initialize(self):
         async with self.engine.begin() as con:
@@ -88,8 +106,7 @@ class SqlObjectArtifacts:
 
     @staticmethod
     def _key(ctx, digest):
-        namespace = _digest(canonical_json([ctx.tenant_id, ctx.agent_id]).encode())
-        return namespace + "/sha256/" + digest
+        return artifact_chunk_key(ctx.tenant_id, ctx.agent_id, digest)
 
     async def publish_content(self, context, content, *, filename, mime_type):
         async def source():
@@ -164,6 +181,10 @@ class SqlObjectArtifacts:
         return row
 
     async def resolve(self, context, artifact_id):
+        if self.archive is not None:
+            historical = await self.archive.resolve_if_present(context, artifact_id)
+            if historical is not None:
+                return historical
         return _public(await self._row(context, artifact_id))
 
     async def resolve_session_output(self, context, run_id, artifact_id):
@@ -173,6 +194,12 @@ class SqlObjectArtifacts:
         return _public(row)
 
     async def read_stream(self, context, artifact_id):
+        if self.archive is not None:
+            stream = await self.archive.archived_stream(context, artifact_id)
+            if stream is not None:
+                async for data in stream:
+                    yield data
+                return
         row = await self._row(context, artifact_id)
         complete = hashlib.sha256()
         for digest, size in row["chunks"]:
