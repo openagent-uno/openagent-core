@@ -863,6 +863,10 @@ class SqliteRuntimeStore:
 
     def _accepted_request(self, run_id: str) -> AcceptedRunRequest:
         row=self.connection.execute("SELECT * FROM session_runs WHERE id=? AND json_extract(metadata_json,'$.runtime_contract')=1",(run_id,)).fetchone()
+        return self._decode_accepted_request(row)
+
+    @staticmethod
+    def _decode_accepted_request(row) -> AcceptedRunRequest:
         if row is None:
             raise LookupError('No durable request has been accepted for this run')
         if row['input_json'] is None:

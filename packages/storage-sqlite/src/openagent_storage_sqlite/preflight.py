@@ -71,11 +71,16 @@ def inspect_migration_source(snapshot: str | Path, database: str, vault: str, *,
     This is source inventory. A destination still requires semantic verification
     and restore qualification before promotion.
     """
-    if not isinstance(expected_tenant, str) or not expected_tenant.strip():
-        raise ValueError("Expected tenant is required")
     root = Path(snapshot).resolve()
     manifest_digest = _digest(root / MANIFEST)
     manifest = verify_snapshot(root)
+    return _inspect_verified_source(root, database, vault, expected_tenant, require_git_history,
+                                    manifest, manifest_digest)
+
+
+def _inspect_verified_source(root, database, vault, expected_tenant, require_git_history, manifest, manifest_digest):
+    if not isinstance(expected_tenant, str) or not expected_tenant.strip():
+        raise ValueError("Expected tenant is required")
     name = str(_relative(database))
     if name not in manifest["databases"] or manifest["files"][name]["kind"] != "sqlite":
         raise ValueError("Snapshot database must be declared")

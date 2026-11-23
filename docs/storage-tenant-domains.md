@@ -144,3 +144,18 @@ receipt identifies the additional source table count; the host must inventory
 those domains separately, together with other databases and private files.
 Verify access rules, original public identifiers, history reconstruction and
 destination APIs before switching applications.
+
+### Private PostgreSQL runtime candidate
+
+After staging, the optional native projection creates a fresh, owner-only schema for a single agent and tenant. Install the SQLite migration extra and the matching PostgreSQL storage adapter. Keep runtime workers disconnected while materializing or verifying the candidate.
+
+```sh
+python -m openagent_storage_sqlite.postgres_candidate "$SEALED_SNAPSHOT" \
+  --database "$DATABASE_RELATIVE_PATH" --vault "$VAULT_RELATIVE_PATH" \
+  --expected-tenant "$ATTESTED_TENANT" --agent-id "$ATTESTED_AGENT" \
+  --stage-schema "$HISTORY_STAGE" --candidate-schema "$RUNTIME_CANDIDATE"
+```
+
+The candidate name must begin with `oa_candidate_`. Supply the PostgreSQL DSN via `OPENAGENT_MIGRATION_POSTGRES_DSN`. Re-run with `--verify-only` before starting a worker. The operation checks the fenced source and private stage, writes the candidate in a single transaction, compares every projected field and keeps the event cursor high-water mark. A retry verifies a previously committed candidate. Any different row or previous worker admission requires a separate candidate.
+
+This projection handles private, active, owner-only root chats and their terminal text runs. It keeps the authenticated author and tenant, session and message IDs, per-session message sequence, request fingerprint, admission context, event cursors, run output and activity timestamps. Legacy sessions, tombstones, quarantines, shared audiences, tools, attachments, child sessions, continuations and reservations require additional runtime mappings. A source with these records remains recoverable in the private history stage. Native candidate creation fails atomically. Validate memory, artifact serving, retained private domains, effects and rollback independently before choosing a live target.

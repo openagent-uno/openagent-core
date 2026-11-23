@@ -16,8 +16,8 @@ from struct import pack
 import psycopg
 from psycopg import sql
 
-from .migration import _relative, verify_snapshot
-from .preflight import inspect_migration_source
+from .migration import MANIFEST, _digest, _relative, verify_snapshot
+from .preflight import _inspect_verified_source
 
 # The storage domains carried by this transfer. Product secrets and source-specific
 # tables outside these domains require their own custody/migration plan.
@@ -155,9 +155,10 @@ def transfer_history(snapshot, database, vault, *, expected_tenant, dsn, schema,
     and never overwritten. No live session or runtime lease is created.
     """
     root = Path(snapshot).resolve()
+    manifest_digest = _digest(root / MANIFEST)
     manifest = verify_snapshot(root)
-    report = inspect_migration_source(root, database, vault, expected_tenant=expected_tenant,
-                                      require_git_history=require_git_history)
+    report = _inspect_verified_source(root, database, vault, expected_tenant, require_git_history,
+                                      manifest, manifest_digest)
     identity = json.dumps([1, report["snapshot_manifest_sha256"], str(_relative(database)),
                            str(_relative(vault)), expected_tenant], separators=(",", ":"))
     database_path = root / _relative(database)
@@ -208,6 +209,7 @@ def transfer_history(snapshot, database, vault, *, expected_tenant, dsn, schema,
         if actual != collections:
             raise StageMismatch("Destination contains unexpected collections")
     return {"format": 1, "source_manifest_sha256": report["snapshot_manifest_sha256"],
+            "source_database_sha256": report["database_sha256"],
             "verified_rows": stats, "verified_artifact_blobs": artifacts,
             "unavailable_artifact_references": missing, "source_issues": report["issues"],
             "other_source_tables": len(tables.difference(HISTORY).difference({"sqlite_sequence"})),
