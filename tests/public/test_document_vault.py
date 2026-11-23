@@ -147,6 +147,41 @@ class DocumentVault(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(LookupError):
             await self.store.read(self.a, "a.md")
 
+    async def test_editor_filename_search_and_metadata_survive_an_older_index(self):
+        import sqlalchemy as sa
+        from openagent_core.administration import ManagementContext
+        from openagent_core.memory.vault.document_admin import DocumentVaultAdministration
+        from openagent_core.memory.vault.documents import notes, properties
+
+        admin = DocumentVaultAdministration(self.store, self.policy, self.a)
+        context = ManagementContext(self.a.authority, self.a.agent_id)
+        text = "---\ntags: [green]\ntype: reference\n---\nCaffè, bodyonly."
+        path = "references/Needle%_File.md"
+        await self.store.write(self.a, path, text, expected_revision=0)
+        await self.store.write(self.a, "references/needleXYfile.md", "plain", expected_revision=0)
+        await self.store.write(self.b, "other/Needle%_File.md", text, expected_revision=0)
+        for old in ("current", "stale", "missing"):
+            if old == "stale":
+                async with self.store.engine.begin() as con:
+                    await con.execute(properties.update().where(properties.c.note_id.in_(
+                        sa.select(notes.c.id).where(notes.c.path == path))).values(revision=0,tags=["stale"],size_bytes=0))
+            if old == "missing":
+                async with self.store.engine.begin() as con:
+                    await con.execute(properties.delete().where(properties.c.note_id.in_(
+                        sa.select(notes.c.id).where(notes.c.path == path))))
+            result = await admin.execute(context, "search/files", query={"q": "NEEDLE%_"})
+            self.assertEqual(result["results"], [{"path": path, "title": "Needle%_File", "tags": ["green"]}])
+            self.assertFalse((await admin.execute(context, "search/files", query={"q":"bodyonly"}))["results"])
+            self.assertEqual((await admin.execute(context, "search", query={"q":"bodyonly"}))["results"][0]["path"], path)
+            page = await admin.execute(context, "notes", query={"limit": 1})
+            entry = page["notes"][0]
+            self.assertEqual((entry["path"], entry["size"], entry["type"], entry["tags"]), (path,len(text.encode()),"reference",["green"]))
+            self.assertIsInstance(entry["modified"], float)
+            self.assertNotIn("content", entry)
+            self.assertEqual((await admin.execute(context,"read",path=path))["modified"],entry["modified"])
+            next_page = await admin.execute(context,"notes",query={"limit":1,"after":page["next_cursor"]})
+            self.assertEqual([n["path"] for n in next_page["notes"]], ["references/needleXYfile.md"])
+
     async def test_admin_and_agent_share_one_vault_with_reversible_delete(self):
         from openagent_core.administration import ManagementContext
         from openagent_core.memory.vault.document_admin import DocumentVaultAdministration

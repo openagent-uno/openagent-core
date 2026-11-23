@@ -1,6 +1,7 @@
 """Management operations over the same authorized document service used by agents."""
 from ...vault_administration import _boolean, _json, _limit, _search_lines
 from .model import GateConfig
+from .parser import FrontmatterSyntaxError
 from .parser import extract_wikilinks, load_frontmatter_yaml, split_frontmatter
 
 
@@ -29,7 +30,7 @@ class DocumentVaultAdministration:
         body = {} if body is None else body
         if not isinstance(query, dict) or not isinstance(body, dict):
             raise ValueError("Expected object")
-        allowed_query = {"search": {"q", "limit"}, "search/files": {"q", "limit"},
+        allowed_query = {"notes": {"after", "limit"}, "search": {"q", "limit"}, "search/files": {"q", "limit"},
             "search/in-file": {"path", "q", "regex"}, "gate": {"strict", "limit"},
             "history": {"path", "limit"}, "commit": {"hash"}, "doctor": {"apply"}, "index/sync": {"force"}}
         allowed_body = {"write": {"content","expected_revision"}, "delete": {"expected_revision"},
@@ -65,17 +66,27 @@ class DocumentVaultAdministration:
                 return await document_history.history(self.store,execution,path=query.get("path"),limit=_limit(query.get("limit"),50,200))
             return await document_history.detail(self.store,execution,query.get("hash"))
         if operation in {"read", "search/in-file"}:
-            row = await self.store.read(execution, path if operation == "read" else query["path"])
             if operation == "search/in-file":
+                row = await self.store.read(execution, query["path"])
                 needle = query.get("q")
                 if not isinstance(needle, str) or not 1 <= len(needle) <= 4096:
                     raise ValueError("A bounded query is required")
                 regex = _boolean(query.get("regex", False))
                 hits = await _search_lines(row["content"], needle, regex)
                 return {"path": row["path"], "query": needle, "regex": regex, "matches": hits, "count": len(hits)}
+            from .document_browser import browse
+            from .documents import note_path
+            page = await browse(self.store, execution, path=note_path(path, allow_generated=True), limit=1, include_content=True)
+            if not page["notes"]:
+                raise LookupError("Note not found")
+            row = page["notes"][0]
             raw, body_text = split_frontmatter(row["content"])
-            return {**row, "frontmatter": _json(load_frontmatter_yaml(raw)) if raw else {},
-                    "body": body_text, "links": [target for target, _ in extract_wikilinks(row["content"])]}
+            try:
+                meta = load_frontmatter_yaml(raw) if raw else {}
+            except FrontmatterSyntaxError:
+                meta = {}
+            return {**row, "frontmatter": _json(meta) if isinstance(meta, dict) else {},
+                    "body": body_text.strip() if raw is not None else row["content"], "links": [target for target, _ in extract_wikilinks(row["content"])]}
         if operation in {"write", "delete"}:
             expected = body.get("expected_revision")
             if expected is None:
@@ -109,16 +120,24 @@ class DocumentVaultAdministration:
             return {"ok": True, "path": path, "revision": result["revision"],
                     "existed": expected != 0, "warnings": warnings, "applied": applied, "commit":result.get("commit")}
         if operation == "notes":
+            from .document_browser import browse
+            if query:
+                return await browse(self.store, execution, after=query.get("after"), limit=_limit(query.get("limit"), 50, 200))
             page, rows = None, []
             while True:
-                result = await self.store.list_notes(execution, after=page, limit=200)
+                result = await browse(self.store, execution, after=page, limit=200)
                 rows.extend(result["notes"])
                 page = result["next_cursor"]
                 if page is None:
                     return {"notes": rows}
         if operation in {"search", "search/files"}:
             text = query.get("q", "").strip()
-            rows = await self.store.search(execution, query=text, limit=_limit(query.get("limit"), 50, 200)) if text else {"hits": []}
+            limit = _limit(query.get("limit"), 50, 200)
+            if operation == "search/files" and text:
+                from .document_browser import browse
+                page = await browse(self.store, execution, query=text, limit=limit)
+                return {"results": [{k: row[k] for k in ("path", "title", "tags")} for row in page["notes"]]}
+            rows = await self.store.search(execution, query=text, limit=limit) if text else {"hits": []}
             return {"results": rows["hits"]}
         result = await self.store.inspect_corpus(execution, operation,
                      config=GateConfig(strict=_boolean(query.get("strict", False))))

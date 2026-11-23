@@ -49,3 +49,9 @@ For a separate management identity, pass an async context manager as
 `resolve(management_context, session_id)` verifies the current credential and
 yields an execution context for that actor, agent and session with its authorized
 audience. The inspection revalidates the underlying protected revisions.
+
+The editor can request `notes` with `limit` and the returned `next_cursor` as
+`after`. Each page contains path, revision, title, tags, type, UTF-8 byte size
+and the recorded edit timestamp in seconds. An unknown source date is null.
+`search/files` matches literal case-insensitive path substrings and returns
+the filename metadata. Content search continues to use the full-text index.

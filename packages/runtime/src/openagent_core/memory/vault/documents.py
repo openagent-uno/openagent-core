@@ -40,6 +40,13 @@ notes = sa.Table("oa_vault_notes", metadata,
     sa.Column("revision", sa.BigInteger, nullable=False),
     sa.Column("title", sa.Text), sa.Column("content", sa.Text),
 )
+properties = sa.Table("oa_vault_note_properties", metadata,
+    sa.Column("note_id", notes.c.id.type, sa.ForeignKey(notes.c.id, ondelete="CASCADE"), primary_key=True),
+    sa.Column("revision", sa.BigInteger, nullable=False),
+    sa.Column("tags", sa.JSON, nullable=False),
+    sa.Column("note_type", sa.Text, nullable=False),
+    sa.Column("size_bytes", sa.BigInteger, nullable=False),
+)
 versions = sa.Table("oa_vault_revisions", metadata, *identity_columns(),
     sa.Column("revision", sa.BigInteger, primary_key=True),
     sa.Column("content", sa.Text, nullable=False),
@@ -88,7 +95,11 @@ import_origins = sa.Table("oa_vault_import_origins", metadata, *identity_columns
 
 async def refresh_indexes(con, key, note_id, parsed, content):
     await con.execute(sa.delete(links).filter_by(**key))
+    await con.execute(properties.delete().where(properties.c.note_id == note_id))
     if parsed:
+        current = sa.select(notes.c.revision).where(notes.c.id == note_id).scalar_subquery()
+        await con.execute(properties.insert().values(note_id=note_id, revision=current, tags=parsed.tags,
+                          note_type=str(parsed.frontmatter.get("type") or ""), size_bytes=parsed.byte_size))
         targets = sorted({link_key(link) for link in parsed.outlinks if len(link_key(link).encode()) <= 700})
         if targets:
             await con.execute(sa.insert(links), [{**key, "target": target} for target in targets])
