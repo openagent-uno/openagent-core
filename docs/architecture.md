@@ -286,3 +286,16 @@ revision checks as agent tools. Opening a graph or running the quality gate
 constructs a transient in-memory index for that authorized space. An ordinary
 note deletion retains its revisions. The explicit forget operation also erases
 the revision bodies. Concurrent writes using a stale revision return a conflict.
+
+### Cloud attachment bytes
+
+Bind `SqlObjectArtifacts(engine, S3Chunks(client, private_bucket), authorizer)`
+to `attachments.publisher` after calling `initialize()`. The host owns the
+async S3 client and SQLAlchemy engine. Uploads stream into bounded chunks with
+SHA-256 integrity checks. Content keys are namespaced by tenant and agent. One
+SQL row publishes the ordered manifest and binds the artifact to its producing
+run, session and recipient list. The byte store stays private after a failed
+upload. Retention procedures may collect unreferenced chunks after in-flight
+uploads have drained. During delivery the reader checks authorization and
+integrity for each chunk. Set the gateway's `resolve_artifact_context` callback
+to serve the artifact content URL using the caller's current verified session.

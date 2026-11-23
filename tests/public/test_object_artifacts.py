@@ -1,0 +1,111 @@
+import os
+import uuid
+import unittest
+from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from sqlalchemy.ext.asyncio import create_async_engine
+from openagent_core.contracts import ExecutionContext, PrincipalRef
+from openagent_core.runtime import execution_scope
+from openagent_core.object_artifacts import S3Chunks, SqlObjectArtifacts
+
+
+class Chunks(dict):
+    async def put(self, key, data):
+        self[key] = data
+
+    async def get(self, key, size):
+        return self[key]
+
+
+class ObjectArtifacts(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.denied = set()
+        self.directory = Path(self.enterContext(TemporaryDirectory()))
+        self.engine = create_async_engine(os.getenv("OPENAGENT_TEST_POSTGRES_URL")
+                                         or "sqlite+aiosqlite:///" + str(self.directory / "refs.sqlite"))
+        self.addAsyncCleanup(self.engine.dispose)
+        self.blobs = Chunks()
+        self.store = SqlObjectArtifacts(self.engine, self.blobs, self, chunk_bytes=4, max_bytes=32)
+        await self.store.initialize()
+        a = PrincipalRef("host", uuid.uuid4().hex, "alice")
+        self.ctx = ExecutionContext(a,a,a,"private","agent",(a,))
+
+    async def authorize(self, context, action, resource, *, audience=()):
+        return action not in self.denied and resource.tenant_id == context.tenant_id
+
+    def service(self, key):
+        return None
+
+    async def test_retry_and_stream(self):
+        with execution_scope(self, self.ctx, "producing-run"):
+            async def publish():
+                return await self.store.publish_content(self.ctx, b"0123456789", filename="fixture.bin",
+                                                        mime_type="application/octet-stream")
+            ref = await publish()
+            self.assertNotIn("path", ref)
+            self.assertEqual(await publish(), ref)
+        ident = ref["artifact_id"]
+        self.assertEqual(await self.store.resolve_session_output(self.ctx, "producing-run", ident), ref)
+        with self.assertRaises(LookupError):
+            await self.store.resolve_session_output(self.ctx, "another-run", ident)
+        with self.assertRaises(LookupError):
+            await self.store.resolve(replace(self.ctx, session_id="other"), ident)
+        bob = replace(self.ctx.initiator, subject_id="bob")
+        with self.assertRaises(LookupError):
+            await self.store.resolve(replace(self.ctx, audience=(self.ctx.initiator, bob)), ident)
+        self.assertEqual([chunk async for chunk in self.store.read_stream(self.ctx, ident)], [b"0123", b"4567", b"89"])
+        chunks = self.store.read_stream(self.ctx, ident)
+        self.assertEqual(await anext(chunks), b"0123")
+        self.denied.add("artifact.publish")
+        with self.assertRaises(PermissionError):
+            await anext(chunks)
+
+    async def test_corrupt_chunk_and_oversized_stream(self):
+        ref = await self.store.publish_content(self.ctx, b"abc", filename="x", mime_type="text/plain")
+        self.blobs[next(iter(self.blobs))] = b"bad"
+        with self.assertRaises(IOError):
+            await anext(self.store.read_stream(self.ctx, ref["artifact_id"]))
+        with self.assertRaises(ValueError):
+            await self.store.publish_content(self.ctx, b"x"*33, filename="x", mime_type="text/plain")
+
+    async def test_authentication_on_the_download_url(self):
+        from contextlib import asynccontextmanager
+        from aiohttp import ClientSession, web
+        from openagent_gateway import create_app
+
+        ref = await self.store.publish_content(self.ctx, b"gold", filename="a.bin", mime_type="application/octet-stream")
+        @asynccontextmanager
+        async def authorize(request, ident):
+            if request.headers.get("Authorization") != "Bearer reader":
+                raise PermissionError("Unknown identity")
+            yield self.ctx
+        class Host:
+            def service(_, key):
+                return self.store if key == "attachments.publisher" else None
+        app = create_app(Host(), None, manage_lifecycle=False, resolve_artifact_context=authorize)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        self.addAsyncCleanup(runner.cleanup)
+        await web.TCPSite(runner, "127.0.0.1", 0).start()
+        url = f"http://127.0.0.1:{runner.addresses[0][1]}" + ref["url"]
+        async with ClientSession() as client:
+            async with client.get(url) as denied:
+                self.assertEqual(denied.status, 403)
+            async with client.get(url, headers={"Authorization": "Bearer reader"}) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(await response.read(), b"gold")
+                self.assertIn("no-store", response.headers["Cache-Control"])
+
+    @unittest.skipUnless(os.getenv("OPENAGENT_TEST_S3_ENDPOINT"), "dedicated private S3 test service required")
+    async def test_s3_server(self):
+        from aiobotocore.session import get_session
+        client = await self.enterAsyncContext(get_session().create_client(
+            "s3", endpoint_url=os.environ["OPENAGENT_TEST_S3_ENDPOINT"], region_name="us-east-1",
+            aws_access_key_id=os.environ["OPENAGENT_TEST_S3_KEY"],
+            aws_secret_access_key=os.environ["OPENAGENT_TEST_S3_SECRET"]))
+        bucket = "oa-" + uuid.uuid4().hex
+        await client.create_bucket(Bucket=bucket)
+        self.store.blobs = S3Chunks(client, bucket)
+        await self.test_retry_and_stream()
