@@ -20,6 +20,7 @@ from openagent_core.contracts import (
     RunRequest,
     SessionRef,
     TERMINAL_STATUSES,
+    canonical_json,
 )
 from .sessions import RUN_AUDIENCE, Sessions, _audience, _members
 from .operations import Operations
@@ -694,7 +695,7 @@ class PostgresRuntimeStore(Sessions, Operations, ProviderSlots):
             cur = await db.execute(
                 """INSERT INTO tool_calls(agent,run_id,id,intent,invocation_id) VALUES(%s,%s,%s,%s,%s)
                 ON CONFLICT DO NOTHING""",
-                (self.agent_id, ident, call_id, Jsonb(intent), uuid5(NAMESPACE_URL,canonical_json([ident,call_id]))),
+                (self.agent_id, ident, call_id, Jsonb(intent), uuid5(NAMESPACE_URL, canonical_json([ident, call_id]))),
             )
             if not cur.rowcount:
                 raise IdempotencyConflict("This tool invocation already has a durable intent")
