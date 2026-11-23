@@ -409,7 +409,15 @@ def _instance(db):
 
 
 def attest_private_continuations(
-    snapshot, database, target, *, owner, target_agent, approved_sessions, writer_fence
+    snapshot,
+    database,
+    target,
+    *,
+    owner,
+    target_agent,
+    approved_sessions,
+    writer_fence,
+    expected_receipts_sha256=None,
 ):
     """Bind a host-approved session/old-writer map on an offline clone of the sealed source."""
     if (
@@ -429,6 +437,17 @@ def attest_private_continuations(
     if name not in manifest["databases"] or dest.is_relative_to(root):
         raise ValueError("A distinct candidate is required")
     total = enabled = 0
+    # Length-prefixed canonical records bind the complete private result to
+    # the source and personal scope, independent of insertion or approval order.
+    proof = sha256()
+
+    def hash_record(record):
+        data = canonical_json(record).encode("utf-8")
+        proof.update(len(data).to_bytes(8, "big") + data)
+
+    hash_record(
+        ["openagent-private-continuation-receipts-v1", receipt, owner.key, target_agent]
+    )
     with (
         writer_fence() as stamp,
         closing(
@@ -448,7 +467,7 @@ def attest_private_continuations(
         if _instance(dst) != identity:
             raise PermissionError("Source and candidate installation differ")
         initialize(dst)
-        for sid, old_agent in approved_sessions.items():
+        for sid, old_agent in sorted(approved_sessions.items()):
             source = _session(src, sid)
             candidate = _session(dst, sid)
             if not all(
@@ -508,14 +527,25 @@ def attest_private_continuations(
             }
             if stored != messages:
                 raise ValueError("Stored original messages differ from sealed evidence")
+            hash_record(["session", *binding])
+            for mid, fields in sorted(stored.items()):
+                hash_record(["message", sid, mid, *fields])
             enabled += 1
             total += len(messages)
         if _digest(root / MANIFEST) != receipt:
             raise ValueError("Source manifest changed during attestation")
+        if (
+            expected_receipts_sha256 is not None
+            and proof.hexdigest() != expected_receipts_sha256
+        ):
+            raise ValueError(
+                "Recomputed receipts differ from the approved private proof"
+            )
         dst.commit()
     return {
         "requested_sessions": len(approved_sessions),
         "qualified_sessions": enabled,
         "verified_messages": total,
         "source_manifest_sha256": receipt,
+        "receipts_sha256": proof.hexdigest(),
     }

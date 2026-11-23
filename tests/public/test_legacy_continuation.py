@@ -382,3 +382,33 @@ class Continuation(unittest.IsolatedAsyncioTestCase):
                 ).fetchone()[0],
                 0,
             )
+
+    async def test_independent_receipt_digest_mismatch_rolls_back_transaction(self):
+        approved = {"private": "former", "unbound": None}
+
+        def run(approval, digest=None):
+            return attest_private_continuations(
+                self.snapshot,
+                "state.db",
+                self.path,
+                owner=self.owner,
+                target_agent="current",
+                approved_sessions=approval,
+                writer_fence=fenced,
+                expected_receipts_sha256=digest,
+            )
+
+        with self.assertRaisesRegex(ValueError, "approved private proof"):
+            run(approved, "0" * 64)
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(
+                db.execute(
+                    "SELECT count(*) FROM oa_private_legacy_messages"
+                ).fetchone()[0],
+                0,
+            )
+        expected = run(approved)
+        self.assertEqual(
+            run(dict(reversed(list(approved.items()))), expected["receipts_sha256"]),
+            expected,
+        )
