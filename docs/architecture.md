@@ -239,6 +239,13 @@ worker surface on an API-only instance. A host-managed task pool can call
 most one eligible space. Configure fleet capacity, model account and token
 budget through the host's normal admission policy.
 
+Document tools preserve case, spaces and Unicode in a supplied vault-relative
+Markdown path. Their catalog checks malformed arguments after authorization and
+before recording a tool invocation. A failed conditional note write returns a
+structured `revision_conflict` with `effects=none` after transaction rollback.
+Read the exact path and reconcile before a new conditional write. External
+executor and publication failures retain their usual uncertain-effect handling.
+
 Hosts that require individual opt-in can pass an asynchronous
 `enrolled(connection, scope)` callback to the queue. It checks a trusted consent
 record in the same transaction as the document mutation. Ineligible edits create

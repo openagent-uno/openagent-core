@@ -1,6 +1,6 @@
 """Native agent capabilities for a host-owned document vault."""
 from openagent_core.dream_evidence import DocumentDreamEvidence, DreamVaultSource, REVIEW_TOOL
-from openagent_core.capabilities import FunctionSource, ToolDefinition
+from openagent_core.capabilities import FunctionSource, ToolDefinition, ToolPreconditionFailed
 from openagent_core.module_adapters import NativeCapabilityDescriptor
 from openagent_core.modules import CapabilityContribution, ModuleContribution, ServiceBinding
 from openagent_core.prompts import PromptBlock, rule_blocks
@@ -27,14 +27,18 @@ class VaultDescriptor(NativeCapabilityDescriptor):
 
 
 _DOCUMENT_PROMPT = PromptBlock(
-    "module.vault.documents", "1",
+    "module.vault.documents", "2",
     """Your long-term memory lives in the authorized document vault. For questions
 about the user's preferences, projects or past decisions, call vault_search,
 then vault_read_note on relevant hits before answering. Cite the notes you use.
 Save durable corrections, preferences, decisions and procedures learned during
 work unless the user asks to keep them out of memory. Each note covers one
 idea. Include a title, summary and dates in YAML frontmatter and link related
-notes using [[folder/name]]. Use vault_write_note with expected_revision=0
+notes using [[folder/name]]. Preserve the requested vault-relative note path exactly,
+including its spelling, case and folders. Use paths such as topics/manual.md.
+If the user supplies an invalid path, ask for a valid vault-relative path.
+Confirm a save only after vault_write_note reports success for that path.
+Use vault_write_note with expected_revision=0
 for a new note, or the revision you read for an edit. If another writer changed
 it, read again and merge the change. Use session history for a transcript.
 Keep credentials and transient errors out of the vault.""",
@@ -42,10 +46,43 @@ Keep credentials and transient errors out of the vault.""",
 )
 
 
+class DocumentRevisionConflict(ToolPreconditionFailed):
+    code = "revision_conflict"
+    recovery = ("No note was changed. Read the exact requested path. For a new note, create with "
+                "expected_revision=0. For an existing note, reconcile its current contents and use "
+                "the revision from that read. Confirm only a successful write.")
+
+
 class DocumentSource(FunctionSource, DreamVaultSource):
     def __init__(self, definitions, functions, vault, evidence):
         super().__init__(definitions, functions)
         self.vault, self.evidence = vault, evidence
+        from jsonschema import Draft202012Validator
+        self.validators = {tool.name: Draft202012Validator(tool.input_schema) for tool in definitions}
+
+    def validate_tool_arguments(self, name, arguments):
+        from openagent_core.memory.vault.documents import note_path
+        # Use the storage parser for the byte limit, segments, generated
+        # reference and case-insensitive extension. Preserve the user's spelling.
+        if "path" in arguments:
+            note_path(arguments["path"], allow_generated=name in {"vault_read_note", "vault_history"})
+        if "after" in arguments:
+            note_path(arguments["after"], allow_generated=True)
+        error = next(self.validators[name].iter_errors(arguments), None)
+        if error is not None:
+            raise ValueError("Invalid document-vault arguments for " + name)
+
+
+    async def call_tool(self, name, arguments, context):
+        from openagent_core.memory.vault.documents import RevisionConflict
+        try:
+            return await super().call_tool(name, arguments, context)
+        except RevisionConflict as error:
+            if name != "vault_write_note":
+                raise
+            # SqlDocumentVault returned through its transaction context manager.
+            # This type denotes the failed conditional revision check.
+            raise DocumentRevisionConflict() from error
 
     async def discover(self, context):
         if self.evidence is not None and await self.evidence.enabled(self.vault, context):
@@ -62,9 +99,13 @@ class DocumentModule:
         self.context = context
         self.store = context.services.require(SqlDocumentVault)
         self.contribution = ModuleContribution()
-        path = {"type": "string", "description": "Vault-relative Markdown note path"}
+        path = {"type": "string", "pattern": r"^[^/\\]", "minLength": 1,
+                "description": "Exact vault-relative note path, such as topics/manual.md. "
+                               "Preserve spelling and case. Start with a filename or folder."}
         limit = {"type": "integer", "minimum": 1, "maximum": 200}
-        revision = {"type": "integer", "minimum": 0}
+        revision = {"type": "integer", "minimum": 0,
+                    "description": "Use 0 to create a new note only. To update, read that exact "
+                                   "path and supply its current revision."}
         actions = (
             ("vault_read_note", self.store.read, "Read the Markdown and current revision of a note.",
              {"path": path, "revision": {"type": "integer", "minimum": 1}}, ["path"], {"vault.read", "vault.recall.path"}),
@@ -80,7 +121,7 @@ class DocumentModule:
             ("vault_history", self.store.history, "List saved revisions of a note.",
              {"path": path, "before": revision, "limit": limit}, ["path"], {"vault.inspect"}),
             ("vault_forget_note", self.store.forget, "Forget the note and all saved revisions.",
-             {"path": path, "expected_revision": revision}, ["path", "expected_revision"], {"vault.write"}),
+             {"path": path, "expected_revision": {"type": "integer", "minimum": 1}}, ["path", "expected_revision"], {"vault.write"}),
         )
         definitions = []
         functions = {}

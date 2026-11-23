@@ -9,6 +9,21 @@ from .content_privacy import ContentOrigin, ToolResultPrivacyPublisher, ToolResu
 from .contracts import Authorizer, CapabilityLease, ExecutionContext, ResourceRef, require_authorized
 
 
+class ToolPreconditionFailed(ValueError):
+    """A trusted native executor verified a transaction did not apply any effect."""
+
+    code = "precondition_failed"
+    recovery = "Read the current state and reconcile the requested change."
+
+    def receipt(self):
+        return {"error_type": self.code, "effects": "none", "retry_allowed": False,
+                "recovery": self.recovery}
+
+    def model_result(self):
+        return {"isError": True, "structuredContent": self.receipt(),
+                "content": [{"type": "text", "text": self.recovery}]}
+
+
 class CapabilityUnavailable(LookupError):
     pass
 
@@ -553,6 +568,11 @@ class CapabilityCatalog:
             raise PermissionError("Tool is not visible to this presentation surface")
         if definition not in current or not self._available(registration, context):
             raise CapabilityUnavailable("Tool was removed or changed after discovery")
+        # Source-owned, side-effect-free syntax checks run only after live
+        # authorization and before a durable invocation can claim any effect.
+        validate_arguments = getattr(registration.source, "validate_tool_arguments", None)
+        if validate_arguments is not None:
+            validate_arguments(definition.name, copy.deepcopy(dict(arguments)))
         async def recheck_definition():
             # Admission/provenance persistence and publication policy may await.
             # Revalidate the exact definition after them, not merely the source
@@ -595,7 +615,14 @@ class CapabilityCatalog:
             # ordinary terminal failed receipt, never a stranded pending row.
             await recheck_definition()
             invoke = getattr(registration.executor, "call_app_tool", registration.executor.call_tool) if surface == "app" else registration.executor.call_tool
-            result = await invoke(definition.name, copy.deepcopy(dict(arguments)), context)
+            rejection = None
+            try:
+                result = await invoke(definition.name, copy.deepcopy(dict(arguments)), context)
+            except ToolPreconditionFailed as error:
+                # Only the executor can attest that its operation rolled back.
+                # Later publication, privacy and transport failures stay uncertain.
+                rejection = error.receipt()
+                result = error.model_result()
             # Publication is distinct from execution. Do not persist the
             # private result into shared history when this authorization fails.
             await authorize("tool.publish")
@@ -631,7 +658,9 @@ class CapabilityCatalog:
                     error={"error_type":type(exc).__name__,"effects":"unknown","retry_allowed":False})
             raise
         if durable:
-            if privacy_publisher is not None:
+            if rejection is not None:
+                await runtime.services.store.finish_tool(run_id, call_id, error=rejection)
+            elif privacy_publisher is not None:
                 await privacy_publisher.publish_tool_result(context,run_id,call_id,envelope,origins)
             else:
                 await runtime.services.store.finish_tool(run_id,call_id,result=envelope)

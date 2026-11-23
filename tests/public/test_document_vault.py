@@ -34,6 +34,31 @@ class Policy:
 class VaultTurn:
     async def execute(self, request, context, runtime):
         tools = {tool.name: tool.tool_ref for tool in await runtime.capabilities.discover(context)}
+        if request.input == "invalid-path-then-retry":
+            for path in ("/topics/Test.MD", "a/../Test.MD", "z" * 701 + ".md"):
+                try:
+                    await runtime.capabilities.call_tool(tools["vault_write_note"], {
+                        "path": path, "content": "private", "expected_revision": 0,
+                    }, context)
+                except ValueError:
+                    continue
+                raise AssertionError("Invalid path was accepted")
+            await runtime.capabilities.call_tool(tools["vault_write_note"], {
+                "path": "Tópics/File With Spaces.MD", "content": "example", "expected_revision": 0,
+            }, context)
+            return "saved"
+        if request.input == "reconcile":
+            write = tools["vault_write_note"]
+            args = {"path": "Case.MD", "content": "unchanged", "expected_revision": 1}
+            conflict = await runtime.capabilities.call_tool(write, args, context)
+            assert conflict["isError"] and conflict["structuredContent"]["effects"] == "none"
+            assert "read" in conflict["structuredContent"]["recovery"].lower()
+            saved = await runtime.capabilities.call_tool(write, {**args, "expected_revision": 0}, context)
+            assert saved["revision"] == 1
+            duplicate = await runtime.capabilities.call_tool(write, {**args, "content": "raced",
+                "expected_revision": 0}, context)
+            assert duplicate["isError"] and duplicate["structuredContent"]["error_type"] == "revision_conflict"
+            return "reconciled"
         if request.input == "remember":
             await runtime.capabilities.call_tool(tools["vault_write_note"], {
                 "path": "topics/color.md", "content": "# Cobalt\n[[topics/Palette#top]]",
@@ -110,6 +135,33 @@ class DocumentVault(unittest.IsolatedAsyncioTestCase):
                 await store.read(actor,path,revision=rev)
         self.assertEqual((await store.search(actor, query="private"))["hits"], [])
 
+
+    async def test_invalid_syntax_never_creates_uncertain_effect_or_changes_the_requested_path(self):
+        import re
+        [write] = [t for t in await self.runtime.capabilities.discover(self.a) if t.name == "vault_write_note"]
+        schema = write.input_schema["properties"]["path"]
+        self.assertFalse(re.search(schema["pattern"], "/filename.md"))
+        self.assertTrue(re.search(schema["pattern"], "Tópics/File With Spaces.MD"))
+        req = RunRequest(uuid.uuid4().hex, self.a.session_id, uuid.uuid4().hex, "invalid-path-then-retry")
+        await self.runtime.submit(req, self.a)
+        self.assertEqual((await self.runtime.wait(req.run_id, self.a)).status, "success")
+        kinds = [e.kind for e in await self.runtime.events(req.run_id, 0, self.a)]
+        self.assertEqual(kinds.count("tool.invoking"), 1)
+        self.assertEqual(kinds.count("tool.completed"), 1)
+        saved = await self.store.read(self.a, "Tópics/File With Spaces.MD")
+        self.assertEqual(saved["content"], "example")
+
+    async def test_conditional_write_conflict_reports_no_effect_and_keeps_the_winning_revision(self):
+        req = RunRequest(uuid.uuid4().hex, self.a.session_id, uuid.uuid4().hex, "reconcile")
+        await self.runtime.submit(req, self.a)
+        self.assertEqual((await self.runtime.wait(req.run_id, self.a)).status, "success")
+        receipts = [e.payload for e in await self.runtime.events(req.run_id, 0, self.a) if e.kind == "tool.completed"]
+        self.assertEqual(len(receipts), 3)
+        for receipt in (receipts[0], receipts[2]):
+            self.assertEqual(receipt["error"]["effects"], "none")
+            self.assertEqual(receipt["error"]["error_type"], "revision_conflict")
+        saved = await self.store.read(self.a, "Case.MD")
+        self.assertEqual((saved["content"], saved["revision"]), ("unchanged", 1))
 
     async def test_session_memory_recall_and_isolation(self):
         self.assertEqual(await self.turn(self.a, "remember"), "saved")
