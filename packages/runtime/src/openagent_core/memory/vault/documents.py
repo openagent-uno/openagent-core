@@ -335,14 +335,7 @@ class SqlDocumentVault:
             if parsed:
                 await con.execute(sa.insert(versions).values(**key, revision=revision, content=content,
                     author=context.author.key, session_id=context.session_id, run_id=current_run_id()))
-<<<<<<< HEAD
-                targets = sorted({link_key(link) for link in parsed.outlinks if len(link_key(link).encode()) <= 700})
-                if targets:
-                    await con.execute(sa.insert(links), [{**key, "target":target} for target in targets])
             elif erase:
-=======
-            else:
->>>>>>> a82d164c (Import attested Git vault history into isolated SQL document spaces)
                 await con.execute(sa.delete(versions).filter_by(**key))
                 await con.execute(sa.delete(import_origins).filter_by(**key))
             await refresh_indexes(con, key, changed, parsed, content)
