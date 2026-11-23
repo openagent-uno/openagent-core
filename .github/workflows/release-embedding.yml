@@ -67,7 +67,7 @@ jobs:
           OPENAGENT_TEST_POSTGRES_DSN: postgresql://postgres:qualification@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
           OPENAGENT_TEST_POSTGRES_URL: postgresql+psycopg://postgres:qualification@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
         run: |
-          python packaging/qualify.py --wheels "$RUNNER_TEMP/release-wheels" \
+          bash packaging/qualify-with-s3.sh python packaging/qualify.py --wheels "$RUNNER_TEMP/release-wheels" \
             --environment "$RUNNER_TEMP/qualified-engine" \
             --test-wheelhouse "$RUNNER_TEMP/qualified-test-wheels"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

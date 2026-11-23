@@ -94,7 +94,7 @@ jobs:
           assert not m['dirty_snapshot']
           assert m['repository_commit']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
           PY_VERIFY
-          python packaging/qualify.py --wheels "$RUNNER_TEMP/release-wheels" --environment "$RUNNER_TEMP/qualified-engine"
+          bash packaging/qualify-with-s3.sh python packaging/qualify.py --wheels "$RUNNER_TEMP/release-wheels" --environment "$RUNNER_TEMP/qualified-engine"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: qualified-${{ inputs.release_tag }}
