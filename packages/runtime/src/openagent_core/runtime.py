@@ -74,8 +74,10 @@ def execution_scope(runtime: Runtime, context: ExecutionContext, run_id: str | N
               _current_module_generation.set(module_generation),
               _current_capability_revision.set(capability_revision),
               _current_provider_tool_call.set(None))
+    from .memory.document_exposure import document_turn
     try:
-        yield
+        with document_turn(runtime, context, run_id):
+            yield
     finally:
         _current_provider_tool_call.reset(tokens[5])
         _current_capability_revision.reset(tokens[4])
@@ -960,7 +962,8 @@ class Runtime:
                     if record.terminal:
                         return record
                     try:
-                        await asyncio.wait_for(changed.wait(), timeout=5)
+                        async with asyncio.timeout(5):
+                            await changed.wait()
                     except TimeoutError:
                         pass  # Revalidate access and recover a missed notification.
         while True:

@@ -306,3 +306,13 @@ returns HTTP 429 and a retry interval. An exact retry still reads its original
 receipt. PostgreSQL workers share one LISTEN connection per process/store.
 Run completion and session turn handoff wake interested observers after commit.
 Every observer rereads the durable record and live policy on wake or timeout.
+
+PostgreSQL stores the due time of an active operation when its current segment
+finishes. A worker uses the indexed deadline and transaction notifications to
+wake for a continuation. A periodic durable read covers notification loss.
+
+During an admitted turn the document vault records the paths and revisions it
+returns via read, search, list and backlinks. A write records those dependencies
+in the same transaction. Forgetting a source removes the dependent revision
+tails transitively, restores the last independent content where available and
+refreshes search and history. Provenance is scoped to the selected memory space.

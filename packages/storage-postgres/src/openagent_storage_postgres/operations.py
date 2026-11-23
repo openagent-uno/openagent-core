@@ -55,7 +55,7 @@ class Operations:
                 ):
                     raise IdempotencyConflict("Source checkpoint unavailable")
             await db.execute(
-                "INSERT INTO operations VALUES (%s,%s,%s,%s,%s)",
+                "INSERT INTO operations(agent,origin_run_id,current_run_id,segment,state) VALUES (%s,%s,%s,%s,%s)",
                 (self.agent_id, origin, request.run_id, 0, "cancelled" if reserved else "active"),
             )
             if descriptor.handoff_run_id:
@@ -92,7 +92,7 @@ class Operations:
         ):
             raise IdempotencyConflict("Operation continuation changed its admission")
         cur = await db.execute(
-            """UPDATE operations SET current_run_id=%s,segment=%s WHERE agent=%s AND
+            """UPDATE operations SET due_at=NULL,current_run_id=%s,segment=%s WHERE agent=%s AND
             origin_run_id=%s AND current_run_id=%s AND segment=%s AND state='active'""",
             (
                 request.run_id,
@@ -161,6 +161,26 @@ class Operations:
                     (self.agent_id, ident),
                 )
             ).fetchone()
+
+    def observe_operations(self):
+        return self._notices.observe("operations", self.agent_id)
+
+    async def operation_delay(self, now):
+        async with self._db() as db:
+            row = await (await db.execute(
+                "SELECT min(due_at) AS due FROM operations WHERE agent=%s AND state='active' AND due_at IS NOT NULL",
+                (self.agent_id,),
+            )).fetchone()
+        return max(0, row["due"] - now) if row["due"] is not None else 60
+
+    async def ready_operations(self, now):
+        async with self._db() as db:
+            return await (await db.execute(
+                """SELECT d.*,floor(extract(epoch from r.finished_at)*1000)::bigint AS segment_finished_at_ms
+                FROM operations d JOIN runs r ON r.agent=d.agent AND r.id=d.current_run_id
+                WHERE d.agent=%s AND d.state='active' AND d.due_at<=%s ORDER BY d.due_at LIMIT 100""",
+                (self.agent_id, now),
+            )).fetchall()
 
     async def durable_operations(self):
         async with self._db() as db:

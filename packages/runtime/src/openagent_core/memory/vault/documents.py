@@ -11,6 +11,7 @@ from openagent_core.contracts import ExecutionContext, ResourceRef, require_auth
 from openagent_core.memory.vault.parser import link_key, parse_note_text
 from openagent_core.memory.vault.privacy import require_unprotected_execution
 from openagent_core.runtime import current_run_id, current_runtime
+from ..document_exposure import saw_notes, note_sources
 from .document_dream import DocumentDreamQueue, check_dream_space, is_document_dream
 
 
@@ -47,6 +48,13 @@ versions = sa.Table("oa_vault_revisions", metadata, *identity_columns(),
 links = sa.Table("oa_vault_links", metadata, *identity_columns(),
     sa.Column("target", sa.String(700), primary_key=True),
 )
+dependencies = sa.Table("oa_vault_derivations", metadata, *identity_columns(),
+    sa.Column("revision", sa.BigInteger, primary_key=True),
+    sa.Column("source_path", sa.String(700), primary_key=True),
+    sa.Column("source_revision", sa.BigInteger, primary_key=True),
+)
+sa.Index("oa_vault_derivation_sources", dependencies.c.tenant, dependencies.c.agent,
+         dependencies.c.space, dependencies.c.source_path, dependencies.c.source_revision)
 sa.Index("oa_vault_backlinks", links.c.tenant, links.c.agent, links.c.space, links.c.target)
 
 
@@ -157,6 +165,7 @@ class SqlDocumentVault:
         await self._recheck(context, "memory.read", scope)
         if row is None:
             raise LookupError("Note not found")
+        saw_notes(scope, [row])
         return dict(row)
 
     async def list_notes(self, context, *, after=None, limit=50):
@@ -170,6 +179,7 @@ class SqlDocumentVault:
         async with self.engine.connect() as con:
             rows = (await con.execute(stmt.order_by(notes.c.path).limit(limit + 1))).mappings().all()
         await self._recheck(context, "memory.read", scope)
+        saw_notes(scope, rows[:limit])
         return {"notes": [dict(row) for row in rows[:limit]],
                 "next_cursor": rows[limit - 1]["path"] if len(rows) > limit else None}
 
@@ -213,6 +223,7 @@ class SqlDocumentVault:
         async with self.engine.connect() as con:
             rows = (await con.execute(sa.text(stmt), params)).mappings().all()
         await self._recheck(context, "memory.read", scope)
+        saw_notes(scope, rows[:limit])
         result = {"hits": [{"kind": "note", **dict(row)} for row in rows[:limit]]}
         if paginate:
             result["next_cursor"] = rows[limit - 1]["path"] if len(rows) > limit else None
@@ -257,13 +268,16 @@ class SqlDocumentVault:
         scope = await self._scope(context, "memory.read")
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("Invalid vault page size")
-        stmt = sa.select(links.c.path).filter_by(**scope, target=target)
+        stmt = sa.select(links.c.path, notes.c.revision).select_from(
+            links.join(notes, sa.and_(*(links.c[k] == notes.c[k] for k in (*scope, "path"))))
+        ).where(links.c.target == target, *(links.c[k] == v for k, v in scope.items()))
         if after is not None:
             stmt = stmt.where(links.c.path > note_path(after))
         async with self.engine.connect() as con:
-            rows = (await con.execute(stmt.order_by(links.c.path).limit(limit + 1))).scalars().all()
+            rows = (await con.execute(stmt.order_by(links.c.path).limit(limit + 1))).mappings().all()
         await self._recheck(context, "memory.read", scope)
-        return {"paths": list(rows[:limit]), "next_cursor": rows[limit - 1] if len(rows) > limit else None}
+        saw_notes(scope, rows[:limit])
+        return {"paths": [r["path"] for r in rows[:limit]], "next_cursor": rows[limit - 1]["path"] if len(rows) > limit else None}
 
     async def history(self, context, path, *, before=None, limit=50):
         """Return revision metadata, newest first, for this space only."""
@@ -316,10 +330,23 @@ class SqlDocumentVault:
         from .document_history import lock_head, native_commit, redact
         async with self.engine.begin() as con:
             head = await lock_head(con, scope)
+            sources = note_sources(scope) if content is not None else ()
+            for start in range(0, len(sources), 256):
+                batch = sources[start:start + 256]
+                known = await con.scalar(sa.select(sa.func.count()).select_from(versions)
+                    .filter_by(**scope).where(sa.tuple_(versions.c.path, versions.c.revision).in_(batch)))
+                if known != len(batch):
+                    raise PermissionError("A source revision is no longer available")
             revision = await self._apply(con,context,scope,path,content,expected,erase=erase)
+            edges = [{**scope, "path": path, "revision": revision, "source_path": source_path,
+                      "source_revision": source_revision} for source_path, source_revision in sources
+                     if source_path != path]
+            if edges:
+                await con.execute(dependencies.insert(), edges)
             if erase:
+                from .document_lineage import forget_derivations
                 await redact(con,scope,path)
-                digest = None
+                digest = await forget_derivations(con, self, scope, head, context, path)
             else:
                 digest = await native_commit(con,scope,head,context,[(path,revision,content is not None)],"Document update")
             await self._recheck(context, "memory.write", scope)

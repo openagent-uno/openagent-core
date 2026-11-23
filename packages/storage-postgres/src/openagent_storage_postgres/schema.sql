@@ -41,6 +41,11 @@ CREATE TABLE IF NOT EXISTS operations (
     agent text NOT NULL, origin_run_id text NOT NULL, current_run_id text NOT NULL,
     segment integer NOT NULL, state text NOT NULL, PRIMARY KEY(agent,origin_run_id),
     FOREIGN KEY(agent,origin_run_id) REFERENCES runs(agent,id) ON DELETE CASCADE);
+ALTER TABLE operations ADD COLUMN IF NOT EXISTS due_at double precision;
+CREATE INDEX IF NOT EXISTS operation_due ON operations(agent,due_at)
+    WHERE state='active' AND due_at IS NOT NULL;
+UPDATE operations d SET due_at=0 FROM runs r WHERE d.agent=r.agent AND d.current_run_id=r.id
+    AND d.state='active' AND d.due_at IS NULL AND r.finished_at IS NOT NULL;
 CREATE TABLE IF NOT EXISTS handoffs (
     agent text NOT NULL, source_id text NOT NULL, origin_run_id text NOT NULL, PRIMARY KEY(agent,source_id),
     FOREIGN KEY(agent,origin_run_id) REFERENCES operations(agent,origin_run_id) ON DELETE CASCADE);

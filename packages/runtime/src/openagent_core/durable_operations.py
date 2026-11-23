@@ -139,6 +139,7 @@ class DurableOperationRunner:
         self.runtime = None
         self._lock = asyncio.Lock()
         self._task = None
+        self._stopping = False
         self._executor = _SegmentExecutor(self)
 
     def definition(self, descriptor):
@@ -154,16 +155,35 @@ class DurableOperationRunner:
             if not callable(getattr(runtime.services.store, method, None)):
                 raise TypeError('The runtime store does not support durable operation continuation')
         self.runtime = runtime
+        self._stopping = False
         self._task = asyncio.create_task(self._observe(), name='openagent-operation-continuations')
 
     async def close(self):
+        self._stopping = True
         if self._task is not None:
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
             self._task = None
 
     async def _observe(self):
-        while True:
+        store = self.runtime.services.store
+        observe = getattr(store, "observe_operations", None)
+        if observe:
+            with observe() as changed:
+                while not self._stopping:
+                    changed.clear()
+                    try:
+                        await self.tick()
+                        timeout = min(60, max(self.poll_seconds, await store.operation_delay(self.now())))
+                        try:
+                            async with asyncio.timeout(timeout):
+                                await changed.wait()
+                        except TimeoutError:
+                            pass
+                    except Exception:
+                        logging.getLogger(__name__).warning("Durable operation observation will retry")
+                        await asyncio.sleep(self.poll_seconds)
+        while not self._stopping:
             await asyncio.sleep(self.poll_seconds)
             try:
                 await self.tick()
@@ -336,7 +356,10 @@ class DurableOperationRunner:
         if self.runtime is None or self.runtime._closing or not self.runtime._started:
             return
         async with self._lock:
-            for row in await self.runtime.services.store.durable_operations():
+            store = self.runtime.services.store
+            ready = getattr(store, "ready_operations", None)
+            rows = await ready(self.now()) if ready else await store.durable_operations()
+            for row in rows:
                 current = await self.runtime.services.store.get(row['current_run_id'])
                 if current is None or not current.terminal:
                     continue

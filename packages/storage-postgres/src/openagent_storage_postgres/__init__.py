@@ -439,6 +439,18 @@ class PostgresRuntimeStore(Sessions, Operations, ProviderSlots):
         if status == "success" and output is not None:
             await self._message(db, row, "assistant", self._agent(row), output)
         await self._event(db, row["id"], "run." + status, dict(status=status, output=output))
+        continuation = row["request"].get("continuation")
+        if continuation:
+            delay = 0
+            if status in {"interrupted", "timed_out"} and isinstance(output, dict) and output.get("reason") == "operation_pending":
+                delay = output.get("retry_after_seconds", 0)
+            finished = updated["finished_at"].timestamp()
+            due = min(finished + delay, continuation["expires_at"]) if delay else 0
+            await db.execute(
+                "UPDATE operations SET due_at=%s WHERE agent=%s AND current_run_id=%s AND state='active'",
+                (due, self.agent_id, row["id"]),
+            )
+            await self._notices.publish(db, "operations", self.agent_id)
         await self._notices.publish(db, "session", row["session_id"])
         await self._notices.publish(db, "run", row["id"])
         return _record(updated)
@@ -455,7 +467,8 @@ class PostgresRuntimeStore(Sessions, Operations, ProviderSlots):
     @staticmethod
     async def _wait_for_notice(event):
         try:
-            await asyncio.wait_for(event.wait(), timeout=5)
+            async with asyncio.timeout(5):
+                await event.wait()
         except TimeoutError:
             pass
 

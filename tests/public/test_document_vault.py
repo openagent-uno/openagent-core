@@ -87,6 +87,26 @@ class DocumentVault(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, "success", result)
         return result.output
 
+    async def test_forget_removes_transitive_copies_and_restores_independent_revision(self):
+        from openagent_core.runtime import execution_scope
+        store, actor = self.store, self.a
+        await store.write(actor, "source.md", "private sample", expected_revision=0)
+        await store.write(actor, "guide.md", "public instructions", expected_revision=0)
+        with execution_scope(self.runtime, actor, "first"):
+            await store.read(actor, "source.md")
+            await store.write(actor, "guide.md", "private sample plus instructions", expected_revision=1)
+        with execution_scope(self.runtime, actor, "second"):
+            await store.read(actor, "guide.md")
+            await store.write(actor, "copy.md", "private sample", expected_revision=0)
+        result = await store.forget(actor, "source.md", expected_revision=1)
+        self.assertTrue(result["forgotten"])
+        self.assertEqual((await store.read(actor, "guide.md"))["content"], "public instructions")
+        for path, rev in (("source.md",1), ("guide.md",2), ("copy.md",1)):
+            with self.assertRaises(LookupError):
+                await store.read(actor,path,revision=rev)
+        self.assertEqual((await store.search(actor, query="private"))["hits"], [])
+
+
     async def test_session_memory_recall_and_isolation(self):
         self.assertEqual(await self.turn(self.a, "remember"), "saved")
         self.assertEqual(await self.turn(self.b, "search"), "")
