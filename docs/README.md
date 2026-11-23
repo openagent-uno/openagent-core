@@ -25,6 +25,7 @@
   [journal/state concurrency](sqlite-commit-concurrency.md) and
   [fallback history](fallback-conversation-history.md).
 
+- [Core beta 161 — per-turn call authorization for model shortcuts](releases/v1.1.0-beta.161.md)
 - [Core beta 160 — scoped document recall, conditional note receipts and dream enrollment](releases/v1.1.0-beta.160.md)
 - [Beta159: tool decisions for JSON Schema endpoints](releases/v1.1.0-beta.159.md).
 - [Beta148: terminal provider failures and safe cooldown categories](releases/v1.1.0-beta.148.md).
