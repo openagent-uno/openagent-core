@@ -191,6 +191,47 @@ class DocumentImport(unittest.IsolatedAsyncioTestCase):
             b"# Working draft\r\n\r\n[[topic]]\r\n",
         )
 
+    async def test_attested_working_tree_without_git_and_generated_rollback(self):
+        from openagent_core.administration import ManagementContext
+        from openagent_core.memory.vault.document_admin import DocumentVaultAdministration
+        with self.assertRaises(VaultImportMismatch):
+            VaultSource(self.sealed, "notes", ["active.md"], working_tree_only=True)
+        corpus = self.source / "plain"
+        corpus.mkdir()
+        (corpus / "note.md").write_bytes(b"# Untracked\r\n")
+        (corpus / "other.md").write_text("separate reader")
+        (corpus / "llms.txt").write_text("old inventory")
+        async def no_migration(_):
+            pass
+        sealed = self.root / "plainsealed"
+        await prepare_migration(self.source, sealed, self.root / "plaincandidate",
+                                databases=("state.db",), quiesce=fence, migrate=no_migration)
+        with self.assertRaises(ValueError):
+            VaultSource(sealed, "plain", ["note.md"])
+        source = VaultSource(sealed, "plain", ["note.md","llms.txt"], working_tree_only=True)
+        report = await vault_import.import_vault(self.vault, self.ctx, source, "state.db")
+        self.assertEqual(report["selected_paths"], 2)
+        row = await self.vault.revision_origin(self.ctx,"note.md",revision=1)
+        self.assertEqual(row["source"], "working_tree")
+        self.assertNotIn("author", row)
+        with self.assertRaises(LookupError):
+            await self.vault.read(self.ctx,"other.md")
+        class AllowAdmin:
+            async def authorize(self,*args,**kwargs): return True
+        admin = DocumentVaultAdministration(self.vault, AllowAdmin(), self.ctx)
+        management = ManagementContext(self.ctx.authority,self.ctx.agent_id)
+        init = await admin.execute(management,"init")
+        await admin.execute(management,"derived")
+        new_paths = [p for p in init["created"] if not p.endswith("/")] + ["_showcase/showcase.md"]
+        restored = self.root / "plainrestore"
+        await vault_import.restore_vault(self.vault,self.ctx,source,"state.db",restored,
+                                         new_paths=new_paths,quiesce=fence)
+        tree = restored / "state" / "plain"
+        self.assertTrue((tree / "concepts").is_dir())
+        self.assertEqual((tree / "note.md").read_bytes(),b"# Untracked\r\n")
+        self.assertNotIn("old inventory",(tree / "llms.txt").read_text())
+        self.assertEqual((tree / "other.md").read_text(),"separate reader")
+
     async def test_resume_atomic_publication_and_refuse_forgotten_history_on_restore(
         self,
     ):

@@ -391,7 +391,7 @@ async def restore_vault(
         raise PermissionError("Offline host fence and explicit restore corpus required")
     scope = await vault._scope(context, "memory.import")
     ident = await asyncio.to_thread(_binding, src, database, scope)
-    additions = {note_path(path) for path in new_paths}
+    additions = {note_path(path, allow_generated=True) for path in new_paths}
     if additions.intersection(src.paths) or any(
         f"{src.relative}/{p}" in src.manifest["files"] for p in additions
     ):
@@ -443,6 +443,9 @@ async def restore_vault(
         destination.mkdir(mode=0o700, parents=False, exist_ok=False)
         state = destination / "state"
         await asyncio.to_thread(_restore_private_tree, src, state)
+        from openagent_core.memory.vault.documents import folders
+        for folder in await con.scalars(sa.select(folders.c.path).filter_by(**scope)):
+            (state / src.relative / _relative(folder)).mkdir(mode=0o700, parents=True, exist_ok=True)
         log = destination / "post-import-revisions.jsonl"
         with log.open("xb") as stream:
             os.chmod(log, 0o600)

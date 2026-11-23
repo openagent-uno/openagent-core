@@ -58,3 +58,12 @@ A run or delegated child that has consumed a document may expose its output only
 The native history list, revision detail, unified diff and restore share the scoped SQL journal. Every accepted edit, deletion and restoration records a space-local revision. Imported Git identities keep their first-parent ancestry across branches, with the captured working tree as the initial writable head. An installation upgrading an older SQL document store without a global journal starts with an explicitly labelled snapshot of its current corpus. Existing note revisions stay available through the note history API.
 
 Restore appends a new commit from the selected state. The entire change and the final management authorization check share one database transaction. An explicitly confirmed reset removes a tail of native commits from the same space and preserves monotonic note revisions. The original imported Git graph remains in custody. A reset across that boundary returns a conflict. Use restore to select an earlier Git state. A forget removes the note's version bodies, provenance and entries from the visible journal. A private filesystem rollback after ordinary SQL deletion records the deletion and removes the file only from the newly restored tree.
+
+
+For a sealed vault whose source never contained a Git repository, use
+`VaultSource(snapshot, relative_vault, approved_paths, working_tree_only=True)`.
+Each file carries its exact manifest hash and working-tree provenance. This mode
+rejects an existing Git directory. An empty selection requires an empty Markdown
+inventory. A restored candidate also contains the virtual scaffold folders created
+in SQL. If the source included a generated `llms.txt` and the space owns it,
+include that exact path in the selection before enabling SQL regeneration.

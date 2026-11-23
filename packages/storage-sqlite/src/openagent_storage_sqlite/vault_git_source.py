@@ -15,7 +15,7 @@ class VaultImportMismatch(ValueError):
 
 
 class VaultSource:
-    def __init__(self, snapshot, vault, paths):
+    def __init__(self, snapshot, vault, paths, *, working_tree_only=False):
         self.root = Path(snapshot).resolve()
         self.receipt = _digest(self.root / MANIFEST)
         self.manifest = verify_snapshot(self.root)
@@ -24,17 +24,23 @@ class VaultSource:
         self.relative = str(_relative(vault))
         self.vault = self.root / self.relative
         self.git = self.vault / ".git"
+        if type(working_tree_only) is not bool:
+            raise TypeError("Expected an explicit source history mode")
+        self.working_tree_only = working_tree_only
+        if working_tree_only and self.git.exists():
+            raise VaultImportMismatch("Working-tree-only custody cannot exclude existing Git history")
         if (self.git / "info/grafts").exists():
             raise VaultImportMismatch(
                 "Source history has an external ancestry override"
             )
         if isinstance(paths, str):
             raise TypeError("Explicit note paths are required")
-        self.paths = frozenset(note_path(p) for p in paths)
-        if not self.paths:
-            raise ValueError("An explicit historical corpus is required")
+        self.paths = frozenset(note_path(p, allow_generated=True) for p in paths)
+
         self.corpus = sha256(canonical_json(sorted(self.paths)).encode()).hexdigest()
-        self.inventory = _vault_inventory(self.root, self.manifest, self.relative, True)
+        self.inventory = _vault_inventory(self.root, self.manifest, self.relative, not working_tree_only)
+        if not self.paths and (not working_tree_only or self.inventory["markdown_files"]):
+            raise ValueError("An explicit historical corpus is required")
         self.verify_receipt()
 
     def verify_receipt(self):
@@ -86,7 +92,7 @@ class VaultSource:
         nearest = {}
         commits = self._git(
             "rev-list", "--topo-order", "--reverse", "--parents", "--all", "--reflog"
-        ).splitlines()
+        ).splitlines() if not self.working_tree_only else []
         for line in commits:
             commit, *parents = line.decode("ascii").split()
             parent = nearest.get(parents[0]) if parents else None
