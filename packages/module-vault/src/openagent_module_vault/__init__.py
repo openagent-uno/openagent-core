@@ -10,7 +10,7 @@ def module_assets(name: str = "vault") -> Path:
         raise FileNotFoundError(f"Vault resources are missing from {path}")
     return path
 
-descriptor=VaultDescriptor(id="vault",version="1.1.0b3",
+descriptor=VaultDescriptor(id="vault",version="1.1.0b4",
     native_sources=("vault","vault-gate"),source_names={"vault":"vault","vault-gate":"vault-gate"},
     search_operation="vault_search",search_source="vault-gate",search_result_key="results",
     search_query_argument="query",

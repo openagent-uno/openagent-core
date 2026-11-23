@@ -4,7 +4,7 @@ Feature implementations live in their individual ``openagent-module-*``
 distributions. Import from those packages for new integrations.
 """
 
-__version__ = "1.1.0b8"
+__version__ = "1.1.0b9"
 
 
 def module_assets(name: str):
