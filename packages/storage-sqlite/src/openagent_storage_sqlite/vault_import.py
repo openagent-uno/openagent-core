@@ -58,9 +58,10 @@ def _binding(src, db, scope):
         con.execute("BEGIN")
         guard_snapshot_transaction(con)
         _check_transaction_tenant(con, scope["tenant"])
-        if not con.execute(
-            "SELECT 1 FROM sessions_v2 WHERE tenant_id=? LIMIT 1", (scope["tenant"],)
-        ).fetchone():
+        evidence = con.execute("SELECT 1 FROM sessions_v2 WHERE tenant_id=? LIMIT 1", (scope["tenant"],)).fetchone()
+        empty_installation = (src.absent_vault and not src.paths and
+                              not con.execute("SELECT 1 FROM sessions_v2 LIMIT 1").fetchone())
+        if not evidence and not empty_installation:
             raise VaultImportMismatch(
                 "Declared tenant has no canonical session evidence"
             )

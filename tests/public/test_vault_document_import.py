@@ -191,6 +191,34 @@ class DocumentImport(unittest.IsolatedAsyncioTestCase):
             b"# Working draft\r\n\r\n[[topic]]\r\n",
         )
 
+    async def test_start_empty_space_only_from_attested_absence(self):
+        empty = self.root / "fresh"
+        empty.mkdir()
+        store = SqliteRuntimeStore(empty / "state.db")
+        await store.start()
+        await store.close()
+        async def noop(_):
+            pass
+        sealed = self.root / "absent"
+        await prepare_migration(empty,sealed,self.root / "emptycandidate",databases=("state.db",),
+                                quiesce=fence,migrate=noop,absent_vault="notes")
+        src = VaultSource(sealed,"notes",[],absent_vault=True)
+        for arguments in (("different",[]),("notes",["invented.md"])):
+            with self.assertRaises(ValueError):
+                VaultSource(sealed,*arguments,absent_vault=True)
+        with self.assertRaises(ValueError):
+            VaultSource(self.sealed,"notes",[],absent_vault=True)
+        report = await vault_import.import_vault(self.vault,self.ctx,src,"state.db")
+        self.assertEqual(report["selected_paths"], 0)
+        await vault_import.require_import_receipt(self.engine,tenant=self.ctx.tenant_id,agent=self.ctx.agent_id,
+                space=self.person.subject_id,source_manifest_sha256=src.receipt,corpus_sha256=src.corpus)
+        self.assertEqual((await self.vault.list_notes(self.ctx))["notes"],[])
+        await self.vault.write(self.ctx,"first.md","first new memory",expected_revision=0)
+        restored = self.root / "freshrestore"
+        await vault_import.restore_vault(self.vault,self.ctx,src,"state.db",restored,
+                                         new_paths=["first.md"],quiesce=fence)
+        self.assertEqual((restored/"state/notes/first.md").read_text(),"first new memory")
+
     async def test_attested_working_tree_without_git_and_generated_rollback(self):
         from openagent_core.administration import ManagementContext
         from openagent_core.memory.vault.document_admin import DocumentVaultAdministration

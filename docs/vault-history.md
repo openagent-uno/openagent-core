@@ -67,3 +67,11 @@ rejects an existing Git directory. An empty selection requires an empty Markdown
 inventory. A restored candidate also contains the virtual scaffold folders created
 in SQL. If the source included a generated `llms.txt` and the space owns it,
 include that exact path in the selection before enabling SQL regeneration.
+
+When the source genuinely has no vault directory, seal it with
+`prepare_migration(..., absent_vault=relative_vault)` and select
+`VaultSource(snapshot, relative_vault, [], absent_vault=True)`. The importer
+requires the exact absence receipt and an empty document selection. Existing
+sessions retain their original tenant checks. A fresh installation with an empty
+canonical session table may establish this empty space using its offline host
+grant. The receipt enables subsequent SQL writes without inventing prior notes.
