@@ -33,6 +33,7 @@ describing something that no longer happens.
 from __future__ import annotations
 
 import asyncio
+import json
 from . import account_routes
 from openagent_core.configuration import runtime_environment
 import logging
@@ -1047,7 +1048,11 @@ class TeamRouterProvider(ProviderResources, BaseModel):
         framework prompt mid-session forces a fresh build instead of
         silently reusing the cached Team's baked-in ``instructions``.
         """
+        from openagent_core.tool_scope import current_capability_sources
+        source_scope = current_capability_sources()
         sys_key = _system_cache_key(system)
+        if source_scope is not None:
+            sys_key += "\0" + json.dumps(sorted(source_scope), separators=(",", ":"))
         cached = self._session_runtime.get(session_id)
         if (
             cached is not None
@@ -1088,7 +1093,7 @@ class TeamRouterProvider(ProviderResources, BaseModel):
         from openagent_core.runtime import current_execution_context
         execution = current_execution_context()
         delegated = execution is not None and execution.parent_run_id is not None
-        force_solo = lean_local_event_active() or delegated
+        force_solo = lean_local_event_active() or delegated or source_scope is not None
         # Budget gate for MEMBERS (C1). The leader is already gated upstream
         # (``ModelDispatcher._enabled_catalog`` → ``guard.filter_catalog``), but
         # members were built straight from the catalog — so an over-cap provider

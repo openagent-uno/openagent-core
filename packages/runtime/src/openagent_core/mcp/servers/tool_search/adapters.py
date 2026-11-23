@@ -1278,6 +1278,7 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
             or pool.discovery_presentation.named_calls == "authorized"):
         tools.append(tool_search_call_named_tool)
     toolkit = Toolkit(name="tool-search", tools=tools)
+    toolkit._openagent_catalog_broker = True
     if pool.discovery_presentation.hot_tools:
         async def authorized_hot_tools():
             from openagent_core.contracts import ResourceRef

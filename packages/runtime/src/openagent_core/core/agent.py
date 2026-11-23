@@ -2727,7 +2727,11 @@ class Agent:
             f"The current date is {now:%Y-%m-%d} ({now:%A}). Use it for "
             "any absolute date you record — never guess the year from memory."
         ), "runtime"))
-        dynamic = {"catalog": build_mcp_catalog_summary(self._mcp)}
+        from openagent_core.tool_scope import current_capability_sources
+        source_scope = current_capability_sources()
+        # A global transport inventory can advertise sources the current turn
+        # cannot use. The authorized capability map is composed separately.
+        dynamic = {"catalog": build_mcp_catalog_summary(self._mcp)} if source_scope is None else {}
         from openagent_core.mcp_apps import current_application_context
         from openagent_core.deliveries import delivered_prompt
         delivered = delivered_prompt()
@@ -2758,13 +2762,13 @@ class Agent:
                 if getattr(identity, key, None) is not None
             }
         context_builder = getattr(self._mcp, "prompt_context", None)
-        if callable(context_builder):
+        if callable(context_builder) and source_scope != frozenset():
             dynamic["capabilities"] = context_builder()
         contribution_builder = getattr(self._mcp, "prompt_blocks", None)
         contributions = tuple(contribution_builder()) if callable(contribution_builder) else ()
         # Capabilities injected by a connection can change every turn. Their
         # instructions cannot contaminate the stable host/framework prefix.
-        if contributions:
+        if contributions and source_scope is None:
             dynamic["capability_instructions"] = [
                 {"id": block.id, "revision": block.revision,
                  "provenance": block.provenance, "instructions": block.text}
@@ -2779,17 +2783,25 @@ class Agent:
             "OPENAGENT_VAULT_PATH": self._resolve_vault_path() if uses_file_vault else "",
             "OPENAGENT_DB_PATH": self._resolve_db_path() if uses_file_vault else "",
             "MCP_CATALOG_SUMMARY": "See the current authorized catalog in the trusted turn context.",
-            "SKILLS_INDEX": self._render_skills_index(),
-            "PTC_NOTE": self._render_ptc_note(),
+            "SKILLS_INDEX": self._render_skills_index() if source_scope is None else "",
+            "PTC_NOTE": self._render_ptc_note() if source_scope is None else "",
         }
         if substitutions["SKILLS_INDEX"]:
             dynamic["skills_index"] = substitutions["SKILLS_INDEX"]
         if substitutions["PTC_NOTE"]:
             dynamic["programmatic_tool_calling"] = substitutions["PTC_NOTE"]
+        framework = core_framework_blocks()
+        modules = runtime.prompt_blocks if runtime is not None else ()
+        if source_scope == frozenset():
+            # Filter only upstream operational rules. Hosts and third-party
+            # modules may place security or identity instructions in any section.
+            tool_rules = {"core.tools", "core.computers", "core.managers", "module.models",
+                          "module.delegation", "module.attachments", "module.mcp"}
+            modules = tuple(block for block in modules if block.id not in tool_rules)
         composed = PromptComposer().compose(
-            framework=core_framework_blocks(),
+            framework=framework,
             substitutions=substitutions,
-            modules=runtime.prompt_blocks if runtime is not None else (),
+            modules=modules,
             host=host, dynamic=dynamic, session_id=session_id,
         )
         receipts = getattr(self, "_prompt_receipts", None)

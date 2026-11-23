@@ -39,7 +39,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from openagent_core.core import tool_trace, vault_recall
 from openagent_core.core.logging import elog
-from openagent_core.core.tool_scope import current_tool_allowlist, normalize_family
+from openagent_core.tool_scope import current_capability_sources, current_tool_allowlist, normalize_family
 from openagent_core.models.base import BaseModel, ModelResponse
 from openagent_core.models.final_answer import completed_final_answer, is_parent_run_event
 from openagent_core.models.resource_lifecycle import ProviderResources, _provider_call
@@ -154,6 +154,7 @@ def _execution_cache_key(system: str | None) -> tuple[str, str]:
 
     policy = current_execution_policy()
     allow = current_tool_allowlist()
+    sources = current_capability_sources()
     from openagent_core.core.execution_profile import stateless_completion_active
     stateless = stateless_completion_active()
     from openagent_core.provider_admission import current_admission
@@ -168,6 +169,7 @@ def _execution_cache_key(system: str | None) -> tuple[str, str]:
             "host_admission": admitted,
             "policy": policy or {},
             "tool_families": None if allow is None else sorted(allow),
+            **({"capability_sources": sorted(sources)} if sources is not None else {}),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -1215,15 +1217,16 @@ class NativeProvider(ProviderResources, BaseModel):
         return allowed, sorted(filtered)
 
     def _compatible_mcp_toolkits(self) -> tuple[list[Any], list[str]]:
-        # Opt-in per-child tool scoping. ``current_tool_allowlist()`` is ``None``
-        # for every ordinary run (chat, automation, unrestricted delegation), so
-        # this takes the EXACT historical path: the memoised cache fast-path, and
-        # the same list it always returned — byte-identical. Only a delegated
-        # child that was spawned with an explicit ``allowed_tools`` subset (see
-        # ``core.tool_scope`` / ``core.child_session``) installs an allowlist,
-        # and that case is request-scoped: it NEITHER reads NOR writes
-        # ``self._compatible_cache``, so a restricted run can never pollute the
-        # shared cache an unrestricted run relies on.
+        # Public source IDs are exact catalog identities. A normalized raw MCP
+        # family can collide with another source. Only the built-in catalog
+        # broker performs authorization against exact IDs on every invocation.
+        sources = current_capability_sources()
+        if sources is not None:
+            if not sources:
+                return [], []
+            base, filtered = self._base_compatible_mcp_toolkits()
+            return [tk for tk in base if getattr(tk, "_openagent_catalog_broker", False)], filtered
+        # Legacy child delegation retains its independent family allowlist.
         allow = current_tool_allowlist()
         if allow is None:
             if self._compatible_cache is not None:

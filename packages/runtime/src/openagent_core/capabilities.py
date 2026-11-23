@@ -269,7 +269,11 @@ class CapabilityCatalog:
         return self._active_generation, self._revision
 
     def _available(self, registration: _Registration, context: ExecutionContext) -> bool:
+        from .tool_scope import current_capability_sources
         from .dream_evidence import DreamVaultSource, is_document_dream
+        allowed = current_capability_sources()
+        if allowed is not None and registration.source_id not in allowed:
+            return False
         if is_document_dream(context) and not (
             registration.managed and registration.source_id == "vault"
             and isinstance(registration.source, DreamVaultSource)
