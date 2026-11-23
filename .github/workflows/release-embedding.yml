@@ -13,6 +13,14 @@ jobs:
     needs: platform-contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: qualification
+        ports:
+          - 5432/tcp
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -36,7 +44,7 @@ jobs:
           version=tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version']
           if os.environ['GITHUB_REF'].startswith('refs/tags/'):
            assert os.environ['GITHUB_REF_NAME']=='v'+version.replace('b','-beta.')
-          for name in ['openagent-core','openagent-storage-sqlite','openagent-gateway','openagent-sdk']:
+          for name in ['openagent-core','openagent-storage-sqlite','openagent-storage-postgres','openagent-gateway','openagent-sdk']:
            row=next(r for r in m['wheels'] if r['name']==name)
            assert row['version']==version
           core=next(r for r in m['wheels'] if r['name']=='openagent-core')
@@ -55,6 +63,8 @@ jobs:
             --pattern openagent_execution-1.0.0b3-py3-none-any.whl \
             --pattern openagent_shell-1.0.0b3-py3-none-any.whl
       - name: Qualify the complete public engine suite on the remote runner
+        env:
+          OPENAGENT_TEST_POSTGRES_DSN: postgresql://postgres:qualification@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
         run: |
           python packaging/qualify.py --wheels "$RUNNER_TEMP/release-wheels" \
             --environment "$RUNNER_TEMP/qualified-engine" \

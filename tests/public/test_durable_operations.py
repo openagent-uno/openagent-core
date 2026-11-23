@@ -51,6 +51,9 @@ class DurableOperationsTests(unittest.IsolatedAsyncioTestCase):
         self.context = ExecutionContext(principal, principal, principal, 'session-a', 'agent-a', (principal,))
         self.grants = Grants()
 
+    def make_store(self):
+        return SqliteRuntimeStore(self.path / 'state.sqlite')
+
     async def runtime(self, read, *, policy=None, now=None, submit_behavior=None, submit_idempotent=True, infer=None):
         self.submissions = getattr(self, 'submissions', [])
 
@@ -94,7 +97,7 @@ class DurableOperationsTests(unittest.IsolatedAsyncioTestCase):
                                         resolve_operation=select, delegation=self.grants,
                                         operation_inference=inference,
                                         policy=policy, poll_seconds=.01, **({'now': now} if now else {}))
-        store = SqliteRuntimeStore(self.path / 'state.sqlite')
+        store = self.make_store()
         runtime = Runtime(RuntimeSettings('agent-a', self.path),
                           RuntimeServices(store, executor, authorizer, catalog, delegations=self.grants),
                           modules=(executor, runner))

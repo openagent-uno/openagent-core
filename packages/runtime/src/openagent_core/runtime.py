@@ -1,6 +1,6 @@
 """Explicit instance lifecycle and durable run admission; no product bootstrap."""
 from __future__ import annotations
-from contextlib import contextmanager, asynccontextmanager
+from contextlib import contextmanager, asynccontextmanager, nullcontext
 from contextvars import ContextVar
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -636,6 +636,9 @@ class Runtime:
 
     async def _authorize(self, context: ExecutionContext, action: str, session_id: str, tenant_id: str) -> None:
         await self.authorize(context, action, ResourceRef('session', tenant_id, session_id), audience=context.audience)
+        check_session = getattr(self.services.store, 'check_session_access', None)
+        if check_session is not None:
+            await check_session(context, session_id)
 
     async def authorize(self, context: ExecutionContext, action: str, resource: ResourceRef, *, audience=()) -> None:
         """Revalidate delegation and current host policy at every operation."""
@@ -761,6 +764,9 @@ class Runtime:
                         target = await self._steering_target(request,context)
                         await self.services.store.append_event(request.run_id,'run.steering',{'target_run_id':target.run_id})
                         await self.cancel(target.run_id,context)
+                    wait_turn = getattr(self.services.store, "wait_session_turn", None)
+                    if wait_turn is not None:
+                        await wait_turn(request.run_id)
                     # Different authors never steer/coalesce into another
                     # principal's active execution or borrow its credentials.
                     async with self._hold_session(context):
@@ -820,6 +826,9 @@ class Runtime:
         if record is None:
             raise LookupError(run_id)
         await self._authorize(context,'run.read',record.session_id,record.tenant_id)
+        check_run = getattr(self.services.store, 'check_run_access', None)
+        if check_run is not None:
+            await check_run(context, run_id)
         return record
 
     async def authorize_replay(self, run_id: str, context: ExecutionContext) -> RunRecord:
@@ -968,7 +977,8 @@ class Runtime:
             # cleanup. Bound both draining the live turn and provider release;
             # failure leaves the host selector on its original generation.
             async with asyncio.timeout(10):
-                async with self._hold_session(context):
+                release_scope = getattr(self.services.store, "provider_release_scope", None)
+                async with self._hold_session(context), release_scope(context) if release_scope else nullcontext():
                     with execution_scope(self,context,None):
                         agent = getattr(self.services.executor,'agent',None)
                         await agent.release_session(context.session_id)

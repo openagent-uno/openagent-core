@@ -14,7 +14,7 @@ import zipfile
 from email.parser import BytesParser
 
 PACKAGES = (
-    '.', 'packages/storage-sqlite', 'packages/modules',
+    '.', 'packages/storage-sqlite', 'packages/storage-postgres', 'packages/modules',
     'packages/module-sessions', 'packages/module-search', 'packages/module-vault',
     'packages/module-mcp', 'packages/module-workflows', 'packages/module-scheduler',
     'packages/module-events', 'packages/module-delegation', 'packages/module-skills',

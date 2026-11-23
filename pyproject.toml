@@ -37,6 +37,7 @@ testpaths = ["tests/public"]
 pythonpath = [
   "packages/runtime/src",
   "packages/storage-sqlite/src",
+  "packages/storage-postgres/src",
   "packages/modules/src",
   "packages/gateway/src",
   "packages/capability-host/src",

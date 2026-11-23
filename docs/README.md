@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [PostgreSQL run and session storage for embedding hosts](postgres-runtime.md)
+
 - [Beta152: current requests and untrusted material](system-prompt.md#structure).
 
 - [Beta151: tool previews follow the responding model’s input capabilities](attachments.md#visual-previews-of-mcp-tool-results).

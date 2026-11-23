@@ -62,6 +62,14 @@ jobs:
     needs: native
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: qualification
+        ports:
+          - 5432/tcp
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -76,6 +84,8 @@ jobs:
           node-version: '24'
       - run: python packaging/build.py --out "$RUNNER_TEMP/release-wheels"
       - name: Qualify installed public engine and exact source provenance
+        env:
+          OPENAGENT_TEST_POSTGRES_DSN: postgresql://postgres:qualification@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
         run: |
           python - <<'PY_VERIFY'
           import json,os,pathlib,subprocess
