@@ -240,7 +240,29 @@ class TaskComputerBroker:
         row = await self._row(key)
         if not row or row["base_version"] != task.base_version or row["state"] not in {"online", "offline"}:
             raise CapabilityUnavailable("The task has no eligible computer assignment")
-        conn = await self.provider.connection(allocation, row["machine_id"])
+        reconnect = getattr(self.provider, "reconnect", None)
+        if callable(reconnect) and row["state"] == "online" and row["expires_at"] <= self.clock():
+            # Fence this exact expired generation before rotating the transport.
+            # A concurrent healthy refresh or revocation wins its own CAS.
+            async with self.engine.begin() as con:
+                await self._authorize(context, key, "computer.attach", base=base)
+                await con.execute(
+                    tasks.update()
+                    .where(
+                        tasks.c.allocation == key,
+                        tasks.c.epoch == row["epoch"],
+                        tasks.c.state == "online",
+                        tasks.c.expires_at <= self.clock(),
+                    )
+                    .values(state="offline", epoch=tasks.c.epoch + 1)
+                )
+                row = await self._row(key, con)
+        if row["state"] == "revoked":
+            raise CapabilityUnavailable("The task assignment was revoked")
+        if callable(reconnect) and row["state"] == "offline" and row["generation"] is not None:
+            conn = await reconnect(allocation, row["machine_id"], row["generation"])
+        else:
+            conn = await self.provider.connection(allocation, row["machine_id"])
         now = self.clock()
         if (
             not isinstance(conn, ComputerConnection)

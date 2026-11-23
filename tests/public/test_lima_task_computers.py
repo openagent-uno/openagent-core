@@ -4,7 +4,11 @@ import asyncio
 import base64
 import json
 from contextlib import AsyncExitStack
+from dataclasses import replace
 import os
+import shlex
+import subprocess
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -23,21 +27,23 @@ from openagent_storage_sqlite import SqliteRuntimeStore
     os.getenv("OPENAGENT_TEST_LIMA_BASE"), "Requires a sealed test VM and dedicated hypervisor"
 )
 class LimaComputers(unittest.IsolatedAsyncioTestCase):
-    async def test_isolated_snapshot_review_viewer_input_and_revocation(self):
+    async def setup_computers(self, lease_seconds):
         home = os.environ["OPENAGENT_TEST_LIMA_HOME"]
         base = os.environ["OPENAGENT_TEST_LIMA_BASE"]
         commit = os.environ["OPENAGENT_TEST_LIMA_COMMIT"]
         task = ComputerTask("workspace", "change", "sealed")
         provider = LimaComputerProvider(
-            home, {(task.project, task.base_version): (base, commit)}, lease_seconds=300
+            home, {(task.project, task.base_version): (base, commit)}, lease_seconds=lease_seconds
         )
         temp = Path(self.enterContext(TemporaryDirectory()))
         engine = create_async_engine("sqlite+aiosqlite:///" + str(temp / "controller.sqlite"))
         self.addAsyncCleanup(engine.dispose)
 
+        denied = set()
+
         class Policy:
             async def authorize(self, context, action, resource, *, audience=()):
-                return all(p == context.initiator for p in audience)
+                return action not in denied and all(p == context.initiator for p in audience)
 
         policy = Policy()
         broker = TaskComputerBroker(engine, policy, provider, provider)
@@ -47,28 +53,35 @@ class LimaComputers(unittest.IsolatedAsyncioTestCase):
         runtime = Runtime(
             RuntimeSettings("agent"), RuntimeServices(SqliteRuntimeStore(temp / "runs.db"), None, policy)
         )
-        viewer = ComputerInteraction(runtime)
         tenant = uuid4().hex
 
         def context(name):
             p = PrincipalRef("auth", tenant, name)
             return ExecutionContext(p, p, p, "session-" + name, "agent", (p,))
 
-        a, b = context("alpha"), context("bravo")
+        self.temp, self.denied, self.runtime, self.context = temp, denied, runtime, context
+        return provider, broker, task
+
+    async def call(self, ctx, name, **args):
+        tool = next(t for t in await self.runtime.capabilities.discover(ctx) if t.name == name)
+        result = await self.runtime.capabilities.call_tool(tool.tool_ref, args, ctx)
+        self.assertFalse(
+            result.get("isError"), result.get("content", [])[:1] if result.get("isError") else ""
+        )
+        return result
+
+    async def test_isolated_snapshot_review_viewer_input_and_revocation(self):
+        provider, broker, task = await self.setup_computers(300)
+        runtime = self.runtime
+        viewer = ComputerInteraction(runtime)
+        call = self.call
+        a, b = self.context("alpha"), self.context("bravo")
         allocations = [ComputerAllocation.for_context(c, task) for c in (a, b)]
         for alloc in allocations:
             self.addAsyncCleanup(provider.suspend, alloc)
         machines = await asyncio.gather(*(broker.provision(c, task) for c in (a, b)))
         self.assertNotEqual(*machines)
         leases = await asyncio.gather(*(broker.attach(c, task) for c in (a, b)))
-
-        async def call(ctx, name, **args):
-            tool = next(t for t in await runtime.capabilities.discover(ctx) if t.name == name)
-            result = await runtime.capabilities.call_tool(tool.tool_ref, args, ctx)
-            self.assertFalse(
-                result.get("isError"), result.get("content", [])[:1] if result.get("isError") else ""
-            )
-            return result
 
         async def browser(ctx, user, *, initialize):
             page = os.environ.get("OPENAGENT_TEST_LIMA_BROWSER_PAGE")
@@ -158,3 +171,123 @@ class LimaComputers(unittest.IsolatedAsyncioTestCase):
             self.assertIn(("+" + who).encode(), patch)
             self.assertIn(b"-sealed", patch)
             self.assertIn(b"viewer-input.txt", patch)
+
+    async def test_same_owner_parallel_edits_conflict_and_expired_generation_recovers(self):
+        provider, broker, task = await self.setup_computers(20)
+        owner, outsider = self.context("owner"), self.context("outsider")
+        tasks = [task, ComputerTask(task.project, "second", task.base_version)]
+        sentinel = self.temp / "controller-private"
+        sentinel.write_text("outside every guest")
+        self.denied.add("computer.base.read")
+        with self.assertRaises(PermissionError):
+            await broker.provision(owner, task)
+        self.denied.clear()
+        for t in tasks:
+            self.addAsyncCleanup(provider.suspend, ComputerAllocation.for_context(owner, t))
+        machines = await asyncio.gather(*(broker.provision(owner, t) for t in tasks))
+        self.assertNotEqual(*machines)
+        leases = await asyncio.gather(*(broker.attach(owner, t) for t in tasks))
+        viewers = ComputerInteraction(self.runtime)
+        async with AsyncExitStack() as stack:
+            contexts = [
+                await stack.enter_async_context(broker.tools(self.runtime.capabilities, owner, lease))
+                for lease in leases
+            ]
+            with self.assertRaises(CapabilityUnavailable):
+                await stack.enter_async_context(
+                    broker.tools(self.runtime.capabilities, outsider, leases[0])
+                )
+            targets = await viewers.targets(contexts[0])
+            with self.assertRaises((PermissionError, CapabilityUnavailable)):
+                await viewers.interact(
+                    contexts[1], {"tool_ref": targets[0]["tool_ref"], "action": "get_screenshot"}
+                )
+
+            async def change(context, lease, label):
+                shell = await self.call(
+                    context,
+                    "shell_exec",
+                    command=(
+                        "test ! -e "
+                        + shlex.quote(str(sentinel))
+                        + " && test ! -r /etc/ssh/ssh_host_ed25519_key && test ! -x /mnt/lima-cidata && ! grep -Eq ' - (virtiofs|9p) ' /proc/self/mountinfo && git rev-parse HEAD^{tree}"
+                    ),
+                )
+                tree = shell["structuredContent"]["stdout"].strip()
+                self.assertRegex(tree, r"^[a-f0-9]{40,64}$")
+                await self.call(context, "write_file", path="seed.txt", content=label + "\n")
+                await self.call(context, "write_file", path=label + ".txt", content=label + "\n")
+                await broker.checkpoint(context, lease, "review")
+                return tree
+
+            base_trees = await asyncio.gather(
+                *(change(c, l, label) for c, l, label in zip(contexts, leases, ("left", "right")))
+            )
+            self.assertEqual(*base_trees)
+            for c, foreign in zip(contexts, ("right.txt", "left.txt")):
+                names = (await self.call(c, "list_directory", path="."))["structuredContent"]
+                self.assertNotIn(foreign, str(names))
+            self.denied.add("computer.base.read")
+            with self.assertRaises(PermissionError):
+                await broker.admit_target(contexts[0], leases[0].host_id, leases[0].generation)
+            self.denied.clear()
+            provider.lease_seconds = 240
+            await broker.attach(owner, tasks[1])
+            self.denied.add("computer.review")
+            with self.assertRaises(PermissionError):
+                await broker.read_checkpoint(owner, tasks[0], "review")
+            self.denied.clear()
+            with self.assertRaises(CapabilityUnavailable):
+                await broker.read_checkpoint(outsider, tasks[0], "review")
+
+            integration = self.temp / "integration"
+            integration.mkdir()
+
+            def git(*args, data=None, check=True):
+                return subprocess.run(
+                    ["git", "-c", "core.hooksPath=/dev/null", *args],
+                    cwd=integration,
+                    env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull},
+                    input=data,
+                    capture_output=True,
+                    check=check,
+                )
+
+            git("init", "-q")
+            (integration / "seed.txt").write_text("sealed\n")
+            git("add", "seed.txt")
+            self.assertEqual(git("write-tree").stdout.decode().strip(), base_trees[0])
+            checkpoints = await asyncio.gather(*(broker.read_checkpoint(owner, t, "review") for t in tasks))
+            (left, left_patch), (right, right_patch) = checkpoints
+            self.assertEqual(left["base_commit"], right["base_commit"])
+            for patch in (left_patch, right_patch):
+                git("apply", "--index", "--check", "-", data=patch)
+            git("apply", "--index", "-", data=left_patch)
+            self.assertEqual(git("write-tree").stdout.decode().strip(), left["tree"])
+            conflict = git("apply", "--index", "--check", "-", data=right_patch, check=False)
+            self.assertNotEqual(conflict.returncode, 0)
+            self.assertIn(b"seed.txt", conflict.stderr)
+            self.assertEqual(git("write-tree").stdout.decode().strip(), left["tree"])
+            self.assertFalse((integration / "right.txt").exists())
+
+            row = await broker._row(leases[0].allocation)
+            await asyncio.sleep(max(0, row["expires_at"] - time.time()) + 0.05)
+            with self.assertRaises(CapabilityUnavailable):
+                await broker.admit_target(contexts[0], leases[0].host_id, leases[0].generation)
+            later = replace(owner, session_id="another-verified-conversation")
+            restored, duplicate = await asyncio.gather(
+                broker.attach(later, tasks[0]), broker.attach(owner, tasks[0])
+            )
+            self.assertEqual(restored, duplicate)
+            self.assertEqual(restored.machine_id, leases[0].machine_id)
+            self.assertGreater(restored.generation, leases[0].generation)
+            with self.assertRaises(CapabilityUnavailable):
+                await broker.admit_target(contexts[0], leases[0].host_id, leases[0].generation)
+            recovered = await stack.enter_async_context(
+                broker.tools(self.runtime.capabilities, later, restored)
+            )
+            for ctx, label in ((recovered, "left"), (contexts[1], "right")):
+                self.assertEqual(
+                    (await self.call(ctx, "read_text_file", path="seed.txt"))["content"][0]["text"],
+                    label + "\n",
+                )

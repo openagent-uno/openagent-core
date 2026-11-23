@@ -149,7 +149,11 @@ each allocation. A private Lima home holds the guest disks, reservations,
 host-key pins, generation counters and review artifacts. Point an API worker
 at the provider on the machine that owns that storage. Multiple independent
 Lima homes represent separate providers. The adapter requires POSIX file locks,
-Lima, OpenSSH and PyYAML on the controller.
+Lima, OpenSSH and PyYAML on the controller. Lima uses QEMU on Linux and can use
+Virtualization.framework on macOS. Prepare a sealed image on the intended
+hypervisor and architecture. A VZ base image and qualification on macOS do
+not establish KVM availability, network policy or performance on a particular
+Linux cloud host. [Lima QEMU driver](https://lima-vm.io/docs/config/vmtype/qemu/)
 
 Register approved `(project, base_version)` pairs with a sealed base instance
 and its full Git commit hash. Set up a nonprivileged `oawork` account, a Git
@@ -178,6 +182,12 @@ the base. Use a dedicated hypervisor network for infrastructure-level filtering.
 
 A heartbeat verifies the host key and the guest boot ID. Reattachment after
 shutdown advances the persistent generation while preserving the task disk.
+A timely heartbeat keeps the current registration. When the lease has already
+expired, the broker atomically fences that registration. Providers may implement
+`reconnect(allocation, machine_id, stale_generation)` to reconstruct the exact
+device connection. Lima restarts the same VM if its expired boot is still
+running. Concurrent reattachments converge on one new boot. Providers that
+receive registrations from a device wait for a fresh attested generation.
 Each control channel checks the guest boot ID as it connects. All RPCs for the
 allocation and lease epoch use that pinned, multiplexed channel, including
 concurrent foreground and background requests. The host-tools broker holds
@@ -186,6 +196,12 @@ The controller derives the browser account, network and profile scope from
 the authenticated owner, tenant and assignment. Reattachment opens the
 same private browser profile on disk. A new browser process may allocate
 new tab IDs. Discover its tabs again after reattachment.
+
+For a personal computer, the host uses a stable project/task pair for each
+verified owner and immutable base version. The same owner can resume it in a
+later conversation. A different task ID gets a separate writable disk even
+for that owner. Two tasks can read the same sealed base. Bringing work back to
+a shared project requires an authorized review of its checkpoint.
 
 Route calls for an active allocation to its owning controller. A host-local
 lock rejects a second controller while the first still has a live channel.
@@ -204,7 +220,21 @@ including untracked additions and tracked deletions, through a temporary Git
 index. `broker.read_checkpoint(context, task, request_id)` checks the host's
 `computer.review` and base-version permissions before returning the saved
 receipt and patch. Checkpoint creation needs `computer.checkpoint`. Applying a
-reviewed patch to a project remains an explicit host operation.
+reviewed patch to a project remains an explicit host operation. Recheck the
+current project revision and permissions when integrating. The acceptance
+suite validates that two overlapping changes each apply against the approved
+base and that Git rejects the second patch against the first result. It
+verifies the selected tree stays unchanged on conflict.
+
+For provider qualification, point `OPENAGENT_TEST_LIMA_HOME` at a private Lima
+home and set `OPENAGENT_TEST_LIMA_BASE` and `OPENAGENT_TEST_LIMA_COMMIT`.
+The test project must contain one committed `seed.txt` with contents
+`sealed\n`. Provide a focused test terminal that writes its input lines to
+`viewer-input.txt`. To exercise Chromium, set
+`OPENAGENT_TEST_LIMA_BROWSER_PAGE` to a controlled guest-reachable fixture
+that sets a persistent `workspace` cookie from `?owner=` and displays
+`Session workspace=<value>`. Run `pytest tests/public/test_lima_task_computers.py`
+on the target hypervisor. The suite powers down its private test allocations.
 
 Release cohort: `1.1.0b48`. The public contract suite passed 720 tests and
 97 subtests (two optional tests skipped). Package publication, host deployment

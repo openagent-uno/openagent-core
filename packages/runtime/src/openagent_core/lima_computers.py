@@ -281,7 +281,30 @@ if [ -s /run/sshd.pid ]; then kill -HUP "$(cat /run/sshd.pid)"; fi
                 await self._pin(directory, name)
             return name
 
+    async def _boot(self, key):
+        return str(
+            UUID(
+                (
+                    await self._ssh(
+                        key,
+                        "sudo -n nft list table inet oa_task_egress >/dev/null && "
+                        "cat /proc/sys/kernel/random/boot_id",
+                        limit=128,
+                    )
+                )
+                .decode()
+                .strip()
+            )
+        )
+
     async def connection(self, allocation, machine_id):
+        return await self._connect(allocation, machine_id, stale_generation=None)
+
+    async def reconnect(self, allocation, machine_id, stale_generation):
+        """Reestablish the exact enrollment after its old generation was fenced."""
+        return await self._connect(allocation, machine_id, stale_generation=stale_generation)
+
+    async def _connect(self, allocation, machine_id, *, stale_generation):
         key = allocation.key
         if self._machine(key) != machine_id:
             raise CapabilityUnavailable("Incorrect VM enrollment")
@@ -293,20 +316,20 @@ if [ -s /run/sshd.pid ]; then kill -HUP "$(cat /run/sshd.pid)"; fi
                 await self._lima("start", machine_id)
             elif status != "Running":
                 raise CapabilityUnavailable("VM is not ready")
-            boot = str(
-                UUID(
-                    (
-                        await self._ssh(
-                            key,
-                            "sudo -n nft list table inet oa_task_egress >/dev/null && "
-                            "cat /proc/sys/kernel/random/boot_id",
-                            limit=128,
-                        )
-                    )
-                    .decode()
-                    .strip()
-                )
-            )
+            boot = await self._boot(key)
+            path = directory / "generation.json"
+            prior = json.loads(path.read_bytes()) if path.exists() else {"boot": None, "generation": 0}
+            if stale_generation == prior["generation"] and boot == prior["boot"]:
+                # Kill effects from the expired generation even if the guest is
+                # still online. Disk and enrollment remain the same. After a
+                # crash, the distinct boot ID makes a redelivered rotation safe.
+                if channel := self._channels.get(key):
+                    await channel.close()
+                await self._lima("stop", machine_id)
+                await self._lima("start", machine_id)
+                boot = await self._boot(key)
+                if boot == prior["boot"]:
+                    raise CapabilityUnavailable("The expired generation is still running")
             if not (directory / "verified-base").exists():
                 expected = json.loads((directory / "reservation.json").read_bytes())["commit"]
                 observed = await self._ssh(
@@ -315,8 +338,6 @@ if [ -s /run/sshd.pid ]; then kill -HUP "$(cat /run/sshd.pid)"; fi
                 if observed.decode().strip() != expected:
                     raise CapabilityUnavailable("The cloned workspace does not contain the approved base")
                 _save(directory / "verified-base", expected.encode())
-            path = directory / "generation.json"
-            prior = json.loads(path.read_bytes()) if path.exists() else {"boot": None, "generation": 0}
             if prior["boot"] != boot:
                 prior = {"boot": boot, "generation": prior["generation"] + 1}
                 _save(path, canonical_json(prior).encode())
