@@ -98,6 +98,33 @@ class AppModelContextTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises((PermissionError,LookupError,RuntimeError)):
             await self.apps.request(opened['handle'],'authorize',{},self.context)
 
+    async def test_open_view_rechecks_its_saved_call_for_cached_results_heartbeat_and_model_context(self):
+        class Reader:
+            available = True
+
+            async def authorize(self, _context):
+                if not self.available:
+                    raise PermissionError("Saved source is unavailable")
+
+            async def __call__(self, context):
+                await self.authorize(context)
+                return {"toolResult": {"content": []}}
+
+        reader = Reader()
+        opened = await self.apps.open(self.tool.tool_ref, self.context, display_reader=reader)
+        handle = opened["handle"]
+        payload = {"structuredContent": {"fixture": "derived model context"}}
+        await self.apps.request(handle, "ui/update-model-context", payload, self.context, request_id="state")
+        self.assertIn("derived model context", str(await self.apps.prompt_context(self.context)))
+        args = {"name": "increment", "arguments": {}}
+        await self.apps.request(handle, "tools/call", args, self.context, request_id="cached")
+        reader.available = False
+        with self.assertRaises(PermissionError):
+            await self.apps.request(handle, "authorize", {"display_received": True}, self.context)
+        with self.assertRaises(PermissionError):
+            await self.apps.request(handle, "tools/call", args, self.context, request_id="cached")
+        self.assertNotIn("derived model context", str(await self.apps.prompt_context(self.context)))
+
     async def test_original_display_reader_is_bounded_and_source_rechecked(self):
         async def oversized(_context):return {'toolResult':{'data':'x'*(8*1024*1024)}}
         before=len(self.apps.sessions)

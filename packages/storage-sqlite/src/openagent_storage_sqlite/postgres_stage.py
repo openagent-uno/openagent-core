@@ -16,8 +16,8 @@ from struct import pack
 import psycopg
 from psycopg import sql
 
-from .migration import MANIFEST, _digest, _relative, verify_snapshot
-from .preflight import _inspect_verified_source
+from .migration import MANIFEST, _digest, _relative, _tenant_selection, verify_snapshot
+from .preflight import _inspect_verified_source, _tenant_cli, _vault_options
 
 # The storage domains carried by this transfer. Product secrets and source-specific
 # tables outside these domains require their own custody/migration plan.
@@ -148,8 +148,8 @@ def _transfer_collection(pg, name, source, verify):
     return total, digest.hexdigest()
 
 
-def transfer_history(snapshot, database, vault, *, expected_tenant, dsn, schema,
-                     verify_only=False, require_git_history=True):
+def transfer_history(snapshot, database, vault, *, expected_tenant=None, expected_tenants=None, dsn, schema,
+                     verify_only=False, require_git_history=True, history_only=False):
     """Transfer and compare every included record in a sealed host-owned snapshot.
 
     Re-running on the same source resumes by part; existing parts are compared
@@ -158,10 +158,11 @@ def transfer_history(snapshot, database, vault, *, expected_tenant, dsn, schema,
     root = Path(snapshot).resolve()
     manifest_digest = _digest(root / MANIFEST)
     manifest = verify_snapshot(root)
-    report = _inspect_verified_source(root, database, vault, expected_tenant, require_git_history,
-                                      manifest, manifest_digest)
-    identity = json.dumps([1, report["snapshot_manifest_sha256"], str(_relative(database)),
-                           str(_relative(vault)), expected_tenant], separators=(",", ":"))
+    selected = _tenant_selection(expected_tenant, expected_tenants)
+    report = _inspect_verified_source(root, database, vault, selected, require_git_history,
+                                      manifest, manifest_digest, history_only=history_only)
+    identity = json.dumps([2 if history_only or expected_tenants is not None else 1, report["snapshot_manifest_sha256"], str(_relative(database)),
+                           str(_relative(vault)), selected], separators=(",", ":"))
     database_path = root / _relative(database)
     with closing(sqlite3.connect(database_path.as_uri() + "?mode=ro&immutable=1", uri=True)) as db, \
             psycopg.connect(dsn, autocommit=True) as pg:
@@ -210,6 +211,7 @@ def transfer_history(snapshot, database, vault, *, expected_tenant, dsn, schema,
         if actual != collections:
             raise StageMismatch("Destination contains unexpected collections")
     return {"format": 1, "source_manifest_sha256": report["snapshot_manifest_sha256"],
+            **({"vault_status": "absent"} if history_only else {}),
             "source_database_sha256": report["database_sha256"],
             "verified_rows": stats, "verified_artifact_blobs": artifacts,
             "unavailable_artifact_references": missing, "source_issues": report["issues"],
@@ -222,18 +224,18 @@ def main(argv=None):
     parser.add_argument("snapshot")
     parser.add_argument("--database", required=True)
     parser.add_argument("--vault", required=True)
-    parser.add_argument("--expected-tenant", required=True)
+    parser.add_argument("--expected-tenant", required=True, action="append")
     parser.add_argument("--schema", required=True)
     parser.add_argument("--verify-only", action="store_true")
-    parser.add_argument("--allow-unversioned-vault", action="store_true")
+    _vault_options(parser)
     args = parser.parse_args(argv)
     dsn = os.environ.get("OPENAGENT_MIGRATION_POSTGRES_DSN")
     if not dsn:
         parser.error("Set OPENAGENT_MIGRATION_POSTGRES_DSN for a private destination")
     try:
-        result = transfer_history(args.snapshot, args.database, args.vault, expected_tenant=args.expected_tenant,
+        result = transfer_history(args.snapshot, args.database, args.vault, **_tenant_cli(args.expected_tenant),
                                   schema=args.schema, dsn=dsn, verify_only=args.verify_only,
-                                  require_git_history=not args.allow_unversioned_vault)
+                                  require_git_history=not args.allow_unversioned_vault, history_only=args.history_only)
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error, psycopg.Error, subprocess.SubprocessError):
         print(json.dumps({"error": "history_transfer_rejected"}))
         return 2

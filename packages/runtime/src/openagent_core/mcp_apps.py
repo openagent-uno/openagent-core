@@ -32,12 +32,14 @@ def current_application_context() -> Mapping[str, Any]:
     return copy.deepcopy(dict(_app_prompt_context.get()))
 
 
-async def saved_invocation_display(store, authorizer, context, selector, tool_ref, *, runtime=None):
-    """Read only the original invocation in the currently authorized session."""
+async def _read_saved_invocation(store, authorizer, context, selector, tool_ref, *, runtime, binding_only):
+    """Read an exact authorized invocation or only its binding for an open view."""
     from .dream_evidence import dream_run_id
     if dream_run_id(context.session_id):
         raise PermissionError("Maintenance sessions have no application surface")
     read = getattr(store, "read_tool_invocation", None)
+    if binding_only:
+        read = getattr(store, "read_tool_invocation_binding", read)
     if not callable(read):
         raise CapabilityUnavailable("Saved invocation unavailable")
     resource = ResourceRef("session", context.tenant_id, context.session_id)
@@ -56,6 +58,32 @@ async def saved_invocation_display(store, authorizer, context, selector, tool_re
             await authorize_document_history(runtime, context, **selector)
         elif await lookup(context, **selector):
             raise PermissionError("Document-dependent tool results require their authorized runtime")
+    return invocation
+
+
+@dataclass(frozen=True)
+class SavedInvocationReader:
+    """A host-bound original call whose lifetime follows its current sources."""
+
+    store: Any
+    authorizer: Any
+    selector: str
+    tool_ref: str
+    runtime: Any = None
+
+    async def authorize(self, context):
+        await _read_saved_invocation(self.store, self.authorizer, context, self.selector,
+            self.tool_ref, runtime=self.runtime, binding_only=True)
+
+    async def __call__(self, context):
+        return await saved_invocation_display(self.store, self.authorizer, context,
+            self.selector, self.tool_ref, runtime=self.runtime)
+
+
+async def saved_invocation_display(store, authorizer, context, selector, tool_ref, *, runtime=None):
+    """Read only the original invocation in the currently authorized session."""
+    invocation = await _read_saved_invocation(store, authorizer, context, selector,
+        tool_ref, runtime=runtime, binding_only=False)
     result = {"toolInput": invocation["arguments"], "toolStatus": invocation.get("status")}
     error = invocation.get("error")
     if invocation.get("status") in {"cancelled", "canceled"} or isinstance(error, Mapping) and error.get("error_type") == "CancelledError":
@@ -181,6 +209,11 @@ class McpAppService:
         await require_authorized(self.catalog.authorizer, context, "tool.call",
             ResourceRef("tool", context.tenant_id, descriptor.source_id + "/" + descriptor.name),
             audience=context.audience)
+        if session.display_reader is not None:
+            # Revalidate even for acknowledged displays, cached retries and
+            # model context. Hosts with a scoped identity-only lookup can
+            # avoid loading the original tool payload for these checks.
+            await getattr(session.display_reader, "authorize", session.display_reader)(context)
         if self._closed or self.sessions.get(handle) is not session or session.expires <= time.monotonic():
             raise CapabilityUnavailable("MCP App session expired or was revoked")
         return session
@@ -218,6 +251,7 @@ class McpAppService:
                 current = await self.catalog.describe_tool(tool_ref, context)
                 if current.source_id != descriptor.source_id:
                     raise CapabilityUnavailable("MCP App source changed")
+                await getattr(display_reader, "authorize", display_reader)(context)
                 if self._closed:
                     raise CapabilityUnavailable("MCP App service was shut down")
             size = 0
@@ -385,7 +419,7 @@ class McpAppService:
             try:
                 async with asyncio.timeout(remaining):
                     await self._resolve(handle, context)
-            except (PermissionError, CapabilityUnavailable, TimeoutError):
+            except (PermissionError, LookupError, CapabilityUnavailable, TimeoutError):
                 unavailable += 1
                 continue
             row = {"source_id": session.source_id, "tool_ref": session.tool_ref,

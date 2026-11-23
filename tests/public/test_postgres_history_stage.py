@@ -35,7 +35,7 @@ class PostgresStage(unittest.IsolatedAsyncioTestCase):
         vault.mkdir(parents=True)
         (vault / "private.md").write_text("private fixture")
         self.database = self.source / "state.sqlite"
-        store = SqliteRuntimeStore(self.database)
+        store = self.store = SqliteRuntimeStore(self.database)
         await store.start()
         self.addAsyncCleanup(store.close)
         actor = PrincipalRef("authority", "tenant", "owner")
@@ -96,6 +96,32 @@ class PostgresStage(unittest.IsolatedAsyncioTestCase):
             self.transfer(True)
         with self.assertRaisesRegex(self.module.StageMismatch, "payload differs"):
             self.transfer(False)
+
+    async def test_exact_tenant_stage_repeats_and_refuses_partial_or_foreign_inventory(self):
+        actor = PrincipalRef("authority", "second", "person")
+        store = self.store
+        ctx = ExecutionContext(actor, actor, actor, "second-session", "agent", (actor,))
+        await store.accept(RunRequest("second-run", "second-session", "key", "question"), ctx)
+        await store.transition("second-run", "running")
+        await store.transition("second-run", "success", output="answer")
+        @asynccontextmanager
+        async def fence():
+            yield "owner-inventory-fence"
+        async def idle(_):
+            return None
+        tenants = ["tenant", "second"]
+        await prepare_migration(self.source, self.snapshot, self.candidate, databases=("state.sqlite",),
+                                quiesce=fence, migrate=idle, expected_tenants_by_database={"state.sqlite": tenants})
+        kwargs = dict(dsn=self.dsn, schema=self.schema, require_git_history=False)
+        def transfer(**args):
+            return self.module.transfer_history(self.snapshot, "state.sqlite", "memories", **kwargs, **args)
+        report = transfer(expected_tenants=tenants)
+        self.assertEqual(report["verified_rows"]["session_runs"], 2)
+        self.assertEqual(report, transfer(expected_tenants=list(reversed(tenants)), verify_only=True))
+        self.assertEqual(report, transfer(expected_tenants=tenants))
+        for other in ({"expected_tenants": ("tenant", "foreign")}, {"expected_tenant": "tenant"}):
+            with self.assertRaises(PermissionError):
+                transfer(**other)
 
     async def test_available_missing_cas_refuses_parity(self):
         self.cas_path.unlink()

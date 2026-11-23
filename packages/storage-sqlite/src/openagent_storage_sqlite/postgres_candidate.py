@@ -21,8 +21,9 @@ from psycopg.types.json import Jsonb
 
 from openagent_core.contracts import ExecutionContext, PrincipalRef, TERMINAL_STATUSES, canonical_json
 from . import SqliteRuntimeStore
-from .migration import _digest, _relative
+from .migration import _digest, _relative, _tenant_selection
 from .postgres_stage import StageMismatch, transfer_history
+from .preflight import _tenant_cli, _vault_options
 
 
 # These columns describe the public runtime's relational projection. The source
@@ -248,17 +249,19 @@ def _schema(pg, name, receipt, verify_only):
     return fresh
 
 
-def build_runtime_candidate(snapshot, database, vault, *, expected_tenant, agent_id, dsn, stage_schema,
-                            candidate_schema, verify_only=False, require_git_history=True):
+def build_runtime_candidate(snapshot, database, vault, *, expected_tenant=None, expected_tenants=None, agent_id, dsn, stage_schema,
+                            candidate_schema, verify_only=False, require_git_history=True, history_only=False):
     """Build or independently re-read an atomic candidate, without runtime admission or cutover."""
     if not isinstance(agent_id, str) or not agent_id.strip():
         raise ValueError("An exact agent ID is required")
-    staged = transfer_history(snapshot, database, vault, expected_tenant=expected_tenant, dsn=dsn,
-                              schema=stage_schema, verify_only=True, require_git_history=require_git_history)
+    selected = _tenant_selection(expected_tenant, expected_tenants)
+    staged = transfer_history(snapshot, database, vault, expected_tenant=expected_tenant, expected_tenants=expected_tenants, dsn=dsn,
+                              schema=stage_schema, verify_only=True, require_git_history=require_git_history,
+                              history_only=history_only)
     if staged["source_issues"]:
         raise StageMismatch("Source inventory has unresolved issues")
     digest = staged["source_manifest_sha256"]
-    receipt = canonical_json([1, digest, database, vault, expected_tenant, agent_id, stage_schema])
+    receipt = canonical_json([2 if history_only or expected_tenants is not None else 1, digest, database, vault, selected, agent_id, stage_schema])
     source = Path(snapshot).resolve() / _relative(database)
     with closing(sqlite3.connect(source.as_uri() + "?mode=ro&immutable=1", uri=True)) as db, psycopg.connect(dsn) as pg:
         db.row_factory = sqlite3.Row
@@ -270,8 +273,8 @@ def build_runtime_candidate(snapshot, database, vault, *, expected_tenant, agent
         counts = {}
         for table, generate in sources.items():
             if fresh:
-                _compare(pg, table, generate(db, agent_id, expected_tenant), True)
-            counts[table] = _compare(pg, table, generate(db, agent_id, expected_tenant), False)
+                _compare(pg, table, generate(db, agent_id, selected), True)
+            counts[table] = _compare(pg, table, generate(db, agent_id, selected), False)
         highwater = db.execute("SELECT seq FROM sqlite_sequence WHERE name='domain_events'").fetchone()
         last_event = highwater[0] if highwater else 0
         if fresh:
@@ -284,17 +287,20 @@ def build_runtime_candidate(snapshot, database, vault, *, expected_tenant, agent
         if _digest(source) != staged["source_database_sha256"]:
             raise StageMismatch("Source file changed during projection")
     return {"format": 1, "scope": "private_terminal_runtime_candidate", "verified_rows": counts,
+            **({"vault_status": "absent"} if history_only else {}),
             "source_manifest_sha256": digest, "runtime_activated": False}
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("snapshot")
-    for key in ("database", "vault", "expected-tenant", "agent-id", "stage-schema", "candidate-schema"):
+    parser.add_argument("--expected-tenant", required=True, action="append")
+    for key in ("database", "vault", "agent-id", "stage-schema", "candidate-schema"):
         parser.add_argument("--" + key, required=True)
     parser.add_argument("--verify-only", action="store_true")
-    parser.add_argument("--allow-unversioned-vault", action="store_true")
+    _vault_options(parser)
     args = vars(parser.parse_args(argv))
+    args.update(_tenant_cli(args.pop("expected_tenant")))
     dsn = os.environ.get("OPENAGENT_MIGRATION_POSTGRES_DSN")
     if not dsn:
         parser.error("Set OPENAGENT_MIGRATION_POSTGRES_DSN for a private destination")

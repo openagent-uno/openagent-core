@@ -149,7 +149,7 @@ A source with document-derived session output carries opaque per-run tokens boun
 
 ### Private PostgreSQL runtime candidate
 
-After staging, the optional native projection creates a fresh, owner-only schema for a single agent and tenant. Install the SQLite migration extra and the matching PostgreSQL storage adapter. Keep runtime workers disconnected while materializing or verifying the candidate.
+After staging, the optional native projection creates a fresh, owner-only schema for one agent and the exact sealed set of tenants. Install the SQLite migration extra and the matching PostgreSQL storage adapter. Keep runtime workers disconnected while materializing or verifying the candidate.
 
 ```sh
 python -m openagent_storage_sqlite.postgres_candidate "$SEALED_SNAPSHOT" \
@@ -163,3 +163,56 @@ The candidate name must begin with `oa_candidate_`. Supply the PostgreSQL DSN vi
 This projection handles private, active, owner-only root chats and their terminal text runs. It keeps the authenticated author and tenant, session and message IDs, per-session message sequence, request fingerprint, admission context, event cursors, run output and activity timestamps. Legacy sessions, tombstones, quarantines, shared audiences, attachments, child sessions, continuations and reservations require additional runtime mappings. A source with these records remains recoverable in the private history stage. Native candidate creation fails atomically. Validate memory, artifact serving, retained private domains, effects and rollback independently before choosing a live target.
 
 Completed private tool calls keep their original invocation UUID, call ID, provider alias, arguments, outcome and message anchor. The native reader checks the admitted run audience and session on every lookup. Verification compares the terminal intent with its saved envelope and never executes the tool.
+### Sealing a history-only source and its tenant inventory
+
+A host whose configured file vault has never existed can declare its exact
+relative path while the writer fence is held. The source root must include all
+of the host's configured state. Declare every canonical SQLite database, including
+any independent grants database. Keep the private manifest and its SHA-256
+receipt under host custody outside the snapshot.
+
+```python
+prepared = await prepare_migration(
+    source, backup, offline_copy, databases=("state.sqlite3",),
+    absent_vault="memories", quiesce=writer_fence, migrate=offline_migration,
+)
+receipt = prepared["manifest_sha256"]
+```
+
+This writes a format 2 manifest containing the fenced absence assertion. A
+file, an empty directory, a symbolic link or a non-directory ancestor at the
+declared path fails the check. Snapshotting, staging and restoring preserve the
+absence. Existing format 1 snapshots remain valid for ordinary vault
+inventory. They cannot establish that an empty source directory was absent
+because their file manifests omit empty directories.
+
+Pass `--history-only --vault memories` to preflight, the private PostgreSQL
+stage and the offline candidate; the Python APIs accept `history_only=True`.
+Each requires the sealed path and binds the mode to its receipt. SQL-backed
+document state still requires its own migration. A host with an unversioned
+directory containing files uses `--allow-unversioned-vault`.
+
+For a source with multiple canonical runtime tenants, attest the exact list
+for each such database under the same fence. For example, set
+`expected_tenants_by_database={"state.sqlite3": [tenant_a, tenant_b]}` in
+`prepare_migration`, then repeat `--expected-tenant` for each ID on every
+inspection and transfer. Python callers pass `expected_tenants=(tenant_a, tenant_b)`.
+The source, the sealed mapping and the caller's set must agree. The manifest
+contains private tenant identifiers. Public inventory reports contain
+aggregates. Archived rows retain their original tenant IDs. Native projection
+also requires supported row types and authorization mapping. A single
+`expected_tenant` retains the historical compatibility rules.
+
+Exercise rollback before releasing the writer fence. Restore the sealed source
+to a new private directory, then verify it independently while it is offline:
+
+```python
+restore_to_new_directory(backup, rollback, expected_manifest_sha256=receipt)
+verified = verify_migration_restore(backup, rollback, expected_manifest_sha256=receipt)
+```
+
+Verification can be repeated. It checks the pinned manifest, every file's
+contents and permissions, the complete file set and any declared vault absence.
+Each restore targets a fresh directory. These operations verify state at the
+fence. After new writes on a destination, reconcile those writes, cursors,
+objects and external-effect receipts under a new fence before switching back.

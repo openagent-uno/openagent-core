@@ -50,21 +50,46 @@ class RuntimeCandidate(unittest.IsolatedAsyncioTestCase):
         with sqlite3.connect(self.path) as db:
             db.execute("UPDATE sqlite_sequence SET seq=100 WHERE name='domain_events'")
 
-    async def seal(self):
+    async def seal(self, *, history_only=False):
         @asynccontextmanager
         async def fence():
             yield "sealed"
         async def idle(_):
             pass
         await prepare_migration(self.source, self.snapshot, self.clone, databases=("state.sqlite",),
-                                quiesce=fence, migrate=idle)
+                                quiesce=fence, migrate=idle, absent_vault="notes" if history_only else None)
         self.stage.transfer_history(self.snapshot, "state.sqlite", "notes", expected_tenant="tenant",
-                                    dsn=self.dsn, schema=self.stage_schema, require_git_history=False)
+                                    dsn=self.dsn, schema=self.stage_schema, require_git_history=history_only,
+                                    history_only=history_only)
 
-    def build(self, verify=False):
+    def build(self, verify=False, *, history_only=False):
         return self.candidate.build_runtime_candidate(self.snapshot, "state.sqlite", "notes", expected_tenant="tenant",
                     agent_id="agent", dsn=self.dsn, stage_schema=self.stage_schema, candidate_schema=self.schema,
-                    verify_only=verify, require_git_history=False)
+                    verify_only=verify, require_git_history=history_only, history_only=history_only)
+
+    async def test_history_only_stage_and_native_candidate_retry_and_reader(self):
+        from openagent_storage_postgres import PostgresRuntimeStore
+        (self.source / "notes/note.md").unlink()
+        (self.source / "notes").rmdir()
+        await self.seal(history_only=True)
+        arguments = dict(expected_tenant="tenant", dsn=self.dsn, schema=self.stage_schema, history_only=True)
+        staged = self.stage.transfer_history(self.snapshot, "state.sqlite", "notes", **arguments)
+        self.assertEqual(staged["vault_status"], "absent")
+        self.assertEqual(staged, self.stage.transfer_history(self.snapshot, "state.sqlite", "notes",
+                                                              verify_only=True, **arguments))
+        report = self.build(history_only=True)
+        self.assertEqual(report["vault_status"], "absent")
+        self.assertEqual(report, self.build(history_only=True))
+        self.assertEqual(report, self.build(True, history_only=True))
+        with self.assertRaisesRegex(ValueError, "explicit selection"):
+            self.build()
+        pg = PostgresRuntimeStore(self.dsn, agent_id="agent", schema=self.schema)
+        await pg.start()
+        self.addAsyncCleanup(pg.close)
+        self.assertEqual(await pg.read_session(self.ref, self.ctx, limit=20),
+                         await self.store.read_session(self.ref, self.ctx, limit=20))
+        for root in self.source, self.snapshot, self.clone:
+            self.assertFalse((root / "notes").exists())
 
     async def test_staged_document_lifetimes_require_native_authorization_parity(self):
         db = self.store.connection
