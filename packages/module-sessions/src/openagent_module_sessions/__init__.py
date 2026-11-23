@@ -198,6 +198,51 @@ class SessionsModule:
         await self._authorized(context, "session.publish", reference)
         return response
 
+    async def browse(self, context, *, query=None, limit=20, cursor=None, include_archived=False):
+        """Return a personal page and expose only cursors following visible rows."""
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("Invalid session page size")
+        if query is not None and (not query.strip() or include_archived):
+            raise ValueError("Invalid session search")
+        selected = []
+        next_visible = None
+        while True:
+            # Once the page is full, look ahead for an authorized result.
+            # A page containing only denied rows cannot disclose a cursor.
+            size = min(100, limit - len(selected)) if len(selected) < limit else 100
+            candidates = getattr(self.store, "personal_session_page", None)
+            if candidates is not None:
+                page = await candidates(context, query=query, limit=size, cursor=cursor,
+                                        include_archived=include_archived)
+                page = await self._filter(context, "session.list" if query is None else "session.search", page)
+            elif query is None:
+                page = await self._list({"limit": size, "cursor": cursor, "include_archived": include_archived}, context)
+            else:
+                page = await self._search({"limit": size, "cursor": cursor, "query": query}, context)
+            for item in page["sessions"]:
+                try:
+                    await self._authorized(context, "session.publish", self._parse(item["session_ref"]))
+                except (PermissionError, LookupError):
+                    continue
+                if len(selected) == limit:
+                    return {"sessions": selected, "next_cursor": next_visible}
+                selected.append(item)
+            previous, cursor = cursor, page.get("next_cursor")
+            if not cursor:
+                return {"sessions": selected, "next_cursor": None}
+            if previous == cursor:
+                raise RuntimeError("Session store did not advance its cursor")
+            if len(selected) == limit and next_visible is None:
+                next_visible = cursor
+
+    async def detail(self, context, session_ref, *, limit=50, cursor=None):
+        reference = self._parse(session_ref)
+        await self._authorized(context, "session.read", reference)
+        reader = getattr(self.store, "personal_session_detail", self.store.read_session)
+        result = await reader(reference, context, limit=limit, cursor=cursor)
+        await self._authorized(context, "session.publish", reference)
+        return result
+
     async def _create(self, args: dict, context: ExecutionContext):
         agent_id = str(args.get("agent_id") or context.agent_id)
         session_id = str(uuid.uuid4())

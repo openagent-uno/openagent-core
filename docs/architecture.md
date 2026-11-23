@@ -207,6 +207,20 @@ state change in the same transaction. Agent recall and federated search consult
 the authorized document service. A local vault continues to use the files backend
 and the existing Git and quality tools.
 
+### Personal API
+
+The HTTP gateway accepts an optional `resolve_personal_context(request, catalog)`
+async context manager. Authenticate every request and yield a context for one
+principal and that same audience. Its session ID is a routing context only.
+Browsing creates no session or run. Pass `personal_prefix` to mount a custom
+route. Python and TypeScript export `PersonalClient`.
+
+* `GET /api/v1/me/sessions` lists active authorized conversations. Use `q` to
+  search, `ref` for the exact session detail and `cursor` to continue.
+* `GET /api/v1/me/memories` lists the document space selected by the host. Use
+  `q` to search, `path` to read one exact Markdown document and `cursor` to
+  continue an ordered list or search. Both catalogs support limits from 1 to 100.
+
 ## Automations
 
 The existing scheduling, timezone/DST, workflow, and delivery algorithms remain.

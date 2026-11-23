@@ -46,7 +46,7 @@ export class AcceptanceUncertain extends Error {
   }
 }
 
-export class RunClient {
+class HttpClient {
   private base: string;
   constructor(baseURL: string, private headers: () => HeadersInit | Promise<HeadersInit>,
               path = "/api/v1/runs", private timeoutMs = 10000) {
@@ -55,7 +55,7 @@ export class RunClient {
       throw new Error("An explicit HTTP service origin is required");
     this.base = baseURL.replace(/\/$/, "") + path.replace(/\/$/, "");
   }
-  private async request<T>(method: string, path = "", body?: unknown, signal?: AbortSignal): Promise<T> {
+  protected async request<T>(method: string, path = "", body?: unknown, signal?: AbortSignal): Promise<T> {
     const headers = new Headers(await this.headers());
     headers.set("Accept", "application/json");
     if (body !== undefined) headers.set("Content-Type", "application/json");
@@ -76,6 +76,49 @@ export class RunClient {
       signal?.removeEventListener("abort", abort);
     }
   }
+}
+
+export interface SessionSummary {
+  session_ref: string;
+  session_id: string;
+  title: string | null;
+  archived: boolean;
+}
+export interface MemorySummary { path: string; title: string | null; revision: number; }
+export interface CatalogOptions { query?: string; cursor?: string; limit?: number; }
+
+export class PersonalClient extends HttpClient {
+  constructor(baseURL: string, headers: () => HeadersInit | Promise<HeadersInit>,
+              path = "/api/v1/me", timeoutMs = 10000) {
+    super(baseURL, headers, path, timeoutMs);
+  }
+  private catalog<T>(resource: string, options: CatalogOptions, detail: Record<string, string>,
+                     signal?: AbortSignal): Promise<T> {
+    const params = new URLSearchParams(detail);
+    if (options.query !== undefined) params.set("q", options.query);
+    if (options.cursor !== undefined) params.set("cursor", options.cursor);
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    return this.request("GET", "/" + resource + "?" + params, undefined, signal);
+  }
+  sessions(options: CatalogOptions = {}, signal?: AbortSignal) {
+    return this.catalog<{sessions: SessionSummary[]; next_cursor: string | null}>("sessions", options, {}, signal);
+  }
+  session(ref: string, options: Omit<CatalogOptions, "query"> = {}, signal?: AbortSignal) {
+    return this.catalog<{session: SessionSummary; messages: Record<string, unknown>[]; next_cursor: string | null}>(
+      "sessions", options, {ref}, signal);
+  }
+  memories(options: Omit<CatalogOptions, "query"> = {}, signal?: AbortSignal) {
+    return this.catalog<{notes: MemorySummary[]; next_cursor: string | null}>("memories", options, {}, signal);
+  }
+  searchMemories(query: string, options: Omit<CatalogOptions, "query"> = {}, signal?: AbortSignal) {
+    return this.catalog<{hits: MemorySummary[]; next_cursor: string | null}>("memories", {...options, query}, {}, signal);
+  }
+  memory(path: string, signal?: AbortSignal) {
+    return this.catalog<MemorySummary & {content: string}>("memories", {}, {path}, signal);
+  }
+}
+
+export class RunClient extends HttpClient {
   async submit(input: RunRequest, signal?: AbortSignal): Promise<RunRecord> {
     // Snapshot the request before awaiting refreshed authentication headers.
     const snapshot = structuredClone(input);

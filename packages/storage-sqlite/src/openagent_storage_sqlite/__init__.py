@@ -640,17 +640,42 @@ class SqliteRuntimeStore:
             'created_at_ms':row['created_at_ms'],'updated_at_ms':row['updated_at_ms'],
             'last_activity_at_ms':row['last_activity_at_ms'],'archived':row['deleted_at_ms'] is not None}
 
+    @staticmethod
+    def _personal_visibility(context, permission):
+        # Match the exact verified principal. Host-specific legacy identity
+        # aliases belong in a trusted directory, never in a request parameter.
+        sql = """(s.owner_principal_id=? OR s.visibility IN ('installation_shared','public')
+            OR EXISTS (SELECT 1 FROM resource_acl a WHERE a.resource_type='session'
+                AND a.tenant_id=s.tenant_id AND a.resource_id=s.id AND a.acl_version=s.acl_version
+                AND a.permission IN (?, 'admin')
+                AND ((a.principal_type=? AND a.principal_id=?)
+                  OR (a.principal_type='installation' AND a.principal_id=s.tenant_id))))"""
+        return sql, [context.initiator.key, permission, context.initiator.kind, context.initiator.key]
+
+    async def personal_session_page(self, context, *, query, limit, cursor, include_archived):
+        if query is None:
+            return await self.list_sessions(context, include_archived=include_archived,
+                                            limit=limit, cursor=cursor, personal=True)
+        return await self.search_sessions(context, query=query, limit=limit, cursor=cursor, personal=True)
+
+    async def personal_session_detail(self, reference, context, *, limit, cursor):
+        return await self.read_session(reference, context, limit=limit, cursor=cursor, personal=True)
+
     def _list_sessions(self,context: ExecutionContext,*,include_archived: bool,limit: int,cursor: str|None=None,
-                       agent_id:str|None=None):
+                       agent_id:str|None=None,personal:bool=False):
         if agent_id is not None and agent_id != context.agent_id:
             raise PermissionError('This session store is local to one agent')
         limit=self._bounded_session_limit(limit);after=self._parse_session_cursor(cursor,length=2)
         clauses=['tenant_id=?','agent_id=?',"visibility<>'quarantined'"];params:list[Any]=[context.tenant_id,context.agent_id]
+        if personal:
+            predicate, args = self._personal_visibility(context, "view")
+            clauses.append(predicate)
+            params.extend(args)
         if not include_archived:clauses.append('deleted_at_ms IS NULL')
         if after is not None:
             clauses.append('(last_activity_at_ms < ? OR (last_activity_at_ms = ? AND id < ?))')
             params.extend([int(after[0]),int(after[0]),str(after[1])])
-        rows=self.connection.execute('SELECT * FROM sessions_v2 WHERE '+' AND '.join(clauses)+
+        rows=self.connection.execute('SELECT s.* FROM sessions_v2 s WHERE '+' AND '.join(clauses)+
             ' ORDER BY last_activity_at_ms DESC,id DESC LIMIT ?',(*params,limit+1)).fetchall()
         page=rows[:limit]
         next_cursor=(self._session_cursor([page[-1]['last_activity_at_ms'],page[-1]['id']])
@@ -659,7 +684,7 @@ class SqliteRuntimeStore:
                 'next_cursor':next_cursor}
 
     def _search_sessions(self,context: ExecutionContext,*,query: str,limit: int,cursor: str|None=None,
-                         agent_id:str|None=None):
+                         agent_id:str|None=None,personal:bool=False):
         if agent_id is not None and agent_id != context.agent_id:
             raise PermissionError('This session store is local to one agent')
         query=str(query or '').strip()
@@ -670,6 +695,10 @@ class SqliteRuntimeStore:
             "(coalesce(s.title,'') LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM session_messages m WHERE m.session_id=s.id AND m.visibility='user_visible' AND coalesce(m.text,'') LIKE ? ESCAPE '\\'))"]
         escaped=query.replace('\\','\\\\').replace('%','\\%').replace('_','\\_')
         params:list[Any]=[context.tenant_id,context.agent_id,'%'+escaped+'%','%'+escaped+'%']
+        if personal:
+            predicate, args = self._personal_visibility(context, "search")
+            clauses.append(predicate)
+            params.extend(args)
         if after is not None:
             clauses.append('(s.last_activity_at_ms < ? OR (s.last_activity_at_ms = ? AND s.id < ?))')
             params.extend([int(after[0]),int(after[0]),str(after[1])])
@@ -696,8 +725,13 @@ class SqliteRuntimeStore:
         require_session_not_quarantined(row)
         return row
 
-    def _read_session(self,reference:SessionRef,context:ExecutionContext,*,limit:int,cursor:str|None=None):
+    def _read_session(self,reference:SessionRef,context:ExecutionContext,*,limit:int,cursor:str|None=None,personal=False):
         row=self._require_local_session(reference,context);limit=self._bounded_session_limit(limit)
+        if personal:
+            predicate, args = self._personal_visibility(context, "view")
+            if self.connection.execute("SELECT 1 FROM sessions_v2 s WHERE id=? AND " + predicate,
+                                       [reference.session_id, *args]).fetchone() is None:
+                raise PermissionError("Session unavailable")
         after=self._parse_session_cursor(cursor,length=1);sequence=int(after[0]) if after else -1
         messages=self.connection.execute('''SELECT id,run_id,sequence,role,status,author_kind,author_principal_id,
             text,content_json,tool_call_id,created_at_ms FROM session_messages

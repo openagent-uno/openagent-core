@@ -1,6 +1,7 @@
 """Exercise the document vault through real runtime turns and service calls."""
 import asyncio
 import os
+from contextlib import asynccontextmanager
 import uuid
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -17,6 +18,7 @@ from openagent_core.core.agent import _with_recall
 from openagent_core.memory.vault.documents import RevisionConflict, SqlDocumentVault
 from openagent_core.modules import ServiceRegistry
 from openagent_module_vault import descriptor
+from openagent_module_sessions import descriptor as sessions_descriptor
 from openagent_storage_sqlite import SqliteRuntimeStore
 
 
@@ -68,8 +70,8 @@ class DocumentVault(unittest.IsolatedAsyncioTestCase):
                             registry=ServiceRegistry({SqlDocumentVault: self.store})),
             profile=RuntimeProfile(1, {"vault": ModuleConfig(
                 frozenset({"service", "host_api", "agent_tools"}), {"backend": "documents"}
-            )}),
-            module_catalog=ModuleCatalog((descriptor,)),
+            ), "sessions": ModuleConfig()}),
+            module_catalog=ModuleCatalog((descriptor, sessions_descriptor)),
         )
         self.addAsyncCleanup(self.runtime.close)
         await self.runtime.start()
@@ -120,6 +122,48 @@ class DocumentVault(unittest.IsolatedAsyncioTestCase):
             await write("late replay", 0)
         with self.assertRaises(LookupError):
             await self.store.read(self.a, "a.md")
+
+    async def test_authenticated_catalog_without_an_open_chat(self):
+        from aiohttp import web
+        from openagent_gateway import create_app
+        from openagent_sdk import PersonalClient, RunHTTPError
+
+        @asynccontextmanager
+        async def personal(request, resource):
+            token = request.headers.get("Authorization")
+            if token not in {"Bearer a", "Bearer b"}:
+                raise PermissionError("Unknown credential")
+            yield self.context(token[-1])
+
+        await self.turn(self.a, "remember")
+        await self.turn(self.b, "search")
+        await self.store.write(self.a, "extra.md", "Cobalt", expected_revision=0)
+        app = create_app(self.runtime, None, resolve_personal_context=personal, manage_lifecycle=False)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        self.addAsyncCleanup(runner.cleanup)
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        url = "http://127.0.0.1:" + str(runner.addresses[0][1])
+        a = PersonalClient(url, lambda: {"Authorization": "Bearer a"})
+        b = PersonalClient(url, lambda: {"Authorization": "Bearer b"})
+        page = await a.sessions()
+        self.assertEqual([s["session_id"] for s in page["sessions"]], [self.a.session_id])
+        ref = page["sessions"][0]["session_ref"]
+        self.assertTrue((await a.session(ref))["messages"])
+        with self.assertRaises(RunHTTPError) as denial:
+            await b.session(ref)
+        self.assertEqual(denial.exception.status, 403)
+        self.assertEqual((await b.memories())["notes"], [])
+        self.assertEqual((await b.memories(query="cobalt"))["hits"], [])
+        page = await a.memories(query="cobalt", limit=1)
+        self.assertEqual(page["hits"][0]["path"], "extra.md")
+        second = await a.memories(query="cobalt", cursor=page["next_cursor"], limit=1)
+        self.assertIsNone(second["next_cursor"])
+        self.assertIn("Cobalt", (await a.memory(second["hits"][0]["path"]))["content"])
+        with self.assertRaises(RunHTTPError) as missing:
+            await b.memory("extra.md")
+        self.assertEqual(missing.exception.status, 404)
 
     async def test_revocation_rolls_back_note_links_search_and_history(self):
         original = self.store.resolve_space

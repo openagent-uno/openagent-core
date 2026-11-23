@@ -10,7 +10,7 @@ import inspect
 import json
 from typing import Callable, Mapping, Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from openagent_core import RunRequest, RunRecord, RunEvent, RunEventPage, RunFinalAnswer
 
@@ -38,7 +38,7 @@ def _record(value):
     return RunRecord(**value)
 
 
-class RunClient:
+class _HTTPClient:
     def __init__(self,base_url: str,headers: Callable[[], Any],*,path='/api/v1/runs',timeout=10):
         parsed=urlsplit(base_url)
         if parsed.scheme not in {'http','https'} or not parsed.netloc or parsed.username or parsed.password:
@@ -65,6 +65,30 @@ class RunClient:
                 raise RunHTTPError(error.code) from None
         return await asyncio.to_thread(fetch)
 
+
+class PersonalClient(_HTTPClient):
+    """Read the signed-in caller's sessions and document vault."""
+    def __init__(self, base_url, headers, *, path="/api/v1/me", timeout=10):
+        super().__init__(base_url, headers, path=path, timeout=timeout)
+
+    async def _catalog(self, resource, **fields):
+        query = urlencode({key: value for key, value in fields.items() if value is not None})
+        return await self._request("GET", "/" + resource + ("?" + query if query else ""))
+
+    async def sessions(self, *, query=None, cursor=None, limit=50):
+        return await self._catalog("sessions", q=query, cursor=cursor, limit=limit)
+
+    async def session(self, session_ref, *, cursor=None, limit=50):
+        return await self._catalog("sessions", ref=session_ref, cursor=cursor, limit=limit)
+
+    async def memories(self, *, query=None, cursor=None, limit=50):
+        return await self._catalog("memories", q=query, cursor=cursor, limit=limit)
+
+    async def memory(self, path):
+        return await self._catalog("memories", path=path)
+
+
+class RunClient(_HTTPClient):
     async def submit(self,request: RunRequest) -> RunRecord:
         try:
             value=await self._request('POST',body=asdict(request))
@@ -109,4 +133,4 @@ class RunClient:
             await asyncio.sleep(interval)
 
 
-__all__=['RunClient','RunRequest','RunRecord','RunEvent','RunEventPage','RunFinalAnswer','RunHTTPError','AcceptanceUncertain']
+__all__=['PersonalClient','RunClient','RunRequest','RunRecord','RunEvent','RunEventPage','RunFinalAnswer','RunHTTPError','AcceptanceUncertain']

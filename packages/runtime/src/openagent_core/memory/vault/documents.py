@@ -135,6 +135,13 @@ class SqlDocumentVault:
                 "next_cursor": rows[limit - 1]["path"] if len(rows) > limit else None}
 
     async def search(self, context, *, query, limit=20):
+        return await self._search(context, query=query, limit=limit, paginate=False, after=None)
+
+    async def search_page(self, context, *, query, limit=20, after=None):
+        """Keyset pagination of full-text matches in stable path order."""
+        return await self._search(context, query=query, limit=limit, paginate=True, after=after)
+
+    async def _search(self, context, *, query, limit, paginate, after):
         scope = await self._scope(context, "memory.read")
         if not isinstance(query, str) or not query.strip() or len(query) > 1024:
             raise ValueError("Invalid vault search")
@@ -145,9 +152,9 @@ class SqlDocumentVault:
                 SELECT path,title,revision FROM oa_vault_notes
                 WHERE tenant=:tenant AND agent=:agent AND space=:space AND content IS NOT NULL
                 AND to_tsvector('simple',content) @@ plainto_tsquery('simple',:query)
-                ORDER BY ts_rank(to_tsvector('simple',content),plainto_tsquery('simple',:query)) DESC,path
-                LIMIT :limit
             """
+            path = "path"
+            rank = "ts_rank(to_tsvector('simple',content),plainto_tsquery('simple',:query)) DESC"
         else:
             # Treat user input as terms, independent of FTS5 query syntax.
             query = " AND ".join('"' + word.replace('"', '""') + '"' for word in query.split())
@@ -155,12 +162,22 @@ class SqlDocumentVault:
                 SELECT n.path,n.title,n.revision FROM oa_vault_search s
                 JOIN oa_vault_notes n ON n.id = s.rowid
                 WHERE oa_vault_search MATCH :query AND n.tenant=:tenant AND n.agent=:agent
-                AND n.space=:space AND n.content IS NOT NULL ORDER BY rank,n.path LIMIT :limit
+                AND n.space=:space AND n.content IS NOT NULL
             """
+            path, rank = "n.path", "rank"
+        params = {**scope, "query": query, "limit": limit + int(paginate)}
+        if after is not None:
+            params["after"] = note_path(after)
+            stmt += f" AND {path} > :after"
+        order = path if paginate else f"{rank}, {path}"
+        stmt += f" ORDER BY {order} LIMIT :limit"
         async with self.engine.connect() as con:
-            rows = (await con.execute(sa.text(stmt), {**scope, "query":query, "limit":limit})).mappings().all()
+            rows = (await con.execute(sa.text(stmt), params)).mappings().all()
         await self._recheck(context, "memory.read", scope)
-        return {"hits":[{"kind":"note", **dict(row)} for row in rows]}
+        result = {"hits": [{"kind": "note", **dict(row)} for row in rows[:limit]]}
+        if paginate:
+            result["next_cursor"] = rows[limit - 1]["path"] if len(rows) > limit else None
+        return result
 
     async def backlinks(self, context, path, *, after=None, limit=50):
         """Page distinct sources that link to this vault-relative path."""

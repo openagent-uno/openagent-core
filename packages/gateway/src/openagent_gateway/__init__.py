@@ -16,7 +16,8 @@ def _id(value):
 
 
 def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lifecycle=True,
-               prefix='/api/v1/runs', durable_operations=None):
+               prefix='/api/v1/runs', durable_operations=None, resolve_personal_context=None,
+               personal_prefix='/api/v1/me'):
     """Build routes without starting a listener or creating identities.
 
     `resolve_context(request, action, run_id, session_id)` must return an async
@@ -95,6 +96,9 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
         web.get(prefix+'/{run_id}/events',events),web.get(prefix+'/{run_id}/final-answer',final_answer),
         web.post(prefix+'/{run_id}/cancel',cancel),
         web.get(prefix+'/{run_id}/children',children)])
+    if resolve_personal_context is not None:
+        from .personal import add_personal_routes
+        add_personal_routes(app, runtime, resolve_personal_context, personal_prefix)
     if manage_lifecycle:
         async def lifecycle(app):
             await runtime.start()
