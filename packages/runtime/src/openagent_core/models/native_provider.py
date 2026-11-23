@@ -1455,7 +1455,10 @@ class NativeProvider(ProviderResources, BaseModel):
         from .connections import connection_info
         info = connection_info(self._provider_config())
         driver = info["vendor"]
+        transport = self._provider_config().get("tool_transport", "native")
         if info["access"] == "subscription":
+            if transport != "native":
+                raise ValueError("Subscription models require their native tool transport")
             return self._construct_subscription_class(), {}
         spec = RUNTIME_PROVIDER_CLASSES.get(driver or provider_name)
         if not spec:
@@ -1463,6 +1466,13 @@ class NativeProvider(ProviderResources, BaseModel):
         if not spec:
             return None, {}
         module_name, class_name, extra_kwargs = spec
+        if transport == "json_schema" and class_name == "OpenAILike":
+            from .providers.openai.schema_tools import SchemaToolChat
+            callbacks = [kit.authorized_hot_tools for kit in self._mcp_toolkits
+                         if callable(getattr(kit, "authorized_hot_tools", None))]
+            return SchemaToolChat, {**extra_kwargs, "authorized_hot_tools": callbacks[0] if len(callbacks) == 1 else None}
+        if transport != "native":
+            raise ValueError("This provider cannot use the configured tool transport")
         module = importlib.import_module(module_name)
         return getattr(module, class_name), dict(extra_kwargs)
 

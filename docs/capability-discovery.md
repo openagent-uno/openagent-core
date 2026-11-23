@@ -31,3 +31,22 @@ built-in MCP spec description.
   against name, target, description and aliases.
 - A tool search with no result returns `suggestions` (sources whose description
   matches) and a `hint` to try other words or list a source.
+
+## Compatible endpoints with JSON Schema
+
+An API-based provider using the OpenAI-compatible driver can opt in with
+`tool_transport: json_schema` when its template supports strict JSON output
+and lacks native tool calls. OpenAgent sends a schema for one action or final
+answer, validates the complete response locally, then runs the selected tool
+through the same authorization, execution and receipt path. Tool-dependent
+requests buffer one decision before publishing output. For a plain request
+without tools, the driver keeps the normal streaming response.
+
+The asynchronous gateway offers the current principal's unambiguous
+`DiscoveryPresentation.hot_tools` with their actual parameter schemas.
+Each decision is resolved to the current catalog reference. An absent,
+revoked or ambiguous tool has no shortcut. Function schemas support local
+JSON pointers. Tool results and prior assistant calls remain distinguishable
+in the text-only template. Model quality is specific to the endpoint. Qualify
+a write, an owner read after restart, cross-owner denial and recall from a
+fresh session before enabling this mode on a service.

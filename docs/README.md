@@ -25,6 +25,7 @@
   [journal/state concurrency](sqlite-commit-concurrency.md) and
   [fallback history](fallback-conversation-history.md).
 
+- [Beta159: tool decisions for JSON Schema endpoints](releases/v1.1.0-beta.159.md).
 - [Beta148: terminal provider failures and safe cooldown categories](releases/v1.1.0-beta.148.md).
 
 - [Beta147: automatic catalog recovery](releases/v1.1.0-beta.147.md).

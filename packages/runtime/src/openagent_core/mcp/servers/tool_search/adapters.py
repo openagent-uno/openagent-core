@@ -1278,6 +1278,21 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
             or pool.discovery_presentation.named_calls == "authorized"):
         tools.append(tool_search_call_named_tool)
     toolkit = Toolkit(name="tool-search", tools=tools)
+    if pool.discovery_presentation.hot_tools:
+        async def authorized_hot_tools():
+            catalog, context = _authorized_catalog(pool)
+            wanted = set(pool.discovery_presentation.hot_tools)
+            available = []
+            for descriptor in await catalog.discover(context):
+                if (descriptor.source_id, descriptor.name) not in wanted:
+                    continue
+                try:
+                    _require_server_allowed(descriptor.source_id)
+                except PermissionError:
+                    continue
+                available.append(descriptor)
+            return available
+        toolkit.authorized_hot_tools = authorized_hot_tools
     for function in _functions_dict(toolkit).values():
         function.process_entrypoint()
         description = pool.discovery_presentation.tool_descriptions.get(function.name)
