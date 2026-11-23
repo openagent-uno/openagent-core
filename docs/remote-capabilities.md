@@ -275,3 +275,46 @@ methods over HTTP should return `Cache-Control: no-store`, keep screenshot
 results out of logs, and avoid automatically retrying input after failures.
 Live media metadata is descriptive. A host with a compatible media transport
 must separately authorize and bind the exact stream.
+
+### Authenticated task viewer over HTTP
+
+Install `openagent-gateway` and pass a `ComputerViewerGateway` when constructing
+the application. The existing gateway identity resolver receives the request,
+action (`computer.viewer.targets` or `computer.viewer.interact`), `None` for
+the run ID and the requested session ID. It must yield the current human's
+verified context for that session. The task resolver translates an opaque
+product alias into an authorized `ComputerTask`. Return `None` or raise
+`LookupError` for an unavailable assignment. The broker checks the
+authenticated owner, project/base permissions and current lease. Direct
+screenshot capture requires `computer.viewer.capture`. Keyboard and pointer
+input require `computer.viewer.input`. The broker rechecks these host grants
+before dispatch and before publishing the result. The host
+provisions and attaches the task before the viewer opens it.
+
+```python
+from openagent_gateway import ComputerViewerGateway, create_app
+
+async def resolve_task(request, context, computer_id):
+    return await projects.authorized_computer_task(context, computer_id)
+
+app = create_app(runtime, resolve_context, computer_viewer=ComputerViewerGateway(broker, resolve_task))
+```
+
+For `/api/v1/sessions/{session_id}/computers/{computer_id}`:
+
+| Request | Response |
+| --- | --- |
+| `GET /targets` | JSON with positive integer `epoch` and `generation`, plus `targets` entries containing `target_id`, `label` and optional live-media metadata in `live_media`. |
+| `POST /interact` | Send the returned `epoch`, `generation`, `target_id` and `action`. Include `coordinate` or `text` when required by the action. Returns the MCP result, including image content for `get_screenshot`. |
+
+A client can reuse a target across HTTP requests and gateway workers that
+share broker state and route transport to the owning controller. Each
+request resolves a fresh ToolRef against the same device, registration, tool
+catalog and verified session. A changed epoch or generation yields 409. An
+unavailable or replaced target yields 404, denied authorization yields 403 and
+invalid input yields 400. Refresh the target list after a 409. Screenshots and
+input responses use `Cache-Control: no-store`. An ambiguous input outcome
+requires checking the desktop before issuing another input. The routes do
+not start or renew a machine. The optional `prefix` argument selects a
+different session-route prefix, and omitting `computer_viewer` leaves the
+routes unregistered.

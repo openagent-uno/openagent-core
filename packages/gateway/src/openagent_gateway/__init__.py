@@ -6,6 +6,7 @@ from aiohttp import web
 from openagent_core import RunEventPage, RunRequest, IdempotencyConflict
 from openagent_core.contracts import AdmissionCapacityExceeded
 from .compression import json_compression
+from .computers import ComputerViewerGateway
 
 _REQUEST_FIELDS={'run_id','session_id','idempotency_key','input','deadline_seconds','model_ref','attachments','steer_run_id'}
 
@@ -18,7 +19,7 @@ def _id(value):
 
 def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lifecycle=True,
                prefix='/api/v1/runs', durable_operations=None, resolve_personal_context=None,
-               personal_prefix='/api/v1/me', resolve_artifact_context=None):
+               personal_prefix='/api/v1/me', resolve_artifact_context=None, computer_viewer=None):
     """Build routes without starting a listener or creating identities.
 
     `resolve_context(request, action, run_id, session_id)` must return an async
@@ -111,6 +112,8 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
             try: yield
             finally: await runtime.close()
         app.cleanup_ctx.append(lifecycle)
+    if computer_viewer is not None:
+        computer_viewer.install(app, runtime, resolve_context)
     return app
 
-__all__=['create_app','json_compression']
+__all__=['ComputerViewerGateway','create_app','json_compression']

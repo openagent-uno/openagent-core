@@ -88,6 +88,10 @@ class ComputerInteraction:
         session = ResourceRef("session", context.tenant_id, context.session_id)
         await self._runtime.authorize(context, action, session, audience=context.audience)
 
+    async def authorize_access(self, context: ExecutionContext, *, interactive: bool) -> None:
+        """Check the current human viewer before resolving an external target assignment."""
+        await self._authorize(context, "run.execute" if interactive else "run.read")
+
     async def targets(self, context: ExecutionContext, *, source_id: str | None = None) -> list[ComputerTarget]:
         """Discover only current, app-visible desktops authorized for this session."""
         await self._authorize(context, "run.read")

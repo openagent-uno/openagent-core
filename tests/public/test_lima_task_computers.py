@@ -3,7 +3,7 @@
 import asyncio
 import base64
 import json
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
 import os
 import shlex
@@ -73,7 +73,6 @@ class LimaComputers(unittest.IsolatedAsyncioTestCase):
     async def test_isolated_snapshot_review_viewer_input_and_revocation(self):
         provider, broker, task = await self.setup_computers(300)
         runtime = self.runtime
-        viewer = ComputerInteraction(runtime)
         call = self.call
         a, b = self.context("alpha"), self.context("bravo")
         allocations = [ComputerAllocation.for_context(c, task) for c in (a, b)]
@@ -82,6 +81,55 @@ class LimaComputers(unittest.IsolatedAsyncioTestCase):
         machines = await asyncio.gather(*(broker.provision(c, task) for c in (a, b)))
         self.assertNotEqual(*machines)
         leases = await asyncio.gather(*(broker.attach(c, task) for c in (a, b)))
+
+        # Separate human browser sessions keep HTTP mounts short-lived, so each
+        # request must rediscover the same remote tool after the last mount closed.
+        from aiohttp.test_utils import TestClient, TestServer
+        from openagent_gateway import ComputerViewerGateway, create_app
+
+        sessions = {
+            p.initiator.subject_id: replace(p, session_id="viewer-" + p.initiator.subject_id)
+            for p in (a, b)
+        }
+
+        @asynccontextmanager
+        async def identity(request, action, run_id, session):
+            user = request.headers.get("Authorization", "").removeprefix("Bearer ")
+            if user not in sessions or sessions[user].session_id != session:
+                raise PermissionError("Unverified viewer")
+            yield sessions[user]
+
+        async def resolve(request, context, alias):
+            if alias != "workspace":
+                raise LookupError(alias)
+            return task
+
+        client = TestClient(
+            TestServer(
+                create_app(
+                    runtime,
+                    identity,
+                    manage_lifecycle=False,
+                    computer_viewer=ComputerViewerGateway(broker, resolve),
+                )
+            )
+        )
+        await client.start_server()
+        self.addAsyncCleanup(client.close)
+        handles = {}
+
+        def path(user):
+            return "/api/v1/sessions/" + sessions[user].session_id + "/computers/workspace"
+
+        def auth(user):
+            return {"Authorization": "Bearer " + user}
+
+        async def post(user, handle, action, **parameters):
+            return await client.post(
+                path(user) + "/interact",
+                headers=auth(user),
+                json={**handle, "action": action, **parameters},
+            )
 
         async def browser(ctx, user, *, initialize):
             page = os.environ.get("OPENAGENT_TEST_LIMA_BROWSER_PAGE")
@@ -104,14 +152,20 @@ class LimaComputers(unittest.IsolatedAsyncioTestCase):
             uid, identity = process["structuredContent"]["stdout"].splitlines()
             self.assertNotEqual(uid, "0")
             self.assertEqual(identity, user)
-            (target,) = await viewer.targets(ctx)
+            async with client.get(path(user) + "/targets", headers=auth(user)) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+                available = await response.json()
+            (desktop,) = available["targets"]
+            handle = {key: available[key] for key in ("epoch", "generation")}
+            handles[user] = handle = {**handle, "target_id": desktop["target_id"]}
 
             async def interact(action, **parameters):
-                result = await viewer.interact(
-                    ctx, {"tool_ref": target["tool_ref"], "action": action, **parameters}
-                )
-                self.assertFalse(result.get("isError"))
-                return result
+                async with await post(user, handle, action, **parameters) as response:
+                    self.assertEqual(response.status, 200)
+                    result = await response.json()
+                    self.assertFalse(result.get("isError"))
+                    return result
 
             screen = await interact("get_screenshot")
             frame = next(block for block in screen["content"] if block["type"] == "image")
@@ -130,10 +184,24 @@ class LimaComputers(unittest.IsolatedAsyncioTestCase):
             ]
             receipts = await asyncio.gather(prove(ca, "alpha", leases[0]), prove(cb, "bravo", leases[1]))
             self.assertNotEqual(receipts[0]["sha256"], receipts[1]["sha256"])
+            self.assertNotEqual(handles["alpha"]["target_id"], handles["bravo"]["target_id"])
+            self.denied.add("computer.viewer.input")
+            async with await post("alpha", handles["alpha"], "type", text="read-only") as refused:
+                self.assertEqual(refused.status, 403)
+            async with await post("alpha", handles["alpha"], "get_screenshot") as capture:
+                self.assertEqual(capture.status, 200)
+                self.assertTrue(any(item["type"] == "image" for item in (await capture.json())["content"]))
+            self.denied.clear()
+            async with await post("bravo", handles["alpha"], "type", text="wrong") as refused:
+                self.assertEqual(refused.status, 404)
+            async with client.get(path("alpha") + "/targets", headers=auth("bravo")) as refused:
+                self.assertEqual(refused.status, 403)
             await provider.suspend(allocations[0])
             self.assertTrue(await broker.disconnected(leases[0]))
             new = await broker.attach(a, task)
             self.assertGreater(new.generation, leases[0].generation)
+            async with await post("alpha", handles["alpha"], "type", text="stale") as refused:
+                self.assertEqual(refused.status, 409)
             active = await stack.enter_async_context(broker.tools(runtime.capabilities, a, new))
             self.assertEqual(
                 (await call(active, "read_text_file", path="seed.txt"))["content"][0]["text"], "alpha"
@@ -157,6 +225,8 @@ class LimaComputers(unittest.IsolatedAsyncioTestCase):
                             break
                         await asyncio.sleep(0.2)
                 await broker.revoke(a, task)
+                async with await post("alpha", handles["alpha"], "type", text="revoked") as refused:
+                    self.assertEqual(refused.status, 404)
                 with self.assertRaises(CapabilityUnavailable):
                     await asyncio.wait_for(running, 20)
             finally:

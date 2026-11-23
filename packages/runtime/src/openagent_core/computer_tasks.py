@@ -231,6 +231,46 @@ class TaskComputerBroker:
                 raise CapabilityUnavailable("The exact computer allocation changed during provisioning")
         return machine
 
+    async def current_lease(self, context, task: ComputerTask):
+        """Resolve an existing assignment without booting, renewing or replacing it."""
+        if context.catalog_partition is not None or context.capabilities:
+            raise PermissionError("Resolving a task requires the original verified context")
+        allocation = ComputerAllocation.for_context(context, task)
+        await self._authorize(
+            context, allocation.key, "computer.use", base=(task.project, task.base_version)
+        )
+        row = await self._row(allocation.key)
+        if not row or row["base_version"] != task.base_version or row["state"] != "online":
+            raise CapabilityUnavailable("The current task computer is unavailable")
+        candidate = ComputerLease(
+            allocation.key, row["epoch"], row["machine_id"], row["host_id"], row["generation"]
+        )
+        bound = replace(context, scopes=context.scopes + (CATALOG_PARTITION_PREFIX + candidate.partition,))
+        return await self._lease(bound, "computer.use")
+
+    async def authorize_viewer_action(self, bound, lease, *, capture):
+        """A product may grant screen capture independently from direct input."""
+        action = "computer.viewer.capture" if capture else "computer.viewer.input"
+        if await self._lease(bound, action) != lease:
+            raise CapabilityUnavailable("The viewer assignment is no longer current")
+
+    def viewer_target_id(self, catalog, bound, descriptor):
+        """Project an exact live remote tool into a portable, non-authorizing viewer handle."""
+        mount = self._mounts.get((catalog, bound.coalescing_key))
+        source = mount.registry.sources.get(descriptor.source_id) if mount else None
+        if source is None:
+            raise CapabilityUnavailable("The desktop does not belong to this mounted computer")
+        # owner includes tenant, principals, session, audience, allocation and
+        # epoch. identity includes the remote device, generation and MCP server.
+        identity = (
+            source.owner,
+            source.identity,
+            source.row["version"],
+            source.row["catalog_digest"],
+            descriptor.name,
+        )
+        return hashlib.sha256(canonical_json(identity).encode()).hexdigest()
+
     async def attach(self, context, task: ComputerTask):
         """Resolve only the provider-attested registration. Same-generation refresh preserves references."""
         allocation = ComputerAllocation.for_context(context, task)
