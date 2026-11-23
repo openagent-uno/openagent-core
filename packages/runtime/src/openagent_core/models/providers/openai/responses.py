@@ -9,6 +9,7 @@ from typing_extensions import Literal
 
 from openagent_core.core.runtime_errors import ContextWindowExceededError, ModelAuthenticationError, ModelProviderError
 from openagent_core.stream.media import File
+from openagent_core.provider_admission import openai_account_model
 from openagent_core.models.providers.base import Model
 from openagent_core.models.providers.message import Citations, Message, UrlCitation
 from openagent_core.models.providers.metrics import MessageMetrics
@@ -96,6 +97,8 @@ class OpenAIResponses(Model):
             "tool": "tool",
         }
     )
+
+    for_admitted_account = openai_account_model
 
     def get_provider(self) -> str:
         return f"{super().get_provider()} Responses"

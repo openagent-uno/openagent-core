@@ -68,6 +68,16 @@ class Groq(Model):
     client: Optional[GroqClient] = None
     async_client: Optional[AsyncGroqClient] = None
 
+    def for_admitted_account(self, credential, base_url):
+        from openagent_core.provider_admission import isolated_sdk_model
+
+        scoped = isolated_sdk_model(self, credential, base_url)
+        options = {"timeout": self.timeout} if self.timeout is not None else {}
+        scoped.async_client = AsyncGroqClient(
+            api_key=credential, base_url=base_url, max_retries=0, **options
+        )
+        return scoped
+
     def _get_client_params(self) -> Dict[str, Any]:
         # Fetch API key from env if not already set
         if not self.api_key:

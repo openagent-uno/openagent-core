@@ -49,3 +49,22 @@ CREATE INDEX IF NOT EXISTS operation_segments ON runs(agent,((request->'continua
 CREATE UNIQUE INDEX IF NOT EXISTS checkpoint_starts ON events(agent,run_id) WHERE kind='run.operation.started';
 CREATE UNIQUE INDEX IF NOT EXISTS checkpoint_resumes ON events(agent,(payload->>'resume_run_id'))
     WHERE kind='run.operation.started' AND payload->>'resume_run_id' IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS provider_limits (
+    provider text PRIMARY KEY, capacity integer NOT NULL CHECK (capacity>0));
+CREATE TABLE IF NOT EXISTS provider_tenants (
+    provider text NOT NULL REFERENCES provider_limits(provider), authority text NOT NULL, tenant text NOT NULL,
+    capacity integer NOT NULL CHECK (capacity>0), PRIMARY KEY(provider,authority,tenant));
+CREATE TABLE IF NOT EXISTS provider_accounts (
+    provider text NOT NULL REFERENCES provider_limits(provider), account text NOT NULL,
+    capacity integer NOT NULL CHECK (capacity>0), cooldown_until timestamptz,
+    PRIMARY KEY(provider,account));
+CREATE TABLE IF NOT EXISTS provider_attempts (
+    id uuid PRIMARY KEY, provider text NOT NULL, account text NOT NULL, worker uuid NOT NULL,
+    agent text NOT NULL, run_id text NOT NULL, authority text NOT NULL,tenant text NOT NULL,
+    FOREIGN KEY(provider,authority,tenant) REFERENCES provider_tenants(provider,authority,tenant),
+    FOREIGN KEY(provider,account) REFERENCES provider_accounts(provider,account),
+    FOREIGN KEY(worker) REFERENCES workers(id) ON DELETE CASCADE,
+    FOREIGN KEY(agent,run_id) REFERENCES runs(agent,id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS provider_slots ON provider_attempts(provider,account);
+CREATE INDEX IF NOT EXISTS provider_slots_worker ON provider_attempts(worker);

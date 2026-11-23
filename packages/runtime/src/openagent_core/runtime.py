@@ -101,6 +101,7 @@ class RuntimeSettings:
     child_max_depth: int = 1
     child_chain_concurrency: int = 8
     max_active_runs: int = 256
+    require_provider_admission: bool = False
 
     def __post_init__(self) -> None:
         if not self.agent_id or (self.workspace is not None and not self.workspace.is_absolute()):

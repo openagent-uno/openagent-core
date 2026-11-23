@@ -185,6 +185,19 @@ class Gemini(Model):
         "tool": "user",
     }
 
+    def for_admitted_account(self, credential, base_url):
+        from openagent_core.provider_admission import isolated_sdk_model
+
+        if self.vertexai or self.credentials or self.parallel_search or self.parallel_api_key:
+            raise ValueError("This provider route requires Google API key inference")
+        scoped = isolated_sdk_model(self, credential, base_url)
+        _require_genai()
+        options = {"base_url": base_url, "retry_options": {"attempts": 1}}
+        if self.timeout is not None:
+            options["timeout"] = int(self.timeout * 1000)
+        scoped.client = genai.Client(api_key=credential, vertexai=False, http_options=options)
+        return scoped
+
     def get_client(self) -> GeminiClient:
         """
         Returns an instance of the GeminiClient client.

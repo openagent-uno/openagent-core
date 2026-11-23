@@ -244,6 +244,18 @@ class Claude(Model):
     client: Optional[AnthropicClient] = None
     async_client: Optional[AsyncAnthropicClient] = None
 
+    def for_admitted_account(self, credential, base_url):
+        from openagent_core.provider_admission import isolated_sdk_model
+
+        scoped = isolated_sdk_model(self, credential, base_url)
+        options = {"timeout": self.timeout} if self.timeout is not None else {}
+        scoped.auth_token = None
+        scoped.async_client = AsyncAnthropicClient(
+            api_key=credential, base_url=base_url, max_retries=0, **options
+        )
+        scoped.async_client.auth_token = None
+        return scoped
+
     def __post_init__(self):
         """Validate model configuration after initialization"""
         # Validate thinking support immediately at model creation

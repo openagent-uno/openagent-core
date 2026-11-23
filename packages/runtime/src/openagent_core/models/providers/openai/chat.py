@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from openagent_core.core.runtime_errors import ContextWindowExceededError, ModelAuthenticationError, ModelProviderError
 from openagent_core.stream.media import Audio
+from openagent_core.provider_admission import openai_account_model
 from openagent_core.models.providers.base import Model
 from openagent_core.models.providers.message import Message
 from openagent_core.models.providers.metrics import MessageMetrics
@@ -100,6 +101,8 @@ class OpenAIChat(Model):
         "tool": "tool",
         "model": "assistant",
     }
+
+    for_admitted_account = openai_account_model
 
     def get_provider(self) -> str:
         return f"{super().get_provider()} Chat"

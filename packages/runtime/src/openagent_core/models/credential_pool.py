@@ -53,6 +53,12 @@ _VALID_STRATEGIES = frozenset({"fill_first", "round_robin", "least_used"})
 _DEFAULT_STRATEGY = "fill_first"
 
 
+def rate_limit_cooldown(retry_after_s):
+    if retry_after_s is not None and retry_after_s > 0:
+        return min(max(float(retry_after_s),1.0),_MAX_COOLDOWN_S)
+    return _RATE_LIMIT_COOLDOWN_S
+
+
 @dataclass
 class PooledAccount:
     """One credential in a provider's rotation pool."""
@@ -141,9 +147,7 @@ class CredentialPool:
         fresh pool). Returns the next usable account, or ``None`` when the
         pool is drained (the caller then falls through to the fallback path).
         """
-        cooldown = _RATE_LIMIT_COOLDOWN_S
-        if retry_after_s is not None and retry_after_s > 0:
-            cooldown = min(max(float(retry_after_s), 1.0), _MAX_COOLDOWN_S)
+        cooldown = rate_limit_cooldown(retry_after_s)
         with self._lock:
             now = time.monotonic()
             for acc in self._accounts:

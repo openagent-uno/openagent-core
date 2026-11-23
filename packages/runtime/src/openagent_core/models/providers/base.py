@@ -250,6 +250,8 @@ class Model(ABC):
         This method wraps the invoke() call and retries on ModelProviderError
         with optional exponential backoff.
         """
+        from openagent_core.provider_admission import require_async_admission
+        require_async_admission(self)
         last_exception: Optional[ModelProviderError] = None
 
         for attempt in range(self.retries + 1):
@@ -303,7 +305,9 @@ class Model(ABC):
         for attempt in range(self.retries + 1):
             try:
                 retries_with_guidance_count = kwargs.pop("retries_with_guidance_count", 0)
-                return await self.ainvoke(**kwargs)
+                from openagent_core.provider_admission import provider_attempt
+                async with provider_attempt(self) as admitted:
+                    return await admitted.ainvoke(**kwargs)
             except ModelProviderError as e:
                 last_exception = self.classify_error(e)
                 # Check if error is non-retryable
@@ -347,6 +351,8 @@ class Model(ABC):
         This method wraps the invoke_stream() call and retries on ModelProviderError
         with optional exponential backoff. Note that retries restart the entire stream.
         """
+        from openagent_core.provider_admission import require_async_admission
+        require_async_admission(self)
         last_exception: Optional[ModelProviderError] = None
 
         for attempt in range(self.retries + 1):
@@ -402,12 +408,24 @@ class Model(ABC):
         last_exception: Optional[ModelProviderError] = None
 
         for attempt in range(self.retries + 1):
+            emitted = False
             try:
                 retries_with_guidance_count = kwargs.pop("retries_with_guidance_count", 0)
-                async for response in self.ainvoke_stream(**kwargs):
-                    yield response
+                from openagent_core.provider_admission import provider_attempt, current_admission
+                async with provider_attempt(self) as admitted:
+                    frames = admitted.ainvoke_stream(**kwargs)
+                    try:
+                        async for response in frames:
+                            emitted = True
+                            yield response
+                    finally:
+                        close=getattr(frames,"aclose",None)
+                        if callable(close):
+                            await close()
                 return  # Success, exit the retry loop
             except ModelProviderError as e:
+                if emitted and current_admission() is not None:
+                    raise
                 last_exception = self.classify_error(e)
                 # Check if error is non-retryable
                 if not self._is_retryable_error(last_exception):
@@ -425,6 +443,8 @@ class Model(ABC):
                     if self.retries > 0:
                         log_error(f"Model provider error after {self.retries + 1} attempts: {str(e)}")
             except RetryableModelProviderError as e:
+                if emitted and current_admission() is not None:
+                    raise
                 current_count = retries_with_guidance_count
                 if current_count >= self.retry_with_guidance_limit:
                     raise ModelProviderError(

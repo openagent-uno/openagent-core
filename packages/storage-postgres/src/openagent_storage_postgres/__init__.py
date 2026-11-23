@@ -24,6 +24,7 @@ from openagent_core.contracts import (
 from .sessions import RUN_AUDIENCE, Sessions, _audience, _members
 from .operations import Operations
 from .notifications import RunNotifications
+from .providers import ProviderSlots
 from openagent_core.durable_operations import (
     OperationRunRequest,
     OperationContinuation,
@@ -55,7 +56,7 @@ def _principal(key):
     return PrincipalRef(**key)
 
 
-class PostgresRuntimeStore(Sessions, Operations):
+class PostgresRuntimeStore(Sessions, Operations, ProviderSlots):
     """One agent namespace, multiple tenant sessions and independently fenced workers.
 
     A new worker identity is minted on each start. Only the worker that admitted a
@@ -112,6 +113,7 @@ class PostgresRuntimeStore(Sessions, Operations):
                     sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self.schema))
                 )
                 await db.execute(files(__package__).joinpath("schema.sql").read_text())
+                self._heartbeat_ack = asyncio.get_running_loop().time()
                 await db.execute(
                     """INSERT INTO workers(id,agent,expires_at)
                     VALUES (%s,%s,clock_timestamp()+make_interval(secs=>%s))""",
@@ -146,6 +148,7 @@ class PostgresRuntimeStore(Sessions, Operations):
             await asyncio.sleep(min(1, self.lease_seconds / 3))
             try:
                 async with self._db() as db:
+                    sent_at = asyncio.get_running_loop().time()
                     cur = await db.execute(
                         """UPDATE workers SET expires_at=clock_timestamp()+make_interval(secs=>%s)
                         WHERE id=%s AND expires_at>clock_timestamp()""",
@@ -162,6 +165,7 @@ class PostgresRuntimeStore(Sessions, Operations):
                             (self._worker,),
                         )
                     ).fetchall()
+                self._heartbeat_ack = sent_at
                 for row in cancellations:
                     task = self._executing.pop(row["id"], None)
                     if task:

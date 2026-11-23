@@ -156,13 +156,16 @@ def _execution_cache_key(system: str | None) -> tuple[str, str]:
     allow = current_tool_allowlist()
     from openagent_core.core.execution_profile import stateless_completion_active
     stateless = stateless_completion_active()
+    from openagent_core.provider_admission import current_admission
+    admitted = current_admission() is not None
     external = external_history_active()
-    if not policy and allow is None and not stateless and not external:
+    if not policy and allow is None and not stateless and not external and not admitted:
         return system_text, system_text
     marker = json.dumps(
         {
             "stateless": stateless,
             "external_history": external,
+            "host_admission": admitted,
             "policy": policy or {},
             "tool_families": None if allow is None else sorted(allow),
         },
@@ -1498,10 +1501,12 @@ class NativeProvider(ProviderResources, BaseModel):
         without instantiating a full ``Agent`` wrapper.
         """
         provider_name, model_id = self._runtime_parts()
-        api_key = self._resolved_api_key()
-        base_url = self._resolved_base_url()
         from ..subscriptions.service import subscription_for
-        subscription = subscription_for(self._provider_config(), self._db_path) if self._provider_config().get("metadata", {}).get("access") == "subscription" else None
+        from openagent_core.provider_admission import current_admission
+        distributed = current_admission() is not None
+        api_key = None if distributed else self._resolved_api_key()
+        base_url = None if distributed else self._resolved_base_url()
+        subscription = subscription_for(self._provider_config(), self._db_path) if not distributed and self._provider_config().get("metadata", {}).get("access") == "subscription" else None
         if subscription is not None:
             api_key = subscription.settings.api_key
             base_url = subscription.inference_base_url((self._provider_config().get("metadata") or {}).get("account_id"), single_attempt=bool((self._provider_config().get("metadata") or {}).get("account_fallback_group")))
@@ -1591,7 +1596,7 @@ class NativeProvider(ProviderResources, BaseModel):
             # configured (metadata.accounts). When present, seed the model's
             # initial credential from the pool and stash it so the fallback
             # chokepoint can rotate on 429/529 before spilling to the secondary provider.
-            pool = None if subscription is not None else get_or_build_pool(provider_name, self._provider_config())
+            pool = None if distributed or subscription is not None else get_or_build_pool(provider_name, self._provider_config())
             if pool is not None:
                 selected = pool.select()
                 if selected is not None:
@@ -1613,6 +1618,7 @@ class NativeProvider(ProviderResources, BaseModel):
                     model.tool_input_modalities = input_modalities_for(entry)
                     break
             model._openagent_runtime_id = self.model
+            model._openagent_requires_admission = distributed
             model._openagent_health_scope = str(self._db_path) if self._db_path else f'catalog:{id(self._providers_config)}'
             source = self._provider_config()
             meta = source.get("metadata") or {}
