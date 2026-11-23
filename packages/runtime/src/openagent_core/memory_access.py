@@ -6,6 +6,12 @@ from typing import Any, Mapping, Protocol
 from .contracts import ExecutionContext, PrincipalRef, ResourceRef
 
 
+class DocumentRecallQuery(Protocol):
+    async def select_query(self, context: ExecutionContext, raw_input: str) -> str | None:
+        """Select search data from a verified host envelope. None skips document recall."""
+        ...
+
+
 class MemoryAccess(Protocol):
     async def search_history(self, context: ExecutionContext, *, query: str, scopes,
                              limit: int, offset: int, session_id: str | None) -> Mapping[str, Any]: ...

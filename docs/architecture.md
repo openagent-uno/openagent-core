@@ -221,6 +221,26 @@ route. Python and TypeScript export `PersonalClient`.
   `q` to search, `path` to read one exact Markdown document and `cursor` to
   continue an ordered list or search. Both catalogs support limits from 1 to 100.
 
+### Automatic recall from document memory
+
+With automatic recall enabled, the document backend searches for bounded lexical
+overlap in the caller’s authorized space before the provider request. Explicit
+`vault_search` keeps its exact all-term query and pagination. Automatic recall
+uses up to 12 literal terms, 128 candidates per term and eight result references.
+Equal overlap is ordered by path. This lexical search requires some shared terms;
+it does not infer concept similarity with zero lexical overlap.
+
+An embedded host can bind `openagent_core.memory_access.DocumentRecallQuery`
+in its service registry and implement `async select_query(context, raw_input)`.
+Return the last verified user message from the host's envelope, or `None` to skip
+the search. This text selects references; the model still receives the original
+turn. Without a selector, the existing configured query marker is honored, and a
+long prompt is sampled from both ends. Both the space and each returned note
+require read and publication rights for the audience. The run revalidates the
+notes before sending to the provider and on subsequent publication.
+`await vault.contains(context, path)` checks live space membership without
+loading Markdown or binding its contents to a read receipt.
+
 ### Scheduled document-vault dreams
 
 The optional document worker sends a memory-maintenance turn through the

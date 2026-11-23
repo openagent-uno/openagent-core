@@ -59,6 +59,15 @@ class VaultTurn:
                 "expected_revision": 0}, context)
             assert duplicate["isError"] and duplicate["structuredContent"]["error_type"] == "revision_conflict"
             return "reconciled"
+        if request.input.startswith("recall-envelope"):
+            from openagent_core.runtime import check_current_publication
+            with patch("openagent_core.core.agent._recall_enabled", return_value=True):
+                text = await _with_recall(None, context.session_id, request.input, "original user input")
+            if getattr(self, "on_recall", None):
+                self.on_recall(text)
+            # The provider transport calls this exact guard before it sends.
+            await check_current_publication()
+            return text
         if request.input == "remember":
             await runtime.capabilities.call_tool(tools["vault_write_note"], {
                 "path": "topics/color.md", "content": "# Cobalt\n[[topics/Palette#top]]",
@@ -162,6 +171,51 @@ class DocumentVault(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(receipt["error"]["error_type"], "revision_conflict")
         saved = await self.store.read(self.a, "Case.MD")
         self.assertEqual((saved["content"], saved["revision"]), ("unchanged", 1))
+
+    async def test_bounded_question_recall_precedes_provider_and_rechecks_its_note(self):
+        from dataclasses import replace
+        from openagent_core.memory_access import DocumentRecallQuery
+        await self.store.write(self.a, "heating.md", "Furnace manual calibration instructions.", expected_revision=0)
+        await self.store.write(self.a, "other.md", "Manual for a sewing machine.", expected_revision=0)
+        foreign = PrincipalRef("test", "separate-" + self.tenant, self.a.authority.subject_id)
+        other = replace(self.a, initiator=foreign, authority=foreign, author=foreign, audience=(foreign,))
+        await self.store.write(other, "secret.md", "Furnace calibration manual private.", expected_revision=0)
+        self.assertTrue(await self.store.contains(self.a, "heating.md"))
+        self.assertFalse(await self.store.contains(other, "heating.md"))
+        question = "Where can I find how to do furnace calibration? This is a differently worded question."
+        raw = "recall-envelope " + "unrelated noise " * 350 + question
+        self.assertEqual((await self.store.search(self.a, query=question))["hits"], [])
+        self.assertEqual((await self.store.recall(self.a, query=raw, limit=1))[0]["path"], "heating.md")
+        class Selector:
+            async def select_query(self, context, raw_input):
+                assert context == self_context and raw_input == raw
+                return question
+        self_context = self.a
+        self.runtime.services.registry.bind(DocumentRecallQuery, Selector())
+        text = await self.turn(self.a, raw)
+        self.assertIn("heating.md", text)
+        self.assertNotIn("secret.md", text)
+        self.assertNotIn(question, text)
+        self.assertTrue(text.endswith("original user input"))
+        policy = self.policy
+        allowed = policy.authorize
+        denied = False
+        async def note_policy(context, action, resource, *, audience=()):
+            if denied and resource.kind == "vault-note":
+                return False
+            return await allowed(context, action, resource, audience=audience)
+        policy.authorize = note_policy
+        def revoke_after_preparation(prepared):
+            nonlocal denied
+            self.assertIn("heating.md", prepared)
+            denied = True
+        self.runtime.services.executor.on_recall = revoke_after_preparation
+        request = RunRequest(uuid.uuid4().hex, self.a.session_id, uuid.uuid4().hex, raw)
+        await self.runtime.submit(request, self.a)
+        record = await self.runtime.wait(request.run_id, self.a)
+        self.assertNotEqual(record.status, "success")
+        await self.store.delete(self.a, "heating.md", expected_revision=1)
+        self.assertFalse(await self.store.contains(self.a, "heating.md"))
 
     async def test_session_memory_recall_and_isolation(self):
         self.assertEqual(await self.turn(self.a, "remember"), "saved")

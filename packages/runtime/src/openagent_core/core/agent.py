@@ -1007,7 +1007,7 @@ async def _with_recall(agent: Any, session_id: str | None, query: str,
     if not _recall_enabled() or not query or not query.strip():
         return text
     from openagent_core.runtime import current_runtime, current_execution_context
-    from openagent_core.memory_access import MemoryAccess, authorized_memory_hits
+    from openagent_core.memory_access import DocumentRecallQuery, MemoryAccess, authorized_memory_hits
     runtime, context = current_runtime(), current_execution_context()
     memory_access = runtime.service(MemoryAccess) if runtime is not None else None
     vault = runtime.service("vault.service") if runtime is not None else None
@@ -1019,7 +1019,6 @@ async def _with_recall(agent: Any, session_id: str | None, query: str,
         return text
     # Narrow the query to the marked span (usually the customer's own words)
     # before embedding. ``text`` — what the model reads — is left alone.
-    query = _recall_query(query)
     try:
         timeout = _recall_float("OPENAGENT_AUTO_RECALL_TIMEOUT", 4.0)
         async def retrieve():
@@ -1030,14 +1029,24 @@ async def _with_recall(agent: Any, session_id: str | None, query: str,
                 if scope == "sessions":
                     return ""
                 limit = min(200, max(1, _recall_int("OPENAGENT_AUTO_RECALL_TOP_K", 3)))
-                candidates = await document_recall(context, query=query, limit=limit)
+                selector = runtime.service(DocumentRecallQuery)
+                search_text = await selector.select_query(context, query) if selector else _recall_query(query)
+                if not isinstance(search_text, str) or not search_text.strip():
+                    return ""
+                candidates = await document_recall(context, query=search_text, limit=limit)
                 candidates = [item for item in candidates if _path_allowed(item["path"], include, exclude)]
             else:
-                candidates = await asyncio.to_thread(_recall_candidates, agent, query, session_id)
+                candidates = await asyncio.to_thread(_recall_candidates, agent, _recall_query(query), session_id)
                 if runtime.uses_descriptor_profile:
                     candidates = [item for item in candidates
                                   if item.get("kind") in {"note", "skill"}]
             hits = await authorized_memory_hits(runtime, context, candidates)
+            if document_recall is not None and hits:
+                from openagent_core.runtime import guard_current_publication
+                async def recheck_document_recall():
+                    if len(await authorized_memory_hits(runtime, context, hits)) != len(hits):
+                        raise PermissionError("Document recall authorization changed")
+                guard_current_publication(recheck_document_recall)
             # Public quality summaries must describe exposed memory only, not
             # counts or scores belonging to another audience's private hits.
             try:

@@ -185,8 +185,7 @@ class DocumentModule:
         return await self.store.search(context, query=query, limit=limit)
 
     async def recall_documents(self, context, *, query, limit):
-        result = await self.store.search(context, query=query, limit=limit)
-        return result["hits"]
+        return await self.store.recall(context, query=query, limit=limit)
 
     async def reconfigure(self, config):
         if config != self.context.config:

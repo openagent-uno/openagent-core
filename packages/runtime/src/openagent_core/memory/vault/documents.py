@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from pathlib import PurePosixPath
+import re
 
 from uuid import uuid4
 
@@ -230,6 +231,16 @@ class SqlDocumentVault:
                 rows.extend((await con.execute(stmt.where(read_receipts.c.token.in_(ids[start:start + 256])))).all())
         return rows
 
+    async def contains(self, context, path):
+        """Test membership of one live note under the same ACL as read()."""
+        scope = await self._scope(context, "memory.read")
+        stmt = sa.select(sa.literal(1)).select_from(notes).filter_by(
+            **scope, path=note_path(path, allow_generated=True)).where(notes.c.content.is_not(None))
+        async with self.engine.connect() as con:
+            found = await con.scalar(stmt)
+        await self._recheck(context, "memory.read", scope)
+        return found is not None
+
     async def read(self, context, path, *, revision=None):
         scope = await self._scope(context, "memory.read")
         async with self.engine.connect() as con:
@@ -264,6 +275,63 @@ class SqlDocumentVault:
 
     async def search(self, context, *, query, limit=20):
         return await self._search(context, query=query, limit=limit, paginate=False, after=None)
+
+    async def recall(self, context, *, query, limit=3):
+        """Retrieve bounded lexical leads for a natural question in this vault space."""
+        scope = await self._scope(context, "memory.read")
+        if not isinstance(query, str) or type(limit) is not int or limit < 1:
+            raise ValueError("Invalid document recall request")
+        limit = min(limit, 8)
+        # Bound work even for an unstructured prompt. Questions on either end
+        # remain eligible when the host has no dedicated query selector.
+        sample = query if len(query) <= 8192 else query[:4096] + " " + query[-4096:]
+        words = re.findall(r"[^\W_]+", sample.casefold())
+        # Interrogatives and common conversational glue rarely identify notes.
+        # Single-character tokens still work through explicit vault search.
+        stop = {"the","and","that","this","which","where","when","what","how","you","your",
+                "are","can","could","have","with","for","from","would","please","tell","about",
+                "che","cosa","come","dove","quale","quali","quando","con","per","una","uno",
+                "dei","del","della","delle","degli","nel","nella","sono","puoi","sapere",
+                "vorrei","mio","mia","miei","mie","nostro","nostra","ho","alla","la","il","le",
+                "lo","gli","un","in","di","da","al","su","si","mi","perché","is","it","on","of",
+                "to","at","or","be","we","us","my","me","if","as","do","an","by","so","am"}
+        words = [w for w in words if 2 <= len(w) <= 64 and w not in stop]
+        # Alternate ends to keep both subject and trailing question in the term
+        # budget. Exact terms are always bound parameters, never FTS operators.
+        terms = []
+        for left, right in zip(words, reversed(words)):
+            for term in (left, right):
+                if term not in terms and len(terms) < 12:
+                    terms.append(term)
+            if len(terms) == 12:
+                break
+        if not terms:
+            return []
+        postgres = self.engine.dialect.name == "postgresql"
+        if postgres:
+            body = """SELECT path,title,revision FROM oa_vault_notes
+                  WHERE tenant=:tenant AND agent=:agent AND space=:space AND content IS NOT NULL
+                  AND to_tsvector('simple',content) @@ plainto_tsquery('simple',:term)
+                  ORDER BY path LIMIT 128"""
+        else:
+            body = """SELECT n.path,n.title,n.revision FROM oa_vault_search s
+                  JOIN oa_vault_notes n ON n.id=s.rowid
+                  WHERE n.tenant=:tenant AND n.agent=:agent AND n.space=:space
+                  AND n.content IS NOT NULL AND oa_vault_search MATCH :term
+                  ORDER BY n.path LIMIT 128"""
+        # Count distinct matched terms in at most 12 x 128 scoped candidates
+        # in one round trip. Ranking does not consult other tenants' statistics.
+        branches = ["SELECT * FROM (" + body.replace(":term", ":term" + str(i)) + ") AS hits"
+                    for i in range(len(terms))]
+        statement = ("SELECT path,title,revision FROM (" + " UNION ALL ".join(branches)
+                     + ") AS candidates GROUP BY path,title,revision ORDER BY count(*) DESC,path LIMIT :limit")
+        args = {**scope, "limit": limit, **{"term"+str(i): w if postgres else '"'+w+'"'
+                                            for i,w in enumerate(terms)}}
+        async with self.engine.connect() as con:
+            rows = (await con.execute(sa.text(statement), args)).mappings().all()
+        await self._recheck(context, "memory.read", scope)
+        await saw_notes(self, context, scope, rows)
+        return [{"kind":"note", **dict(row)} for row in rows]
 
     async def search_page(self, context, *, query, limit=20, after=None):
         """Keyset pagination of full-text matches in stable path order."""
