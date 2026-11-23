@@ -82,11 +82,15 @@ class VaultSource:
 
     def revisions(self):
         counts = Counter()
+        self.graph = {}
+        nearest = {}
         commits = self._git(
             "rev-list", "--topo-order", "--reverse", "--parents", "--all", "--reflog"
         ).splitlines()
         for line in commits:
             commit, *parents = line.decode("ascii").split()
+            parent = nearest.get(parents[0]) if parents else None
+            nearest[commit] = parent
             revisions = (parents[0], commit) if parents else ("--root", commit)
             raw = self._git(
                 "diff-tree",
@@ -120,7 +124,13 @@ class VaultSource:
                     raise VaultImportMismatch(
                         "Historical path has unsupported Git type"
                     )
-                facts = facts or self._facts(commit, parents)
+                if facts is None:
+                    facts = self._facts(commit, parents)
+                    nearest[commit] = commit
+                    self.graph[commit] = (
+                        parent,
+                        {**facts, "order": len(self.graph) + 1},
+                    )
                 if rename and first in self.paths:
                     counts[first] += 1
                     yield (
@@ -154,6 +164,12 @@ class VaultSource:
                             "peer": first if rename and first in self.paths else None,
                         },
                     )
+        current = (
+            self._git("rev-parse", "--verify", "HEAD").decode().strip()
+            if commits
+            else None
+        )
+        self.active_parent = nearest.get(current)
         for path in sorted(self.paths):
             entry = self.manifest["files"].get(f"{self.relative}/{path}")
             if entry is None and not counts[path]:

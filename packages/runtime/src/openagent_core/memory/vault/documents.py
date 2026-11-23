@@ -101,7 +101,14 @@ class SqlDocumentVault:
         if self.dream_queue is not None:
             await self.dream_queue.initialize()
         async with self.engine.begin() as connection:
+            from .document_history import heads, lock_head, meta as history_schema
             await connection.run_sync(metadata.create_all)
+            await connection.run_sync(history_schema.create_all)
+            old_spaces = (await connection.execute(sa.select(notes.c.tenant,notes.c.agent,notes.c.space)
+                .where(~sa.exists(sa.select(heads.c.head).where(heads.c.tenant==notes.c.tenant,
+                         heads.c.agent==notes.c.agent,heads.c.space==notes.c.space))).distinct())).mappings().all()
+            for fields in old_spaces:
+                await lock_head(connection,dict(fields))
             if self.engine.dialect.name == "postgresql":
                 await connection.execute(sa.text("""
                     CREATE INDEX IF NOT EXISTS oa_vault_search ON oa_vault_notes
@@ -285,65 +292,78 @@ class SqlDocumentVault:
         await self._recheck(context, "memory.read", scope)
         return json.loads(facts) if facts is not None else None
 
-    async def write(self, context, path, content, *, expected_revision):
+    async def write(self, context, path, content, *, expected_revision, before_commit=None):
         if not isinstance(content, str) or len(content.encode()) > 2 << 20 or "\0" in content:
             raise ValueError("Invalid Markdown content")
-        return await self._change(context, note_path(path), content, expected_revision)
+        return await self._change(context, note_path(path), content, expected_revision, before_commit=before_commit)
 
-    async def delete(self, context, path, *, expected_revision):
+    async def delete(self, context, path, *, expected_revision, before_commit=None):
         """Remove a note from the current corpus while retaining its revisions."""
         if expected_revision == 0:
             raise ValueError("Deleting a note requires an existing revision")
-        return await self._change(context, note_path(path), None, expected_revision)
+        return await self._change(context, note_path(path), None, expected_revision, before_commit=before_commit)
 
     async def forget(self, context, path, *, expected_revision):
         if expected_revision == 0:
             raise ValueError("Forgetting a note requires an existing revision")
         return await self._change(context, note_path(path), None, expected_revision, erase=True)
 
-    async def _change(self, context, path, content, expected, *, erase=False):
+    async def _change(self, context, path, content, expected, *, erase=False, before_commit=None):
         await require_unprotected_execution("Document vault")
         if type(expected) is not int or expected < 0 or expected >= (1 << 63) - 1:
             raise ValueError("Invalid expected revision")
         scope = await self._scope(context, "memory.write")
-        key = {**scope, "path":path}
+        from .document_history import lock_head, native_commit, redact
+        async with self.engine.begin() as con:
+            head = await lock_head(con, scope)
+            revision = await self._apply(con,context,scope,path,content,expected,erase=erase)
+            if erase:
+                await redact(con,scope,path)
+                digest = None
+            else:
+                digest = await native_commit(con,scope,head,context,[(path,revision,content is not None)],"Document update")
+            await self._recheck(context, "memory.write", scope)
+            if before_commit is not None:
+                await before_commit()
+        return {"path":path,"revision":revision,"forgotten":erase,"commit":digest}
+
+    async def _apply(self,con,context,scope,path,content,expected,*,erase=False,historical=False):
+        key = {**scope,"path":path}
         parsed = parse_note_text(path, content) if content is not None else None
-        if parsed and not parsed.frontmatter_valid:
+        if parsed and not parsed.frontmatter_valid and not historical:
             raise ValueError("Invalid Markdown frontmatter")
         revision = expected + 1
         values = {"content":content, "title":parsed.title if parsed else None, "revision":revision}
-        async with self.engine.begin() as con:
-            if expected == 0:
-                # ON CONFLICT is limited to this note's identity. Other database
-                # errors still reach the caller and roll back the transaction.
-                if self.engine.dialect.name == "postgresql":
-                    from sqlalchemy.dialects.postgresql import insert
-                else:
-                    from sqlalchemy.dialects.sqlite import insert
-                stmt = insert(notes).values(**key, **values).on_conflict_do_nothing(
-                    index_elements=list(key))
+        if expected == 0:
+            # ON CONFLICT is limited to this note's identity. Other database
+            # errors still reach the caller and roll back the transaction.
+            if self.engine.dialect.name == "postgresql":
+                from sqlalchemy.dialects.postgresql import insert
             else:
-                mutable = notes.c.content.is_not(None)
-                if content is not None or erase:
-                    saved = sa.select(versions.c.revision).filter_by(**key).exists()
-                    origin = sa.select(import_origins.c.revision).filter_by(**key).exists()
-                    mutable = sa.or_(mutable, saved, origin)
-                stmt = sa.update(notes).filter_by(**key, revision=expected).where(mutable).values(**values)
-            changed = (await con.execute(stmt.returning(notes.c.id))).scalar_one_or_none()
-            if changed is None:
-                raise RevisionConflict("Note has a conflicting revision or was forgotten")
-            if parsed:
-                await con.execute(sa.insert(versions).values(**key, revision=revision, content=content,
-                    author=context.author.key, session_id=context.session_id, run_id=current_run_id()))
-            elif erase:
-                await con.execute(sa.delete(versions).filter_by(**key))
-                await con.execute(sa.delete(import_origins).filter_by(**key))
-            await refresh_indexes(con, key, changed, parsed, content)
-            if is_document_dream(context):
-                if self.dream_queue is None:
-                    raise PermissionError("Document maintenance is disabled")
-                await self.dream_queue.verify_dream_write(con, scope, current_run_id())
-            elif self.dream_queue is not None:
-                await self.dream_queue.mark_changed(con, scope)
-            await self._recheck(context, "memory.write", scope)
-        return {"path":path, "revision":revision, "forgotten":erase}
+                from sqlalchemy.dialects.sqlite import insert
+            stmt = insert(notes).values(**key, **values).on_conflict_do_nothing(
+                index_elements=list(key))
+        else:
+            mutable = notes.c.content.is_not(None)
+            if content is not None or erase:
+                saved = sa.select(versions.c.revision).filter_by(**key).exists()
+                origin = sa.select(import_origins.c.revision).filter_by(**key).exists()
+                mutable = sa.or_(mutable, saved, origin)
+            stmt = sa.update(notes).filter_by(**key, revision=expected).where(mutable).values(**values)
+        changed = (await con.execute(stmt.returning(notes.c.id))).scalar_one_or_none()
+        if changed is None:
+            raise RevisionConflict("Note has a conflicting revision or was forgotten")
+        if parsed:
+            await con.execute(sa.insert(versions).values(**key, revision=revision, content=content,
+                author=context.author.key, session_id=context.session_id, run_id=current_run_id()))
+        elif erase:
+            await con.execute(sa.delete(versions).filter_by(**key))
+            await con.execute(sa.delete(import_origins).filter_by(**key))
+        await refresh_indexes(con, key, changed, parsed, content)
+        if is_document_dream(context):
+            if self.dream_queue is None:
+                raise PermissionError("Document maintenance is disabled")
+            await self.dream_queue.verify_dream_write(con, scope, current_run_id())
+        elif self.dream_queue is not None:
+            await self.dream_queue.mark_changed(con, scope)
+        return revision

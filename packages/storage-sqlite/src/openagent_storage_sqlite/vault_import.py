@@ -164,6 +164,9 @@ async def _publish(con, vault, scope, src):
             ).scalar_one()
             await refresh_indexes(con, key, note_id, parsed, content)
         _add_witness(hashes, path, rev, content, facts)
+    from openagent_core.memory.vault.document_history import seed_import
+
+    await seed_import(con, scope, src)
     return {k: v.digest() for k, v in hashes.items()}
 
 
@@ -457,20 +460,59 @@ async def restore_vault(
                     )
                 ).scalar_one()
                 target = state / src.relative / path
-                records = (
+                from openagent_core.memory.vault.document_history import commits, edits
+
+                written = (
+                    sa.select(
+                        versions.c.revision,
+                        versions.c.content,
+                        versions.c.author,
+                        versions.c.session_id,
+                        versions.c.run_id,
+                    )
+                    .filter_by(**scope, path=path)
+                    .where(versions.c.revision > base)
+                )
+                join = sa.and_(
+                    commits.c.digest == edits.c.digest,
+                    *(getattr(commits.c, k) == getattr(edits.c, k) for k in scope),
+                )
+                # JSON trailers are deliberately stored as portable text; retrieve them
+                # directly to avoid backend-dependent JSON casts on the native journal.
+                tombstones = (
                     await con.execute(
                         sa.select(
-                            versions.c.revision,
-                            versions.c.content,
-                            versions.c.author,
-                            versions.c.session_id,
-                            versions.c.run_id,
+                            edits.c.revision, commits.c.author, commits.c.provenance
                         )
-                        .filter_by(**scope, path=path)
-                        .where(versions.c.revision > base)
-                        .order_by(versions.c.revision)
+                        .select_from(edits.join(commits, join))
+                        .where(
+                            *(getattr(edits.c, k) == v for k, v in scope.items()),
+                            edits.c.path == path,
+                            edits.c.revision > base,
+                            edits.c.present.is_(False),
+                            commits.c.source == "native",
+                        )
                     )
-                ).mappings()
+                ).all()
+                markers = [
+                    {
+                        "revision": r,
+                        "content": None,
+                        "author": a,
+                        "session_id": json.loads(o).get("session"),
+                        "run_id": json.loads(o).get("run"),
+                    }
+                    for r, a, o in tombstones
+                ]
+                from heapq import merge
+
+                records = merge(
+                    (
+                        await con.execute(written.order_by(versions.c.revision))
+                    ).mappings(),
+                    sorted(markers, key=lambda x: x["revision"]),
+                    key=lambda x: x["revision"],
+                )
                 last = base
                 latest = None
                 for record in records:
@@ -489,6 +531,8 @@ async def restore_vault(
                         "Post-import head lacks its revision ledger"
                     )
                 if content is None:
+                    if last > base and target.is_file():
+                        target.unlink()  # only the newly restored, verified candidate
                     if target.exists():
                         raise VaultImportMismatch(
                             "Restored archive conflicts with a forgotten document"

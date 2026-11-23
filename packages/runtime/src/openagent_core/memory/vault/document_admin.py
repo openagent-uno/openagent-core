@@ -19,17 +19,29 @@ class DocumentVaultAdministration:
 
     async def execute(self, context, operation, *, path=None, query=None, body=None):
         query, body = query or {}, body or {}
-        readable = {"notes", "read", "graph", "stats", "gate", "search", "search/files", "search/in-file"}
-        if operation not in readable | {"write", "delete"}:
+        readable = {"notes", "read", "graph", "stats", "gate", "search", "search/files", "search/in-file","history","commit"}
+        if operation not in readable | {"write", "delete","restore","reset"}:
             raise NotImplementedError("This operation requires version-history administration")
         action = "vault.read" if operation in readable else "vault.write"
         await self.authorize(context, action)
-        result = await self._execute(operation, path, query, body)
+        if operation in {"restore","reset"}:
+            from .document_history import restore
+            if operation == "reset" and body.get("confirm") is not True:
+                raise ValueError("An explicit reset confirmation is required")
+            result = await restore(self.store,self.execution,body.get("hash"),reset=operation=="reset",
+                                   authorize=lambda:self.authorize(context,action))
+        else:
+            result = await self._execute(operation, path, query, body, lambda:self.authorize(context,action))
         await self.authorize(context, action)
         return result
 
-    async def _execute(self, operation, path, query, body):
+    async def _execute(self, operation, path, query, body, before_commit):
         execution = self.execution
+        if operation in {"history","commit"}:
+            from . import document_history
+            if operation == "history":
+                return await document_history.history(self.store,execution,path=query.get("path"),limit=_limit(query.get("limit"),50,200))
+            return await document_history.detail(self.store,execution,query.get("hash"))
         if operation in {"read", "search/in-file"}:
             row = await self.store.read(execution, path if operation == "read" else query["path"])
             if operation == "search/in-file":
@@ -52,11 +64,11 @@ class DocumentVaultAdministration:
                         raise
                     expected = 0
             if operation == "delete":
-                result = await self.store.delete(execution, path, expected_revision=expected)
+                result = await self.store.delete(execution, path, expected_revision=expected,before_commit=before_commit)
             else:
-                result = await self.store.write(execution, path, body["content"], expected_revision=expected)
+                result = await self.store.write(execution, path, body["content"], expected_revision=expected,before_commit=before_commit)
             return {"ok": True, "path": path, "revision": result["revision"],
-                    "existed": expected != 0, "warnings": [], "applied": []}
+                    "existed": expected != 0, "warnings": [], "applied": [], "commit":result.get("commit")}
         if operation == "notes":
             page, rows = None, []
             while True:

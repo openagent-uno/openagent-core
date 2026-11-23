@@ -265,3 +265,77 @@ class DocumentImport(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaises(LookupError):
             await self.vault.read(self.ctx, "old.md", revision=1)
+
+    async def test_desktop_history_restores_exact_branch_and_current_reset_requires_consent(
+        self,
+    ):
+        from openagent_core.administration import ManagementContext
+        from openagent_core.memory.vault.document_admin import (
+            DocumentVaultAdministration,
+        )
+
+        await self.run_import()
+        admin = DocumentVaultAdministration(self.vault, self.vault.authorizer, self.ctx)
+        management = ManagementContext(self.person, "agent")
+
+        # Product management policy is independent of the memory-space grant.
+        class Granted:
+            async def authorize(self, *args, **kwargs):
+                return True
+
+        admin.authorizer = Granted()
+
+        async def op(name, **kwargs):
+            return await admin.execute(management, name, **kwargs)
+
+        initial = await op("history")
+        self.assertEqual(initial["commits"][0]["subject"], "Captured working tree")
+        old = (await op("history", query={"path": "old.md"}))["commits"]
+        self.assertTrue(any(c["hash"] == self.first for c in old))
+        detail = await op("commit", query={"hash": self.first})
+        self.assertEqual(detail["files"], [{"path": "old.md", "status": "A"}])
+        self.assertNotIn("secret.md", str(detail))
+        self.assertIn("Intro", detail["diff"])
+        side = self.git("rev-parse", "side").strip()
+        await op("restore", body={"hash": side})
+        self.assertEqual(
+            (await self.vault.read(self.ctx, "old.md"))["content"], "# Side branch"
+        )
+        for path in ("active.md", "new.md"):
+            with self.assertRaises(LookupError):
+                await self.vault.read(self.ctx, path)
+        saved = (await op("history"))["commits"][0]["hash"]
+        await op("write", path="old.md", body={"content": "# newer"})
+        await op("write", path="old.md", body={"content": "# Side branch"})
+        with self.assertRaises(ValueError):
+            await op("reset", body={"hash": saved})
+        before = (await op("history"))["commits"]
+        result = await op("reset", body={"hash": saved, "confirm": True})
+        self.assertEqual(result["deleted"], 2)
+        self.assertEqual(
+            (await self.vault.read(self.ctx, "old.md"))["content"], "# Side branch"
+        )
+        with self.assertRaises(LookupError):
+            await op("commit", query={"hash": before[0]["hash"]})
+        self.assertIn(
+            "error", await op("reset", body={"hash": self.first, "confirm": True})
+        )
+        await op("restore", body={"hash": initial["commits"][0]["hash"]})
+        self.assertIn(
+            "Working draft", (await self.vault.read(self.ctx, "active.md"))["content"]
+        )
+
+    async def test_normal_deletion_is_honored_by_private_rollback(self):
+        await self.run_import()
+        head = await self.vault.read(self.ctx, "new.md")
+        await self.vault.delete(self.ctx, "new.md", expected_revision=head["revision"])
+        destination = self.root / "native-deletion"
+        receipt = await vault_import.restore_vault(
+            self.vault, self.ctx, self.src, "state.db", destination, quiesce=fence
+        )
+        self.assertEqual(receipt["later_revisions"], 1)
+        self.assertFalse((destination / "state/notes/new.md").exists())
+        self.assertTrue((self.sealed / "notes/new.md").is_file())
+        row = json.loads((destination / "post-import-revisions.jsonl").read_text())
+        self.assertIsNone(row["content"])
+        self.assertEqual(row["author"], self.person.key)
