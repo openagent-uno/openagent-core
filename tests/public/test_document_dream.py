@@ -138,6 +138,24 @@ class DocumentDream(unittest.IsolatedAsyncioTestCase):
         await self.runtime.start()
         self.addAsyncCleanup(self.runtime.close)
 
+    async def test_an_admitted_scheduler_occurrence_uses_one_vault_only_run(self):
+        from openagent_core.contracts import RunRequest
+        await self.vault.write(self.user, "manual.md", "manual", expected_revision=0)
+        self.agent.release.set()
+        authority = replace(self.user, deferred=True, delegation_id="vault-grant")
+        vault, worker = self.vault, self.worker
+        class Scheduled:
+            async def execute(_, request, context, runtime):
+                first = await worker.run_occurrence(runtime, vault, context, "schedule-click")
+                retry = await worker.run_occurrence(runtime, vault, context, "schedule-click")
+                assert first.run_id == retry.run_id
+                return retry.status
+        await self.runtime.execute_operation(
+            RunRequest("schedule", authority.session_id,"schedule","maintenance"),authority,Scheduled())
+        outcome = await asyncio.wait_for(self.runtime.wait("schedule",authority), 8)
+        self.assertEqual((outcome.status,outcome.output), ("success","success"))
+        self.assertEqual(self.agent.turns, 1)
+
     async def test_manual_receipt_and_scheduled_completion(self):
         await self.vault.write(self.user, "manual.md", "manual", expected_revision=0)
         self.assertIsNone(await self.worker.run_due_once(self.runtime))

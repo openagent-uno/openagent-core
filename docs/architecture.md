@@ -324,3 +324,8 @@ visibility. Send the space ID alongside the logical path for detail reads.
 The directory selects a scope on the original verified identity and the vault
 rechecks that scope before returning rows. Equal paths in different spaces
 are independent identities.
+
+An existing host scheduler can drive the same queue with
+`DocumentDreamWorker.run_occurrence`. It supplies an already admitted scheduled
+context and its stable occurrence ID. Retries join the same SQL receipt and
+the caller observes the actual terminal status of the delegated vault turn.

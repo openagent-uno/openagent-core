@@ -43,6 +43,10 @@ manual = sa.Table(
     "oa_document_dream_requests", metadata, sa.Column("request_digest", sa.String(64), primary_key=True)
 )
 
+occurrences = sa.Table("oa_document_dream_occurrences", metadata,
+    sa.Column("receipt", sa.String(64), primary_key=True),
+    sa.Column("run_id", sa.String(64), nullable=False))
+
 
 def _digest(values):
     return hashlib.sha256(canonical_json(values).encode()).hexdigest()
@@ -183,9 +187,43 @@ class DocumentDreamQueue:
             await vault._recheck(context, "memory.dream", scope)
         return digest
 
-    async def claim(self, agent):
+    async def scheduled_run(self, vault, context, occurrence_id):
+        """Join one durable pass for an already admitted scheduler occurrence."""
+        from openagent_core.runtime import current_execution_context, current_run_id, current_runtime
+        if (not context.deferred or current_execution_context() != context or not current_run_id()
+                or vault.dream_queue is not self):
+            raise PermissionError("An active scheduled occurrence is required")
+        if not isinstance(occurrence_id, str) or not 1 <= len(occurrence_id) <= 256:
+            raise ValueError("Invalid scheduler occurrence ID")
+        owner = await current_runtime().get_run(current_run_id(), context)
+        if owner.status != "running" or owner.session_id != context.session_id:
+            raise PermissionError("The scheduler occurrence is no longer active")
+        scope = await vault._scope(context, "memory.dream")
+        key = _digest([scope, context.authority.key, context.delegation_id, occurrence_id])
+        new_id = uuid4().hex
+        builder = pg_insert if self.engine.dialect.name == "postgresql" else sqlite_insert
+        async with self.engine.begin() as con:
+            created = await con.scalar(builder(occurrences).values(receipt=key,run_id=new_id)
+                .on_conflict_do_nothing().returning(occurrences.c.receipt))
+            if created:
+                await self.mark_changed(con, scope, only_if_idle=True)
+                updated = await con.execute(spaces.update().filter_by(**scope).values(
+                    run_id=sa.case((spaces.c.target.is_(None),new_id),else_=spaces.c.run_id),
+                    target=sa.func.coalesce(spaces.c.target,spaces.c.dirty),
+                    due_at=sa.case((spaces.c.target.is_(None),self.clock()),else_=spaces.c.due_at),
+                ).returning(spaces.c.run_id))
+                ident = updated.scalar_one()
+                await con.execute(occurrences.update().filter_by(receipt=key).values(run_id=ident))
+            else:
+                ident = await con.scalar(sa.select(occurrences.c.run_id).filter_by(receipt=key))
+            await vault._recheck(context, "memory.dream", scope)
+        return scope, ident
+
+    async def claim(self, agent, *, scope=None):
         now = self.clock()
         due = sa.and_(spaces.c.agent == agent, spaces.c.completed < spaces.c.dirty, spaces.c.due_at <= now)
+        if scope is not None:
+            due = sa.and_(due, *(spaces.c[key] == scope[key] for key in ("tenant","agent","space")))
         key = list(spaces.primary_key.columns)
         candidate = (
             sa.select(*key).where(due).order_by(spaces.c.due_at, spaces.c.tenant, spaces.c.space).limit(1)
@@ -238,8 +276,8 @@ class DocumentDreamWorker:
         self.interval, self.deadline = tick_seconds, deadline_seconds
         self.task = None
 
-    async def run_due_once(self, runtime):
-        claim = await self.queue.claim(runtime.settings.agent_id)
+    async def run_due_once(self, runtime, *, scope=None):
+        claim = await self.queue.claim(runtime.settings.agent_id, scope=scope)
         if claim is None:
             return None
         try:
@@ -281,6 +319,31 @@ class DocumentDreamWorker:
         except PermissionError:
             await self.queue.finish(claim, "denied")
             return None
+
+    async def run_occurrence(self, runtime, vault, context, occurrence_id):
+        """The host scheduler keeps its own clock, projections and durable grant."""
+        scope, ident = await self.queue.scheduled_run(vault, context, occurrence_id)
+        identity = DreamClaim(**scope, target=0, run_id=ident, token="")
+        reader = await self.resolve_context(identity)
+        async with asyncio.timeout(self.deadline + self.queue.lease + self.interval):
+            while True:
+                try:
+                    record = await runtime.get_run(ident, reader)
+                except LookupError:
+                    await self.run_due_once(runtime, scope=scope)
+                    async with self.queue.engine.connect() as con:
+                        status = await con.scalar(sa.select(spaces.c.status).filter_by(**scope, run_id=ident))
+                    if status == "denied":
+                        raise PermissionError("Scheduled dream authority denied")
+                    await asyncio.sleep(min(.1, self.interval))
+                    continue
+                if not record.terminal:
+                    record = await runtime.wait(ident, reader)
+                async with self.queue.engine.begin() as con:
+                    await con.execute(spaces.update().filter_by(**scope,run_id=ident)
+                        .where(spaces.c.target.is_not(None)).values(status=record.status,
+                        completed=spaces.c.target, target=None, lease_token=None, due_at=self.queue._next_due(scope)))
+                return record
 
     async def start(self, runtime):
         if self.task is None:
