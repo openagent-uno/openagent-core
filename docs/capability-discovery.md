@@ -67,3 +67,29 @@ choice, a fact explicitly excluded from memory, and a synthetic credential.
 Compare the vault inventory before and after each of these three cases.
 
 A schema-transport model shortcut requires live permission to call its exact tool at request composition. Source discovery and public inventory continue to use their normal grants. Execution rechecks the call grant again.
+
+### Restricting the capability sources of one turn
+
+An embedding host can narrow a run to exact catalog source IDs with
+`openagent_core.capability_scope`. Install the scope in the public
+`AgentExecutor.request_scope` hook. Derive the choice from the authenticated
+execution context and the persisted, fingerprinted request. This keeps retries
+and resumed execution on the same policy. A trusted policy may narrow the
+set further when an underlying grant expires.
+
+```python
+@asynccontextmanager
+async def request_scope(request, context, runtime):
+    sources = await policy.sources_for(request, context)
+    with capability_scope(sources):
+        yield request
+```
+
+`None` inherits the current scope. An empty set produces a text turn with no
+model tools. A nonempty set limits discovery and invocation to those exact
+sources and retains the discovery broker on compatible providers. An earlier
+tool reference cannot be executed through a narrower scope. Nested scopes
+intersect and concurrent runs have independent contexts. Source selection
+continues to require the host's ordinary user, tenant, operation, and audience
+grants. Session history, automatic memory recall, and the grants protecting
+them remain independent.

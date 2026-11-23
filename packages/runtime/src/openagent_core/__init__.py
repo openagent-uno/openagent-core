@@ -13,6 +13,7 @@ from .deliveries import ConfirmedDelivery
 from .capabilities import (CapabilityCatalog, CapabilitySource, ToolExecutor,
     ToolDefinition, ToolDescriptor, FunctionSource, CapabilityUnavailable)
 from .extensions import EngineExtensions
+from .tool_scope import capability_scope
 from .discovery import DISCOVERY_PRESENTATION_API_VERSION, DiscoveryPresentation
 from .notifications import NotificationCapability, NotificationRequest, NotificationSink
 from .channel_messages import ChannelDestination, ChannelMessageCapability, ChannelMessageRequest, ChannelMessageSink
@@ -27,7 +28,7 @@ __version__ = '1.1.0b161'
 __all__ = ['Runtime','RuntimeSettings','RuntimeServices','ProviderHistory','ProviderHistoryMessage','ProviderAccount','ProviderRoute','ProviderAdmission','PrincipalRef','ExecutionContext',
     'CapabilityLease','ResourceRef','RunRequest','AcceptedRunRequest','RunRecord','RunEvent','RunEventPage','RunFinalAnswer','RunReplayReader','Authorizer','ConfirmedDelivery',
     'IdentityDirectory','RuntimeStore','SessionRef','SessionStore','ModelCatalog','CredentialResolver','DelegationService',
-    'CapabilityCatalog','CapabilitySource','ToolExecutor','ToolDefinition','ToolDescriptor',
+    'CapabilityCatalog','capability_scope','CapabilitySource','ToolExecutor','ToolDefinition','ToolDescriptor',
     'FunctionSource','CapabilityUnavailable','IdempotencyConflict','EngineExtensions',
     'DISCOVERY_PRESENTATION_API_VERSION','DiscoveryPresentation',
     'NotificationCapability','NotificationRequest','NotificationSink',

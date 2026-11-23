@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from types import SimpleNamespace
 
 from openagent_core import (
-    CapabilityCatalog, CapabilityUnavailable, DiscoveryPresentation,
+    CapabilityCatalog, CapabilityUnavailable, DiscoveryPresentation, capability_scope,
     DISCOVERY_PRESENTATION_API_VERSION, ExecutionContext, FunctionSource,
     PrincipalRef, ToolDefinition,
 )
@@ -75,6 +76,58 @@ class DiscoveryPresentationContract(unittest.IsolatedAsyncioTestCase):
         hidden = FunctionSource((ToolDefinition("private_operation", "Not visible", {}),),
             {"private_operation": implementation("private_operation")})
         self.catalog.register("hidden-source", hidden, hidden, target_label="service-hidden")
+
+    async def test_turn_capability_scope_is_exact_nested_concurrent_and_rechecks_invocation(self):
+        from openagent_core.models.native_provider import NativeProvider, _execution_cache_key
+        from openagent_core.tool_scope import current_tool_allowlist
+
+        other = FunctionSource((ToolDefinition("read", "Read another origin", {"type": "object"}),),
+                               {"read": lambda *_: None})
+        self.catalog.register("records-v2", other, other, target_label="exact")
+        self.catalog.register("records_v2", other, other, target_label="alias")
+        all_sources = await self.catalog.discover(self.context)
+        allowed = next(d for d in all_sources if d.source_id == "records-v2")
+        alias = next(d for d in all_sources if d.source_id == "records_v2")
+        pool, _ = await self.make_pool()
+        broker, = pool.runtime_toolkits_tool_search_only()
+        alias_toolkit = SimpleNamespace(name="records_v2")
+        impersonator = SimpleNamespace(name="tool-search")
+        provider = NativeProvider("openai:fixture")
+        provider.set_mcp_toolkits([alias_toolkit, impersonator, broker])
+        with capability_scope({"records-v2"}):
+            self.assertEqual(provider._compatible_mcp_toolkits()[0], [broker])
+        self.assertEqual(provider._compatible_mcp_toolkits()[0], [alias_toolkit, impersonator, broker])
+        gates = [asyncio.Event(), asyncio.Event()]
+        async def inspect(index, selected):
+            with capability_scope(selected):
+                gates[index].set()
+                await gates[1-index].wait()
+                visible = await self.catalog.discover(self.context)
+                return {d.source_id for d in visible}, _execution_cache_key("same prompt")[0]
+        left, right = await asyncio.gather(inspect(0, {"records-v2"}), inspect(1, {"records_v2"}))
+        self.assertEqual(left[0], {"records-v2"})
+        self.assertEqual(right[0], {"records_v2"})
+        self.assertNotEqual(left[1], right[1])
+
+        with capability_scope({"records-v2"}):
+            with self.assertRaises(CapabilityUnavailable):
+                await self.catalog.call_tool(alias.tool_ref, {}, self.context)
+            with capability_scope(None), capability_scope({"records_v2", "records-v2"}):
+                self.assertEqual({d.source_id for d in await self.catalog.discover(self.context)}, {"records-v2"})
+            with capability_scope(()):
+                self.assertEqual(await self.catalog.discover(self.context), ())
+                self.assertEqual(NativeProvider._compatible_mcp_toolkits(object()), ([], []))
+                token = set_tool_allowlist(["records-v2"])
+                try:
+                    self.assertEqual(current_tool_allowlist(), frozenset())
+                    with self.assertRaises(CapabilityUnavailable):
+                        await self.catalog.call_tool(allowed.tool_ref, {}, self.context)
+                finally:
+                    reset_tool_allowlist(token)
+        self.assertIsNone(current_tool_allowlist())
+        self.assertEqual([d.tool_ref for d in await self.catalog.discover(self.context)], [d.tool_ref for d in all_sources])
+        with self.assertRaises(TypeError), capability_scope("records"):
+            self.fail("String was accepted as a sequence of sources")
 
     async def test_model_shortcuts_require_tool_call_even_when_the_source_is_discoverable(self):
         pool, unused = await self.make_pool(DiscoveryPresentation(named_calls="authorized",
