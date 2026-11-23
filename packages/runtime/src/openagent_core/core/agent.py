@@ -2726,7 +2726,8 @@ class Agent:
             ]
         active_module_ids = (runtime.enabled_module_ids if runtime is not None
                              else frozenset())
-        vault = runtime.service("vault.service") if runtime is not None and "vault" in active_module_ids else None
+        service = getattr(runtime, "service", None)
+        vault = service("vault.service") if service and "vault" in active_module_ids else None
         uses_file_vault = "vault" in active_module_ids and not hasattr(vault, "recall_documents")
         substitutions = {
             "OPENAGENT_VAULT_PATH": self._resolve_vault_path() if uses_file_vault else "",

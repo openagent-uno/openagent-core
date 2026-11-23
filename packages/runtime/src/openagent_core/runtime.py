@@ -109,9 +109,14 @@ class RuntimeSettings:
 
 
     def require_workspace(self) -> Path:
-        if self.workspace is None:
-            raise RuntimeError('This operation requires a local runtime workspace')
-        return self.workspace
+        return require_workspace(self)
+
+
+def require_workspace(settings) -> Path:
+    workspace = settings.workspace
+    if workspace is None:
+        raise RuntimeError('This operation requires a local runtime workspace')
+    return workspace
 
 
 @dataclass(slots=True, init=False)

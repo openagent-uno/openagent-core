@@ -382,10 +382,10 @@ _AGNO_IMAGE_TMPDIR: str | None = None
 
 
 def _agno_image_tmpdir() -> str:
-    from openagent_core.runtime import current_runtime
+    from openagent_core.runtime import current_runtime, require_workspace
     runtime = current_runtime()
     if runtime is not None:
-        path = runtime.settings.require_workspace() / 'cache' / 'model-media'
+        path = require_workspace(runtime.settings) / 'cache' / 'model-media'
         path.mkdir(parents=True,exist_ok=True,mode=0o700)
         return str(path)
     global _AGNO_IMAGE_TMPDIR

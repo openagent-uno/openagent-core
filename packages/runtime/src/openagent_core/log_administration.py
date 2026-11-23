@@ -3,14 +3,14 @@ from __future__ import annotations
 import asyncio
 import re
 from .contracts import ResourceRef,require_authorized
-from .runtime import runtime_scope
+from .runtime import require_workspace, runtime_scope
 
 
 class LogAdministration:
     def __init__(self,runtime,authorizer):self.runtime,self.authorizer=runtime,authorizer
 
     def checked_path(self):
-        root=self.runtime.settings.require_workspace().resolve();path=root/"logs"/"events.jsonl"
+        root=require_workspace(self.runtime.settings).resolve();path=root/"logs"/"events.jsonl"
         if not path.resolve().is_relative_to(root):raise PermissionError("Log path escapes the host workspace")
         return path
 

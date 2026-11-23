@@ -156,12 +156,12 @@ def _existing_is_hub(dest: Path) -> bool | None:
 
 def hub_settings():
     from openagent_core.core.config import load_config, skills_settings
-    from openagent_core.runtime import current_runtime
+    from openagent_core.runtime import current_runtime, require_workspace
 
     runtime = current_runtime()
     # An embedded runtime can have a writable current directory that is
     # unrelated to its host-owned configuration.
-    config_path = runtime.settings.require_workspace() / "openagent.yaml" if runtime is not None else None
+    config_path = require_workspace(runtime.settings) / "openagent.yaml" if runtime is not None else None
     return skills_settings(load_config(config_path))
 
 
