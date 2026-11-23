@@ -64,11 +64,69 @@ class RuntimeCandidate(unittest.IsolatedAsyncioTestCase):
                                     dsn=self.dsn, schema=self.stage_schema, require_git_history=history_only,
                                     history_only=history_only)
 
-    def build(self, verify=False, *, history_only=False, tenants=None):
+    def build(self, verify=False, *, history_only=False, tenants=None, attest_engine_history=False):
         return self.candidate.build_runtime_candidate(self.snapshot, "state.sqlite", "notes", expected_tenant=None if tenants else "tenant",
                     expected_tenants=tenants,
                     agent_id="agent", dsn=self.dsn, stage_schema=self.stage_schema, candidate_schema=self.schema,
-                    verify_only=verify, require_git_history=history_only, history_only=history_only)
+                    verify_only=verify, require_git_history=history_only, history_only=history_only,
+                    attest_engine_history=attest_engine_history)
+
+    def create_archived_engine_session(self):
+        import json
+        db = self.store.connection
+        db.execute("""CREATE TABLE sessions(session_id TEXT PRIMARY KEY,session_type TEXT,agent_id TEXT,
+                   user_id TEXT,runs TEXT,team_id TEXT,workflow_id TEXT,summary TEXT)""")
+        engine = dict(run_id="run",session_id="thread",agent_id="internal-engine",user_id="internal-alias",
+                      status="COMPLETED",input={"input_content":"question"},content="answer",
+                      messages=[{"role":"system","content":"private policy"},{"role":"user","content":"question"},
+                                {"role":"assistant","content":"answer"}])
+        db.execute("INSERT INTO sessions VALUES(?,?,?,?,?,NULL,NULL,?)",
+                   ("thread","agent","internal-engine","internal-alias",json.dumps([engine]),"private summary"))
+        return engine
+
+    async def test_archive_keeps_engine_payloads_and_projects_only_proven_session_associations(self):
+        import hashlib
+        self.create_archived_engine_session()
+        await self.seal()
+        with self.assertRaisesRegex(self.stage.StageMismatch, "additional runtime"):
+            self.build()
+        self.assertIsNone(self.pg.execute("SELECT to_regnamespace(%s)",(self.schema,)).fetchone()[0])
+        report=self.build(attest_engine_history=True)
+        self.assertEqual(report["verified_rows"]["migration_engine_runs"],1)
+        self.assertEqual(self.build(verify=True,attest_engine_history=True),report)
+        with self.assertRaises(self.stage.StageMismatch):
+            self.build(verify=True)
+        from psycopg import sql
+        meta=sql.Identifier(self.schema,"migration_engine_runs")
+        link=self.pg.execute(sql.SQL("SELECT * FROM {}").format(meta)).fetchone()
+        self.assertEqual(link[:5],("agent","tenant","thread","run",1))
+        payload=self.pg.execute(sql.SQL("SELECT payload FROM {} WHERE collection='table/sessions' AND part=1")
+                                .format(sql.Identifier(self.stage_schema,"parts"))).fetchone()[0]
+        self.assertIn(b"private summary",payload)
+        self.assertIn(b"private policy",payload)
+        self.assertEqual(link[5],hashlib.sha256(payload).hexdigest())
+        self.assertEqual(link[6],0)
+        self.assertNotIn("private summary",repr(link))
+        self.pg.execute(sql.SQL("UPDATE {} SET tenant='other'").format(meta))
+        with self.assertRaisesRegex(self.stage.StageMismatch,"data differs"):
+            self.build(verify=True,attest_engine_history=True)
+
+    async def test_engine_associations_reject_ambiguous_runs_and_unproven_content(self):
+        import json
+        from openagent_storage_sqlite.engine_history_archive import associations
+        engine=self.create_archived_engine_session()
+        db=self.store.connection
+        for rows in ([dict(engine,content="another private answer")],[dict(engine,session_id="elsewhere")],
+                     [dict(engine,agent_id="a different alias")],[dict(engine,run_id="unbound")],
+                     [dict(engine,messages=engine["messages"]+[{"role":"assistant","content":"extra"}])],
+                     [engine,engine],[]):
+            with self.subTest(case=len(rows)):
+                db.execute("UPDATE sessions SET runs=?",(json.dumps(rows),))
+                with self.assertRaises(self.stage.StageMismatch):
+                    list(associations(db,"agent",("tenant",)))
+        db.execute("UPDATE sessions SET runs=?",(json.dumps([engine]),))
+        with self.assertRaises(self.stage.StageMismatch):
+            list(associations(db,"agent",("another-tenant",)))
 
     async def test_history_only_stage_and_native_candidate_retry_and_reader(self):
         from openagent_storage_postgres import PostgresRuntimeStore

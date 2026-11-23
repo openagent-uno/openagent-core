@@ -30,6 +30,8 @@ from .preflight import _tenant_cli, _vault_options
 # These columns describe the public runtime's relational projection. The source
 # envelope, ACL evidence, derived items and search journal stay in the private stage.
 PROJECTION = {
+    "migration_engine_runs": ("agent tenant session_id run_id source_rowid source_row_sha256 engine_ordinal engine_run_sha256",
+                              'session_id COLLATE "C", engine_ordinal'),
     "sessions": ("agent id tenant authority owner_id participants title archived origin parent_id root_id "
                  "created_at updated_at last_activity_at", 'id COLLATE "C"'),
     "runs": ("agent id session_id tenant ordinal request_key digest request context worker status finished_at "
@@ -246,9 +248,11 @@ def _handoff_rows(db, agent, tenants):
         yield agent, row["source_run_id"], row["origin_run_id"]
 
 
-def _source_scope(db, *, archive_verified):
+def _source_scope(db, *, archive_verified, engine_history):
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
-    restricted = ("sessions", "resource_acl", "session_message_parts", "context_snapshots")
+    restricted = ("resource_acl", "session_message_parts", "context_snapshots")
+    if not engine_history:
+        restricted += ("sessions",)
     if not archive_verified:
         restricted += ("artifacts", "artifact_links")
     for table in restricted:
@@ -326,10 +330,12 @@ def _schema(pg, name, receipt, verify_only):
 
 def build_runtime_candidate(snapshot, database, vault, *, expected_tenant=None, expected_tenants=None, agent_id, dsn, stage_schema,
                             candidate_schema, verify_only=False, require_git_history=True, history_only=False,
-                            artifact_archive_schema=None):
+                            artifact_archive_schema=None, attest_engine_history=False):
     """Build or independently re-read an atomic candidate, without runtime admission or cutover."""
     if not isinstance(agent_id, str) or not agent_id.strip():
         raise ValueError("An exact agent ID is required")
+    if type(attest_engine_history) is not bool:
+        raise ValueError("Select engine history attestation explicitly")
     selected = _tenant_selection(expected_tenant, expected_tenants)
     staged = transfer_history(snapshot, database, vault, expected_tenant=expected_tenant, expected_tenants=expected_tenants, dsn=dsn,
                               schema=stage_schema, verify_only=True, require_git_history=require_git_history,
@@ -340,6 +346,8 @@ def build_runtime_candidate(snapshot, database, vault, *, expected_tenant=None, 
     receipt_data = [2 if history_only or expected_tenants is not None else 1, digest, database, vault, selected, agent_id, stage_schema]
     if artifact_archive_schema is not None:
         receipt_data.extend(["artifact_archive", artifact_archive_schema])
+    if attest_engine_history:
+        receipt_data.append("archived_engine_bindings_v1")
     receipt = canonical_json(receipt_data)
     source = Path(snapshot).resolve() / _relative(database)
     with closing(sqlite3.connect(source.as_uri() + "?mode=ro&immutable=1", uri=True)) as db, psycopg.connect(dsn) as pg:
@@ -352,7 +360,7 @@ def build_runtime_candidate(snapshot, database, vault, *, expected_tenant=None, 
             artifact_runs = verify_artifact_candidate(pg, db, schema=artifact_archive_schema,
                 manifest_sha256=digest, database_sha256=staged["source_database_sha256"],
                 agent_id=agent_id, tenants=selected)
-        _source_scope(db, archive_verified=artifact_archive_schema is not None)
+        _source_scope(db, archive_verified=artifact_archive_schema is not None, engine_history=attest_engine_history)
         fresh = _schema(pg, candidate_schema, receipt, verify_only)
         sources = dict(sessions=_session_rows, runs=partial(_run_rows, artifact_runs=artifact_runs), messages=_message_rows, events=_event_rows, tool_calls=_tool_rows,
                        operations=_operation_rows, handoffs=_handoff_rows)
@@ -361,6 +369,18 @@ def build_runtime_candidate(snapshot, database, vault, *, expected_tenant=None, 
             if fresh:
                 _compare(pg, table, generate(db, agent_id, selected), True)
             counts[table] = _compare(pg, table, generate(db, agent_id, selected), False)
+        if attest_engine_history:
+            from .engine_history_archive import TABLE, associations
+            if not staged["verified_rows"].get("sessions"):
+                raise StageMismatch("Engine history attestation requires archived source rows")
+            if fresh:
+                pg.execute(TABLE)
+            else:
+                pg.execute("LOCK TABLE migration_engine_runs IN SHARE MODE")
+            rows = partial(associations, db, agent_id, selected)
+            if fresh:
+                _compare(pg, "migration_engine_runs", rows(), True)
+            counts["migration_engine_runs"] = _compare(pg, "migration_engine_runs", rows(), False)
         highwater = db.execute("SELECT seq FROM sqlite_sequence WHERE name='domain_events'").fetchone()
         last_event = highwater[0] if highwater else 0
         if fresh:
@@ -384,6 +404,7 @@ def main(argv=None):
     for key in ("database", "vault", "agent-id", "stage-schema", "candidate-schema"):
         parser.add_argument("--" + key, required=True)
     parser.add_argument("--artifact-archive-schema")
+    parser.add_argument("--attest-engine-history",action="store_true")
     parser.add_argument("--verify-only", action="store_true")
     _vault_options(parser)
     args = vars(parser.parse_args(argv))

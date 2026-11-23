@@ -417,3 +417,11 @@ new operation, and switches forward. It compares event, artifact, document
 and effect receipts and exercises stale, in-flight and failed qualifications.
 The application-specific previous HTTP contract and production writer fence
 must pass their host's own acceptance run before activation.
+
+### Preserve engine session envelopes during a runtime migration
+
+Some SQLite installations contain a legacy `sessions` table alongside canonical sessions and runs. The private historical stage preserves the exact table definition, row order, row identities and bytes, including engine aliases, system prompts, summaries and model metadata. To associate supported envelopes to a runtime candidate, add `--attest-engine-history` to its creation and verification commands, or pass `attest_engine_history=True`. This opt-in is part of the sealed candidate receipt.
+
+Each supported engine run must be a completed single-turn agent exchange. Its session and run identifiers must match one admitted canonical run in a private session belonging to the selected tenant and agent. Input, output, user and assistant messages must agree exactly. Engine agent/user aliases must agree within each envelope. Authority always comes from the canonical admission. Mixed sessions, additional turns, orphaned or duplicate runs and contradictory data stop the transaction. The operator must reconcile histories outside this profile before continuing.
+
+The migration-only `migration_engine_runs` table stores the canonical association, the row and run positions, and SHA-256 digests. The row digest covers the original archived JSON line including its terminating newline. Operator verification rechecks the raw PostgreSQL stage against the sealed SQLite source, regenerates each association and verifies every destination row. Keep both migration tables and the history stage private when granting the application its runtime privileges. The public agent receives its canonical transcript. Older summary and system-prompt contents remain available to the authorized recovery operator in the raw archive.
