@@ -100,3 +100,47 @@ parity, file permissions, provider credentials, engine context reconstruction
 or a successful restore. Reconcile source and target data under the same fence,
 verify scope, history, content, attached bytes and permissions using the
 target adapter, and qualify restore before activating the target.
+
+## Transfer and recheck PostgreSQL staging
+
+Install the `postgres-migration` extra of the SQLite adapter. The host supplies a
+dedicated private PostgreSQL destination in `OPENAGENT_MIGRATION_POSTGRES_DSN`.
+The transfer uses an isolated schema owned exclusively by the migration role.
+Its prefix is `oa_stage_` and it is bound permanently to one source
+manifest, database, vault and attested tenant. Runtime/API roles must have no
+access to this schema or to the migration role. Use encrypted transport and
+appropriate backup/retention controls for the sensitive staged history.
+
+```sh
+python -m openagent_storage_sqlite.postgres_stage "$SNAPSHOT" \
+  --database state.sqlite3 --vault memories --expected-tenant "$ATTESTED_TENANT" \
+  --schema oa_stage_initial
+python -m openagent_storage_sqlite.postgres_stage "$SNAPSHOT" \
+  --database state.sqlite3 --vault memories --expected-tenant "$ATTESTED_TENANT" \
+  --schema oa_stage_initial --verify-only
+```
+
+The first command inserts bounded parts of the source history and immediately
+compares their destination bytes and row counts. It can resume after a crash.
+A mismatch stops the copy without overwriting existing data. The second command
+only verifies, including unexpected destination parts. Both take the same
+destination advisory lock. A result with source issues requires review before
+further action.
+
+The staged history includes retained legacy session envelopes and the canonical
+session, message, part, run, tool, ACL, artifact/link, event and projection
+records. Each table stream begins with a header giving source DDL and column
+order; subsequent parts contain newline-delimited JSON arrays. BLOB values are
+tagged base64, and real values use tagged IEEE-754 bits. The ordering uses
+SQLite row identity or the declared primary key for WITHOUT ROWID tables.
+Quarantines, tombstones and references are carried as stored. Each referenced
+available artifact requires matching CAS bytes under the artifact root next
+to the source database. Unavailable references retain their original state.
+
+This is private migration staging. It does not expose conversations through
+runtime APIs, recreate grants, execute source DDL, or replay tools. Vault and
+Git history remain in the verified snapshot for their separate import. The
+receipt identifies the additional source table count; the host must inventory
+those domains separately, together with other databases and private files.
+Verify access rules, original public identifiers, history reconstruction and
+destination APIs before switching applications.
