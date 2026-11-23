@@ -59,6 +59,9 @@ class Continuation(unittest.IsolatedAsyncioTestCase):
             ("missing-parent", "former", "alice"),
             ("foreign-author", "former", "alice"),
             ("self-prompt", "former", "alice"),
+            ("compact", "former", "alice"),
+            ("compact-reordered", "former", "alice"),
+            ("compact-missing-visible", "former", "alice"),
         ]:
             meta = {"client_id": owner}
             items = envelope
@@ -94,6 +97,18 @@ class Continuation(unittest.IsolatedAsyncioTestCase):
                         ],
                     }
                 ]
+            if sid.startswith("compact"):
+                items = [
+                    {
+                        "status": "completed",
+                        "messages": [
+                            {"role": "system", "content": "internal instructions"},
+                            {"role": "developer", "content": "private setup"},
+                            {"role": "user", "content": "visible question"},
+                            {"role": "assistant", "content": "visible answer"},
+                        ],
+                    }
+                ]
             q.execute(
                 "INSERT INTO sessions(session_id,session_type,agent_id,metadata,runs,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
                 (
@@ -107,6 +122,28 @@ class Continuation(unittest.IsolatedAsyncioTestCase):
                 ),
             )
             project_legacy_session(q, sid)
+            if sid.startswith("compact"):
+                q.execute(
+                    "DELETE FROM session_messages WHERE session_id=? AND visibility='internal'",
+                    (sid,),
+                )
+                retained = q.execute(
+                    "SELECT id FROM session_messages WHERE session_id=? ORDER BY sequence",
+                    (sid,),
+                ).fetchall()
+                if sid == "compact-reordered":
+                    retained.reverse()
+                for position, (mid,) in enumerate(retained):
+                    q.execute(
+                        "UPDATE session_messages SET sequence=? WHERE id=?",
+                        (position, mid),
+                    )
+                if sid == "compact-missing-visible":
+                    q.execute(
+                        "DELETE FROM session_messages WHERE session_id=? AND role='assistant'",
+                        (sid,),
+                    )
+
             if sid == "documented-child":
                 q.execute(
                     "UPDATE sessions_v2 SET parent_session_id=NULL WHERE id=?", (sid,)
@@ -293,6 +330,55 @@ class Continuation(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 db.execute(
                     "SELECT count(*) FROM oa_private_legacy_sessions"
+                ).fetchone()[0],
+                0,
+            )
+
+    async def test_visible_only_format_requires_every_retained_row_in_exact_order(self):
+        sessions = ("compact", "compact-reordered", "compact-missing-visible")
+        result = attest_private_continuations(
+            self.snapshot,
+            "state.db",
+            self.path,
+            owner=self.owner,
+            target_agent="current",
+            approved_sessions=dict.fromkeys(sessions, "former"),
+            writer_fence=fenced,
+        )
+        self.assertEqual(result["qualified_sessions"], 1)
+        self.assertEqual(result["verified_messages"], 2)
+        store = SqliteRuntimeStore(self.path)
+        await store.start()
+        self.addAsyncCleanup(store.close)
+        ctx = replace(self.context, session_id="compact")
+        req = RunRequest("next", ctx.session_id, "next", "continue")
+        await store.accept(req, ctx)
+        await store.transition(req.run_id, "running")
+        window = await store.provider_history(
+            ctx, req.run_id, limit=128, max_bytes=65536
+        )
+        self.assertEqual(
+            [m.text for m in window], ["visible question", "visible answer"]
+        )
+        await store.transition(
+            req.run_id, "success", output="answer after the migration"
+        )
+        # Re-running the original source proof after real writes must neither
+        # absorb new messages as evidence nor fail the unchanged old proof.
+        again = attest_private_continuations(
+            self.snapshot,
+            "state.db",
+            self.path,
+            owner=self.owner,
+            target_agent="current",
+            approved_sessions=dict.fromkeys(sessions, "former"),
+            writer_fence=fenced,
+        )
+        self.assertEqual(again, result)
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(
+                db.execute(
+                    "SELECT count(*) FROM session_messages WHERE session_id='compact' AND visibility='internal'"
                 ).fetchone()[0],
                 0,
             )

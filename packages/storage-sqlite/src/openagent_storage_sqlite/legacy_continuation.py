@@ -139,6 +139,54 @@ def _body_digest(message, run):
     )
 
 
+def _match_visible_only_sequences(desired, stored, admitted_suffix):
+    """Recognize the legacy dense ordering before internal messages had rows."""
+    # An already-serving candidate may have appended new admitted turns since
+    # the seal. They are a separate suffix and must never participate in the
+    # comparison or be returned as historical evidence.
+    extra = [
+        row
+        for key, row in stored.items()
+        if key not in desired and row["run_id"] in admitted_suffix
+    ]
+    if extra:
+        stored = {
+            key: row
+            for key, row in stored.items()
+            if key in desired or row["run_id"] not in admitted_suffix
+        }
+        if not stored or min(row["sequence"] for row in extra) <= max(
+            row["sequence"] for row in stored.values()
+        ):
+            return
+    missing = set(desired) - stored.keys()
+    if not missing or stored.keys() - desired.keys():
+        return
+    for key in missing:
+        row = desired[key]
+        envelope = json.loads(row["raw_envelope_json"])
+        if (
+            row["role"] != "compaction"
+            or row["visibility"] != "internal"
+            or str(envelope.get("role") or "").strip().lower()
+            not in {"system", "developer"}
+        ):
+            return
+    # Every remaining row, including tool messages, must agree on identity,
+    # all content/author fields and its exact ordinal in the filtered transcript.
+    remaining = sorted((desired[k] for k in stored), key=lambda row: row["sequence"])
+    for sequence, expected in enumerate(remaining):
+        actual = stored[expected["id"]]
+        if actual["sequence"] != sequence or any(
+            expected.get(k) != actual[k]
+            for k in _MESSAGE_COLUMNS
+            if k not in ("source_version", "sequence")
+        ):
+            return
+    for sequence, expected in enumerate(remaining):
+        expected["sequence"] = sequence
+
+
 def _expected_messages(db, row, owner):
     raw = _fetch_legacy(db, row["id"])
     if not raw or raw.get("agent_id") != row["agent_id"]:
@@ -234,6 +282,21 @@ def _expected_messages(db, row, owner):
         )
     }
     desired = {item["id"]: _message_values(item, **kw) for item in projection.messages}
+    last_original = max((run["ordinal"] for run in projection.runs), default=-1)
+    admitted_suffix = {
+        r[0]
+        for r in db.execute(
+            """
+        SELECT id FROM session_runs WHERE session_id=? AND tenant_id=? AND ordinal>?
+          AND json_extract(metadata_json,'$.runtime_contract')=1
+          AND json_type(metadata_json,'$.execution_context.audience')='array'
+          AND json_type(metadata_json,'$.execution_context.initiator')='object'
+          AND json_type(metadata_json,'$.execution_context.authority')='object'
+        """,
+            (row["id"], owner.tenant_id, last_original),
+        )
+    }
+    _match_visible_only_sequences(desired, actual_messages, admitted_suffix)
     _preserve_delivery_sequences(db, row["id"], desired, actual_messages)
     messages = {}
     for item in projection.messages:
