@@ -65,6 +65,7 @@ jobs:
       - name: Qualify the complete public engine suite on the remote runner
         env:
           OPENAGENT_TEST_POSTGRES_DSN: postgresql://postgres:qualification@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
+          OPENAGENT_TEST_POSTGRES_URL: postgresql+psycopg://postgres:qualification@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
         run: |
           python packaging/qualify.py --wheels "$RUNNER_TEMP/release-wheels" \
             --environment "$RUNNER_TEMP/qualified-engine" \

@@ -44,7 +44,7 @@ that it ended.""",
 @dataclass(frozen=True, slots=True)
 class SessionsDescriptor:
     id: str = "sessions"
-    version: str = "1.1.0b4"
+    version: str = "1.1.0b5"
     api_version: str = MODULE_API_VERSION
     requires_modules: frozenset[str] = frozenset()
     optional_integrations: frozenset[str] = frozenset({"search"})

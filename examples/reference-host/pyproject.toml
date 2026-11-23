@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reference-agent-example"
-version = "1.1.0b5"
+version = "1.1.0b6"
 description = "Reference Reference consumer of the public OpenAgent runtime"
 requires-python = ">=3.11"
 dependencies = ["openagent-core[engine,providers]>=1.1.0b1,<2", "openagent-storage-sqlite>=1.1.0b1,<2",
-  "openagent-module-sessions==1.1.0b4", "openagent-module-tool-discovery==1.1.0b4", "aiohttp>=3.12,<4"]
+  "openagent-module-sessions==1.1.0b5", "openagent-module-tool-discovery==1.1.0b4", "aiohttp>=3.12,<4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

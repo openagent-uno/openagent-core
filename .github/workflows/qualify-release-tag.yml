@@ -86,6 +86,7 @@ jobs:
       - name: Qualify installed public engine and exact source provenance
         env:
           OPENAGENT_TEST_POSTGRES_DSN: postgresql://postgres:qualification@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
+          OPENAGENT_TEST_POSTGRES_URL: postgresql+psycopg://postgres:qualification@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
         run: |
           python - <<'PY_VERIFY'
           import json,os,pathlib,subprocess

@@ -3,10 +3,10 @@ requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 [project]
 name = "openagent-module-vault"
-version = "1.1.0b2"
+version = "1.1.0b3"
 requires-python = ">=3.11"
 license = "MIT"
-dependencies = ["openagent-core[engine]>=1.1.0b1,<2"]
+dependencies = ["openagent-core[engine]>=1.1.0b153,<2"]
 [project.entry-points."openagent.modules"]
 vault = "openagent_module_vault:descriptor"
 [tool.hatch.build.targets.wheel]
