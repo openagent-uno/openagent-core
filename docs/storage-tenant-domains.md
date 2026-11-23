@@ -232,7 +232,8 @@ objects and external-effect receipts under a new fence before switching back.
 The private historical stage retains original SQLite records and CAS bytes. To
 make supported private input attachments available on the normal authenticated
 download URL, use a separate PostgreSQL archive schema and a private object
-store. The following example uses an async S3 client supplied by the host. The
+store. The following example uses an async S3 client supplied by the host. Install the Core engine dependencies, the SQLite adapter’s
+`postgres-migration` extra and the host’s async S3 client. The
 migration role must own the new schema. Hold the source fence and keep the
 archive offline during preparation and independent verification.
 
@@ -285,3 +286,30 @@ and any matching session-link ID. Historical input links cannot establish that
 a run produced an output. The artifact archive does not activate a runtime.
 
 A host migrating private input attachments first imports and verifies their original links, byte digests and admitted request references in an artifact archive. Pass its explicit schema with `--artifact-archive-schema` when creating and verifying the runtime candidate. The candidate compares the index to the same sealed database and admits attachments only on verified runs. Configure the same archive on the destination reader before activation.
+
+### Host ingress and model media
+
+`openagent_core.artifacts.InputArtifactRepository` describes the host upload,
+authorization and bounded read methods shared by the SQLite repository and
+`SqlObjectArtifacts`. Before admission, a host resolves the authenticated
+product resource and the exact agent/session context, fetches allowed bytes
+from its own origin, and calls
+`await repository.upload(context, content, filename=name, mime_type=mime, session_id=None)`.
+This creates an idempotent owner-private input for that session with no output
+link. During an admitted run, pass `session_id=context.session_id` to upload a
+session output owned by the current run. A different session ID fails. The
+download API supports `read(context, artifact_id=ident)` returning
+`ArtifactContent`, and `read_stream(context, ident)` for bounded chunks.
+
+Bind the repository under the typed `openagent_core.artifacts.ModelAttachmentReader`
+service. When the publisher also implements this protocol, a single
+`attachments.publisher` binding suffices. The model ingestor calls
+`model_content(context, reference, max_bytes=remaining)` inside the admitted
+execution and supplies the model with typed media carrying verified bytes.
+The reader enforces both the object limit and the cumulative
+`max_model_input_bytes` budget. Model and publication policy checks continue
+throughout the run. A host whose publisher wraps domain-specific output
+identifiers can bind the typed reader independently. The public wire reference
+contains the artifact ID, MIME, filename, byte count, digest and download URL.
+A historical path-bearing request needs its original run, session and exact
+archived reference fingerprint. Cloud model ingestion never opens that path.

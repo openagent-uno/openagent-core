@@ -8,7 +8,7 @@ import re
 
 import sqlalchemy as sa
 
-from .contracts import ResourceRef
+from .contracts import ResourceRef, canonical_json
 from .memory.artifacts import safe_attachment_filename
 from .memory.document_exposure import authorize_document_history
 from .object_artifacts import SqlObjectArtifacts
@@ -120,6 +120,16 @@ class SqlArtifactArchive:
     async def resolve_if_present(self, ctx, ident):
         found = await self._find(ctx, ident)
         return None if found is None else await self._access(ctx, found[0])
+
+    async def require_request(self, ctx, run_id, reference):
+        found = await self._find(ctx, reference.get("artifact_id"))
+        if found is not None:
+            digest = hashlib.sha256(canonical_json(reference).encode()).hexdigest()
+            if any(origin["run_id"] == run_id and origin["session_id"] == ctx.session_id
+                   and origin.get("request_sha256") == digest for origin in found[0]["origins"]):
+                await self._access(ctx, found[0])
+                return
+        raise PermissionError("The admitted attachment differs from its sealed request")
 
     async def archived_stream(self, ctx, ident):
         found = await self._find(ctx, ident)

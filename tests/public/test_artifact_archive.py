@@ -140,6 +140,7 @@ class ArtifactArchive(unittest.IsolatedAsyncioTestCase):
         await publisher.initialize()
 
         originals, identifiers, saved_runs = [], [], []
+        historical_refs = {}
         sqlite = store.connection
         for i in range(16):
             data = bytes([i]) * 19
@@ -177,7 +178,7 @@ class ArtifactArchive(unittest.IsolatedAsyncioTestCase):
                 ctx = context("thread-" + str(i))
                 ref = dict(
                     artifact_id=ident,
-                    filename=filename,
+                    filename="alternate.mp4" if i == 15 else filename,
                     kind=kind,
                     type=kind,
                     sha256=digest,
@@ -193,6 +194,7 @@ class ArtifactArchive(unittest.IsolatedAsyncioTestCase):
                     "inspect",
                     attachments=(ref,),
                 )
+                historical_refs[req.run_id] = ref
                 await store.accept(req, ctx)
                 await store.transition(req.run_id, "running")
                 await store.transition(req.run_id, "success", output="received")
@@ -336,6 +338,83 @@ class ArtifactArchive(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("path", ref)
         for reader in ("foreign", "unknown", "bob"):
             self.assertIn((await get(15, reader))[0], (403, 404))
+        from openagent_core.artifacts import ModelAttachmentReader
+        from openagent_core.core.agent import Agent
+        from openagent_core.runtime import execution_scope
+
+        registry.bind(ModelAttachmentReader, publisher)
+        captured = []
+        class VideoModel:
+            history_mode = "caller"
+            model = "fixture/video"
+            def effective_model_id(self, session_id=None):
+                return self.model
+            async def stream(self, messages, system=None, tools=None, session_id=None, videos=None):
+                captured.extend(videos or [])
+                yield "inspected"
+        agent = Agent(name="fixture", model=VideoModel(), system_prompt="Describe admitted media", memory=None)
+        with execution_scope(runtime, context("thread-15"), "run-15"):
+            ref = historical_refs["run-15"]
+            events = [event async for event in agent.run_stream("inspect", attachments=[ref], session_id="thread-15")]
+            self.assertEqual(len(captured), 1, [(e.get("kind"), e.get("error_code")) for e in events])
+            self.assertEqual(captured[0].content, originals[15])
+            self.assertFalse(captured[0].filepath)
+            self.assertEqual((await publisher.model_content(context("thread-15"), ref)).filename,
+                             "alternate.mp4")
+            with self.assertRaises(PermissionError):
+                await publisher.model_content(context("thread-15"), {**ref, "path": "/unauthorized/other"})
+        # The gateway resolves the host's resource before run admission. The
+        # same runtime executes a normal agent turn and delivers its scoped output.
+        class RenderTurn:
+            async def execute(self, request, admitted, runtime):
+                events = [e async for e in agent.run_stream(request.input, session_id=request.session_id,
+                                                             attachments=list(request.attachments))]
+                if not any(e.get("kind") == "done" and not e.get("errored") for e in events):
+                    raise RuntimeError("Model turn did not finish")
+                return await publisher.publish_content(admitted, b"rendered", filename="output.bin",
+                                                       mime_type="application/octet-stream")
+        runtime = Runtime(RuntimeSettings("agent"), RuntimeServices(ledger, RenderTurn(), policy, owns_store=False,
+                                                                   registry=registry))
+        await runtime.start()
+        self.addAsyncCleanup(runtime.close)
+        @asynccontextmanager
+        async def ingress(request, action, run_id, session_id):
+            if request.headers.get("Authorization") != "owner":
+                raise PermissionError("Unknown reader")
+            yield context(session_id or "new-thread")
+        async def resolve_inputs(refs, admitted):
+            if refs != [{"asset":"owned-media"}]:
+                raise LookupError("Unknown domain asset")
+            return [await publisher.upload(admitted, b"current domain bytes", filename="now.mp4",
+                                           mime_type="video/mp4", session_id=None)]
+        gateway = create_app(runtime, ingress, resolve_attachments=resolve_inputs, manage_lifecycle=False)
+        gateway_runner = web.AppRunner(gateway)
+        await gateway_runner.setup()
+        self.addAsyncCleanup(gateway_runner.cleanup)
+        listener = web.TCPSite(gateway_runner, "127.0.0.1", 0)
+        await listener.start()
+        api = f"http://127.0.0.1:{listener._server.sockets[0].getsockname()[1]}/api/v1/runs"
+        body = dict(run_id="new-run", session_id="new-thread", idempotency_key="new-key", input="inspect",
+                    attachments=[{"asset":"owned-media"}])
+        for attempt in range(2):
+            async with http.post(api, json=body, headers={"Authorization":"owner"}) as response:
+                self.assertEqual(response.status, 202, await response.text())
+            result = await runtime.wait("new-run", context("new-thread"))
+            self.assertEqual(result.status, "success")
+        self.assertEqual(len(captured), 2)
+        self.assertEqual(captured[-1].content, b"current domain bytes")
+        self.assertFalse(captured[-1].filepath)
+        accepted = await ledger.accepted_request("new-run")
+        self.assertNotIn("path", accepted.request.attachments[0])
+        self.assertNotIn("artifact_link_id", accepted.request.attachments[0])
+        self.assertEqual((await publisher.read(context("new-thread"), artifact_id=result.output["artifact_id"])).content,
+                         b"rendered")
+        self.assertEqual(await publisher.resolve_session_output(context("new-thread"), "new-run",
+                         result.output["artifact_id"]), result.output)
+        async with http.post(api, json={**body,"run_id":"foreign-run","attachments":[{"asset":"unowned"}]},
+                             headers={"Authorization":"owner"}) as response:
+            self.assertEqual(response.status,404)
+        self.assertIsNone(await ledger.get("foreign-run"))
         protected = context("thread-15")
         await vault.write(protected, "secret.md", "body", expected_revision=0)
         tokens = await vault.note_receipts(

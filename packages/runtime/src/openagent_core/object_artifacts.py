@@ -5,10 +5,12 @@ import base64
 import hashlib
 import re
 from collections.abc import AsyncIterable
+from dataclasses import replace
 from typing import Protocol
 
 import sqlalchemy as sa
 
+from .artifacts import ArtifactContent
 from .contracts import ExecutionContext, ResourceRef, canonical_json, require_authorized
 from .memory.artifacts import attachment_kind, safe_attachment_filename
 from .memory.vault.privacy import require_unprotected_execution
@@ -75,23 +77,43 @@ def artifact_chunk_key(tenant_id, agent_id, digest):
     return namespace + "/sha256/" + digest
 
 
+def _identity(row, *, owner_input=False):
+    fields = [row[k] for k in ("tenant", "agent", "session_id", "run_id", "audience",
+                                "filename", "mime_type", "digest")]
+    if owner_input:
+        fields.append("owner_ingress")
+    return "art_" + _digest(canonical_json(fields).encode())[:32]
+
+
+def _ingress_owner(row):
+    if row["run_id"] is None and len(row["audience"]) == 1 and row["artifact_id"] == _identity(row, owner_input=True):
+        return row["audience"][0]
+    return None
+
+
 def _public(row):
     ident = row["artifact_id"]
     kind = attachment_kind(row["mime_type"])
-    return {"artifact_id": ident, "filename": row["filename"], "mime_type": row["mime_type"],
+    ref = {"artifact_id": ident, "filename": row["filename"], "mime_type": row["mime_type"],
             "size_bytes": row["size"], "sha256": row["digest"], "kind": kind, "type": kind,
-            "artifact_link_id": "lnk_" + ident[4:], "url": "/api/artifacts/" + ident + "/content"}
+            "url": "/api/artifacts/" + ident + "/content"}
+    if _ingress_owner(row) is None:
+        ref["artifact_link_id"] = "lnk_" + ident[4:]
+    return ref
 
 
 class SqlObjectArtifacts:
     """The SQL row is the publication boundary. Chunks have no public URL."""
-    def __init__(self, engine, blobs: ChunkStore, authorizer, *, chunk_bytes=4 << 20, max_bytes=256 << 20, archive=None):
+    def __init__(self, engine, blobs: ChunkStore, authorizer, *, chunk_bytes=4 << 20, max_bytes=256 << 20, archive=None, max_model_input_bytes=64 << 20):
         if not 1 <= chunk_bytes <= 16 << 20 or max_bytes < chunk_bytes or max_bytes > 4096 * chunk_bytes:
             raise ValueError("Invalid artifact byte limits")
         if engine.dialect.name not in {"postgresql", "sqlite"}:
             raise ValueError("Unsupported artifact index database")
         self.engine, self.blobs, self.authorizer = engine, blobs, authorizer
         self.chunk_bytes, self.max_bytes = chunk_bytes, max_bytes
+        if type(max_model_input_bytes) is not int or max_model_input_bytes < 1:
+            raise ValueError("Invalid model input budget")
+        self.max_model_input_bytes = max_model_input_bytes
         self.archive = archive
 
     async def initialize(self):
@@ -108,12 +130,32 @@ class SqlObjectArtifacts:
     def _key(ctx, digest):
         return artifact_chunk_key(ctx.tenant_id, ctx.agent_id, digest)
 
+    async def authorize(self, context, action):
+        if action not in {"artifact.write", "artifact.read"}:
+            raise ValueError("Unknown artifact action")
+        await self._authorize(context, action)
+
+    async def upload(self, context, content, *, filename, mime_type="application/octet-stream", session_id=None):
+        if session_id is not None and session_id != context.session_id:
+            raise PermissionError("Upload belongs to a different session")
+        private = session_id is None
+        if private and (current_execution_context() is not None or context.author != context.initiator
+                or set(context.audience) != {context.initiator}):
+            raise PermissionError("Unlinked input requires a resolved private ingress owner")
+        async def stream():
+            yield content
+        return await self._publish_stream(context, stream(), filename=filename, mime_type=mime_type,
+                                          private_input=private)
+
     async def publish_content(self, context, content, *, filename, mime_type):
         async def source():
             yield content
         return await self.publish_stream(context, source(), filename=filename, mime_type=mime_type)
 
     async def publish_stream(self, context, source: AsyncIterable[bytes], *, filename, mime_type):
+        return await self._publish_stream(context, source, filename=filename, mime_type=mime_type, private_input=False)
+
+    async def _publish_stream(self, context, source, *, filename, mime_type, private_input):
         execution = current_execution_context()
         if execution is not None and execution != context:
             raise PermissionError("Artifact publication must use the active context")
@@ -151,10 +193,10 @@ class SqlObjectArtifacts:
         digest = complete.hexdigest()
         run_id = current_run_id()
         audience = sorted({p.key for p in (*context.audience, context.initiator)})
-        identity = [context.tenant_id, context.agent_id, context.session_id, run_id, audience, filename, mime_type, digest]
-        ident = "art_" + _digest(canonical_json(identity).encode())[:32]
-        values = dict(artifact_id=ident, tenant=context.tenant_id, agent=context.agent_id, session_id=context.session_id,
-                      run_id=run_id, audience=audience, filename=filename, mime_type=mime_type, digest=digest, size=total, chunks=parts)
+        values = dict(tenant=context.tenant_id, agent=context.agent_id, session_id=context.session_id,
+                      run_id=run_id, audience=audience, filename=filename, mime_type=mime_type,
+                      digest=digest, size=total, chunks=parts)
+        ident = values["artifact_id"] = _identity(values, owner_input=private_input)
         if self.engine.dialect.name == "postgresql":
             from sqlalchemy.dialects.postgresql import insert
         else:
@@ -171,11 +213,14 @@ class SqlObjectArtifacts:
         await self._authorize(ctx, "artifact.read")
         if not isinstance(ident, str) or len(ident) != 36 or not ident.startswith("art_"):
             raise LookupError("Artifact not found")
-        stmt = sa.select(objects).filter_by(artifact_id=ident, tenant=ctx.tenant_id, agent=ctx.agent_id,
-                                            session_id=ctx.session_id)
+        stmt = sa.select(objects).filter_by(artifact_id=ident, tenant=ctx.tenant_id,
+                                            agent=ctx.agent_id, session_id=ctx.session_id)
         async with self.engine.connect() as con:
             row = (await con.execute(stmt)).mappings().one_or_none()
         if row is None or not {p.key for p in (*ctx.audience, ctx.initiator)}.issubset(row["audience"]):
+            raise LookupError("Artifact not found")
+        owner = _ingress_owner(row)
+        if owner is not None and {p.key for p in (*ctx.audience, ctx.author, ctx.initiator)} != {owner}:
             raise LookupError("Artifact not found")
         await self._authorize(ctx, "artifact.publish")
         return row
@@ -186,6 +231,47 @@ class SqlObjectArtifacts:
             if historical is not None:
                 return historical
         return _public(await self._row(context, artifact_id))
+
+    async def read(self, context, *, artifact_id):
+        return await self._read_bounded(context, artifact_id, self.max_bytes)
+
+    async def _read_bounded(self, context, artifact_id, limit):
+        ref = await self.resolve(context, artifact_id)
+        if ref["size_bytes"] > limit:
+            raise ValueError("Artifact exceeds the admitted read budget")
+        data = bytearray()
+        async for chunk in self.read_stream(context, artifact_id):
+            if len(data) + len(chunk) > limit:
+                raise ValueError("Artifact exceeds the admitted read budget")
+            data.extend(chunk)
+        after = await self.resolve(context, artifact_id)
+        if ref != after or len(data) != ref["size_bytes"] or _digest(data) != ref["sha256"]:
+            raise IOError("Artifact changed during delivery")
+        return ArtifactContent(artifact_id, ref["filename"], ref["mime_type"], ref["sha256"], bytes(data))
+
+    async def model_content(self, context, attachment, *, max_bytes=None):
+        from .runtime import guard_current_publication
+        if current_execution_context() != context or not current_run_id():
+            raise PermissionError("Model attachments require an admitted execution")
+        if max_bytes is not None and (type(max_bytes) is not int or max_bytes < 0):
+            raise ValueError("Invalid model attachment budget")
+        ident = attachment.get("artifact_id")
+        if "path" in attachment:
+            if self.archive is None:
+                raise PermissionError("A historical path requires its verified original request")
+            await self.archive.require_request(context, current_run_id(), attachment)
+        limit = self.max_model_input_bytes if max_bytes is None else min(max_bytes, self.max_model_input_bytes)
+        item = await self._read_bounded(context, ident, limit)
+        facts = dict(mime_type=item.mime_type, sha256=item.sha256, size_bytes=len(item.content),
+                     url=f"/api/artifacts/{ident}/content")
+        if any(attachment[k] != v for k,v in facts.items() if k in attachment):
+            raise ValueError("Admitted attachment metadata differs from storage")
+        async def recheck():
+            await self.resolve(context, ident)
+        guard_current_publication(recheck)
+        if "path" in attachment and "filename" in attachment:
+            return replace(item, filename=safe_attachment_filename(attachment["filename"]))
+        return item
 
     async def resolve_session_output(self, context, run_id, artifact_id):
         row = await self._row(context, artifact_id)

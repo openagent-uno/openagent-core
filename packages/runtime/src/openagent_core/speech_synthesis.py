@@ -5,7 +5,7 @@ import asyncio
 import re
 from typing import Any, Mapping
 
-from .artifacts import ArtifactRepository
+from .artifacts import InputArtifactRepository
 from .audio import VoiceService
 from .capabilities import CapabilityUnavailable, ToolDefinition
 from .contracts import AuthorizationDenied, ExecutionContext, ResourceRef, require_authorized
@@ -39,7 +39,7 @@ class SpeechSynthesisCapability:
     """A catalog source and executor using explicitly provisioned host services."""
 
     def __init__(
-        self, voice: VoiceService, artifacts: ArtifactRepository, *, timeout_seconds: float = 120,
+        self, voice: VoiceService, artifacts: InputArtifactRepository, *, timeout_seconds: float = 120,
     ) -> None:
         if type(timeout_seconds) not in (int, float) or not 0.1 <= timeout_seconds <= 3600:
             raise ValueError("Speech synthesis timeout must be between 0.1 and 3600 seconds")

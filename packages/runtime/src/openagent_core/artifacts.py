@@ -33,6 +33,25 @@ class ArtifactContent:
     content: bytes
 
 
+class InputArtifactRepository(Protocol):
+    """Canonical host-bound upload, authorization and bounded download."""
+
+    authorizer: Any
+
+    async def authorize(self, context, action: str) -> None: ...
+    async def upload(self, context, content: bytes, *, filename: str, mime_type: str,
+                     session_id: str | None = None) -> dict[str, Any]: ...
+    async def read(self, context, *, artifact_id: str) -> ArtifactContent: ...
+
+
+class ModelAttachmentReader(Protocol):
+    """Resolve admitted references to verified bytes without borrowing a worker path."""
+
+    max_model_input_bytes: int
+
+    async def model_content(self, context, attachment, *, max_bytes: int | None = None) -> ArtifactContent: ...
+
+
 class ArtifactRepository:
     def __init__(self, db: Any, authorizer: Any, *, max_input_bytes=64 << 20, max_output_bytes=256 << 20, runtime=None):
         self.db, self.authorizer, self.runtime = db, authorizer, runtime

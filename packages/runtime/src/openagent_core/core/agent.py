@@ -236,7 +236,7 @@ def _infer_mime(filename: str | None, declared: str | None) -> str | None:
 
 
 def _build_runtime_media(
-    attachments: list[dict] | None,
+    attachments: list[dict] | None, *, verified_contents: list[bytes] | None = None,
 ) -> tuple[list[Any], list[Any], list[Any], list[Any]]:
     """Convert wire-format attachments into runtime media objects, AgentOS-style.
 
@@ -267,31 +267,26 @@ def _build_runtime_media(
     videos: list[Any] = []
     files: list[Any] = []
 
-    for a in attachments:
+    for index, a in enumerate(attachments):
         a_path = a.get("path") or ""
         a_name = a.get("filename") or (a_path.rsplit("/", 1)[-1] if a_path else None)
         a_mime = _infer_mime(a_name, a.get("mime_type"))
-        if not a_path:
-            elog("agent.media.skip", level="warning",
-                 filename=a_name, reason="no_path")
+        if verified_contents is not None:
+            content = verified_contents[index]
+        elif a_path:
+            try:
+                with open(a_path, "rb") as fh:
+                    content = fh.read()
+            except OSError as exc:
+                elog("agent.media.read_skip", level="warning",
+                     filename=a_name, path=a_path, error=str(exc))
+                content = None
+        else:
+            elog("agent.media.skip", level="warning", filename=a_name, reason="no_path")
             continue
 
-        content: bytes | None
-        try:
-            with open(a_path, "rb") as fh:
-                content = fh.read()
-        except OSError as exc:
-            # The bytes weren't readable (file not on disk yet, permission,
-            # NFS hiccup, …). Don't drop the attachment — fall back to
-            # ``filepath=`` so the runtime still sees it. Downstream
-            # consumers that need bytes can re-read on demand; tools that
-            # just need a path (file-search MCPs, shell, etc.) still work.
-            elog("agent.media.read_skip", level="warning",
-                 filename=a_name, path=a_path, error=str(exc))
-            content = None
-
         ext = (a_name.rsplit(".", 1)[-1].lower() if a_name and "." in a_name else None)
-        attachment_id = a.get("file_id") or a.get("id")
+        attachment_id = a.get("file_id") or a.get("id") or a.get("artifact_id")
 
         try:
             if a_mime in _AGNO_IMAGE_MIMES:
@@ -317,22 +312,57 @@ def _build_runtime_media(
                 # whichever it prefers — multimodal APIs consume content,
                 # file-search tools follow the path.
                 file_kwargs: dict[str, Any] = {
-                    "filepath": a_path,
                     "filename": a_name,
                     "format": ext,
-                    "id": a.get("file_id") or a.get("id"),
+                    "id": attachment_id,
                     "size": a.get("size_bytes"),
                 }
+                if a_path:
+                    file_kwargs["filepath"] = a_path
                 if content is not None:
                     file_kwargs["content"] = content
                 if a_mime:
                     file_kwargs["mime_type"] = a_mime
                 files.append(_RuntimeFile(**file_kwargs))
         except Exception as exc:  # noqa: BLE001
+            if verified_contents is not None:
+                raise ValueError("Verified media could not be passed to the model") from exc
             elog("agent.media.build_skip", level="warning",
                  filename=a_name, mime=a_mime, error=str(exc) or type(exc).__name__)
 
     return (images, audios, videos, files)
+
+
+async def _prepare_runtime_media(attachments):
+    from openagent_core.artifacts import ArtifactContent, ModelAttachmentReader
+    from openagent_core.memory.artifacts import attachment_kind
+    from openagent_core.runtime import current_execution_context, current_runtime
+
+    runtime, ctx = current_runtime(), current_execution_context()
+    if not attachments or runtime is None or ctx is None:
+        return attachments, _build_runtime_media(attachments)
+    reader = runtime.service(ModelAttachmentReader)
+    if reader is None:
+        reader = runtime.service("attachments.publisher")
+        if not callable(getattr(reader, "model_content", None)):
+            return attachments, _build_runtime_media(attachments)
+    elif not callable(getattr(reader, "model_content", None)):
+        raise TypeError("The host model attachment reader is incomplete")
+    remaining = reader.max_model_input_bytes
+    refs, contents = [], []
+    for attachment in attachments:
+        item = await reader.model_content(ctx, attachment, max_bytes=remaining)
+        if (not isinstance(item, ArtifactContent) or item.artifact_id != attachment.get("artifact_id")
+                or not isinstance(item.content, bytes)):
+            raise ValueError("The verified model attachment does not match its admitted reference")
+        if len(item.content) > remaining:
+            raise ValueError("Verified attachments exceed the model input budget")
+        remaining -= len(item.content)
+        kind = attachment_kind(item.mime_type)
+        refs.append(dict(artifact_id=item.artifact_id, type=kind, kind=kind, filename=item.filename,
+                         mime_type=item.mime_type, size_bytes=len(item.content), sha256=item.sha256))
+        contents.append(item.content)
+    return refs, _build_runtime_media(refs, verified_contents=contents)
 
 
 _VAULT_WRITE_TOOLS = frozenset({
@@ -1728,7 +1758,7 @@ class Agent:
         # File) with ``content=bytes``, then pass each list to ``arun``'s
         # corresponding kwarg. API-native model adapters consume the
         # bytes directly (multimodal API content).
-        media_images, media_audios, media_videos, media_files = _build_runtime_media(attachments)
+        attachments, (media_images, media_audios, media_videos, media_files) = await _prepare_runtime_media(attachments)
 
         # Images still get a textual prepend — but non-image attachments
         # are now routed natively through the runtime's ``files=`` kwarg
@@ -2160,7 +2190,7 @@ class Agent:
 
         # AgentOS-aligned media: see ``_run_inner`` above for the full
         # rationale. Same per-MIME split + content=bytes construction.
-        media_images, media_audios, media_videos, media_files = _build_runtime_media(attachments)
+        attachments, (media_images, media_audios, media_videos, media_files) = await _prepare_runtime_media(attachments)
 
         # Same images-prepend / files=-passthrough split as ``_run_inner``.
         if attachments:

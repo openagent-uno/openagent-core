@@ -62,6 +62,47 @@ class ObjectArtifacts(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PermissionError):
             await anext(chunks)
 
+    async def test_private_ingress_upload_model_content_and_publication_recheck(self):
+        from openagent_core.artifacts import ModelAttachmentReader
+        from openagent_core.core.agent import _prepare_runtime_media
+        from openagent_core.runtime import check_current_publication
+
+        data = b"verified text"
+        ref = await self.store.upload(self.ctx, data, filename="input.txt", mime_type="text/plain")
+        self.assertNotIn("artifact_link_id", ref)
+        self.assertEqual(await self.store.resolve(self.ctx, ref["artifact_id"]), ref)
+        self.assertEqual(await self.store.upload(self.ctx,data,filename="input.txt",mime_type="text/plain"), ref)
+        self.assertEqual((await self.store.read(self.ctx,artifact_id=ref["artifact_id"])).content,data)
+        with self.assertRaises(LookupError):
+            await self.store.resolve_session_output(self.ctx,"run",ref["artifact_id"])
+        with self.assertRaises(PermissionError):
+            await self.store.upload(self.ctx,data,filename="input.txt",session_id="unrelated")
+        bob = replace(self.ctx.author,subject_id="bob")
+        with self.assertRaises(LookupError):
+            await self.store.read(replace(self.ctx,author=bob,initiator=bob,audience=(bob,)),artifact_id=ref["artifact_id"])
+        publisher = self.store
+        class Host:
+            def service(self, key):
+                return publisher if key is ModelAttachmentReader else None
+        with execution_scope(Host(),self.ctx,"run"):
+            with self.assertRaises(PermissionError):
+                await self.store.model_content(self.ctx,{**ref,"path":"/never/open"})
+            with self.assertRaises(ValueError):
+                await self.store.model_content(self.ctx,{**ref,"sha256":"changed"})
+            with self.assertRaises(ValueError):
+                await self.store.model_content(self.ctx,ref,max_bytes=3)
+            refs, (_, _, _, files) = await _prepare_runtime_media([ref])
+            self.assertEqual(files[0].content,data)
+            self.assertFalse(files[0].filepath)
+            self.assertNotIn("path",refs[0])
+            self.assertEqual(refs[0]["artifact_id"],ref["artifact_id"])
+            output = await self.store.upload(self.ctx,b"audio",filename="speech.wav",mime_type="audio/wav",
+                                             session_id=self.ctx.session_id)
+            self.assertEqual(await self.store.resolve_session_output(self.ctx,"run",output["artifact_id"]),output)
+            self.denied.add("artifact.read")
+            with self.assertRaises(PermissionError):
+                await check_current_publication()
+
     async def test_corrupt_chunk_and_oversized_stream(self):
         ref = await self.store.publish_content(self.ctx, b"abc", filename="x", mime_type="text/plain")
         self.blobs[next(iter(self.blobs))] = b"bad"
