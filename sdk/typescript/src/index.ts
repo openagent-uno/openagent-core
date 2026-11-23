@@ -84,7 +84,7 @@ export interface SessionSummary {
   title: string | null;
   archived: boolean;
 }
-export interface MemorySummary { path: string; title: string | null; revision: number; }
+export interface MemorySummary { space?: string; visibility?: "personal" | "shared"; path: string; title: string | null; revision: number; }
 export interface CatalogOptions { query?: string; cursor?: string; limit?: number; }
 
 export class PersonalClient extends HttpClient {
@@ -107,14 +107,14 @@ export class PersonalClient extends HttpClient {
     return this.catalog<{session: SessionSummary; messages: Record<string, unknown>[]; next_cursor: string | null}>(
       "sessions", options, {ref}, signal);
   }
-  memories(options: Omit<CatalogOptions, "query"> = {}, signal?: AbortSignal) {
-    return this.catalog<{notes: MemorySummary[]; next_cursor: string | null}>("memories", options, {}, signal);
+  memories(options: Omit<CatalogOptions, "query"> & {space?: string} = {}, signal?: AbortSignal) {
+    return this.catalog<{notes: MemorySummary[]; next_cursor: string | null}>("memories", options, options.space ? {space: options.space} : {}, signal);
   }
-  searchMemories(query: string, options: Omit<CatalogOptions, "query"> = {}, signal?: AbortSignal) {
-    return this.catalog<{hits: MemorySummary[]; next_cursor: string | null}>("memories", {...options, query}, {}, signal);
+  searchMemories(query: string, options: Omit<CatalogOptions, "query"> & {space?: string} = {}, signal?: AbortSignal) {
+    return this.catalog<{hits: MemorySummary[]; next_cursor: string | null}>("memories", {...options, query}, options.space ? {space: options.space} : {}, signal);
   }
-  memory(path: string, signal?: AbortSignal) {
-    return this.catalog<MemorySummary & {content: string}>("memories", {}, {path}, signal);
+  memory(path: string, signal?: AbortSignal, space?: string) {
+    return this.catalog<MemorySummary & {content: string}>("memories", {}, space ? {path, space} : {path}, signal);
   }
 }
 

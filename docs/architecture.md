@@ -316,3 +316,11 @@ returns via read, search, list and backlinks. A write records those dependencies
 in the same transaction. Forgetting a source removes the dependent revision
 tails transitively, restores the last independent content where available and
 refreshes search and history. Provenance is scoped to the selected memory space.
+
+Hosts with personal and shared vaults bind `PersonalMemoryCatalog` to their
+live space directory. The personal memory endpoint then returns an ordered
+page across all readable spaces. Each note includes its space ID and
+visibility. Send the space ID alongside the logical path for detail reads.
+The directory selects a scope on the original verified identity and the vault
+rechecks that scope before returning rows. Equal paths in different spaces
+are independent identities.

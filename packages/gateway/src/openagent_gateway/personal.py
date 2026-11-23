@@ -13,6 +13,8 @@ def add_personal_routes(app, runtime, resolve_personal_context, prefix):
     async def catalog(request):
         resource = request.match_info["catalog"]
         fields = {"q", "cursor", "limit", "ref" if resource == "sessions" else "path"}
+        if resource == "memories":
+            fields.add("space")
         if set(request.query) - fields or any(len(request.query.getall(key)) != 1 for key in request.query):
             raise ValueError("Unexpected personal catalog query")
         limit = int(request.query.get("limit", 50))
@@ -38,7 +40,17 @@ def add_personal_routes(app, runtime, resolve_personal_context, prefix):
                 documents = getattr(vault, "store", None)
                 if documents is None:
                     raise web.HTTPNotFound()
-                if ref is not None:
+                from openagent_core.memory.personal_catalog import PersonalMemoryCatalog
+                spaces = runtime.service(PersonalMemoryCatalog)
+                selected = request.query.get("space")
+                if spaces is not None and ref is not None:
+                    result = await spaces.detail(documents, context, selected, ref)
+                elif spaces is not None:
+                    result = await spaces.browse(documents, context, query=query, cursor=cursor,
+                                                 limit=limit, space_id=selected)
+                elif selected is not None:
+                    raise ValueError("The host uses a single memory space")
+                elif ref is not None:
                     result = await documents.read(context, ref)
                 elif query is None:
                     result = await documents.list_notes(context, after=cursor, limit=limit)

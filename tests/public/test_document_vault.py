@@ -163,6 +163,51 @@ class DocumentVault(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(LookupError):
             await self.store.read(self.a, "topics/color.md", revision=1)
 
+    async def test_personal_and_shared_spaces_with_the_same_note_path_are_distinct(self):
+        from dataclasses import replace
+        from openagent_core.memory.personal_catalog import PersonalMemoryCatalog, PersonalMemorySpace
+        from openagent_gateway import create_app
+        from openagent_sdk import PersonalClient, RunHTTPError
+        from aiohttp.test_utils import TestServer
+
+        grants = {"a": {"a", "shared"}, "b": {"b", "shared"}}
+        async def resolve(context):
+            return context.scopes[0] if context.scopes else context.initiator.subject_id
+        self.store.resolve_space = resolve
+        async def select(context, ident):
+            if ident not in grants[context.initiator.subject_id]:
+                raise PermissionError("Space unavailable")
+            return PersonalMemorySpace(ident, "shared" if ident == "shared" else "personal"), replace(context, scopes=(ident,))
+        async def spaces(context, *, after, limit):
+            return [key for key in sorted(grants[context.initiator.subject_id]) if after is None or key > after][:limit]
+
+        catalog = PersonalMemoryCatalog(spaces, select)
+        class Host:
+            def service(_, name):
+                return catalog if name is PersonalMemoryCatalog else self.runtime.service(name)
+        @asynccontextmanager
+        async def identity(request, resource):
+            yield self.context(request.headers["Authorization"])
+        path = "manual.md"
+        await self.store.write(self.a, path, "my private note", expected_revision=0)
+        await self.store.write(replace(self.a, scopes=("shared",)), path, "household note", expected_revision=0)
+        await self.store.write(self.b, path, "another private note", expected_revision=0)
+        server = TestServer(create_app(Host(), None, resolve_personal_context=identity, manage_lifecycle=False))
+        await server.start_server()
+        self.addAsyncCleanup(server.close)
+        client = PersonalClient(str(server.make_url("")).rstrip("/"), lambda: {"Authorization": "a"})
+        first = await client.memories(query="note", limit=1)
+        second = await client.memories(query="note", limit=1, cursor=first["next_cursor"])
+        self.assertEqual([(r["space"],r["visibility"]) for p in (first,second) for r in p["hits"]],
+                         [("a","personal"), ("shared","shared")])
+        self.assertEqual((await client.memory(path,space="shared"))["content"], "household note")
+        with self.assertRaises(RunHTTPError):
+            await client.memory(path, space="b")
+        grants["a"].remove("shared")
+        self.assertFalse((await client.memories(cursor=first["next_cursor"]))["notes"])
+        with self.assertRaises(RunHTTPError):
+            await client.memory(path, space="shared")
+
     async def test_authenticated_catalog_without_an_open_chat(self):
         from aiohttp import web
         from openagent_gateway import create_app

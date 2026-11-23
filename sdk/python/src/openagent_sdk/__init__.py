@@ -81,11 +81,11 @@ class PersonalClient(_HTTPClient):
     async def session(self, session_ref, *, cursor=None, limit=50):
         return await self._catalog("sessions", ref=session_ref, cursor=cursor, limit=limit)
 
-    async def memories(self, *, query=None, cursor=None, limit=50):
-        return await self._catalog("memories", q=query, cursor=cursor, limit=limit)
+    async def memories(self, *, query=None, cursor=None, limit=50, space=None):
+        return await self._catalog("memories", q=query, cursor=cursor, limit=limit, space=space)
 
-    async def memory(self, path):
-        return await self._catalog("memories", path=path)
+    async def memory(self, path, *, space=None):
+        return await self._catalog("memories", path=path, space=space)
 
 
 class RunClient(_HTTPClient):
