@@ -164,7 +164,7 @@ class ContractEvidence:
 @dataclass(frozen=True)
 class CloudServingTarget:
     route: PostgresServingGeneration
-    artifacts: SqlObjectArtifacts
+    artifacts: SqlObjectArtifacts | None
     documents: SqlDocumentVault
     probe: Callable[[], Awaitable[ContractEvidence]]
 
@@ -230,13 +230,6 @@ async def _verify_bindings(first, second, active_db):
             or a.store.agent_id != b.store.agent_id
         ):
             raise ValueError("The target uses a different runtime ledger")
-    left, right = first.artifacts, second.artifacts
-    if not all(
-        isinstance(repo, SqlObjectArtifacts) and isinstance(repo.blobs, S3Chunks)
-        for repo in (left, right)
-    ):
-        raise TypeError("Both targets require the actual SQL and S3 repositories")
-    await _same_sql_engine(left.engine, right.engine, (("oa_session_artifacts", "SELECT,INSERT"),))
     if not all(isinstance(target.documents, SqlDocumentVault) for target in (first, second)):
         raise TypeError("Both targets require the actual document vault")
     await _same_sql_engine(
@@ -248,6 +241,46 @@ async def _verify_bindings(first, second, active_db):
             ("oa_vault_read_receipts", "SELECT,INSERT,DELETE"),
         ),
     )
+    left, right = first.artifacts, second.artifacts
+    if (left is None) != (right is None):
+        raise ValueError("The object-storage contract differs")
+    if left is None:
+        prior = await (
+            await active_db.execute(
+                "SELECT 1 FROM oa_serving_changes WHERE agent=%s AND jsonb_array_length(receipt->'object_witnesses')>0 LIMIT 1",
+                (a.store.agent_id,),
+            )
+        ).fetchone()
+        if prior:
+            raise ValueError("The agent previously served an authoritative object store")
+        async with first.documents.engine.connect() as con:
+            if await con.scalar(sa.text("SELECT to_regclass('oa_session_artifacts') IS NOT NULL")):
+                owns = await con.scalar(
+                    sa.text("SELECT EXISTS(SELECT 1 FROM oa_session_artifacts WHERE agent=:agent)"),
+                    {"agent": a.store.agent_id},
+                )
+                if owns:
+                    raise ValueError("The agent already owns indexed artifacts")
+        has_import = await (
+            await active_db.execute(
+                "SELECT to_regclass('migration_receipt') IS NOT NULL AS present"
+            )
+        ).fetchone()
+        if has_import["present"]:
+            archive = await (
+                await active_db.execute(
+                    "SELECT 1 FROM migration_receipt WHERE singleton AND receipt::jsonb ? 'artifact_archive'"
+                )
+            ).fetchone()
+            if archive:
+                raise ValueError("The imported agent already has an authoritative artifact archive")
+        return []
+    if not all(
+        isinstance(repo, SqlObjectArtifacts) and isinstance(repo.blobs, S3Chunks)
+        for repo in (left, right)
+    ):
+        raise TypeError("Both targets require the actual SQL and S3 repositories")
+    await _same_sql_engine(left.engine, right.engine, (("oa_session_artifacts", "SELECT,INSERT"),))
     if (left.archive is None) != (right.archive is None):
         raise ValueError("The historical artifact binding differs")
     stores = [(left.blobs, right.blobs)]

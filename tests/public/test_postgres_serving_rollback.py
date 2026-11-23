@@ -418,3 +418,92 @@ class CloudRollback(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             (await read(old, "/api/artifacts/" + artifacts["run-b"] + "/content", "b"))[0], 403
         )
+
+
+@unittest.skipUnless(
+    os.getenv("OPENAGENT_TEST_POSTGRES_DSN") and os.getenv("OPENAGENT_TEST_POSTGRES_URL"),
+    "disposable PostgreSQL required",
+)
+class DocumentOnlyRollback(unittest.IsolatedAsyncioTestCase):
+    async def test_object_free_agent_checks_live_documents_and_never_needs_an_s3_client(self):
+        import psycopg
+        from openagent_storage_postgres import PostgresRuntimeStore
+        from openagent_storage_postgres.serving import (
+            CloudServingTarget,
+            ContractEvidence,
+            PostgresServingGeneration,
+            switch_serving_generation,
+        )
+        from psycopg import sql
+
+        schema = "oa_text_" + uuid4().hex
+        agent = "text-" + uuid4().hex
+        dsn = os.environ["OPENAGENT_TEST_POSTGRES_DSN"]
+        pg = self.enterContext(psycopg.connect(dsn, autocommit=True))
+        pg.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        self.addCleanup(
+            lambda: pg.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+        )
+        targets = []
+
+        async def resolve(_):
+            return "personal"
+
+        policy = SimpleNamespace(authorize=AsyncMock(return_value=True))
+        owner = PrincipalRef("private", "owner", "owner")
+        ctx = ExecutionContext(owner, owner, owner, "thread", agent, (owner,))
+        for i in (1, 2):
+            store = PostgresRuntimeStore(dsn, agent_id=agent, schema=schema)
+            await store.start()
+            self.addAsyncCleanup(store.close)
+            route = PostgresServingGeneration(
+                store,
+                deployment="build-" + str(i),
+                generation=i,
+                binding_sha256=digest("document-only"),
+            )
+            await route.open()
+            self.addAsyncCleanup(route.close)
+            if i == 1:
+                await route.install()
+                await store.accept(RunRequest("conversation", "thread", "message", "remember"), ctx)
+                await store.transition("conversation", "success", output="complete")
+            engine = create_async_engine(os.environ["OPENAGENT_TEST_POSTGRES_URL"])
+            self.addAsyncCleanup(engine.dispose)
+            vault = SqlDocumentVault(engine, policy, resolve)
+            await vault.initialize()
+            if i == 1:
+                await vault.write(ctx, "recent.md", "post-cutover content", expected_revision=0)
+                await vault.write(ctx, "forgotten.md", "private", expected_revision=0)
+                await vault.forget(ctx, "forgotten.md", expected_revision=1)
+
+            async def probe(v=vault, s=store):
+                self.assertEqual(
+                    (await v.read(ctx, "recent.md"))["content"], "post-cutover content"
+                )
+                with self.assertRaises(LookupError):
+                    await v.read(ctx, "forgotten.md", revision=1)
+                self.assertEqual((await s.get("conversation")).output, "complete")
+                return ContractEvidence(
+                    digest("post-cutover content"), digest("forgotten"), digest("complete")
+                )
+
+            targets.append(CloudServingTarget(route, None, vault, probe))
+        a, b = targets
+
+        @asynccontextmanager
+        async def fence(start, end):
+            yield digest([start.generation, end.generation])
+
+        change = uuid4()
+        with self.assertRaisesRegex(ValueError, "contract differs"):
+            await switch_serving_generation(
+                a, replace(b, artifacts=object()), change_id=change, writer_fence=fence
+            )
+        result = await switch_serving_generation(a, b, change_id=change, writer_fence=fence)
+        self.assertEqual(result["object_witnesses"], [])
+        self.assertEqual(await b.route.receipt(change), result)
+        async with b.route.serving():
+            self.assertEqual(
+                (await b.documents.read(ctx, "recent.md"))["content"], "post-cutover content"
+            )

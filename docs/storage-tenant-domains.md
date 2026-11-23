@@ -346,8 +346,11 @@ grant and revocation stores so the standby reads the latest decisions.
 1. Construct a `PostgresServingGeneration` from each build's actual runtime
    store, immutable deployment ID, expected generation and binding SHA-256.
    Call `await generation.open()`. During initial provisioning, the operator
-   calls `await active.install()` once for generation one. The private route
-   and change receipts live under the runtime schema and agent ID. A bootstrap
+   calls `await active.install()` once for generation one. An agent without an artifact storage contract passes
+   `artifacts=None` on both targets. Its receipt contains an empty object witness
+   list. The operator rejects a one-sided binding, an existing artifact index for
+   that agent, a migrated artifact archive or earlier object witnesses.
+   The private route and change receipts live under the runtime schema and agent ID. A bootstrap
    attempt using an old generation fails after the first change.
 2. Call `create_app(..., serving_generation=generation)` for the public gateway.
    Hold `async with generation.serving()` around separate host entry points
