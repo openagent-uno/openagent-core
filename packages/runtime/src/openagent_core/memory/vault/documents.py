@@ -50,6 +50,26 @@ links = sa.Table("oa_vault_links", metadata, *identity_columns(),
 sa.Index("oa_vault_backlinks", links.c.tenant, links.c.agent, links.c.space, links.c.target)
 
 
+# Imported provenance is historical evidence, independent of runtime principals.
+import_origins = sa.Table("oa_vault_import_origins", metadata, *identity_columns(),
+    sa.Column("revision", sa.BigInteger, primary_key=True),
+    sa.Column("facts", sa.Text, nullable=False),
+)
+
+
+async def refresh_indexes(con, key, note_id, parsed, content):
+    await con.execute(sa.delete(links).filter_by(**key))
+    if parsed:
+        targets = sorted({link_key(link) for link in parsed.outlinks if len(link_key(link).encode()) <= 700})
+        if targets:
+            await con.execute(sa.insert(links), [{**key, "target": target} for target in targets])
+    if con.dialect.name == "sqlite":
+        await con.execute(sa.text("DELETE FROM oa_vault_search WHERE rowid=:id"), {"id": note_id})
+        if parsed:
+            await con.execute(sa.text("INSERT INTO oa_vault_search(rowid,content) VALUES (:id,:content)"),
+                              {"id": note_id, "content": content})
+
+
 def note_path(value: str) -> str:
     if (not isinstance(value, str) or len(value.encode()) > 700 or "\\" in value
             or ":" in value or "\0" in value or PurePosixPath(value).suffix.lower() != ".md"
@@ -253,6 +273,18 @@ class SqlDocumentVault:
         await self._recheck(context, "memory.read", scope)
         return {"revisions": list(rows[:limit]), "next_cursor": rows[limit - 1] if len(rows) > limit else None}
 
+    async def revision_origin(self, context, path, *, revision):
+        """Return the separately attributed source evidence of an imported revision."""
+        import json
+        if type(revision) is not int or revision < 1:
+            raise ValueError("Invalid note revision")
+        scope = await self._scope(context, "memory.read")
+        async with self.engine.connect() as con:
+            facts = (await con.execute(sa.select(import_origins.c.facts).filter_by(
+                **scope, path=note_path(path), revision=revision))).scalar_one_or_none()
+        await self._recheck(context, "memory.read", scope)
+        return json.loads(facts) if facts is not None else None
+
     async def write(self, context, path, content, *, expected_revision):
         if not isinstance(content, str) or len(content.encode()) > 2 << 20 or "\0" in content:
             raise ValueError("Invalid Markdown content")
@@ -291,29 +323,29 @@ class SqlDocumentVault:
                 stmt = insert(notes).values(**key, **values).on_conflict_do_nothing(
                     index_elements=list(key))
             else:
-                stmt = sa.update(notes).filter_by(**key, revision=expected).values(**values)
-                if content is None and not erase:
-                    stmt = stmt.where(notes.c.content.is_not(None))
+                mutable = notes.c.content.is_not(None)
+                if content is not None or erase:
+                    saved = sa.select(versions.c.revision).filter_by(**key).exists()
+                    origin = sa.select(import_origins.c.revision).filter_by(**key).exists()
+                    mutable = sa.or_(mutable, saved, origin)
+                stmt = sa.update(notes).filter_by(**key, revision=expected).where(mutable).values(**values)
             changed = (await con.execute(stmt.returning(notes.c.id))).scalar_one_or_none()
             if changed is None:
                 raise RevisionConflict("Note has a conflicting revision or was forgotten")
-            await con.execute(sa.delete(links).filter_by(**key))
             if parsed:
                 await con.execute(sa.insert(versions).values(**key, revision=revision, content=content,
                     author=context.author.key, session_id=context.session_id, run_id=current_run_id()))
+<<<<<<< HEAD
                 targets = sorted({link_key(link) for link in parsed.outlinks if len(link_key(link).encode()) <= 700})
                 if targets:
                     await con.execute(sa.insert(links), [{**key, "target":target} for target in targets])
             elif erase:
+=======
+            else:
+>>>>>>> a82d164c (Import attested Git vault history into isolated SQL document spaces)
                 await con.execute(sa.delete(versions).filter_by(**key))
-            if self.engine.dialect.name == "sqlite":
-                await con.execute(sa.text("""
-                    DELETE FROM oa_vault_search WHERE rowid=:rowid
-                """), {"rowid": changed})
-                if parsed:
-                    await con.execute(sa.text("""
-                        INSERT INTO oa_vault_search(rowid,content) VALUES (:rowid,:content)
-                    """), {"rowid":changed, "content":content})
+                await con.execute(sa.delete(import_origins).filter_by(**key))
+            await refresh_indexes(con, key, changed, parsed, content)
             if is_document_dream(context):
                 if self.dream_queue is None:
                     raise PermissionError("Document maintenance is disabled")
