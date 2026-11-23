@@ -228,6 +228,36 @@ async def test_account_capacity_and_process_lease_recovery():
                 three, "r3", replace(limited, accounts=(b,))
             ) as eligible:
                 assert eligible == b
+        # Fast completions and worker changes retain start frequency limits.
+        capped_a = replace(a, starts_per_minute=1)
+        capped_b = replace(b, starts_per_minute=1)
+        rates = replace(route, provider_id="minute-window", accounts=(capped_a,capped_b),
+                        tenant_starts_per_minute=1)
+        async with first.provider_slot(one, "r1", rates) as selected:
+            assert selected == capped_a
+        with pytest.raises(TimeoutError):
+            async with second.provider_slot(two, "r2", rates):
+                pytest.fail("a completed call still counts towards this tenant's start window")
+        async with second.provider_slot(three, "r3", rates) as selected:
+            assert selected == capped_b
+        async with first._db() as db:
+            for table in ("provider_accounts", "provider_tenants"):
+                await db.execute(f"UPDATE {table} SET start_minute=clock_timestamp()-interval '61 seconds' WHERE provider=%s",
+                                 (rates.provider_id,))
+        async with second.provider_slot(two, "r2", rates) as selected:
+            assert selected == capped_a
+
+        scheduled = replace(three, session_id="scheduled", deferred=True, delegation_id="scheduler-grant")
+        await second.accept(RunRequest("scheduled", "scheduled", "scheduled", "scheduled work"), scheduled)
+        await second.transition("scheduled", "running")
+        reserved = replace(route, provider_id="shared-with-chat", accounts=(a,b), interactive_reserve=1)
+        async with first.provider_slot(one, "r1", replace(reserved, background=True)):
+            with pytest.raises(TimeoutError):
+                async with second.provider_slot(scheduled, "scheduled", reserved):
+                    pytest.fail("background work consumed the interactive reservation")
+            async with second.provider_slot(two, "r2", reserved) as selected:
+                assert selected == b
+
         async with AsyncExitStack() as held:
             await held.enter_async_context(first.provider_slot(one, "r1", route))
             # Account a is saturated while provider capacity is still available.

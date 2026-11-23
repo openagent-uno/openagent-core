@@ -76,5 +76,16 @@ CREATE TABLE IF NOT EXISTS provider_attempts (
     FOREIGN KEY(provider,account) REFERENCES provider_accounts(provider,account),
     FOREIGN KEY(worker) REFERENCES workers(id) ON DELETE CASCADE,
     FOREIGN KEY(agent,run_id) REFERENCES runs(agent,id) ON DELETE CASCADE);
+-- Existing installations gain disabled rate limits and retain all active permits.
+ALTER TABLE provider_limits ADD COLUMN IF NOT EXISTS interactive_reserve integer NOT NULL DEFAULT 0;
+ALTER TABLE provider_attempts ADD COLUMN IF NOT EXISTS background boolean NOT NULL DEFAULT false;
+ALTER TABLE provider_tenants
+    ADD COLUMN IF NOT EXISTS starts_per_minute integer,
+    ADD COLUMN IF NOT EXISTS start_minute timestamptz,
+    ADD COLUMN IF NOT EXISTS starts integer NOT NULL DEFAULT 0;
+ALTER TABLE provider_accounts
+    ADD COLUMN IF NOT EXISTS starts_per_minute integer,
+    ADD COLUMN IF NOT EXISTS start_minute timestamptz,
+    ADD COLUMN IF NOT EXISTS starts integer NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS provider_slots ON provider_attempts(provider,account);
 CREATE INDEX IF NOT EXISTS provider_slots_worker ON provider_attempts(worker);

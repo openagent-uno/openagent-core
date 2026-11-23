@@ -15,13 +15,20 @@ def _identifier(value):
     return isinstance(value, str) and 1 <= len(value) <= 240 and all(c.isprintable() for c in value)
 
 
+def _minute_limit(value):
+    if value is not None and (type(value) is not int or not 1 <= value <= 1_000_000):
+        raise ValueError("Invalid provider starts per minute")
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderAccount:
     account_id: str
     credential_ref: str
     capacity: int
+    starts_per_minute: int | None = None
 
     def __post_init__(self):
+        _minute_limit(self.starts_per_minute)
         if (
             not all(map(_identifier, (self.account_id, self.credential_ref)))
             or type(self.capacity) is not int
@@ -38,8 +45,15 @@ class ProviderRoute:
     accounts: tuple[ProviderAccount, ...]
     wait_seconds: float = 30
     tenant_capacity: int | None = None
+    tenant_starts_per_minute: int | None = None
+    interactive_reserve: int = 0
+    background: bool = False
 
     def __post_init__(self):
+        _minute_limit(self.tenant_starts_per_minute)
+        if (type(self.background) is not bool or type(self.interactive_reserve) is not int
+                or type(self.capacity) is not int or not 0 <= self.interactive_reserve <= self.capacity):
+            raise ValueError("Invalid provider workload reservation")
         if self.tenant_capacity is not None and (
             type(self.tenant_capacity) is not int or not 1 <= self.tenant_capacity <= self.capacity
         ):
