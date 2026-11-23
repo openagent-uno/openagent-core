@@ -558,3 +558,37 @@ async def restore_vault(
         }
         (destination / "complete.json").write_text(canonical_json(receipt) + "\n")
     return receipt
+
+
+async def require_import_receipt(
+    engine, *, tenant, agent, space, source_manifest_sha256, corpus_sha256
+):
+    """Provisioning guard for hosts pinning activation to an approved verified import."""
+    import re
+
+    for digest in (source_manifest_sha256, corpus_sha256):
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("Expected an exact migration digest")
+    scope = {"tenant": tenant, "agent": agent, "space": space}
+    async with engine.connect() as con:
+        exists = await con.run_sync(
+            lambda sync: sa.inspect(sync).has_table(receipts.name)
+        )
+        if not exists:
+            raise VaultImportMismatch("The configured import receipt is unavailable")
+        ident = (
+            await con.execute(
+                sa.select(receipts.c.identity).filter_by(**scope, complete=True)
+            )
+        ).scalar_one_or_none()
+    if ident:
+        proof = json.loads(ident)
+        if (
+            len(proof) == 6
+            and proof[0] == 1
+            and proof[1] == source_manifest_sha256
+            and proof[4] == corpus_sha256
+            and proof[5] == scope
+        ):
+            return
+    raise VaultImportMismatch("The configured import receipt is unavailable")

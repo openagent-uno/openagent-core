@@ -339,3 +339,19 @@ class DocumentImport(unittest.IsolatedAsyncioTestCase):
         row = json.loads((destination / "post-import-revisions.jsonl").read_text())
         self.assertIsNone(row["content"])
         self.assertEqual(row["author"], self.person.key)
+
+    async def test_activation_requires_exact_scope_and_verified_digest(self):
+        report = await self.run_import()
+        proof = dict(
+            tenant=self.person.tenant_id,
+            agent="agent",
+            space="a",
+            source_manifest_sha256=report["source_manifest_sha256"],
+            corpus_sha256=report["corpus_sha256"],
+        )
+        await vault_import.require_import_receipt(self.engine, **proof)
+        for k, v in (("tenant", "other"), ("space", "b"), ("corpus_sha256", "0" * 64)):
+            with self.assertRaises(VaultImportMismatch):
+                await vault_import.require_import_receipt(
+                    self.engine, **{**proof, k: v}
+                )
