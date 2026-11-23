@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from importlib.resources import files
 import re
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from psycopg import OperationalError, sql
 from psycopg.rows import dict_row
@@ -692,9 +692,9 @@ class PostgresRuntimeStore(Sessions, Operations, ProviderSlots):
                 raise RuntimeError("Tool execution is unavailable")
             intent = dict(call_id=call_id, binding=dict(binding), arguments=dict(arguments))
             cur = await db.execute(
-                """INSERT INTO tool_calls(agent,run_id,id,intent) VALUES(%s,%s,%s,%s)
+                """INSERT INTO tool_calls(agent,run_id,id,intent,invocation_id) VALUES(%s,%s,%s,%s,%s)
                 ON CONFLICT DO NOTHING""",
-                (self.agent_id, ident, call_id, Jsonb(intent)),
+                (self.agent_id, ident, call_id, Jsonb(intent), uuid5(NAMESPACE_URL,canonical_json([ident,call_id]))),
             )
             if not cur.rowcount:
                 raise IdempotencyConflict("This tool invocation already has a durable intent")

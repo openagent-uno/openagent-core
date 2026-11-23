@@ -3,6 +3,7 @@
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 import json
 from dataclasses import asdict
+from uuid import NAMESPACE_URL, UUID, uuid5
 from psycopg.types.json import Jsonb
 
 from openagent_core.contracts import SessionRef, IdempotencyConflict, canonical_json
@@ -228,6 +229,59 @@ class Sessions:
             messages=[message(m) for m in page],
             next_cursor=_encode(page[-1]["session_seq"]) if len(records) > limit else None,
         )
+
+    async def read_tool_invocation(self, reference, selector, context):
+        return await self._saved_tool(reference, selector, context, binding_only=False)
+
+    async def read_tool_invocation_binding(self, reference, selector, context):
+        return await self._saved_tool(reference, selector, context, binding_only=True)
+
+    async def _saved_tool(self, reference, selector, context, *, binding_only):
+        self._boundary(reference, context)
+        if reference.session_id != context.session_id:
+            raise PermissionError("Invocation must belong to the verified session")
+        if not isinstance(selector, str) or not 1 <= len(selector) <= 512 or any(ord(c) < 32 for c in selector):
+            raise ValueError("Invalid tool invocation identifier")
+        try:
+            alias = UUID(selector)
+            if str(alias) != selector:
+                alias = None
+        except ValueError:
+            alias = None
+        projection = ("t.run_id,t.intent->'binding'->>'tool_ref' AS tool_ref" if binding_only
+                      else "t.run_id,t.id,t.invocation_id,t.intent,t.result,t.error,t.finished")
+        scoped = f"""FROM tool_calls t JOIN runs r ON t.agent=r.agent AND t.run_id=r.id
+                     WHERE t.agent=%s AND r.tenant=%s AND r.session_id=%s AND {RUN_AUDIENCE}"""
+        scope = (self.agent_id, context.tenant_id, reference.session_id, _audience(context))
+        async with self._db() as db:
+            await self._session(db, reference.session_id, context, lock=False)
+            rows = await (await db.execute(f"""SELECT {projection} {scoped} AND (t.invocation_id=%s
+                          OR t.id=%s OR t.intent->'binding'->>'provider_call_id'=%s) LIMIT 2""",
+                          (*scope, alias, selector, selector))).fetchall()
+            # Older PostgreSQL workers persisted the two source keys without the deterministic UUID.
+            # Resolve a UUID for those rows with a bounded server-side cursor and no tool payloads.
+            if not rows and alias is not None and alias.version == 5:
+                async with db.cursor(name="saved_invocation_keys") as cursor:
+                    await cursor.execute(f"SELECT t.run_id,t.id {scoped} AND t.invocation_id IS NULL", scope)
+                    async for key in cursor:
+                        if uuid5(NAMESPACE_URL, canonical_json([key["run_id"], key["id"]])) == alias:
+                            rows = await (await db.execute(f"""SELECT {projection} {scoped}
+                                AND t.run_id=%s AND t.id=%s""", (*scope, key["run_id"], key["id"]))).fetchall()
+                            break
+        if not rows:
+            raise LookupError("Tool invocation not found in this session")
+        if len(rows) != 1:
+            raise ValueError("Tool invocation identifier is ambiguous; use the invocation id")
+        row = rows[0]
+        if binding_only:
+            return {"run_id": row["run_id"], "binding": {"tool_ref": row["tool_ref"]}}
+        intent = row["intent"]
+        failed = row["error"] is not None or isinstance(row["result"], dict) and row["result"].get("isError")
+        status = ("error" if failed else "success") if row["finished"] else "running"
+        ident = row["invocation_id"] or uuid5(NAMESPACE_URL, canonical_json([row["run_id"], row["id"]]))
+        return {"id": str(ident), "run_id": row["run_id"], "tool_call_id": row["id"], "session_id": reference.session_id,
+                "binding": intent["binding"], "arguments": intent["arguments"], "result": row["result"],
+                "error": row["error"], "status": status}
 
     async def bind_document_sources(self, context, run_id, source_ids):
         async with self._db() as db:

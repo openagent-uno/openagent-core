@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     agent text NOT NULL, run_id text NOT NULL, id text NOT NULL, intent jsonb NOT NULL,
     result jsonb, error jsonb, finished boolean NOT NULL DEFAULT false,
     PRIMARY KEY(agent,run_id,id), FOREIGN KEY(agent,run_id) REFERENCES runs(agent,id) ON DELETE CASCADE);
+ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS invocation_id uuid;
+CREATE UNIQUE INDEX IF NOT EXISTS tool_invocation_id ON tool_calls(agent,invocation_id) WHERE invocation_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS operations (
     agent text NOT NULL, origin_run_id text NOT NULL, current_run_id text NOT NULL,
     segment integer NOT NULL, state text NOT NULL, PRIMARY KEY(agent,origin_run_id),

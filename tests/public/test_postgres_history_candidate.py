@@ -86,7 +86,7 @@ class RuntimeCandidate(unittest.IsolatedAsyncioTestCase):
         from openagent_storage_postgres import PostgresRuntimeStore
         await self.seal()
         report = self.build()
-        self.assertEqual(report["verified_rows"], dict(sessions=1, runs=1, messages=2, events=3))
+        self.assertEqual(report["verified_rows"], dict(sessions=1, runs=1, messages=2, events=3, tool_calls=0))
         self.assertEqual(self.build(True), report)
         self.assertEqual(self.build(), report)
         pg = PostgresRuntimeStore(self.dsn, agent_id="agent", schema=self.schema)
@@ -118,6 +118,33 @@ class RuntimeCandidate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record.status,"success")
         await pg.accept(RunRequest("second","thread","second","later"),self.ctx)
         self.assertGreater((await pg.events("second"))[0].cursor,100)
+
+    async def test_imported_tool_reopens_under_each_saved_identifier_without_reexecution(self):
+        from openagent_storage_postgres import PostgresRuntimeStore
+        await self.store.accept(RunRequest("tool-run", "thread", "second", "inspect"), self.ctx)
+        await self.store.transition("tool-run", "running")
+        binding = {"source_id": "host", "name": "inspect", "tool_ref": "inspect", "provider_call_id": "provider-call"}
+        await self.store.begin_tool("tool-run", "call", binding, {"limit": 1})
+        await self.store.finish_tool("tool-run", "call", result={"content": ["retained"]})
+        await self.store.transition("tool-run", "success", output="inspected")
+        original = await self.store.read_tool_invocation(self.ref, "call", self.ctx)
+        await self.seal()
+        self.assertEqual(self.build()["verified_rows"]["tool_calls"], 1)
+        self.build(True)
+        pg = PostgresRuntimeStore(self.dsn, agent_id="agent", schema=self.schema)
+        await pg.start()
+        self.addAsyncCleanup(pg.close)
+        for selector in (original["id"], "call", "provider-call"):
+            self.assertEqual(await pg.read_tool_invocation(self.ref, selector, self.ctx), original)
+            self.assertEqual(await pg.read_tool_invocation_binding(self.ref, selector, self.ctx),
+                             {"run_id": "tool-run", "binding": {"tool_ref": "inspect"}})
+        self.assertEqual(await pg.read_session(self.ref, self.ctx, limit=20),
+                         await self.store.read_session(self.ref, self.ctx, limit=20))
+        self.pg.execute(f"UPDATE {self.schema}.tool_calls SET invocation_id=NULL")
+        self.assertEqual(await pg.read_tool_invocation(self.ref, original["id"], self.ctx), original)
+        actor = PrincipalRef("host", "tenant", "other")
+        with self.assertRaises(PermissionError):
+            await pg.read_tool_invocation(self.ref, "provider-call", replace(self.ctx, authority=actor))
 
     async def test_rejects_modified_request_without_partial_candidate(self):
         with sqlite3.connect(self.path) as db:

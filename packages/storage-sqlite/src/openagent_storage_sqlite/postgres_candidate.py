@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 import sqlite3
 import subprocess
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import psycopg
 from psycopg import sql
@@ -34,8 +34,9 @@ PROJECTION = {
              "cancel_requested output parent_run_id", 'id COLLATE "C"'),
     "messages": ("agent id session_id session_seq run_id role author body call_id status created_at", 'id COLLATE "C"'),
     "events": ("agent seq run_id kind payload", "seq"),
+    "tool_calls": ("agent run_id id invocation_id intent result error finished", 'run_id COLLATE "C",id COLLATE "C"'),
 }
-JSON_COLUMNS = {"request", "context", "output", "body", "payload"}
+JSON_COLUMNS = {"request", "context", "output", "body", "payload", "intent", "result", "error"}
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 OFFLINE_WORKER = UUID(int=0)
 
@@ -51,9 +52,17 @@ def _principal(raw, tenant):
     return person
 
 
-def _session_rows(db, agent, tenant):
+def _source_tenant(row, selected):
+    tenant = row["tenant_id"]
+    if tenant not in ((selected,) if isinstance(selected, str) else selected):
+        raise StageMismatch("Source row outside the sealed tenant set")
+    return tenant
+
+
+def _session_rows(db, agent, tenants):
     for row in db.execute("SELECT * FROM sessions_v2 ORDER BY id"):
-        if (row["tenant_id"] != tenant or row["agent_id"] != agent or row["visibility"] != "private"
+        tenant = _source_tenant(row, tenants)
+        if (row["agent_id"] != agent or row["visibility"] != "private"
                 or row["status"] != "active" or row["deleted_at_ms"] is not None or row["kind"] != "chat"
                 or row["parent_session_id"] is not None or row["root_session_id"] is not None
                 or json.loads(row["metadata_json"]).get("runtime_contract") != 1):
@@ -64,12 +73,13 @@ def _session_rows(db, agent, tenant):
                _time(row["last_activity_at_ms"]))
 
 
-def _run_rows(db, agent, tenant):
+def _run_rows(db, agent, tenants):
     for row in db.execute("""SELECT r.*,s.owner_principal_id, ROW_NUMBER() OVER
             (ORDER BY r.session_id,r.ordinal) AS import_ordinal FROM session_runs r
-            JOIN sessions_v2 s ON r.session_id=s.id ORDER BY r.id"""):
+            LEFT JOIN sessions_v2 s ON r.session_id=s.id AND r.tenant_id=s.tenant_id ORDER BY r.id"""):
         meta = json.loads(row["metadata_json"])
-        if (meta.get("runtime_contract") != 1 or row["tenant_id"] != tenant or row["agent_id"] != agent
+        tenant = _source_tenant(row, tenants)
+        if (meta.get("runtime_contract") != 1 or row["owner_principal_id"] is None or row["agent_id"] != agent
                 or row["status"] not in TERMINAL_STATUSES or row["finished_at_ms"] is None
                 or row["input_json"] is None or meta.get("operation_continuation") or meta.get("attachments")
                 or meta.get("steer_run_id") or row["delegated_parent_run_id"] or row["parent_run_id"]):
@@ -93,12 +103,20 @@ def _run_rows(db, agent, tenant):
                _time(row["finished_at_ms"]), record.cancel_requested, record.output, None)
 
 
-def _message_rows(db, agent, tenant):
-    for row in db.execute("""SELECT m.*,s.owner_principal_id FROM session_messages m
-                             JOIN sessions_v2 s ON m.session_id=s.id ORDER BY m.id"""):
-        if (row["tenant_id"] != tenant or row["visibility"] != "user_visible" or row["run_id"] is None
+def _message_rows(db, agent, tenants):
+    for row in db.execute("""SELECT m.*,s.owner_principal_id,r.id AS admitted,t.tool_call_id AS invocation
+                             FROM session_messages m
+                             LEFT JOIN sessions_v2 s ON m.session_id=s.id AND m.tenant_id=s.tenant_id
+                             LEFT JOIN session_runs r ON r.id=m.run_id AND r.tenant_id=m.tenant_id
+                                 AND r.session_id=m.session_id AND r.agent_id=?
+                             LEFT JOIN tool_invocations t ON t.session_run_id=m.run_id AND t.tool_call_id=m.tool_call_id
+                                 AND t.session_id=m.session_id AND t.tenant_id=m.tenant_id ORDER BY m.id""", (agent,)):
+        tenant = _source_tenant(row, tenants)
+        has_call = row["role"] == "tool"
+        if (row["visibility"] != "user_visible" or row["admitted"] is None or row["owner_principal_id"] is None
                 or row["content_json"] is not None or not isinstance(row["text"], str)
-                or row["role"] not in ("user", "assistant") or row["tool_call_id"] is not None):
+                or row["role"] not in ("user", "assistant", "tool") or has_call != bool(row["tool_call_id"])
+                or has_call and (row["invocation"] is None or row["status"] != "complete")):
             raise StageMismatch("Message requires an unsupported visibility, tool or content mapping")
         actor = _principal(row["author_principal_id"], tenant)
         owner = _principal(row["owner_principal_id"], tenant)
@@ -106,21 +124,56 @@ def _message_rows(db, agent, tenant):
         if actor.kind != row["author_kind"] or actor != expected_actor:
             raise StageMismatch("Message author evidence differs")
         yield (agent, row["id"], row["session_id"], row["sequence"], row["run_id"], row["role"], actor.key,
-               row["text"], None, row["status"], _time(row["created_at_ms"]))
+               row["text"], row["tool_call_id"], row["status"], _time(row["created_at_ms"]))
 
 
-def _event_rows(db, agent, tenant):
+def _event_rows(db, agent, tenants):
     for row in db.execute("""SELECT e.*,r.id AS admitted FROM domain_events e LEFT JOIN session_runs r
-                             ON e.run_id=r.id AND e.session_id=r.session_id ORDER BY e.sequence"""):
-        if (row["tenant_id"] != tenant or not row["admitted"] or row["resource_type"] != "run"
+                             ON e.run_id=r.id AND e.session_id=r.session_id AND e.tenant_id=r.tenant_id
+                             AND r.agent_id=? ORDER BY e.sequence""", (agent,)):
+        _source_tenant(row, tenants)
+        if (not row["admitted"] or row["resource_type"] != "run"
                 or row["resource_id"] != row["run_id"]):
             raise StageMismatch("Event requires a distinct historical or reservation mapping")
         yield agent, row["sequence"], row["run_id"], row["event_type"], json.loads(row["metadata_json"])
 
 
+def _tool_rows(db, agent, tenants):
+    for row in db.execute("""SELECT t.*,s.owner_principal_id AS session_owner,r.id AS admitted,
+            (SELECT COUNT(*) FROM session_messages m WHERE m.run_id=t.session_run_id
+             AND m.session_id=t.session_id AND m.tenant_id=t.tenant_id AND m.role='tool'
+             AND m.tool_call_id=t.tool_call_id) AS anchors
+            FROM tool_invocations t
+            LEFT JOIN sessions_v2 s ON s.id=t.session_id AND s.tenant_id=t.tenant_id
+            LEFT JOIN session_runs r ON r.id=t.session_run_id AND r.session_id=t.session_id
+                AND r.tenant_id=t.tenant_id AND r.agent_id=?
+            ORDER BY t.session_run_id,t.tool_call_id""", (agent,)):
+        _source_tenant(row, tenants)
+        call, run = row["tool_call_id"], row["session_run_id"]
+        ident = uuid5(NAMESPACE_URL, canonical_json([run, call]))
+        if (not call or not row["admitted"] or row["visibility"] != "private" or row["root_kind"] != "session"
+                or row["root_id"] != row["session_id"] or row["session_owner"] != row["owner_principal_id"]
+                or row["session_owner"] is None or row["id"] != str(ident) or row["finished_at_ms"] is None
+                or row["anchors"] != 1 or row["raw_envelope_schema"] != 1):
+            raise StageMismatch("Tool invocation lacks a scoped terminal intent and message")
+        envelope = json.loads(row["raw_envelope_json"])
+        binding = envelope["binding"]
+        arguments = json.loads(row["args_json"])
+        result = json.loads(row["result_json"]) if row["result_json"] is not None else None
+        error = json.loads(row["error_json"]) if row["error_json"] is not None else None
+        status = "error" if error is not None or isinstance(result, dict) and result.get("isError") else "success"
+        outcome = {"error": error} if error is not None else {"result": result}
+        intent = {"call_id": call, "binding": binding, "arguments": arguments}
+        if (binding.get("source_id") != row["tool_server"] or binding.get("name") != row["tool_name"]
+                or row["status"] != status or row["error_json"] is not None and row["result_json"] is not None
+                or canonical_json(envelope) != canonical_json({**intent, "status": status, **outcome})):
+            raise StageMismatch("Tool invocation envelope differs from the retained intent or outcome")
+        yield agent, run, call, ident, intent, result, error, True
+
+
 def _source_scope(db):
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
-    restricted = ("sessions", "tool_invocations", "resource_acl", "artifacts", "artifact_links",
+    restricted = ("sessions", "resource_acl", "artifacts", "artifact_links",
                   "session_message_parts", "context_snapshots", "durable_operations", "durable_operation_handoffs")
     for table in restricted:
         if table in tables and db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
@@ -189,7 +242,7 @@ def _schema(pg, name, receipt, verify_only):
         raise StageMismatch("Candidate belongs to another source or scope")
     if not fresh:
         pg.execute("LOCK TABLE workers,sessions,runs,messages,events,reservations,operations,handoffs,tool_calls IN SHARE MODE")
-        for table in ("workers", "reservations", "operations", "handoffs", "tool_calls"):
+        for table in ("workers", "reservations", "operations", "handoffs"):
             if pg.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
                 raise StageMismatch("Candidate has runtime or historical state outside the offline receipt")
     return fresh
@@ -213,7 +266,7 @@ def build_runtime_candidate(snapshot, database, vault, *, expected_tenant, agent
         db.execute("BEGIN")
         _source_scope(db)
         fresh = _schema(pg, candidate_schema, receipt, verify_only)
-        sources = dict(sessions=_session_rows, runs=_run_rows, messages=_message_rows, events=_event_rows)
+        sources = dict(sessions=_session_rows, runs=_run_rows, messages=_message_rows, events=_event_rows, tool_calls=_tool_rows)
         counts = {}
         for table, generate in sources.items():
             if fresh:
