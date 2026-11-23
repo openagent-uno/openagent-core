@@ -1280,7 +1280,10 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
     toolkit = Toolkit(name="tool-search", tools=tools)
     if pool.discovery_presentation.hot_tools:
         async def authorized_hot_tools():
+            from openagent_core.contracts import ResourceRef
+            from openagent_core.runtime import current_runtime
             catalog, context = _authorized_catalog(pool)
+            runtime = current_runtime()
             wanted = set(pool.discovery_presentation.hot_tools)
             available = []
             for descriptor in await catalog.discover(context):
@@ -1288,6 +1291,8 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
                     continue
                 try:
                     _require_server_allowed(descriptor.source_id)
+                    resource = ResourceRef("tool", context.tenant_id, descriptor.source_id + "/" + descriptor.name)
+                    await runtime.authorize(context, "tool.call", resource, audience=context.audience)
                 except PermissionError:
                     continue
                 available.append(descriptor)

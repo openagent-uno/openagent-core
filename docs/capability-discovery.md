@@ -50,3 +50,5 @@ JSON pointers. Tool results and prior assistant calls remain distinguishable
 in the text-only template. Model quality is specific to the endpoint. Qualify
 a write, an owner read after restart, cross-owner denial and recall from a
 fresh session before enabling this mode on a service.
+
+A schema-transport model shortcut requires live permission to call its exact tool at request composition. Source discovery and public inventory continue to use their normal grants. Execution rechecks the call grant again.

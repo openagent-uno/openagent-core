@@ -76,6 +76,19 @@ class DiscoveryPresentationContract(unittest.IsolatedAsyncioTestCase):
             {"private_operation": implementation("private_operation")})
         self.catalog.register("hidden-source", hidden, hidden, target_label="service-hidden")
 
+    async def test_model_shortcuts_require_tool_call_even_when_the_source_is_discoverable(self):
+        pool, unused = await self.make_pool(DiscoveryPresentation(named_calls="authorized",
+            hot_tools=[("records", "operation_00"), ("records", "operation_01")]))
+        toolkit = pool.runtime_toolkits_tool_search_only()[0]
+        with execution_scope(self.runtime, self.context, "shortcuts"):
+            self.policy.denied.add("records/operation_01")
+            public = await self.catalog.discover(self.context)
+            self.assertIn("operation_01", [d.name for d in public])
+            self.assertEqual([d.name for d in await toolkit.authorized_hot_tools()], ["operation_00"])
+            self.policy.denied.add("records/operation_00")
+            self.assertEqual(await toolkit.authorized_hot_tools(), [])
+            self.assertEqual(self.runtime.events, [])
+
     async def test_source_query_finds_later_devices_without_disclosing_hidden_sources(self):
         for i in range(25):
             source = FunctionSource((ToolDefinition("capture", "Capture screen", {}),),
