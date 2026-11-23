@@ -58,7 +58,9 @@ def _system() -> str:
 
 def _platform_dir(kind: str) -> Path:
     """Resolve the base config/data directory for the current platform."""
-    agent_dir = get_agent_dir()
+    from openagent_core.runtime import current_runtime
+    runtime = current_runtime()
+    agent_dir = runtime.settings.require_workspace() if runtime is not None else get_agent_dir()
     if agent_dir is not None:
         agent_dir.mkdir(parents=True, exist_ok=True)
         return agent_dir

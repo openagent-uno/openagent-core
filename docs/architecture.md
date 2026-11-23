@@ -39,6 +39,13 @@ finally:
     await runtime.close()
 ```
 
+A host may construct `RuntimeSettings(agent_id)` with no local workspace.
+The kernel runs against the supplied store and executor. File-based services
+must be explicitly provisioned with an absolute workspace. Inside a workspace-free
+runtime, resolving default config, DB, or vault directories raises an error
+instead of using the operating system user's home. File-backed executors and
+modules still need their own storage configuration.
+
 Construction does no I/O. `start` opens only explicitly owned storage and modules;
 it recovers incomplete runs without repeating effects. Module startup must clean
 up a partially opened module. `close` cancels its exact runs and closes only its

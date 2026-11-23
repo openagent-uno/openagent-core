@@ -94,17 +94,23 @@ def runtime_scope(runtime: Runtime):
 @dataclass(frozen=True, slots=True)
 class RuntimeSettings:
     agent_id: str
-    workspace: Path
+    workspace: Path | None = None
     environment: tuple[tuple[str, str], ...] = ()
     child_concurrency: int = 16
     child_max_depth: int = 1
     child_chain_concurrency: int = 8
 
     def __post_init__(self) -> None:
-        if not self.agent_id or not self.workspace.is_absolute():
-            raise ValueError('Runtime requires an agent ID and an explicit absolute workspace')
+        if not self.agent_id or (self.workspace is not None and not self.workspace.is_absolute()):
+            raise ValueError('Runtime requires an agent ID and any local workspace must be absolute')
         if self.child_concurrency < 1 or self.child_max_depth < 1 or self.child_chain_concurrency < 0:
             raise ValueError('Invalid child execution limits')
+
+
+    def require_workspace(self) -> Path:
+        if self.workspace is None:
+            raise RuntimeError('This operation requires a local runtime workspace')
+        return self.workspace
 
 
 @dataclass(slots=True, init=False)

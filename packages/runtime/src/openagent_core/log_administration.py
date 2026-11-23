@@ -10,7 +10,7 @@ class LogAdministration:
     def __init__(self,runtime,authorizer):self.runtime,self.authorizer=runtime,authorizer
 
     def checked_path(self):
-        root=self.runtime.settings.workspace.resolve();path=root/"logs"/"events.jsonl"
+        root=self.runtime.settings.require_workspace().resolve();path=root/"logs"/"events.jsonl"
         if not path.resolve().is_relative_to(root):raise PermissionError("Log path escapes the host workspace")
         return path
 

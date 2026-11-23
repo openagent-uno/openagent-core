@@ -40,6 +40,22 @@ class Contracts(unittest.IsolatedAsyncioTestCase):
     def request(self,id='run',**kwargs):
         return RunRequest(id,'s',id,'hello',**kwargs)
 
+    async def test_workspace_free_kernel_never_resolves_a_local_agent_directory(self):
+        from openagent_core.core.paths import config_dir, data_dir, get_agent_dir
+        from openagent_core.runtime import runtime_scope
+
+        runtime = Runtime(RuntimeSettings('agent'), self.r.services)
+        self.addAsyncCleanup(runtime.close)
+        with runtime_scope(runtime):
+            self.assertIsNone(get_agent_dir())
+            for resolve in (data_dir, config_dir):
+                with self.assertRaisesRegex(RuntimeError, 'requires a local runtime workspace'):
+                    resolve()
+        await runtime.start()
+        await runtime.submit(self.request(), self.ctx)
+        result = await runtime.wait('run', self.ctx)
+        self.assertEqual((result.status, result.output), ('success', 'hello'))
+
     async def test_construction_has_no_files_or_execution(self):
         self.assertFalse((self.path/'one').exists());self.assertEqual(self.executor.calls,[])
 

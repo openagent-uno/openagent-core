@@ -161,7 +161,7 @@ def hub_settings():
     runtime = current_runtime()
     # An embedded runtime can have a writable current directory that is
     # unrelated to its host-owned configuration.
-    config_path = runtime.settings.workspace / "openagent.yaml" if runtime is not None else None
+    config_path = runtime.settings.require_workspace() / "openagent.yaml" if runtime is not None else None
     return skills_settings(load_config(config_path))
 
 
