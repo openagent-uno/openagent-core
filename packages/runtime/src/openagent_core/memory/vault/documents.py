@@ -191,6 +191,39 @@ class SqlDocumentVault:
             result["next_cursor"] = rows[limit - 1]["path"] if len(rows) > limit else None
         return result
 
+    async def inspect_corpus(self, context, operation, *, config=None):
+        """Execute an explicit whole-space graph or quality inspection."""
+        import asyncio
+        from .gate import run_gate
+        from .index import VaultIndex
+
+        if operation not in {"graph", "gate", "stats"}:
+            raise ValueError("Unknown vault inspection")
+        scope = await self._scope(context, "memory.read")
+        async with self.engine.connect() as con:
+            records = (await con.execute(sa.select(notes.c.path, notes.c.content)
+                       .filter_by(**scope).where(notes.c.content.is_not(None)))).all()
+
+        def inspect():
+            index = VaultIndex.from_documents(records)
+            try:
+                if operation == "gate":
+                    return run_gate(index, config).to_dict()
+                if operation == "stats":
+                    return index.stats()
+                nodes, edges = [], []
+                for note in index.all_notes():
+                    nodes.append({"id": note.path, "label": note.title or note.stem, "tags": note.tags})
+                    targets = {index.resolve_link(link) for link in note.outlinks}
+                    edges.extend({"source": note.path, "target": target} for target in sorted(targets - {None, note.path}))
+                return {"nodes": nodes, "edges": edges}
+            finally:
+                index.close()
+
+        result = await asyncio.to_thread(inspect)
+        await self._recheck(context, "memory.read", scope)
+        return result
+
     async def backlinks(self, context, path, *, after=None, limit=50):
         """Page distinct sources that link to this vault-relative path."""
         target = link_key(note_path(path))
@@ -225,12 +258,18 @@ class SqlDocumentVault:
             raise ValueError("Invalid Markdown content")
         return await self._change(context, note_path(path), content, expected_revision)
 
+    async def delete(self, context, path, *, expected_revision):
+        """Remove a note from the current corpus while retaining its revisions."""
+        if expected_revision == 0:
+            raise ValueError("Deleting a note requires an existing revision")
+        return await self._change(context, note_path(path), None, expected_revision)
+
     async def forget(self, context, path, *, expected_revision):
         if expected_revision == 0:
             raise ValueError("Forgetting a note requires an existing revision")
-        return await self._change(context, note_path(path), None, expected_revision)
+        return await self._change(context, note_path(path), None, expected_revision, erase=True)
 
-    async def _change(self, context, path, content, expected):
+    async def _change(self, context, path, content, expected, *, erase=False):
         await require_unprotected_execution("Document vault")
         if type(expected) is not int or expected < 0 or expected >= (1 << 63) - 1:
             raise ValueError("Invalid expected revision")
@@ -252,8 +291,9 @@ class SqlDocumentVault:
                 stmt = insert(notes).values(**key, **values).on_conflict_do_nothing(
                     index_elements=list(key))
             else:
-                stmt = sa.update(notes).filter_by(**key, revision=expected).where(
-                    notes.c.content.is_not(None)).values(**values)
+                stmt = sa.update(notes).filter_by(**key, revision=expected).values(**values)
+                if content is None and not erase:
+                    stmt = stmt.where(notes.c.content.is_not(None))
             changed = (await con.execute(stmt.returning(notes.c.id))).scalar_one_or_none()
             if changed is None:
                 raise RevisionConflict("Note has a conflicting revision or was forgotten")
@@ -264,7 +304,7 @@ class SqlDocumentVault:
                 targets = sorted({link_key(link) for link in parsed.outlinks if len(link_key(link).encode()) <= 700})
                 if targets:
                     await con.execute(sa.insert(links), [{**key, "target":target} for target in targets])
-            else:
+            elif erase:
                 await con.execute(sa.delete(versions).filter_by(**key))
             if self.engine.dialect.name == "sqlite":
                 await con.execute(sa.text("""
@@ -281,4 +321,4 @@ class SqlDocumentVault:
             elif self.dream_queue is not None:
                 await self.dream_queue.mark_changed(con, scope)
             await self._recheck(context, "memory.write", scope)
-        return {"path":path, "revision":revision, "forgotten":content is None}
+        return {"path":path, "revision":revision, "forgotten":erase}

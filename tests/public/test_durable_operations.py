@@ -568,13 +568,22 @@ class DurableOperationsTests(unittest.IsolatedAsyncioTestCase):
         from openagent_gateway import create_app
         from openagent_sdk import RunClient
 
+        from openagent_core.runtime import current_run_id
         reads = 0
+        second_running, complete_second = asyncio.Event(), asyncio.Event()
+        answer = {'text':'ready','attachments':[{'artifact_id':'qualified-fixture'}]}
 
         async def read(args, context):
             nonlocal reads
             reads += 1
             if reads == 1:
+                await runtime.services.store.append_event(current_run_id(), "run.stream",
+                    {"kind": "done", "final_answer": {"text": "old"}})
                 await asyncio.Future()
+            second_running.set()
+            await complete_second.wait()
+            await runtime.services.store.append_event(current_run_id(), "run.stream",
+                {"kind": "done", "final_answer": answer})
             return {'ready': True}
 
         runtime, runner = await self.runtime(read, policy=DurableOperationPolicy(segment_seconds=.15))
@@ -595,6 +604,11 @@ class DurableOperationsTests(unittest.IsolatedAsyncioTestCase):
         url = f'http://127.0.0.1:{port}'
         client = RunClient(url, lambda: {'Authorization': 'Bearer fixture-owner'})
         await client.submit(self.request())
+        await asyncio.wait_for(second_running.wait(), 4)
+        try:
+            self.assertIsNone((await client.final_answer('run-a')).final_answer)
+        finally:
+            complete_second.set()
         async with asyncio.timeout(4):
             result = await client.wait('run-a', interval=.01)
         self.assertEqual((result.run_id, result.origin_run_id, result.output), ('run-a', 'run-a', 'Record ready'))
@@ -623,11 +637,6 @@ class DurableOperationsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tuple(seen), events)
         self.assertLessEqual(max(sizes), 4)
         self.assertEqual({row.payload['segment_run_id'] for row in seen}, {'run-a',segment.run_id})
-        # An earlier segment's attestation must never appear on the logical result.
-        await store.append_event('run-a', 'run.stream', {'kind':'done','final_answer':{'text':'old'}})
-        self.assertIsNone((await client.final_answer('run-a')).final_answer)
-        answer = {'text':'ready','attachments':[{'artifact_id':'qualified-fixture'}]}
-        await store.append_event(segment.run_id, 'run.stream', {'kind':'done','final_answer':answer})
         final = await client.final_answer('run-a')
         self.assertEqual((final.run_id, final.segment_run_id, final.final_answer), ('run-a',segment.run_id,answer))
         async with ClientSession() as http:

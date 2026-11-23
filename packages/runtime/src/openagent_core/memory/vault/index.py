@@ -204,13 +204,35 @@ class VaultIndex:
         self.journal_root = journal_root
         self._lock = threading.RLock()
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.index_path), check_same_thread=False)
+        self._open(str(self.index_path))
+
+    def _open(self, database):
+        self._conn = sqlite3.connect(database, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(_SCHEMA)
-        self._ensure_vault_meta()
+        if database != ":memory:":
+            self._ensure_vault_meta()
         self._configure_rank()
+
+    @classmethod
+    def from_documents(cls, documents):
+        """Build a transient index for a scoped graph inspection or quality report."""
+        instance = cls.__new__(cls)
+        instance.vault_root = instance.index_path = None
+        instance.journal_root = "workspace/journal"
+        instance._lock = threading.RLock()
+        instance._open(":memory:")
+        try:
+            with instance._conn:
+                for path, content in documents:
+                    instance._upsert(parse_note_text(path, content), content)
+                instance._rebuild_links()
+            return instance
+        except BaseException:
+            instance.close()
+            raise
 
     # ── lifecycle ─────────────────────────────────────────────────────
 

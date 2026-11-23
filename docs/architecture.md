@@ -278,3 +278,11 @@ executor through the same run authority. Its versioned definition is part of the
 request fingerprint. Tokens are resolved in an ephemeral execution scope; they
 are never stored in the context. Existing definitions need their actual historical
 authority resolved during migration; the installation owner is never guessed.
+
+## Standalone document management
+
+The document administration adapter uses the same space resolution and
+revision checks as agent tools. Opening a graph or running the quality gate
+constructs a transient in-memory index for that authorized space. An ordinary
+note deletion retains its revisions. The explicit forget operation also erases
+the revision bodies. Concurrent writes using a stale revision return a conflict.

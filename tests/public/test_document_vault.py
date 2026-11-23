@@ -123,6 +123,26 @@ class DocumentVault(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(LookupError):
             await self.store.read(self.a, "a.md")
 
+    async def test_admin_and_agent_share_one_vault_with_reversible_delete(self):
+        from openagent_core.administration import ManagementContext
+        from openagent_core.memory.vault.document_admin import DocumentVaultAdministration
+        admin = DocumentVaultAdministration(self.store, self.policy, self.a)
+        context = ManagementContext(self.a.authority, self.a.agent_id)
+        await self.turn(self.a, "remember")
+        result = await admin.execute(context, "read", path="topics/color.md")
+        self.assertIn("Cobalt", result["content"])
+        self.assertEqual(result["links"], ["topics/Palette#top"])
+        await admin.execute(context, "write", path="topics/palette.md", body={"content": "# Palette"})
+        graph = await admin.execute(context, "graph")
+        self.assertEqual(graph["edges"], [{"source": "topics/color.md", "target": "topics/palette.md"}])
+        self.assertIn("violations", await admin.execute(context, "gate"))
+        await admin.execute(context, "delete", path="topics/color.md")
+        self.assertFalse((await self.store.search(self.a, query="Cobalt"))["hits"])
+        self.assertEqual((await self.store.read(self.a, "topics/color.md", revision=1))["content"], result["content"])
+        await self.store.forget(self.a, "topics/color.md", expected_revision=2)
+        with self.assertRaises(LookupError):
+            await self.store.read(self.a, "topics/color.md", revision=1)
+
     async def test_authenticated_catalog_without_an_open_chat(self):
         from aiohttp import web
         from openagent_gateway import create_app
