@@ -273,6 +273,13 @@ class AgentExecutor:
                                             ref = public_attachment_ref(verified)
                                     except (LookupError, PermissionError, ValueError, OSError):
                                         ref = None
+                            if ref is None and not artifact_marker and db is None and callable(lookup):
+                                from .artifacts import publish_opaque_output
+                                try:
+                                    ref = await publish_opaque_output(runtime, context, request.run_id, value["path"])
+                                except (LookupError, OSError, PermissionError, ValueError):
+                                    ref = None
+                                await can_publish()
                             if ref is None and not artifact_marker and publisher is not None and db is not None:
                                 try:
                                     value = await publisher.publish(context, value["path"])

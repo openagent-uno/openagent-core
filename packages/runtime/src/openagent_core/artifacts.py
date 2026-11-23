@@ -261,6 +261,36 @@ class SessionOutputResolver(Protocol):
         ...
 
 
+class OpaqueOutputPublisher(SessionOutputResolver, Protocol):
+    """Publish a host-authorized asset identified by a provider namespace and opaque ID."""
+    reference_schemes: frozenset[str]
+
+    async def publish_reference(self, context: Any, reference: str) -> dict[str, Any]: ...
+
+
+async def publish_opaque_output(runtime, context, run_id, reference):
+    from .memory.artifacts import public_attachment_ref
+    from .memory.vault.privacy import require_unprotected_execution
+
+    match = re.fullmatch(r"([a-z][a-z0-9-]{0,47}):([A-Za-z0-9][A-Za-z0-9._-]{0,159})", reference)
+    if not match or match[1] in {"artifact", "data", "file", "http", "https"}:
+        return None
+    publisher = runtime.service(OpaqueOutputPublisher)
+    if match[1] not in getattr(publisher, "reference_schemes", ()):
+        return None
+    resource = ResourceRef("session", context.tenant_id, context.session_id)
+    await require_unprotected_execution("Host reference publication")
+    await runtime.authorize(context, "artifact.write", resource, audience=context.audience)
+    output = await publisher.publish_reference(context, reference)
+    ident = output.get("artifact_id") if isinstance(output, dict) else None
+    if not canonical_artifact_id(ident):
+        return None
+    await runtime.authorize(context, "artifact.read", resource, audience=context.audience)
+    verified = await publisher.resolve_session_output(context, run_id, ident)
+    await runtime.authorize(context, "artifact.read", resource, audience=context.audience)
+    return public_attachment_ref(verified) if isinstance(verified, dict) and verified.get("artifact_id") == ident else None
+
+
 # Inherited by local subtasks. The run ID keeps a child from contributing a
 # marker to its parent unless that parent independently receives a validated ref.
 _native_outputs = ContextVar("native_model_outputs", default=None)

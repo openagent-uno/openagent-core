@@ -58,6 +58,10 @@ The history window contains the most recent suffix of completed user/assistant t
 
 For native output media, bind a publisher under `attachments.publisher` with `publish_content(context, content, *, filename, mime_type)` and `resolve_session_output(context, run_id, artifact_id)`. The publisher stores authorized bytes and returns a reference including the canonical artifact ID, SHA-256 and byte length. The resolver must recheck the exact run, active session, agent, tenant, audience and current permissions whenever a result is delivered. Only admitted in-memory bytes enter this path. URL-only and path-only model output cannot trigger a host file read or a download. The public transcript carries path-free references. A model-authored audio reply can select only the exact bytes from its final assistant message. Tool preview media is separate from that selection.
 
+## Publishing references from a host asset service
+
+A host with its own asset service can also bind `OpaqueOutputPublisher` from `openagent_core.artifacts`. Declare the admitted namespaces in `reference_schemes`. The model can cite a reference such as `[IMAGE:library:asset-17]`. The host resolves that opaque ID with the current project or user grants, publishes it and verifies the resulting object belongs to the producing run. Filesystem paths and URLs cannot enter this port.
+
 ## Shared provider accounts
 
 A cloud host can set `RuntimeSettings(require_provider_admission=True)` and bind both `ProviderAdmission` and `CredentialResolver` in the service registry. The admission policy selects a `ProviderRoute` for the authenticated context and exact model. Its provider identifier represents the physical endpoint across replicas. Its ordered `ProviderAccount` entries identify eligible physical accounts and opaque secret references. The host owns the endpoint URL, account inventory and secret resolution. Secrets are resolved only after a slot is acquired and are excluded from the ledger. Each call uses a separate SDK client. Removing a required policy or changing a selected account blocks dispatch.

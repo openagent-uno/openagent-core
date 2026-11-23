@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta154 historical attachments, document maintenance and reversible cloud deployment](releases/v1.1.0-beta.154.md).
+
 - [Beta153 embedding, document memory and scoped computers](releases/v1.1.0-beta.153.md).
 
 - [PostgreSQL run and session storage for embedding hosts](postgres-runtime.md)

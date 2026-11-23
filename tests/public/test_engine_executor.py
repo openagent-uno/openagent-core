@@ -31,6 +31,7 @@ class EngineExecutor(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.store = _Store()
         self.runtime = SimpleNamespace(
+            settings=SimpleNamespace(environment={}),
             services=SimpleNamespace(authorizer=_Policy(), store=self.store)
         )
         self.context = SimpleNamespace(
@@ -41,6 +42,39 @@ class EngineExecutor(unittest.IsolatedAsyncioTestCase):
             input="hello", session_id="session", run_id="run",
             model_ref=None, attachments=(),
         )
+
+    async def test_diskless_asset_publisher_requires_a_host_namespace_and_the_producing_run(self):
+        from openagent_core.artifacts import OpaqueOutputPublisher
+
+        ident = "art_" + "1" * 32
+        calls = []
+        class Publisher:
+            reference_schemes = frozenset({"library"})
+
+            async def publish_reference(inner, context, reference):
+                calls.append(reference)
+                return {"artifact_id": ident}
+
+            async def resolve_session_output(inner, context, run, asset):
+                if (context, run, asset) != (self.context, "run", ident):
+                    raise PermissionError()
+                return {"artifact_id": ident, "mime_type": "image/png", "filename": "asset.png"}
+
+        publisher = Publisher()
+        self.runtime.service = lambda key: publisher if key is OpaqueOutputPublisher else None
+        self.runtime.authorize = self.runtime.services.authorizer.authorize
+        for ref in ("library:asset-17", "/private/source.png", "file:private", "https://example.invalid/icon",
+                    "other:asset-17", "library:../source"):
+            agent = _Agent([{"kind": "done", "text": "Picture. [IMAGE:" + ref + "]"}])
+            await AgentExecutor(agent).execute(self.request, self.context, self.runtime)
+            result = self.store.events[-1][2]
+            self.assertEqual([item["artifact_id"] for item in result["attachments"]],
+                             [ident] if ref == "library:asset-17" else [])
+        self.assertEqual(calls, ["library:asset-17"])
+        self.request.run_id = "other"
+        await AgentExecutor(_Agent([{"kind":"done","text":"[IMAGE:library:asset-17]"}])).execute(
+            self.request, self.context, self.runtime)
+        self.assertEqual(self.store.events[-1][2]["attachments"], [])
 
     async def test_errored_done_is_a_failed_run_and_is_not_published(self):
         executor = AgentExecutor(_Agent([
