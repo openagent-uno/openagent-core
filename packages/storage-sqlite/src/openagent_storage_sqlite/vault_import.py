@@ -595,6 +595,25 @@ async def require_import_receipt(
     raise VaultImportMismatch("The configured import receipt is unavailable")
 
 
+class LegacyReaderPrivacyConflict(VaultImportMismatch):
+    """A filesystem-era reader cannot continuously authorize document-derived output."""
+
+
+def guard_legacy_session_reader(connection):
+    """Check every audience in the standalone database before exporting to a legacy reader."""
+    if (
+        connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='oa_document_run_sources'"
+        ).fetchone()
+        and connection.execute(
+            "SELECT 1 FROM oa_document_run_sources LIMIT 1"
+        ).fetchone()
+    ):
+        raise LegacyReaderPrivacyConflict(
+            "The legacy session reader cannot honor document-source revocation"
+        )
+
+
 async def restore_standalone_memory_and_sessions(
     vault, context, src, database, destination, *, new_paths=(), quiesce
 ):
@@ -639,6 +658,7 @@ async def restore_standalone_memory_and_sessions(
             ):
                 source.execute("BEGIN")
                 guard_snapshot_transaction(source)
+                guard_legacy_session_reader(source)
                 _check_transaction_tenant(source, context.tenant_id)
                 identity_query = "SELECT db_instance_id FROM operational_storage_state WHERE singleton_id=1"
                 original = sealed.execute(identity_query).fetchone()
@@ -682,6 +702,7 @@ async def restore_standalone_memory_and_sessions(
                 source.execute("PRAGMA query_only=ON")
                 source.execute("BEGIN")
                 guard_snapshot_transaction(source)
+                guard_legacy_session_reader(source)
                 _check_transaction_tenant(source, context.tenant_id)
                 source.backup(clone)
                 if clone.execute("PRAGMA integrity_check").fetchone() != ("ok",):

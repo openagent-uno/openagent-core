@@ -356,6 +356,31 @@ class DocumentImport(unittest.IsolatedAsyncioTestCase):
                     self.engine, **{**proof, k: v}
                 )
 
+    async def test_legacy_rollback_requires_continuous_document_source_authorization(
+        self,
+    ):
+        import sqlite3
+        from contextlib import closing
+
+        with closing(sqlite3.connect(":memory:")) as con:
+            vault_import.guard_legacy_session_reader(con)
+            con.execute(
+                "CREATE TABLE oa_document_run_sources(run_id, session_id, source_id)"
+            )
+            vault_import.guard_legacy_session_reader(con)
+            # A retained receipt may subsequently be forgotten or lose its audience.
+            # Legacy readers interpret neither these bindings nor their token lifetimes.
+            con.execute("CREATE TABLE oa_vault_read_receipts(token)")
+            con.execute("INSERT INTO oa_vault_read_receipts VALUES ('opaque-revision')")
+            con.execute(
+                "INSERT INTO oa_document_run_sources VALUES ('r', 's', 'opaque-revision')"
+            )
+            for retained in (True, False):
+                if not retained:
+                    con.execute("DELETE FROM oa_vault_read_receipts")
+                with self.assertRaises(vault_import.LegacyReaderPrivacyConflict):
+                    vault_import.guard_legacy_session_reader(con)
+
     async def test_standalone_rollback_keeps_new_session_and_note_together(self):
         from openagent_core.contracts import SessionRef
         from openagent_storage_sqlite.migration import restore_to_new_directory
