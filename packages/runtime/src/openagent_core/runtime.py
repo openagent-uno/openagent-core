@@ -770,7 +770,8 @@ class Runtime:
         if len(self._tasks) + len(self._accepting) >= self.settings.max_active_runs:
             # Saturation still allows authorized replay of an existing receipt.
             try:
-                existing = await self.get_run(request.run_id, context)
+                async with self._credentials(context):
+                    existing = await self.get_run(request.run_id, context)
             except LookupError:
                 raise AdmissionCapacityExceeded("Worker execution capacity reached") from None
             if existing.request_digest != request.fingerprint(context):
@@ -806,7 +807,8 @@ class Runtime:
         if not created:
             # Returning prior content requires current read authority, even if
             # this worker currently has free execution slots.
-            return await self.get_run(record.run_id, context)
+            async with self._credentials(context):
+                return await self.get_run(record.run_id, context)
         graph.acquire()
         self._run_graphs[record.run_id] = graph
         self._run_capability_revisions[record.run_id] = capability_revision
