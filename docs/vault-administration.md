@@ -64,3 +64,9 @@ Whole-space maintenance plans execute in memory. Defaults admit up to 100,000
 live documents and 64 MiB of UTF-8 contents per space. Hosts can configure
 `max_maintenance_notes` and `max_maintenance_bytes` at construction. Exceeding
 the budget fails the request before loading the corpus or changing notes.
+
+
+Set `validate_on_write=True` on SQL management interfaces that enforce editor
+quality gates. Both storage backends then run the same deterministic mechanical
+repairs and reject invalid structure before committing. Direct document storage
+continues to preserve the caller's submitted Markdown.

@@ -201,6 +201,18 @@ class DocumentVault(unittest.IsolatedAsyncioTestCase):
                 await self.store.read(self.a, path, revision=1)
         self.assertEqual((await self.store.search(self.a, query="privateword"))["hits"], [])
 
+    async def test_editor_validation_and_raw_material_scope(self):
+        admin = self.administration(self.a, validate_on_write=True)
+        long_note = "line\n" * 500
+        refusal = await admin("write", path="concepts/alpha.md", body={"content": long_note})
+        self.assertTrue(refusal["blocked"])
+        self.assertEqual((await self.store.list_notes(self.a))["notes"], [])
+        await admin("write", path="sources/raw.md", body={"content": long_note})
+        self.assertEqual((await self.store.read(self.a,"sources/raw.md"))["content"], long_note)
+        repaired = await admin("write", path="concepts/alpha.md", body={"content": "[[ sources/raw ]]"})
+        self.assertTrue(repaired["applied"])
+        self.assertIn("[[sources/raw]]", (await self.store.read(self.a,"concepts/alpha.md"))["content"])
+
     async def test_competing_moves_serialize_and_preserve_ownership(self):
         admin = self.administration(self.a)
         await self.store.write(self.a, "source.md", "sample", expected_revision=0)

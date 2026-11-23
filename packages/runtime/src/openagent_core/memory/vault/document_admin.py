@@ -5,9 +5,10 @@ from .parser import extract_wikilinks, load_frontmatter_yaml, split_frontmatter
 
 
 class DocumentVaultAdministration:
-    def __init__(self, store, authorizer, execution, *, max_maintenance_bytes=64 << 20, max_maintenance_notes=100_000):
+    def __init__(self, store, authorizer, execution, *, validate_on_write=False, max_maintenance_bytes=64 << 20, max_maintenance_notes=100_000):
         if min(max_maintenance_bytes, max_maintenance_notes) < 1:
             raise ValueError("Invalid maintenance budget")
+        self.validate_on_write = validate_on_write
         self.maintenance_budget = max_maintenance_notes, max_maintenance_bytes
         self.store = store
         self.authorizer = authorizer
@@ -84,12 +85,29 @@ class DocumentVaultAdministration:
                     if operation == "delete":
                         raise
                     expected = 0
+            warnings, applied = [], []
             if operation == "delete":
                 result = await self.store.delete(execution, path, expected_revision=expected,before_commit=before_commit)
             else:
-                result = await self.store.write(execution, path, body["content"], expected_revision=expected,before_commit=before_commit)
+                from . import taxonomy
+                from .documents import note_path
+                path = note_path(path)
+                content = body.get("content")
+                if not isinstance(content, str) or len(content.encode()) > 2 << 20:
+                    raise ValueError("Invalid note content")
+                config = GateConfig()
+                if self.validate_on_write and taxonomy.is_in_quality_scope(
+                        path, config.excluded_folders, config.raw_prefixes, config.journal_root):
+                    import asyncio
+                    from .edited_note import validate_edited_note
+                    content, errors, warnings, applied = await asyncio.to_thread(
+                        validate_edited_note, path, content, is_new=expected == 0, config=config)
+                    if errors:
+                        return {"ok": False, "blocked": True, "existed": expected != 0,
+                                "warnings": warnings, "errors": errors}
+                result = await self.store.write(execution, path, content, expected_revision=expected,before_commit=before_commit)
             return {"ok": True, "path": path, "revision": result["revision"],
-                    "existed": expected != 0, "warnings": [], "applied": [], "commit":result.get("commit")}
+                    "existed": expected != 0, "warnings": warnings, "applied": applied, "commit":result.get("commit")}
         if operation == "notes":
             page, rows = None, []
             while True:

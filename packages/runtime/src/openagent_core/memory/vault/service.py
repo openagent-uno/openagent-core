@@ -162,54 +162,8 @@ class VaultService:
         errors + warnings, mirroring the vendored vault MCP's write gate
         (validate.ts). Pure CPU; runs in a thread. Returns
         ``(fixed_content, errors, warnings, applied)``."""
-        import datetime
-        from openagent_core.memory.vault.doctor import fix_note_content, _FIXABLE_RULES
-        from openagent_core.memory.vault.parser import (
-            FrontmatterSyntaxError,
-            load_frontmatter_yaml,
-            split_frontmatter,
-        )
-
-        def work() -> tuple[str, list, list, list]:
-            note = parse_note_text(rel, content, journal_root=self.journal_root)
-            today = datetime.date.today().isoformat()
-            fixed, applied = fix_note_content(
-                content, note, set(_FIXABLE_RULES), today)
-            errors: list = []
-            warnings: list = []
-            # NOTE the order: the auto-fixer above has already run, so this
-            # asks "is the frontmatter valid AFTER repair?", not "was it valid
-            # as submitted?". That is what makes the 38 damaged notes in the
-            # real vault writable again without loosening this check by one
-            # inch — the doctor's ``frontmatter_yaml`` repair lands them in
-            # valid YAML and they sail through. Loosening it to the tolerant
-            # parser's contract was the alternative and was rejected: it would
-            # have let NEW unparseable notes in (the vendored MCP's gray-matter
-            # reader would still hand the agent ``frontmatter: {}``), i.e. it
-            # would have made the vault writable by breaking the promise that
-            # made it readable.
-            raw_fm, _ = split_frontmatter(fixed)
-            if raw_fm is not None and raw_fm.strip():
-                try:
-                    load_frontmatter_yaml(raw_fm)
-                except FrontmatterSyntaxError as e:
-                    errors.append({"rule": "frontmatter_yaml", "severity": "error",
-                                   "message": f"frontmatter is not valid YAML: {e}"})
-            note2 = parse_note_text(rel, fixed, journal_root=self.journal_root)
-            if is_new and note2.line_count > self.config.max_lines:
-                errors.append({
-                    "rule": "atomicity", "severity": "error",
-                    "message": (f"note is {note2.line_count} body lines "
-                                f"(> {self.config.max_lines}); split it into "
-                                "atomic notes, one idea each, and link them")})
-            if not note2.summary:
-                warnings.append({
-                    "rule": "frontmatter", "severity": "warn",
-                    "message": ("missing 'summary' — add a one-sentence "
-                                "summary so the note is self-describing")})
-            return fixed, errors, warnings, applied
-
-        return await asyncio.to_thread(work)
+        from .edited_note import validate_edited_note
+        return await asyncio.to_thread(validate_edited_note, rel, content, is_new=is_new, config=self.config, journal_root=self.journal_root)
 
     async def write_note(self, rel_path: str, content: str,
                          origin: dict | None = None,
