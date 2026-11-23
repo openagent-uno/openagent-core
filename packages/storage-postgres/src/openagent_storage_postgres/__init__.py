@@ -23,6 +23,7 @@ from openagent_core.contracts import (
 )
 from .sessions import RUN_AUDIENCE, Sessions, _audience, _members
 from .operations import Operations
+from .notifications import RunNotifications
 from openagent_core.durable_operations import (
     OperationRunRequest,
     OperationContinuation,
@@ -73,6 +74,7 @@ class PostgresRuntimeStore(Sessions, Operations):
         self._dsn, self._pool_size = dsn, pool_size
         self._pool = self._heartbeat = self._worker = None
         self._executing = {}
+        self._notices = RunNotifications(dsn, schema, agent_id)
 
     @asynccontextmanager
     async def _db(self):
@@ -115,6 +117,7 @@ class PostgresRuntimeStore(Sessions, Operations):
                     VALUES (%s,%s,clock_timestamp()+make_interval(secs=>%s))""",
                     (self._worker, self.agent_id, self.lease_seconds),
                 )
+            self._notices.start()
             self._heartbeat = asyncio.create_task(self._maintain(), name="openagent-pg-lease")
         except BaseException:
             await self._pool.close()
@@ -122,6 +125,7 @@ class PostgresRuntimeStore(Sessions, Operations):
             raise
 
     async def close(self):
+        await self._notices.close()
         if self._heartbeat is not None:
             self._heartbeat.cancel()
             await asyncio.gather(self._heartbeat, return_exceptions=True)
@@ -431,6 +435,8 @@ class PostgresRuntimeStore(Sessions, Operations):
         if status == "success" and output is not None:
             await self._message(db, row, "assistant", self._agent(row), output)
         await self._event(db, row["id"], "run." + status, dict(status=status, output=output))
+        await self._notices.publish(db, "session", row["session_id"])
+        await self._notices.publish(db, "run", row["id"])
         return _record(updated)
 
     async def _guard_session(self, db, session_id):
@@ -439,41 +445,52 @@ class PostgresRuntimeStore(Sessions, Operations):
             (str((self.schema, self.agent_id, session_id)),),
         )
 
+    def observe_run(self, ident):
+        return self._notices.observe("run", ident)
+
+    @staticmethod
+    async def _wait_for_notice(event):
+        try:
+            await asyncio.wait_for(event.wait(), timeout=5)
+        except TimeoutError:
+            pass
+
     async def wait_session_turn(self, ident):
-        while True:
-            async with self._db() as db:
-                row = await self._owned(db, ident)
-                if row["cancel_requested"]:
-                    raise asyncio.CancelledError()
-                earlier = await (
-                    await db.execute(
+        async with self._db() as db:
+            session_id = (await self._owned(db, ident))["session_id"]
+        with self._notices.observe("session", session_id) as changed:
+            while True:
+                changed.clear()
+                async with self._db() as db:
+                    row = await self._owned(db, ident)
+                    if row["cancel_requested"]:
+                        raise asyncio.CancelledError()
+                    earlier = await (await db.execute(
                         """SELECT 1 FROM runs WHERE agent=%s AND session_id=%s
-                    AND ordinal<%s AND status IN ('queued','running') LIMIT 1""",
-                        (self.agent_id, row["session_id"], row["ordinal"]),
-                    )
-                ).fetchone()
-                if not earlier:
-                    return
-            await asyncio.sleep(0.1)
+                           AND ordinal<%s AND status IN ('queued','running') LIMIT 1""",
+                        (self.agent_id, session_id, row["ordinal"]),
+                    )).fetchone()
+                    if not earlier:
+                        return
+                await self._wait_for_notice(changed)
 
     @asynccontextmanager
     async def provider_release_scope(self, context):
-        # Serialize the provider release with the moment any worker starts
-        # execution in this session. Never wait for a run inside the transaction.
-        while True:
-            async with self._db() as db:
-                await self._guard_session(db, context.session_id)
-                active = await (
-                    await db.execute(
+        # Hold the session lock while releasing a provider that is no longer active.
+        with self._notices.observe("session", context.session_id) as changed:
+            while True:
+                changed.clear()
+                async with self._db() as db:
+                    await self._guard_session(db, context.session_id)
+                    active = await (await db.execute(
                         """SELECT 1 FROM runs WHERE agent=%s AND tenant=%s
-                    AND session_id=%s AND status='running' LIMIT 1""",
+                           AND session_id=%s AND status='running' LIMIT 1""",
                         (self.agent_id, context.tenant_id, context.session_id),
-                    )
-                ).fetchone()
-                if not active:
-                    yield
-                    return
-            await asyncio.sleep(0.1)
+                    )).fetchone()
+                    if not active:
+                        yield
+                        return
+                await self._wait_for_notice(changed)
 
     async def transition(self, ident, status, *, output=None):
         if status != "running" and status not in TERMINAL_STATUSES:
@@ -526,6 +543,8 @@ class PostgresRuntimeStore(Sessions, Operations):
             (self.agent_id, ident),
         )
         await self._event(db, ident, "run.cancel_requested", {})
+        await self._notices.publish(db, "session", row["session_id"])
+        await self._notices.publish(db, "run", ident)
         return _record(await cur.fetchone())
 
     async def reserve_cancel(self, ident, context):

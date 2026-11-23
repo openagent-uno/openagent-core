@@ -299,3 +299,10 @@ upload. Retention procedures may collect unreferenced chunks after in-flight
 uploads have drained. During delivery the reader checks authorization and
 integrity for each chunk. Set the gateway's `resolve_artifact_context` callback
 to serve the artifact content URL using the caller's current verified session.
+
+A runtime bounds the number of locally admitted active runs with
+`RuntimeSettings.max_active_runs`. At capacity, the authenticated gateway
+returns HTTP 429 and a retry interval. An exact retry still reads its original
+receipt. PostgreSQL workers share one LISTEN connection per process/store.
+Run completion and session turn handoff wake interested observers after commit.
+Every observer rereads the durable record and live policy on wake or timeout.

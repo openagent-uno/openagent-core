@@ -1122,7 +1122,7 @@ class Agent:
         self._initialized = False
         self._idle_cleanup_task: asyncio.Task | None = None
         self._runtime_models: list[BaseModel] = []
-        self._last_response_meta: dict[str, dict[str, Any]] = {}
+        self._last_response_meta: dict[tuple, dict[str, Any]] = {}
 
         # Materialised provider+model catalog from the SQLite ``providers`` /
         # ``models`` tables. Populated by ``_hydrate_providers_from_db`` at
@@ -1149,15 +1149,21 @@ class Agent:
         return self._db
 
     @staticmethod
-    def _response_meta_key(session_id: str | None) -> str:
-        return session_id or "__default__"
+    def _response_meta_key(session_id: str | None) -> tuple:
+        from openagent_core.runtime import current_execution_context
+        ctx = current_execution_context()
+        return (ctx.tenant_id, ctx.agent_id, session_id, ctx.authority.key) if ctx else (session_id,)
+
 
     def _store_response_meta(self, session_id: str | None, response: ModelResponse | None) -> None:
         key = self._response_meta_key(session_id)
         if response is None or not response.model:
             self._last_response_meta.pop(key, None)
             return
+        self._last_response_meta.pop(key, None)
         self._last_response_meta[key] = {"model": response.model}
+        if len(self._last_response_meta) > 128:
+            self._last_response_meta.pop(next(iter(self._last_response_meta)))
 
     def last_response_meta(self, session_id: str | None) -> dict[str, Any]:
         return dict(self._last_response_meta.get(self._response_meta_key(session_id), {}))
@@ -1259,14 +1265,15 @@ class Agent:
         """Release live runtime resources tied to one session, if supported."""
         if not session_id:
             return
+        key = self._response_meta_key(session_id)
+        self._last_response_meta.pop(key, None)
+        getattr(self, "_prompt_receipts", {}).pop(key, None)
         model = model_override or self.model
-        if model is None:
-            return
-        self._prepare_model_runtime(model)
-        close_session = getattr(model, "close_session", None)
-        if not callable(close_session):
-            return
-        await close_session(session_id)
+        if model is not None:
+            self._prepare_model_runtime(model)
+            close_session = getattr(model, "close_session", None)
+            if callable(close_session):
+                await close_session(session_id)
         try:
             await self.background_jobs.purge_session(session_id)
         except Exception as e:  # noqa: BLE001
@@ -2749,7 +2756,9 @@ class Agent:
         receipts = getattr(self, "_prompt_receipts", None)
         if receipts is None:
             receipts = self._prompt_receipts = {}
-        receipts[session_id or "__default__"] = tuple(
+        key = self._response_meta_key(session_id)
+        receipts.pop(key, None)
+        receipts[key] = tuple(
             receipt.to_dict() for receipt in composed.receipts
         )
         # Bound diagnostics; receipts never contain prompt or credential text.
@@ -2762,6 +2771,8 @@ class Agent:
         from openagent_core.runtime import current_runtime, current_execution_context, current_run_id
         text = self._combined_system_prompt(session_id=session_id)
         runtime, context, run_id = current_runtime(), current_execution_context(), current_run_id()
+        # Capture before any await; an unrelated turn can evict the diagnostic cache.
+        prompt_receipt = self.prompt_receipt(session_id)
         # The map of what this turn can use: every authorized capability source
         # with its use case, target and (for small sources) tool names. Without
         # it the deferred catalog shows the model only the discovery tools.
@@ -2777,14 +2788,14 @@ class Agent:
             if context.session_id != session_id:
                 raise PermissionError("Prompt composition belongs to another session")
             await runtime.services.store.append_event(run_id, "run.prompt", {
-                "blocks": list(self.prompt_receipt(session_id)),
+                "blocks": list(prompt_receipt),
             })
         return text
 
     def prompt_receipt(self, session_id: str | None = None) -> tuple[dict, ...]:
         """Latest composition revisions/checksums for a session, without content."""
         return tuple(dict(item) for item in getattr(self, "_prompt_receipts", {}).get(
-            session_id or "__default__", ()))
+            self._response_meta_key(session_id), ()))
 
     async def stream_run(
         self,

@@ -4,6 +4,7 @@ from dataclasses import asdict
 from typing import Any
 from aiohttp import web
 from openagent_core import RunEventPage, RunRequest, IdempotencyConflict
+from openagent_core.contracts import AdmissionCapacityExceeded
 from .compression import json_compression
 
 _REQUEST_FIELDS={'run_id','session_id','idempotency_key','input','deadline_seconds','model_ref','attachments','steer_run_id'}
@@ -32,6 +33,8 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
     async def boundary(request,handler):
         try:
             return await handler(request)
+        except AdmissionCapacityExceeded:
+            return web.json_response({'error': 'capacity_exceeded'}, status=429, headers={'Retry-After': '1'})
         except IdempotencyConflict:
             return web.json_response({'error':'idempotency_conflict'},status=409)
         except PermissionError:

@@ -110,6 +110,10 @@ class AuthorizationDenied(PermissionError):
     pass
 
 
+class AdmissionCapacityExceeded(RuntimeError):
+    """The worker has no remaining in-process execution slots."""
+
+
 class IdempotencyConflict(ValueError):
     pass
 

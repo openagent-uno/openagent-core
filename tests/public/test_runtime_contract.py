@@ -56,6 +56,29 @@ class Contracts(unittest.IsolatedAsyncioTestCase):
         result = await runtime.wait('run', self.ctx)
         self.assertEqual((result.status, result.output), ('success', 'hello'))
 
+    async def test_full_worker_returns_identical_receipt_without_creating_another_task(self):
+        from openagent_core.contracts import AdmissionCapacityExceeded, IdempotencyConflict
+        self.r = Runtime(replace(self.r.settings, max_active_runs=1), self.r.services)
+        self.executor.hold = asyncio.Event()
+        await self.r.start()
+        await self.r.submit(self.request(), self.ctx)
+        await self.executor.started.get()
+        try:
+            retry = await self.r.submit(self.request(), self.ctx)
+            self.assertEqual(retry.run_id, 'run')
+            with self.assertRaises(IdempotencyConflict):
+                await self.r.submit(replace(self.request(), input='changed'), self.ctx)
+            with self.assertRaises(AdmissionCapacityExceeded):
+                await self.r.submit(self.request('other'), self.ctx)
+            self.assertIsNone(await self.store.get('other'))
+            self.assertEqual(len(self.r._tasks), 1)
+        finally:
+            self.executor.hold.set()
+        await self.r.wait('run', self.ctx)
+        await self.r.submit(self.request('other'), self.ctx)
+        self.assertEqual((await self.r.wait('other', self.ctx)).status, 'success')
+        self.assertFalse(self.r._sessions)
+
     async def test_construction_has_no_files_or_execution(self):
         self.assertFalse((self.path/'one').exists());self.assertEqual(self.executor.calls,[])
 

@@ -16,7 +16,7 @@ from .memory_access import MemoryAccess
 from .modules import (CapabilityContribution, ModuleCatalog,
     ModuleContext, ModuleContribution, ModuleReconfigurationError, ModuleReferenceConflict,
     ModuleStatus, ReconfigureReceipt, RuntimeProfile, ServiceRegistry)
-from .contracts import (AgentExecutor, Authorizer, DelegationService, ExecutionContext,
+from .contracts import (AdmissionCapacityExceeded, IdempotencyConflict, AgentExecutor, Authorizer, DelegationService, ExecutionContext,
     ResourceRef, RunEvent, RunEventPage, RunFinalAnswer, RunRecord, RunRequest, RuntimeStore, SessionStore,
     ModelCatalog, PrincipalRef, require_authorized)
 
@@ -100,10 +100,13 @@ class RuntimeSettings:
     child_concurrency: int = 16
     child_max_depth: int = 1
     child_chain_concurrency: int = 8
+    max_active_runs: int = 256
 
     def __post_init__(self) -> None:
         if not self.agent_id or (self.workspace is not None and not self.workspace.is_absolute()):
             raise ValueError('Runtime requires an agent ID and any local workspace must be absolute')
+        if type(self.max_active_runs) is not int or self.max_active_runs < 1:
+            raise ValueError('A worker requires at least one execution slot')
         if self.child_concurrency < 1 or self.child_max_depth < 1 or self.child_chain_concurrency < 0:
             raise ValueError('Invalid child execution limits')
 
@@ -704,6 +707,16 @@ class Runtime:
             await self._authorize(context,'run.submit',request.session_id,context.tenant_id)
             if request.steer_run_id is not None:
                 await self._steering_target(request,context)
+        if len(self._tasks) >= self.settings.max_active_runs:
+            # The lifecycle lock serializes admission through task registration.
+            # A retry can still obtain its original receipt at full capacity.
+            try:
+                existing = await self.get_run(request.run_id, context)
+            except LookupError:
+                raise AdmissionCapacityExceeded("Worker execution capacity reached") from None
+            if existing.request_digest != request.fingerprint(context):
+                raise IdempotencyConflict("Different request or authority already admitted")
+            return existing
         record, created = await self.services.store.accept(request,context)
         if created:
             graph.acquire()
@@ -937,6 +950,18 @@ class Runtime:
         # store. A missing local task does not mean it has finished. Observe
         # authoritative state until it is terminal, rechecking current host
         # policy on each read. Cancelling this observer never cancels the run.
+        observe = getattr(self.services.store, "observe_run", None)
+        if observe is not None:
+            with observe(run_id) as changed:
+                while True:
+                    changed.clear()
+                    record = await self.get_run(run_id, context)
+                    if record.terminal:
+                        return record
+                    try:
+                        await asyncio.wait_for(changed.wait(), timeout=5)
+                    except TimeoutError:
+                        pass  # Revalidate access and recover a missed notification.
         while True:
             record = await self.get_run(run_id, context)
             if record.terminal:
