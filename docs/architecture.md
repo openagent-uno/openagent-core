@@ -134,6 +134,11 @@ input author, terminal transitions, events, and invocation receipts use the
 existing operational SQLite tables. The same key with different input or author
 is a conflict. Disconnecting an observer does not cancel an accepted run.
 
+Within a runtime, turns and deferred provider-session release actions share a
+lock per tenant and session. The lock stays registered while an action holds
+it or waits for it, and is reclaimed as soon as the last action leaves.
+Session history remains available in the durable store after the lock is gone.
+
 Cancellation targets an exact run. A host may reserve cancellation for an
 authorized run whose HTTP acceptance is uncertain. The reservation uses the
 existing immutable domain event log; it invents neither a message nor a session

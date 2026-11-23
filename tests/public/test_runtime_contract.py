@@ -59,6 +59,42 @@ class Contracts(unittest.IsolatedAsyncioTestCase):
     async def test_construction_has_no_files_or_execution(self):
         self.assertFalse((self.path/'one').exists());self.assertEqual(self.executor.calls,[])
 
+    async def test_idle_sessions_release_locks_and_retain_durable_history(self):
+        await self.r.start()
+
+        async def run_turn(number):
+            session_id = f'session-{number}'
+            context = replace(self.ctx, session_id=session_id)
+            request = RunRequest(f'run-{number}', session_id, 'one', 'hello')
+            await self.r.submit(request, context)
+            self.assertEqual((await self.r.wait(request.run_id, context)).status, 'success')
+
+        for start in range(0, 64, 8):
+            await asyncio.gather(*(run_turn(number) for number in range(start, start + 8)))
+            self.assertFalse(self.r._sessions)
+        first = await self.r.get_run('run-0', replace(self.ctx, session_id='session-0'))
+        self.assertEqual(first.output, 'hello')
+
+    async def test_cancelling_queued_turn_keeps_waiters_on_same_lock(self):
+        await self.r.start()
+        self.executor.hold = asyncio.Event()
+        await self.r.submit(self.request('active'), self.ctx)
+        self.assertEqual(await asyncio.wait_for(self.executor.started.get(), 2), 'active')
+        key = (self.ctx.tenant_id, self.ctx.session_id)
+        for count, run_id in enumerate(('cancel-me', 'queued'), start=2):
+            await self.r.submit(self.request(run_id), self.ctx)
+            async with asyncio.timeout(2):
+                while self.r._sessions[key].users != count:
+                    await asyncio.sleep(0)
+        await self.r.cancel('cancel-me', self.ctx)
+        self.assertEqual(self.r._sessions[key].users, 2)
+        self.assertEqual((await self.r.get_run('queued', self.ctx)).status, 'queued')
+        self.executor.hold.set()
+        for run_id in ('active', 'queued'):
+            self.assertEqual((await self.r.wait(run_id, self.ctx)).status, 'success')
+        self.assertEqual([call[0] for call in self.executor.calls], ['active', 'queued'])
+        self.assertFalse(self.r._sessions)
+
     async def test_durable_idempotency_and_replay_after_restart(self):
         await self.r.start();req=self.request()
         await asyncio.gather(self.r.submit(req,self.ctx),self.r.submit(req,self.ctx))

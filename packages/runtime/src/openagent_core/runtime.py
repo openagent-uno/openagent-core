@@ -197,6 +197,12 @@ class RuntimeModule(Protocol):
 
 
 @dataclass(slots=True)
+class _SessionLock:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
+
+
+@dataclass(slots=True)
 class _ActiveGraph:
     profile: RuntimeProfile
     services: ServiceRegistry
@@ -253,7 +259,7 @@ class Runtime:
         self._tasks: dict[str, asyncio.Task] = {}
         self._child_slots: dict[int, asyncio.Semaphore] = {}
         self._child_chain_slots: dict[tuple[str, int], tuple[asyncio.Semaphore, int]] = {}
-        self._sessions: dict[tuple[str,str], asyncio.Lock] = {}
+        self._sessions: dict[tuple[str, str], _SessionLock] = {}
         self._lifecycle = asyncio.Lock()
 
     def _build_host_registry(self) -> ServiceRegistry:
@@ -716,6 +722,22 @@ class Runtime:
                 raise
         return record
 
+    @asynccontextmanager
+    async def _hold_session(self, context: ExecutionContext):
+        key = (context.tenant_id, context.session_id)
+        entry = self._sessions.get(key)
+        if entry is None:
+            entry = self._sessions[key] = _SessionLock()
+        # Count waiters before the first await, including the next holder during handoff.
+        entry.users += 1
+        try:
+            async with entry.lock:
+                yield
+        finally:
+            entry.users -= 1
+            if entry.users == 0:
+                del self._sessions[key]
+
     async def _steering_target(self, request: RunRequest, context: ExecutionContext) -> RunRecord:
         target = await self.get_run(request.steer_run_id,context)
         if target.session_id != request.session_id or target.tenant_id != context.tenant_id:
@@ -738,10 +760,9 @@ class Runtime:
                         target = await self._steering_target(request,context)
                         await self.services.store.append_event(request.run_id,'run.steering',{'target_run_id':target.run_id})
                         await self.cancel(target.run_id,context)
-                    lock=self._sessions.setdefault((context.tenant_id,context.session_id),asyncio.Lock())
                     # Different authors never steer/coalesce into another
                     # principal's active execution or borrow its credentials.
-                    async with lock:
+                    async with self._hold_session(context):
                         await self._authorize(context,'run.execute',request.session_id,context.tenant_id)
                         record=await self.services.store.get(request.run_id)
                         if record.cancel_requested:
@@ -910,12 +931,11 @@ class Runtime:
         self._admission()
         async with self._credentials(context):
             await self._authorize(context,'run.submit',context.session_id,context.tenant_id)
-            lock = self._sessions.setdefault((context.tenant_id, context.session_id), asyncio.Lock())
             # A transport-level stop acknowledgement need not prove provider
             # cleanup. Bound both draining the live turn and provider release;
             # failure leaves the host selector on its original generation.
             async with asyncio.timeout(10):
-                async with lock:
+                async with self._hold_session(context):
                     with execution_scope(self,context,None):
                         agent = getattr(self.services.executor,'agent',None)
                         await agent.release_session(context.session_id)

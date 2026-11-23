@@ -259,16 +259,18 @@ async def test_deferred_reset_drains_real_runtime_turn_before_provider_release(t
         # A provider that never drains cannot hang cleanup or reach rotation.
         from unittest.mock import patch
         real_timeout = asyncio.timeout
-        lock = runtime._sessions[(context.tenant_id, context.session_id)]
         before = list(executor.agent.calls)
-        await lock.acquire()
+        executor.started.clear()
+        await runtime.submit(RunRequest("still-active", "session", "still-active", "block"), context)
+        await asyncio.wait_for(executor.started.wait(), 1)
         try:
             with patch("openagent_core.runtime.asyncio.timeout", lambda _seconds: real_timeout(0.01)):
                 with pytest.raises(TimeoutError):
                     await runtime.chat_command_action(cc.RELEASE_SESSION, context, operation_id="blocked-cleanup")
         finally:
-            lock.release()
+            await runtime.cancel("still-active", context)
         assert executor.agent.calls == before
+        assert not runtime._sessions
         with pytest.raises(ValueError):
             await runtime.chat_command_action("erase_history", context, operation_id="reset-old-session")
     finally:
