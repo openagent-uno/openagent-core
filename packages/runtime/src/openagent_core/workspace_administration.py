@@ -85,8 +85,9 @@ class SkillsLibrary:
 
 
 class SessionInspection:
-    def __init__(self,db,authorizer,*,agent=None):
+    def __init__(self,db,authorizer,*,agent=None,runtime=None):
         self.db,self.authorizer,self.agent=db,authorizer,agent
+        self.runtime = runtime
 
     async def authorize(self,context,session_id):
         from .dream_evidence import dream_run_id
@@ -97,6 +98,18 @@ class SessionInspection:
         row=await (await conn.execute("SELECT * FROM sessions_v2 WHERE id=? AND deleted_at_ms IS NULL",(session_id,))).fetchone()
         if row is not None and row["tenant_id"] != context.tenant_id:raise PermissionError("Session tenant does not match host provenance")
         require_session_not_quarantined(row)
+        from .memory.legacy_document_history import marked_session
+        if await marked_session(conn, session_id):
+            from .memory.document_exposure import authorize_document_history
+            store = self.runtime.services.store if self.runtime is not None else None
+            store_path = getattr(store, "path", None)
+            db_path = getattr(self.db, "db_path", None)
+            if (row is None or not store_path or not db_path
+                    or Path(store_path).resolve() != Path(db_path).resolve()
+                    or row["agent_id"] != context.agent_id
+                    or not callable(getattr(store, "document_sources", None))):
+                raise PermissionError("Document-dependent history requires its authorized runtime")
+            await authorize_document_history(self.runtime, context, session_id=session_id)
         return dict(row) if row is not None else None
 
     async def list(self,context,*,parent=None,limit=50):
@@ -117,7 +130,12 @@ class SessionInspection:
             legacy=await self.db.get_session(row["id"])
             result.append(legacy or {"session_id":row["id"],"title":row["title"],"origin":row["origin"],"parent_session_id":row["parent_session_id"],"kind":row["kind"],"created_at":row["created_at_ms"]/1000,"last_active_at":row["last_activity_at_ms"]/1000})
             if len(result)>=max(1,min(int(limit),200)):break
-        return {"sessions":result}
+        from .memory.legacy_document_history import SessionProjectionGuard
+        async def check_source(sid):
+            await self.authorize(context, sid)
+        allowed = await SessionProjectionGuard(check_source).visible(
+            conn, (row["session_id"] for row in result), remember=False)
+        return {"sessions":[row for row in result if row["session_id"] in allowed]}
 
     async def _public_input_refs(self, context, session_id, values):
         from .session_transcript import public_transcript_attachments
@@ -472,6 +490,10 @@ class SessionInspection:
             # Take the storage snapshot first; recheck authority before publishing
             # under the same writer lock so ACL/source changes cannot race the copy.
             await require_authorized(self.authorizer, context, "session.fork", resource)
+            from .dream_evidence import dream_run_id
+            from .memory.legacy_document_history import marked_session
+            if dream_run_id(session_id) or await marked_session(conn, session_id):
+                raise PermissionError("A text-only fork cannot preserve protected source receipts")
             source = await (await conn.execute(
                 "SELECT title,visibility,agent_id FROM sessions_v2 WHERE id=? AND tenant_id=? AND deleted_at_ms IS NULL",
                 (session_id, context.tenant_id))).fetchone()

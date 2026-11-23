@@ -7,8 +7,10 @@ rechecked against the canonical operational database before serialization.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Sequence
+
+from ..legacy_document_history import SessionProjectionGuard
 
 
 @dataclass(frozen=True)
@@ -20,6 +22,8 @@ class AccessContext:
     device_id: str
     principal_ids: frozenset[str]
     grant_identities: frozenset[tuple[str, str]]
+
+    projection: SessionProjectionGuard | None = field(default=None, compare=False, repr=False)
 
     @classmethod
     def from_request(cls, request: Any) -> "AccessContext":
@@ -53,7 +57,8 @@ class AccessContext:
                 ("installation", tenant),
             }
         )
-        return cls(tenant, principal_id, principal_type, handle, device, ids, grants)
+        return cls(tenant, principal_id, principal_type, handle, device, ids, grants,
+                   request.get("openagent_session_projection") or SessionProjectionGuard())
 
     @classmethod
     def from_on_behalf_identity(cls, identity: Any) -> "AccessContext":
@@ -114,7 +119,17 @@ def row_is_visible_without_grant(row: Any, access: AccessContext) -> bool:
     return owner is not None and str(owner) in access.principal_ids
 
 
-async def resource_is_visible(
+async def resource_is_visible(conn, row, access, *, permission="view") -> bool:
+    if not await _resource_acl_visible(conn, row, access, permission=permission):
+        return False
+    projection = getattr(access, "projection", None)
+    if (projection is not None and permission in {"view", "search"} and
+            "resource_type" in row.keys() and row["resource_type"] == "session"):
+        return bool(await projection.visible(conn, (row["resource_id"],)))
+    return True
+
+
+async def _resource_acl_visible(
     conn: Any,
     row: Any,
     access: AccessContext,
@@ -241,4 +256,11 @@ async def resources_are_visible(
         if len(pending) == _VISIBILITY_RESOURCE_BATCH:
             await check_pending()
     await check_pending()
+    projection = getattr(access, "projection", None)
+    if projection is not None and permission in {"view", "search"}:
+        sessions = {i: row["resource_id"] for i, row in enumerate(rows) if decisions[i]
+                    and "resource_type" in row.keys() and row["resource_type"] == "session"}
+        allowed = await projection.visible(conn, sessions.values())
+        for index, sid in sessions.items():
+            decisions[index] = sid in allowed
     return decisions

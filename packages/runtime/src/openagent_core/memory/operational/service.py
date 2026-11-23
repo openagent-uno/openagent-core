@@ -508,6 +508,7 @@ SELECT
     CASE WHEN
         h.request_types_valid
         AND h.canonical_exists
+        {document_visibility}
         AND h.anchor_valid
         AND h.hierarchy_valid
         AND h.canonical_tenant_id IS NOT NULL
@@ -679,6 +680,14 @@ async def search_rows_visible(
         "acl_version",
         "source_version",
     )
+    from ..legacy_document_history import has_ledger
+    document_visibility = ""
+    if await has_ledger(conn):
+        document_visibility = (
+            "AND (h.canonical_resource_type <> 'session' OR NOT EXISTS "
+            "(SELECT 1 FROM oa_document_run_sources d WHERE d.session_id=h.canonical_resource_id))"
+        )
+    authorization_sql = _CANONICAL_AUTHORIZATION_SQL.replace("{document_visibility}", document_visibility)
     for start in range(0, len(candidates), _CANONICAL_AUTHORIZATION_BATCH):
         batch = candidates[start : start + _CANONICAL_AUTHORIZATION_BATCH]
         requested_json = json.dumps(
@@ -688,7 +697,7 @@ async def search_rows_visible(
         )
         result_rows = await (
             await conn.execute(
-                _CANONICAL_AUTHORIZATION_SQL,
+                authorization_sql,
                 (
                     requested_json,
                     access.tenant_id,
@@ -879,6 +888,7 @@ class OperationalSearchService:
         authorized_seen = 0
         page_consumed = 0
         hits: list[dict[str, Any]] = []
+        published_candidates = []
         has_more = False
         window = candidates[:_MAX_CANDIDATES]
         stop = False
@@ -917,8 +927,17 @@ class OperationalSearchService:
                 if highlighted is None:
                     continue
                 hits.append(_result(row, highlighted))
+                published_candidates.append(row)
             if stop:
                 break
+        # Highlight extraction awaits a separate index connection. Check all recipients
+        # once more after the final read, before any snippet leaves this request.
+        if published_candidates:
+            verified = await search_rows_visible(conn, published_candidates, access)
+            for recipient in audience_accesses:
+                other = await search_rows_visible(conn, published_candidates, recipient)
+                verified = tuple(left and right for left, right in zip(verified, other))
+            hits = [hit for hit, visible in zip(hits, verified) if visible]
         response: dict[str, Any] = {
             "ok": True,
             "hits": hits,

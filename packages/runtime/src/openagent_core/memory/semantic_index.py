@@ -1386,6 +1386,8 @@ class SemanticIndex:
                             "session_id": r["session_id"],
                             "title": r["title"] or "", "origin": r["origin"] or "",
                         })
+        from .legacy_document_history import visible_cache_hits
+        hits = visible_cache_hits(self._open_source, hits)
         hits.sort(key=lambda h: h["score"], reverse=True)
         return hits[:max(1, int(limit))]
 

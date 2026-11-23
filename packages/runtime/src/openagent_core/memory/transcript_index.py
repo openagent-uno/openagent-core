@@ -300,6 +300,9 @@ def live_sessions(src: sqlite3.Connection) -> Optional[dict[str, LiveSession]]:
     the canonical store has never seen (pre-migration installs and paths that
     still write only the legacy table).
     """
+    from .legacy_document_history import withheld_sessions
+    from ..dream_evidence import dream_run_id
+    withheld = withheld_sessions(src)
     out: dict[str, LiveSession] = {}
     canonical_ids: set[str] = set()
     have_any = False
@@ -315,7 +318,7 @@ def live_sessions(src: sqlite3.Connection) -> Optional[dict[str, LiveSession]]:
         # readable through the canonical readers, so recall must not surface
         # them either. Dropping them from ``live`` makes the reconcile remove
         # any vector/FTS rows they already had.
-        if r["deleted_at_ms"] is not None or r["visibility"] == "quarantined":
+        if sid in withheld or dream_run_id(sid) or r["deleted_at_ms"] is not None or r["visibility"] == "quarantined":
             continue
         updated = max(int(r["updated_at_ms"] or 0), int(r["mx"] or 0))
         out[sid] = LiveSession(
@@ -333,7 +336,7 @@ def live_sessions(src: sqlite3.Connection) -> Optional[dict[str, LiveSession]]:
         legacy = []
     for r in legacy:
         sid = str(r["session_id"])
-        if sid in canonical_ids:
+        if sid in canonical_ids or sid in withheld or dream_run_id(sid):
             continue
         updated = int(r["updated_at"] or 0)
         out[sid] = LiveSession(SOURCE_LEGACY, updated, int(r["runs_len"]), float(updated))
@@ -705,7 +708,8 @@ class TranscriptIndex:
                     "ts": r["ts"],
                     "snippet": r["snip"],
                 })
-            return out
+            from .legacy_document_history import visible_cache_hits
+            return visible_cache_hits(self._open_source, out)
 
     def stats(self) -> dict[str, int]:
         with self._lock:

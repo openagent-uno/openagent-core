@@ -455,6 +455,15 @@ def _delete_doc(conn: sqlite3.Connection, doc_id: str) -> None:
     conn.execute("DELETE FROM search_documents WHERE doc_id=?", (doc_id,))
 
 
+def _delete_session_documents(index: sqlite3.Connection, session_id: str) -> None:
+    index.execute(
+        "DELETE FROM search_fts WHERE rowid IN ("
+        "SELECT c.chunk_rowid FROM search_documents d JOIN search_chunks c "
+        "ON c.document_rowid=d.document_rowid WHERE d.session_id=?)", (session_id,),
+    )
+    index.execute("DELETE FROM search_documents WHERE session_id=?", (session_id,))
+
+
 def _put_document(
     conn: sqlite3.Connection,
     *,
@@ -530,12 +539,18 @@ def _put_document(
     )
 
 
-async def _source_row(conn: Any, source_kind: str, source_id: str) -> tuple[dict[str, Any], str, str, str, str] | None:
+async def _source_row(conn: Any, source_kind: str, source_id: str, *, ledger=None) -> tuple[dict[str, Any], str, str, str, str] | None:
+    from ..legacy_document_history import has_ledger
+    if ledger is None:
+        ledger = await has_ledger(conn)
+    # This plaintext index has no viewer with which to resolve document permissions.
+    session_filter = (" AND NOT EXISTS (SELECT 1 FROM oa_document_run_sources d WHERE d.session_id=s.id)"
+                      if ledger else "")
     from openagent_core.dream_evidence import dream_run_id
     if source_kind == "session":
         row = await (
             await conn.execute(
-                "SELECT s.*, s.id AS resource_id FROM sessions_v2 s WHERE s.id=? AND s.deleted_at_ms IS NULL",
+                "SELECT s.*, s.id AS resource_id FROM sessions_v2 s WHERE s.id=? AND s.deleted_at_ms IS NULL" + session_filter,
                 (source_id,),
             )
         ).fetchone()
@@ -559,7 +574,7 @@ async def _source_row(conn: Any, source_kind: str, source_id: str) -> tuple[dict
                 "SELECT m.*, s.owner_principal_id, s.visibility AS session_visibility, "
                 "s.acl_version, s.title, s.kind AS session_kind, s.parent_session_id, "
                 "s.origin, s.deleted_at_ms FROM session_messages m JOIN sessions_v2 s "
-                "ON s.id=m.session_id WHERE m.id=? AND s.deleted_at_ms IS NULL",
+                "ON s.id=m.session_id WHERE m.id=? AND s.deleted_at_ms IS NULL" + session_filter,
                 (source_id,),
             )
         ).fetchone()
@@ -594,7 +609,7 @@ async def _source_row(conn: Any, source_kind: str, source_id: str) -> tuple[dict
                 "AND m.run_id=t.session_run_id ORDER BY m.sequence DESC LIMIT 1)) AS message_id "
                 "FROM tool_invocations t JOIN sessions_v2 s ON s.id=t.session_id "
                 "WHERE t.id=? AND t.root_kind='session' "
-                "AND s.deleted_at_ms IS NULL",
+                "AND s.deleted_at_ms IS NULL" + session_filter,
                 (source_id,),
             )
         ).fetchone()
@@ -1001,6 +1016,8 @@ async def _sync_operational_search_unlocked(
             )
         ).fetchall()
         now_ms = int(time.time() * 1000)
+        from ..legacy_document_history import has_ledger
+        ledger = await has_ledger(source)
         index.execute("BEGIN IMMEDIATE")
         try:
             for item in outbox:
@@ -1019,8 +1036,16 @@ async def _sync_operational_search_unlocked(
                 }.get(kind)
                 if doc_prefix:
                     _delete_doc(index, f"{doc_prefix}:{source_id}")
+                if ledger and kind == "session":
+                    receipt = await (await source.execute(
+                        "SELECT 1 FROM oa_document_run_sources WHERE session_id=? LIMIT 1", (source_id,),
+                    )).fetchone()
+                    if receipt:
+                        # The first receipt enqueues the session. Evict messages and tools
+                        # written before it even when their original outbox rows were compacted.
+                        await _index_thread_call(_delete_session_documents, index, source_id)
                 if operation != "delete":
-                    projected = await _source_row(source, kind, source_id)
+                    projected = await _source_row(source, kind, source_id, ledger=ledger)
                     if projected is not None:
                         metadata, match_kind, field, body, identifier = projected
                         metadata.setdefault("source_version", 1)

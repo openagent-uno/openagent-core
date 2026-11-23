@@ -32,7 +32,7 @@ def current_application_context() -> Mapping[str, Any]:
     return copy.deepcopy(dict(_app_prompt_context.get()))
 
 
-async def saved_invocation_display(store, authorizer, context, selector, tool_ref):
+async def saved_invocation_display(store, authorizer, context, selector, tool_ref, *, runtime=None):
     """Read only the original invocation in the currently authorized session."""
     from .dream_evidence import dream_run_id
     if dream_run_id(context.session_id):
@@ -47,6 +47,15 @@ async def saved_invocation_display(store, authorizer, context, selector, tool_re
     await require_authorized(authorizer, context, "session.read", resource, audience=context.audience)
     if not isinstance(invocation, Mapping) or invocation.get("binding", {}).get("tool_ref") != tool_ref:
         raise PermissionError("MCP App invocation does not match this exact tool")
+    lookup = getattr(store, "document_sources", None)
+    if callable(lookup):
+        run_id = invocation.get("run_id")
+        selector = {"run_id": run_id} if run_id else {"session_id": context.session_id}
+        if runtime is not None and runtime.services.store is store:
+            from .memory.document_exposure import authorize_document_history
+            await authorize_document_history(runtime, context, **selector)
+        elif await lookup(context, **selector):
+            raise PermissionError("Document-dependent tool results require their authorized runtime")
     result = {"toolInput": invocation["arguments"], "toolStatus": invocation.get("status")}
     error = invocation.get("error")
     if invocation.get("status") in {"cancelled", "canceled"} or isinstance(error, Mapping) and error.get("error_type") == "CancelledError":
