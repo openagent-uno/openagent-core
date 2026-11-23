@@ -275,6 +275,9 @@ class PostgresRuntimeStore(Sessions, Operations, ProviderSlots):
         )
 
     async def accept(self, request, context):
+        return await self.accept_with_profile(request, context, None)
+
+    async def accept_with_profile(self, request, context, profile):
         if type(request) not in (RunRequest, OperationRunRequest):
             raise ValueError("Operation continuation requires an operation-capable store")
         if request.session_id != context.session_id or context.agent_id != self.agent_id:
@@ -359,6 +362,8 @@ class PostgresRuntimeStore(Sessions, Operations, ProviderSlots):
             await self._event(
                 db, request.run_id, "run.accepted", dict(status=status, request_digest=digest)
             )
+            if profile is not None and reservation is None:
+                await self._event(db, request.run_id, "run.profile", profile)
             return _record(row), reservation is None
 
     async def get(self, ident):
@@ -472,24 +477,38 @@ class PostgresRuntimeStore(Sessions, Operations, ProviderSlots):
         except TimeoutError:
             pass
 
-    async def wait_session_turn(self, ident):
+    async def _predecessor(self, ident):
+        # This is an observation only. All writes still acquire and verify the
+        # worker lease and run lock in their own transaction.
         async with self._db() as db:
-            session_id = (await self._owned(db, ident))["session_id"]
-        with self._notices.observe("session", session_id) as changed:
-            while True:
-                changed.clear()
-                async with self._db() as db:
-                    row = await self._owned(db, ident)
-                    if row["cancel_requested"]:
-                        raise asyncio.CancelledError()
-                    earlier = await (await db.execute(
-                        """SELECT 1 FROM runs WHERE agent=%s AND session_id=%s
-                           AND ordinal<%s AND status IN ('queued','running') LIMIT 1""",
-                        (self.agent_id, session_id, row["ordinal"]),
-                    )).fetchone()
-                    if not earlier:
-                        return
-                await self._wait_for_notice(changed)
+            row = await (await db.execute(
+                """SELECT r.cancel_requested, (
+                       SELECT prev.id FROM runs prev
+                       WHERE prev.agent=r.agent AND prev.session_id=r.session_id
+                         AND prev.ordinal<r.ordinal AND prev.status IN ('queued','running')
+                       ORDER BY prev.ordinal DESC LIMIT 1
+                   ) AS predecessor
+                   FROM runs r JOIN workers w ON w.id=r.worker
+                   WHERE r.agent=%s AND r.id=%s AND r.worker=%s
+                     AND r.status IN ('queued','running') AND w.expires_at>clock_timestamp()""",
+                (self.agent_id, ident, self._worker),
+            )).fetchone()
+        if row is None:
+            raise RuntimeError("This execution has lost write authority")
+        if row["cancel_requested"]:
+            raise asyncio.CancelledError()
+        return row["predecessor"]
+
+    async def wait_session_turn(self, ident):
+        with self._notices.observe("run", ident) as changed:
+            while (predecessor := await self._predecessor(ident)) is not None:
+                # The immediately preceding live turn (or our own cancellation)
+                # can unblock us. Other completions in this session needn't wake
+                # its entire queue. Verify again after attaching the listener.
+                with self._notices.observe("run", predecessor, event=changed):
+                    changed.clear()
+                    if await self._predecessor(ident) == predecessor:
+                        await self._wait_for_notice(changed)
 
     @asynccontextmanager
     async def provider_release_scope(self, context):

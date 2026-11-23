@@ -48,9 +48,10 @@ class RunNotifications:
                 await asyncio.sleep(1)
 
     @contextmanager
-    def observe(self, kind, identifier):
+    def observe(self, kind, identifier, *, event=None):
         key = digest(kind + "/" + identifier)
-        event = asyncio.Event()
+        if event is None:
+            event = asyncio.Event()
         observers = self.waiters[key]
         observers.add(event)
         try:

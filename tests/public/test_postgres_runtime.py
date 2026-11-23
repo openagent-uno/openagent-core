@@ -245,3 +245,29 @@ async def test_pre_admission_cancellation_is_principal_scoped(pg, tmp_path):
         assert (await runtime.submit(request, make_context())).status == "cancelled"
     finally:
         await runtime.close()
+
+
+async def test_middle_cancellation_relinks_the_queue_and_preserves_order(pg, tmp_path):
+    from openagent_core import RunRequest
+
+    first, second = Executor(), Executor()
+    a = worker(pg(), first, Policy(), tmp_path)
+    b = worker(pg(), second, Policy(), tmp_path)
+    ctx = make_context()
+    await asyncio.gather(a.start(), b.start())
+    try:
+        for owner, ident, payload in ((a, "head", "hold"), (b, "middle", "skip"), (a, "tail", "end")):
+            await owner.submit(RunRequest(ident, ctx.session_id, ident, payload), ctx)
+        assert await asyncio.wait_for(first.started.get(), 2) == "head"
+        await a.cancel("middle", ctx)
+        assert (await asyncio.wait_for(a.wait("middle", ctx), 2)).status == "cancelled"
+        assert (await b.get_run("tail", ctx)).status == "queued"
+        first.release.set()
+        assert await asyncio.wait_for(first.started.get(), 2) == "tail"
+        assert (await b.wait("tail", ctx)).status == "success"
+        assert second.started.empty()
+        events = await b.events("tail", 0, ctx)
+        assert [e.kind for e in events].count("run.profile") == 1
+    finally:
+        first.release.set()
+        await asyncio.gather(a.close(), b.close())

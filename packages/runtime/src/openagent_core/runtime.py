@@ -104,12 +104,15 @@ class RuntimeSettings:
     child_chain_concurrency: int = 8
     max_active_runs: int = 256
     require_provider_admission: bool = False
+    max_admission_writes: int = 2
 
     def __post_init__(self) -> None:
         if not self.agent_id or (self.workspace is not None and not self.workspace.is_absolute()):
             raise ValueError('Runtime requires an agent ID and any local workspace must be absolute')
         if type(self.max_active_runs) is not int or self.max_active_runs < 1:
             raise ValueError('A worker requires at least one execution slot')
+        if type(self.max_admission_writes) is not int or self.max_admission_writes < 1:
+            raise ValueError('A worker requires at least one admission writer')
         if self.child_concurrency < 1 or self.child_max_depth < 1 or self.child_chain_concurrency < 0:
             raise ValueError('Invalid child execution limits')
 
@@ -273,6 +276,11 @@ class Runtime:
         self._child_chain_slots: dict[tuple[str, int], tuple[asyncio.Semaphore, int]] = {}
         self._sessions: dict[tuple[str, str], _SessionLock] = {}
         self._lifecycle = asyncio.Lock()
+        self._admissions = 0
+        self._admissions_idle = asyncio.Event()
+        self._admissions_idle.set()
+        self._accepting: dict[str, asyncio.Event] = {}
+        self._admission_io = asyncio.Semaphore(settings.max_admission_writes)
 
     def _build_host_registry(self) -> ServiceRegistry:
         registry = self.services.registry.clone()
@@ -502,6 +510,7 @@ class Runtime:
         async with self._lifecycle:
             if self._closing:
                 return
+            await self._admissions_idle.wait()
             self._closing = True
             tasks = tuple(self._tasks.values())
             for task in tasks:
@@ -571,6 +580,7 @@ class Runtime:
         with runtime_scope(self):
             candidate = await self._prepare_graph(profile)
         async with self._lifecycle:
+            await self._admissions_idle.wait()
             current = self._active_graph
             if current is None or current.profile.generation != expected_generation:
                 await self._close_graph(candidate)
@@ -694,9 +704,17 @@ class Runtime:
     async def _submit(self, request: RunRequest, context: ExecutionContext, executor: AgentExecutor) -> RunRecord:
         from .persistence import complete_before_cancelling
         async with self._lifecycle:
-            # Closing cannot pass an acceptance whose execution has not yet
-            # been registered. Disconnecting the submitter cannot strand it.
+            self._admission()
+            # Lifecycle writers hold this lock while waiting for already-entered
+            # submissions. Independent authorized store operations can overlap.
+            self._admissions += 1
+            self._admissions_idle.clear()
+        try:
             return await complete_before_cancelling(self._admit_and_start(request, context, executor))
+        finally:
+            self._admissions -= 1
+            if self._admissions == 0:
+                self._admissions_idle.set()
 
     async def _admit_and_start(self, request: RunRequest, context: ExecutionContext, executor: AgentExecutor) -> RunRecord:
         self._admission()
@@ -710,9 +728,12 @@ class Runtime:
             await self._authorize(context,'run.submit',request.session_id,context.tenant_id)
             if request.steer_run_id is not None:
                 await self._steering_target(request,context)
-        if len(self._tasks) >= self.settings.max_active_runs:
-            # The lifecycle lock serializes admission through task registration.
-            # A retry can still obtain its original receipt at full capacity.
+        # A simultaneous retry must see the first admission's durable outcome
+        # even when that admission reserved the final slot.
+        while pending := self._accepting.get(request.run_id):
+            await pending.wait()
+        if len(self._tasks) + len(self._accepting) >= self.settings.max_active_runs:
+            # Saturation still allows authorized replay of an existing receipt.
             try:
                 existing = await self.get_run(request.run_id, context)
             except LookupError:
@@ -720,31 +741,54 @@ class Runtime:
             if existing.request_digest != request.fingerprint(context):
                 raise IdempotencyConflict("Different request or authority already admitted")
             return existing
-        record, created = await self.services.store.accept(request,context)
-        if created:
-            graph.acquire()
-            capability_revision = self.capabilities.snapshot_revision()
-            self._run_graphs[record.run_id] = graph
-            self._run_capability_revisions[record.run_id] = capability_revision
-            try:
-                await self.services.store.append_event(record.run_id, "run.profile", {
-                    "generation": graph.profile.generation,
-                    "modules": [
-                        {"id": descriptor.id, "version": descriptor.version,
-                         "surfaces": sorted(graph.profile.modules[descriptor.id].surfaces)}
-                        for descriptor, _instance, _contribution in graph.instances
-                    ],
-                    "capability_revision": capability_revision,
-                })
-                self._tasks[record.run_id] = asyncio.create_task(
-                    self._execute(request,context,executor,graph,capability_revision),
-                    name='openagent-run-'+record.run_id,
-                )
-            except BaseException:
-                self._run_graphs.pop(record.run_id, None)
-                self._run_capability_revisions.pop(record.run_id, None)
-                graph.release()
-                raise
+        # No await separates the capacity check from this reservation. It stays
+        # counted until either the task is registered or the admission fails.
+        pending = self._accepting[request.run_id] = asyncio.Event()
+        try:
+            async with self._admission_io:
+                return await self._register_admission(request, context, executor, graph)
+        finally:
+            del self._accepting[request.run_id]
+            pending.set()
+
+    async def _register_admission(self, request: RunRequest, context: ExecutionContext,
+                                  executor: AgentExecutor, graph: _ActiveGraph) -> RunRecord:
+        capability_revision = self.capabilities.snapshot_revision()
+        profile = {
+            "generation": graph.profile.generation,
+            "modules": [
+                {"id": descriptor.id, "version": descriptor.version,
+                 "surfaces": sorted(graph.profile.modules[descriptor.id].surfaces)}
+                for descriptor, _instance, _contribution in graph.instances
+            ],
+            "capability_revision": capability_revision,
+        }
+        atomic_accept = getattr(self.services.store, "accept_with_profile", None)
+        if atomic_accept is None:
+            record, created = await self.services.store.accept(request, context)
+        else:
+            record, created = await atomic_accept(request, context, profile)
+        if not created:
+            # Returning prior content requires current read authority, even if
+            # this worker currently has free execution slots.
+            return await self.get_run(record.run_id, context)
+        graph.acquire()
+        self._run_graphs[record.run_id] = graph
+        self._run_capability_revisions[record.run_id] = capability_revision
+        try:
+            if atomic_accept is None:
+                await self.services.store.append_event(record.run_id, "run.profile", profile)
+            self._tasks[record.run_id] = asyncio.create_task(
+                self._execute(request,context,executor,graph,capability_revision),
+                name='openagent-run-'+record.run_id,
+            )
+        except BaseException:
+            self._run_graphs.pop(record.run_id, None)
+            self._run_capability_revisions.pop(record.run_id, None)
+            graph.release()
+            await self.services.store.transition(
+                record.run_id, 'interrupted', output={'reason': 'runtime_registration_failed'})
+            raise
         return record
 
     @asynccontextmanager

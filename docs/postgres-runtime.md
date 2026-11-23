@@ -15,6 +15,21 @@ Use a dedicated database or private schema with a trusted database role and tran
 
 ## Ownership and ordering
 
+The runtime admits independent submissions concurrently. `max_active_runs` counts
+durable writes in progress and registered executions against the same per-worker
+capacity. `RuntimeSettings.max_admission_writes` separately limits concurrent
+durable admissions (default 2). Authorization can run concurrently while
+storage capacity remains available for execution, cancellation and readers.
+A concurrent retry waits for the first admission for its run ID and rechecks
+access to the receipt. Shutdown and profile swaps wait for admissions that
+entered before them to finish registering on the original profile.
+
+PostgreSQL commits the accepted run and its profile event together. A queued
+turn observes its own cancellation and the immediately preceding live turn.
+After a predecessor changes, the worker queries the durable queue again.
+`benchmarks/session_load.py` measures these paths with distinct sessions or one
+contended session, and reports latency, RSS and retained runtime resources.
+
 Admission records an idempotency key, request digest, user message and acceptance event in a single transaction. The original process runs the request. Workers execute turns of one session in admission order and can run separate sessions concurrently. Host authorization is checked before submission, execution, replay and publication. Database checks additionally bind session access to tenant, authority, agent and the admitted participants. Session listings, searches and public transcript pages share these boundaries. Session-scoped message IDs and sequences support stable history; event replay uses a separate increasing cursor. Text search uses an authorized substring scan and its cost grows with the selected user’s history.
 
 Every productive writer checks its worker lease using the database clock. A new worker only interrupts work belonging to an expired worker. Recovery closes incomplete tool intents with unknown effects and records a terminal interruption. Interactive work with uncertain side effects requires a new, explicitly authorized request. Named checkpointed operations may use the durable runner to continue at a distinct segment after checking the stored request, segment, operation, grant and checkpoint. The active-operation limit is 100 per agent.

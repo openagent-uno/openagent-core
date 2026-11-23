@@ -10,7 +10,8 @@ From the repository root, with the runtime, PostgreSQL adapter and psutil instal
 
 Two worker objects run in the same Python process with independent stores. Half
 of the clients wait on another worker when two workers are configured. The
-executor only sleeps. Wall latency includes admission, owner checks, execution
+executor only sleeps. --submit-policy-ms models latency of an external
+submission authorizer. Wall latency includes admission, owner checks, execution
 and confirmation of the terminal receipt. RSS excludes the database process.
 """
 
@@ -37,7 +38,12 @@ from openagent_storage_postgres import PostgresRuntimeStore
 
 
 class Policy:
+    def __init__(self, submit_latency):
+        self.submit_latency = submit_latency
+
     async def authorize(self, context, action, resource, *, audience=()):
+        if action == "run.submit" and self.submit_latency:
+            await asyncio.sleep(self.submit_latency)
         return resource.tenant_id == context.tenant_id and all(p == context.initiator for p in audience)
 
 
@@ -70,7 +76,7 @@ async def run(args):
     dsn = os.environ["OPENAGENT_BENCH_POSTGRES_DSN"]
     schema = "bench_" + uuid4().hex
     executor = Executor(args.hold_ms / 1000)
-    policy = Policy()
+    policy = Policy(args.submit_policy_ms / 1000)
     process = psutil.Process()
     workers = []
     for _ in range(args.workers):
@@ -87,6 +93,8 @@ async def run(args):
         pools = [s._pool.get_stats() for s in stores if s._pool is not None]
         return {
             "rss_mib": round(process.memory_info().rss / 2**20, 2),
+            "admissions_in_progress": sum(getattr(w, "_admissions", 0) for w in workers),
+            "reserved_slots": sum(len(getattr(w, "_accepting", ())) for w in workers),
             "run_tasks": sum(len(w._tasks) for w in workers),
             "session_locks": sum(len(w._sessions) for w in workers),
             "executing_tasks": sum(len(s._executing) for s in stores),
@@ -155,6 +163,8 @@ async def run(args):
         if any(
             idle[k]
             for k in (
+                "admissions_in_progress",
+                "reserved_slots",
                 "run_tasks",
                 "session_locks",
                 "executing_tasks",
@@ -197,14 +207,12 @@ if __name__ == "__main__":
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--pool", type=int, default=8)
     parser.add_argument("--hold-ms", type=float, default=8)
+    parser.add_argument("--submit-policy-ms", type=float, default=0)
     args = parser.parse_args()
     if (
         min(args.runs, args.concurrency, args.workers) < 1
         or args.pool < 2
-        or not math.isfinite(args.hold_ms)
-        or args.hold_ms < 0
+        or any(not math.isfinite(ms) or ms < 0 for ms in (args.hold_ms, args.submit_policy_ms))
     ):
-        parser.error(
-            "Expected positive runs, concurrency and workers, pool >= 2 and a nonnegative hold time"
-        )
+        parser.error("Expected positive runs, concurrency and workers, pool >= 2 and nonnegative delays")
     asyncio.run(run(args))

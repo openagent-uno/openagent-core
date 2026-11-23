@@ -79,6 +79,104 @@ class Contracts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.r.wait('other', self.ctx)).status, 'success')
         self.assertFalse(self.r._sessions)
 
+    async def test_concurrent_acceptance_reserves_capacity_and_deduplicates_pending_retry(self):
+        from openagent_core.contracts import AdmissionCapacityExceeded
+        self.r = Runtime(replace(self.r.settings, max_active_runs=2), self.r.services)
+        self.executor.hold = asyncio.Event()
+        await self.r.start()
+        entered = asyncio.Queue()
+        release = asyncio.Event()
+        accept = self.store.accept
+
+        async def blocked(request, context):
+            entered.put_nowait(request.run_id)
+            await release.wait()
+            return await accept(request, context)
+
+        self.store.accept = blocked
+        session_b = replace(self.ctx, session_id='s-b')
+        pending = [
+            asyncio.create_task(self.r.submit(self.request(), self.ctx)),
+            asyncio.create_task(self.r.submit(replace(self.request('b'), session_id='s-b'), session_b)),
+        ]
+        try:
+            async with asyncio.timeout(2):
+                self.assertEqual({await entered.get(), await entered.get()}, {'run', 'b'})
+            pending.append(asyncio.create_task(self.r.submit(self.request(), self.ctx)))
+            with self.assertRaises(AdmissionCapacityExceeded):
+                await self.r.submit(self.request('c'), self.ctx)
+            self.assertIsNone(await self.store.get('c'))
+            release.set()
+            records = await asyncio.gather(*pending)
+            self.assertEqual([r.run_id for r in records], ['run', 'b', 'run'])
+            self.assertEqual(len(self.r._tasks), 2)
+            self.assertFalse(self.r._accepting)
+            self.policy.denied.add('run.read')
+            with self.assertRaises(PermissionError):
+                await self.r.submit(self.request(), self.ctx)
+        finally:
+            release.set()
+            self.executor.hold.set()
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    async def test_failed_registration_interrupts_accepted_receipt_and_releases_reservation(self):
+        await self.r.start()
+        append = self.store.append_event
+
+        async def fail_profile(ident, kind, payload):
+            if kind == 'run.profile':
+                raise OSError('unavailable')
+            return await append(ident, kind, payload)
+
+        self.store.append_event = fail_profile
+        with self.assertRaises(OSError):
+            await self.r.submit(self.request(), self.ctx)
+        self.assertEqual((await self.r.get_run('run', self.ctx)).status, 'interrupted')
+        self.assertFalse(self.r._accepting)
+        self.assertFalse(self.r._tasks)
+        self.policy.denied.add('run.read')
+        with self.assertRaises(PermissionError):
+            await self.r.submit(self.request(), self.ctx)
+
+    async def assert_writer_barrier(self, change):
+        await self.r.start()
+        entered, release = asyncio.Event(), asyncio.Event()
+        accept = self.store.accept
+
+        async def blocked(request, context):
+            entered.set()
+            await release.wait()
+            return await accept(request, context)
+
+        self.store.accept = blocked
+        admission = asyncio.create_task(self.r.submit(self.request(), self.ctx))
+        await entered.wait()
+        writer = asyncio.create_task(change())
+        try:
+            async with asyncio.timeout(2):
+                while not self.r._lifecycle.locked():
+                    await asyncio.sleep(0)
+            self.assertFalse(writer.done())
+        finally:
+            release.set()
+        await asyncio.gather(admission, writer)
+        self.assertFalse(self.r._accepting)
+        self.assertEqual(self.r._admissions, 0)
+
+    async def test_close_drains_admissions_in_progress_before_releasing_store(self):
+        await self.assert_writer_barrier(self.r.close)
+        with self.assertRaises(RuntimeError):
+            await self.r.submit(self.request('late'), self.ctx)
+
+    async def test_profile_swap_drains_inflight_admission_on_original_generation(self):
+        from openagent_core.modules import RuntimeProfile
+        await self.assert_writer_barrier(
+            lambda: self.r.reconfigure(RuntimeProfile(1), expected_generation=0))
+        events = await self.r.events('run', 0, self.ctx)
+        profiles = [event.payload['generation'] for event in events if event.kind == 'run.profile']
+        self.assertEqual(profiles, [0])
+        self.assertEqual(self.r.profile.generation, 1)
+
     async def test_construction_has_no_files_or_execution(self):
         self.assertFalse((self.path/'one').exists());self.assertEqual(self.executor.calls,[])
 
