@@ -7,6 +7,7 @@ from .contracts import (PrincipalRef, ExecutionContext, CapabilityLease, Resourc
     RunRequest, AcceptedRunRequest, RunRecord, RunEvent, RunEventPage, RunFinalAnswer, RunReplayReader, Authorizer, IdentityDirectory, RuntimeStore,
     ModelCatalog, CredentialResolver, DelegationService, IdempotencyConflict, SessionRef, SessionStore)
 from .runtime import Runtime, RuntimeSettings, RuntimeServices
+from .provider_history import ProviderHistory, ProviderHistoryMessage
 from .deliveries import ConfirmedDelivery
 from .capabilities import (CapabilityCatalog, CapabilitySource, ToolExecutor,
     ToolDefinition, ToolDescriptor, FunctionSource, CapabilityUnavailable)
@@ -22,7 +23,7 @@ from .modules import (MODULE_API_VERSION, MODULE_SURFACES, CapabilityContributio
     ModuleStatus, ReconfigureReceipt, RuntimeProfile, ServiceBinding, ServiceRegistry)
 
 __version__ = '1.1.0b152'
-__all__ = ['Runtime','RuntimeSettings','RuntimeServices','PrincipalRef','ExecutionContext',
+__all__ = ['Runtime','RuntimeSettings','RuntimeServices','ProviderHistory','ProviderHistoryMessage','PrincipalRef','ExecutionContext',
     'CapabilityLease','ResourceRef','RunRequest','AcceptedRunRequest','RunRecord','RunEvent','RunEventPage','RunFinalAnswer','RunReplayReader','Authorizer','ConfirmedDelivery',
     'IdentityDirectory','RuntimeStore','SessionRef','SessionStore','ModelCatalog','CredentialResolver','DelegationService',
     'CapabilityCatalog','CapabilitySource','ToolExecutor','ToolDefinition','ToolDescriptor',

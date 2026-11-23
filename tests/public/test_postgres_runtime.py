@@ -196,7 +196,12 @@ async def hold():
 asyncio.run(hold())
 """
     child = await asyncio.create_subprocess_exec(
-        sys.executable, "-c", child_code, survivor.schema, stdout=asyncio.subprocess.PIPE
+        sys.executable,
+        "-c",
+        child_code,
+        survivor.schema,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+        stdout=asyncio.subprocess.PIPE,
     )
     try:
         assert await asyncio.wait_for(child.stdout.readline(), 10) == b"intent committed\n"

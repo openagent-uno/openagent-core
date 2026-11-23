@@ -22,6 +22,7 @@ metrics so ``sessions.runs[*].metrics.cost`` stays queryable.
 from __future__ import annotations
 
 from openagent_core.configuration import runtime_environment
+from openagent_core.provider_history import external_history_active
 import contextlib
 import asyncio
 import contextvars
@@ -155,11 +156,13 @@ def _execution_cache_key(system: str | None) -> tuple[str, str]:
     allow = current_tool_allowlist()
     from openagent_core.core.execution_profile import stateless_completion_active
     stateless = stateless_completion_active()
-    if not policy and allow is None and not stateless:
+    external = external_history_active()
+    if not policy and allow is None and not stateless and not external:
         return system_text, system_text
     marker = json.dumps(
         {
             "stateless": stateless,
+            "external_history": external,
             "policy": policy or {},
             "tool_families": None if allow is None else sorted(allow),
         },
@@ -476,6 +479,10 @@ def _save_agno_output_media(media: Any, kind: str) -> str | None:
     import os
     from uuid import uuid4
 
+    from openagent_core.runtime import current_runtime
+    runtime = current_runtime()
+    if runtime is not None and runtime.settings.workspace is None:
+        return None
     marker_name = _OUTPUT_MEDIA_MARKERS.get(kind)
     if marker_name is None:
         return None
@@ -966,7 +973,7 @@ class NativeProvider(ProviderResources, BaseModel):
         design; wiping them per-session would contradict the product
         model (user-level preferences should survive /clear).
         """
-        if not session_id:
+        if not session_id or external_history_active():
             return
         try:
             from openagent_core.memory.store.sqlite import SqliteDb
@@ -1309,6 +1316,11 @@ class NativeProvider(ProviderResources, BaseModel):
         return out
 
     def _model_row_metadata(self) -> dict[str, Any]:
+        if external_history_active():
+            for entry in iter_configured_models([self._provider_config()]):
+                if entry.runtime_id == self.model:
+                    return dict(entry.metadata or {})
+            return {}
         import json as _json
         import sqlite3 as _sqlite3
 
@@ -1579,7 +1591,8 @@ class NativeProvider(ProviderResources, BaseModel):
 
         from openagent_core.core.execution_profile import stateless_completion_active
         stateless = stateless_completion_active()
-        db_path = None if stateless else self._ensured_runtime_db_path()
+        local_history = not stateless and not external_history_active()
+        db_path = self._ensured_runtime_db_path() if local_history else None
         compatible_toolkits, filtered_families = self._compatible_mcp_toolkits()
         if filtered_families:
             elog("runtime.toolkits_filtered",
@@ -1592,9 +1605,6 @@ class NativeProvider(ProviderResources, BaseModel):
         summaries_enabled = not lean_local_event_active()
         from openagent_core.core.execution_profile import strict_local_only_active
 
-        from openagent_core.core.execution_profile import stateless_completion_active
-
-        stateless = stateless_completion_active()
         agent = RuntimeAgent(
             model=self._build_runtime_model(),
             # Controller-owned support composition is explicitly local-only.
@@ -1606,10 +1616,10 @@ class NativeProvider(ProviderResources, BaseModel):
             # A stateless completion writes nothing: no session row, no
             # history replay, no summary. That removes the only writer in the
             # composer path and with it the lock contention above.
-            db=None if stateless else SqliteDb(db_file=str(db_path)),
+            db=SqliteDb(db_file=str(db_path)) if local_history else None,
             tools=agent_tools,
             system_message=sys_key or None,
-            add_history_to_context=not stateless,
+            add_history_to_context=local_history,
             # Replay the ENTIRE stored transcript for this session, not a
             # trailing window (vision §16). ``_history_runs`` defaults to
             # ``FULL_SESSION_HISTORY_RUNS`` so the runtime's ``runs[-N:]``
@@ -1619,8 +1629,8 @@ class NativeProvider(ProviderResources, BaseModel):
             num_history_runs=self._history_runs,
             # The runtime also maintains a rolling summary of older turns in
             # the same SqliteDb and injects it into context on each call.
-            enable_session_summaries=summaries_enabled and not stateless,
-            add_session_summary_to_context=summaries_enabled and not stateless,
+            enable_session_summaries=summaries_enabled and local_history,
+            add_session_summary_to_context=summaries_enabled and local_history,
             # Agentic memory is disabled — OpenAgent uses the vault for
             # user-scoped persistence. Keeping it off avoids the legacy agno_memories
             # table creation and keeps all state in the sessions table.
@@ -1702,7 +1712,7 @@ class NativeProvider(ProviderResources, BaseModel):
             elog("runtime.team.unavailable", model=self.model, error=str(exc))
             return None
 
-        db_path = self._ensured_runtime_db_path()
+        local_history = not external_history_active()
 
         members: list[Any] = []
         for family, toolkits in families.items():
@@ -1735,7 +1745,7 @@ class NativeProvider(ProviderResources, BaseModel):
         # these itself — so the fallback costs nothing on the happy path.
         leader_tools: list[Any] = list(compatible_toolkits)
 
-        team_db = SqliteDb(db_file=str(db_path))
+        team_db = SqliteDb(db_file=str(self._ensured_runtime_db_path())) if local_history else None
         try:
             team = Team(
                 members=members,
@@ -1751,16 +1761,17 @@ class NativeProvider(ProviderResources, BaseModel):
                 # to answer directly ("I cannot access files") when the
                 # member name alone doesn't make the match obvious.
                 add_member_tools_to_context=True,
-                add_history_to_context=True,
+                add_history_to_context=local_history,
                 num_history_runs=self._history_runs,
-                enable_session_summaries=True,
-                add_session_summary_to_context=True,
+                enable_session_summaries=local_history,
+                add_session_summary_to_context=local_history,
                 enable_agentic_memory=False,
                 tool_call_limit=_max_tool_calls_per_run(),
                 markdown=False,
             )
         except Exception as exc:
-            team_db.close()
+            if team_db is not None:
+                team_db.close()
             # If Team construction fails for any reason (signature drift
             # between runtime versions, model incompatibility, …), log and
             # fall back rather than breaking the main generate path.
@@ -1992,7 +2003,7 @@ class NativeProvider(ProviderResources, BaseModel):
                 # into the API request and the provider's
                 # deserialization fails.  Wipe the corrupted session
                 # and retry once with a clean history.
-                if sid != "default" and self._is_session_corruption_error(raw_error):
+                if not external_history_active() and sid != "default" and self._is_session_corruption_error(raw_error):
                     elog("runtime.session_corrupt",
                         session_id=sid,
                         error=raw_error[:300],
@@ -2399,7 +2410,7 @@ class NativeProvider(ProviderResources, BaseModel):
             if terminal_failed or emitted or tools_started or generate_started:
                 raise
             raw_error = str(e) or repr(e)
-            if sid != "default" and self._is_session_corruption_error(raw_error):
+            if not external_history_active() and sid != "default" and self._is_session_corruption_error(raw_error):
                 elog("runtime.stream.corrupt_session",
                     session_id=sid,
                     error=raw_error[:300],

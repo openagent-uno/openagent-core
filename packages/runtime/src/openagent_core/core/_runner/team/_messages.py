@@ -1059,6 +1059,10 @@ async def _aget_run_messages(
             else:
                 run_response.additional_input.extend(messages_to_add_to_run_response)
 
+    from openagent_core.provider_history import previous_model_messages
+
+    run_messages.messages.extend(await previous_model_messages(session.session_id, run_response.run_id))
+
     # 3. Add history to run_messages
     if add_history_to_context:
         from copy import deepcopy

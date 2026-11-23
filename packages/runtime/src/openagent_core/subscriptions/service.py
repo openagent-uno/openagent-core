@@ -369,6 +369,10 @@ def subscription_for(row: dict, db_path: str | Path) -> SubscriptionService | No
         if key not in _SERVICES or _SERVICES[key].client.is_closed:
             _SERVICES[key] = RemoteSubscriptionService(provider, row.get('base_url') or '', row.get('api_key'), account_id=metadata.get('account_id'), allow_unkeyed=metadata.get('subscription_remote_unkeyed') is True)
         return _SERVICES[key]
+    from openagent_core.runtime import current_runtime
+    runtime = current_runtime()
+    if runtime is not None and runtime.settings.workspace is None:
+        raise ValueError("A diskless runtime requires a remote subscription connection")
     if not db_path:
         raise ValueError("Subscription access requires an explicit host database path")
     path = Path(db_path)

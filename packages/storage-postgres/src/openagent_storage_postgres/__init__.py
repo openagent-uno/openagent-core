@@ -21,7 +21,7 @@ from openagent_core.contracts import (
     SessionRef,
     TERMINAL_STATUSES,
 )
-from .sessions import Sessions, _members
+from .sessions import RUN_AUDIENCE, Sessions, _audience, _members
 from .operations import Operations
 from openagent_core.durable_operations import (
     OperationRunRequest,
@@ -380,6 +380,16 @@ class PostgresRuntimeStore(Sessions, Operations):
 
     async def check_run_access(self, context, ident):
         async with self._db() as db:
+            admitted = await (
+                await db.execute(
+                    f"SELECT {RUN_AUDIENCE} AS visible FROM runs r WHERE r.agent=%s AND r.id=%s",
+                    (_audience(context), self.agent_id, ident),
+                )
+            ).fetchone()
+            if admitted:
+                if not admitted["visible"]:
+                    raise PermissionError("Run unavailable")
+                return
             row = await (
                 await db.execute(
                     "SELECT participants FROM reservations WHERE agent=%s AND id=%s",

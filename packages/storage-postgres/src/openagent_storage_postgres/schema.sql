@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS runs (
     output jsonb, parent_run_id text, PRIMARY KEY (agent,id), UNIQUE (agent,session_id,request_key),
     FOREIGN KEY (agent,session_id) REFERENCES sessions(agent,id) ON DELETE CASCADE);
 CREATE INDEX IF NOT EXISTS runs_queue ON runs(agent,session_id,ordinal) WHERE status IN ('queued','running');
+CREATE INDEX IF NOT EXISTS runs_history ON runs(agent,session_id,ordinal);
 CREATE INDEX IF NOT EXISTS runs_owner ON runs(worker) WHERE status IN ('queued','running');
 CREATE TABLE IF NOT EXISTS reservations (
     agent text NOT NULL,id text NOT NULL,tenant text NOT NULL,session_id text NOT NULL,participants text[] NOT NULL,PRIMARY KEY(agent,id));
@@ -25,6 +26,7 @@ CREATE TABLE IF NOT EXISTS messages (
     status text NOT NULL DEFAULT 'complete', created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     FOREIGN KEY (agent,run_id) REFERENCES runs(agent,id) ON DELETE CASCADE);
 CREATE UNIQUE INDEX IF NOT EXISTS messages_id ON messages(agent,id);
+CREATE INDEX IF NOT EXISTS messages_run ON messages(agent,run_id,session_seq);
 CREATE UNIQUE INDEX IF NOT EXISTS messages_page ON messages(agent,session_id,session_seq);
 CREATE TABLE IF NOT EXISTS events (
     seq bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, agent text NOT NULL,

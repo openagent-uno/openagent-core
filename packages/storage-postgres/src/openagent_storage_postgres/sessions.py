@@ -2,6 +2,8 @@
 
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 import json
+from dataclasses import asdict
+from psycopg.types.json import Jsonb
 
 from openagent_core.contracts import SessionRef, IdempotencyConflict, canonical_json
 
@@ -53,6 +55,17 @@ def _wire(row):
 
 def _members(ctx):
     return sorted({p.key for p in (ctx.authority, ctx.initiator, *ctx.audience)})
+
+
+# Run contexts are immutable. A room participant may have individual turns in
+# the same room, so a room-wide grant alone cannot expose those messages.
+RUN_AUDIENCE = (
+    "((r.context->'audience') || (r.context->'authority') || (r.context->'initiator')) @> %s"
+)
+
+
+def _audience(ctx):
+    return Jsonb([asdict(p) for p in (ctx.authority, ctx.initiator, *ctx.audience)])
 
 
 class Sessions:
@@ -146,10 +159,11 @@ class Sessions:
             sql += " AND (last_activity_at,id)<(%s::timestamptz,%s)"
             args.extend((stamp, ident))
         if query is not None:
-            sql += """ AND (strpos(lower(coalesce(title,'')),lower(%s))>0 OR EXISTS(
-                SELECT 1 FROM messages m WHERE m.agent=s.agent AND m.session_id=s.id
-                AND m.role IN ('user','assistant') AND strpos(lower(m.body#>>'{}'),lower(%s))>0))"""
-            args.extend((query, query))
+            sql += f""" AND (strpos(lower(coalesce(title,'')),lower(%s))>0 OR EXISTS(
+                SELECT 1 FROM messages m JOIN runs r ON m.agent=r.agent AND m.run_id=r.id
+                WHERE {RUN_AUDIENCE} AND m.agent=s.agent AND m.session_id=s.id
+                AND m.role IN ('user','assistant') AND strpos(lower(m.body#>>'{{}}'),lower(%s))>0))"""
+            args.extend((query, _audience(context), query))
         sql += " ORDER BY last_activity_at DESC,id DESC LIMIT %s"
         async with self._db() as db:
             rows = await (await db.execute(sql, (*args, limit + 1))).fetchall()
@@ -179,11 +193,13 @@ class Sessions:
             row = await self._session(db, reference.session_id, context)
             records = await (
                 await db.execute(
-                    """SELECT * FROM messages WHERE agent=%s AND session_id=%s
-                AND session_seq>%s ORDER BY session_seq LIMIT %s""",
+                    f"""SELECT m.* FROM messages m JOIN runs r ON m.agent=r.agent AND m.run_id=r.id
+                WHERE m.agent=%s AND m.session_id=%s AND {RUN_AUDIENCE}
+                AND m.session_seq>%s ORDER BY m.session_seq LIMIT %s""",
                     (
                         self.agent_id,
                         reference.session_id,
+                        _audience(context),
                         int(after) if after is not None else -1,
                         _limit(limit) + 1,
                     ),
@@ -212,6 +228,56 @@ class Sessions:
             messages=[message(m) for m in page],
             next_cursor=_encode(page[-1]["session_seq"]) if len(records) > limit else None,
         )
+
+    async def provider_history(self, context, run_id, *, limit, max_bytes):
+        from openagent_core.provider_history import ProviderHistoryMessage
+
+        if (
+            type(limit) is not int
+            or not 1 <= limit <= 128
+            or type(max_bytes) is not int
+            or not 1 <= max_bytes <= 65536
+        ):
+            raise ValueError("Invalid provider history budget")
+        async with self._db() as db:
+            await self._session(db, context.session_id, context, lock=False)
+            current = await self._owned(db, run_id)
+            if (
+                current["status"] != "running"
+                or current["session_id"] != context.session_id
+                or current["tenant"] != context.tenant_id
+            ):
+                raise PermissionError("Provider history requires the current admitted turn")
+            # Order by turn admission before ordering messages inside each turn.
+            # An earlier assistant response may commit after this turn's user input.
+            # A later queued user's input may already be present in the transcript.
+            rows = await (
+                await db.execute(
+                    f"""
+                WITH recent AS MATERIALIZED (
+                    SELECT r.ordinal, m.session_seq, m.role, m.body #>> '{{}}' AS content
+                    FROM runs r JOIN messages m ON m.agent=r.agent AND m.run_id=r.id
+                    WHERE r.agent=%s AND r.session_id=%s AND r.ordinal<%s AND {RUN_AUDIENCE}
+                      AND m.role IN ('user','assistant') AND m.status='complete'
+                      AND jsonb_typeof(m.body)='string'
+                    ORDER BY r.ordinal DESC,m.session_seq DESC LIMIT %s
+                ), bounded AS (
+                    SELECT *,sum(octet_length(content)) OVER (ORDER BY ordinal DESC,session_seq DESC) AS total
+                    FROM recent
+                )
+                SELECT role, content FROM bounded WHERE total<=%s ORDER BY ordinal,session_seq
+                """,
+                    (
+                        self.agent_id,
+                        context.session_id,
+                        current["ordinal"],
+                        _audience(context),
+                        limit,
+                        max_bytes,
+                    ),
+                )
+            ).fetchall()
+            return tuple(ProviderHistoryMessage(row["role"], row["content"]) for row in rows)
 
     async def _edit(self, reference, context, field, value):
         self._boundary(reference, context)
