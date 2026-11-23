@@ -1,0 +1,249 @@
+"""Versioned Markdown notes for hosts that supply an asynchronous SQL engine."""
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from pathlib import PurePosixPath
+
+import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from openagent_core.contracts import ExecutionContext, ResourceRef, require_authorized
+from openagent_core.memory.vault.parser import link_key, parse_note_text
+from openagent_core.memory.vault.privacy import require_unprotected_execution
+from openagent_core.runtime import current_run_id
+
+
+class RevisionConflict(ValueError):
+    """The writer's observed version is no longer current."""
+
+
+metadata = sa.MetaData()
+
+
+def identity_columns(*, primary_key=True):
+    return (
+        sa.Column("tenant", sa.String(200), primary_key=primary_key, nullable=False),
+        sa.Column("agent", sa.String(200), primary_key=primary_key, nullable=False),
+        sa.Column("space", sa.String(200), primary_key=primary_key, nullable=False),
+        sa.Column("path", sa.String(700), primary_key=primary_key, nullable=False),
+    )
+
+
+notes = sa.Table("oa_vault_notes", metadata,
+    sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key=True),
+    *identity_columns(primary_key=False),
+    sa.UniqueConstraint("tenant", "agent", "space", "path"),
+    sa.Column("revision", sa.BigInteger, nullable=False),
+    sa.Column("title", sa.Text), sa.Column("content", sa.Text),
+)
+versions = sa.Table("oa_vault_revisions", metadata, *identity_columns(),
+    sa.Column("revision", sa.BigInteger, primary_key=True),
+    sa.Column("content", sa.Text, nullable=False),
+    sa.Column("author", sa.Text, nullable=False),
+    sa.Column("session_id", sa.Text, nullable=False),
+    sa.Column("run_id", sa.Text),
+)
+links = sa.Table("oa_vault_links", metadata, *identity_columns(),
+    sa.Column("target", sa.String(700), primary_key=True),
+)
+sa.Index("oa_vault_backlinks", links.c.tenant, links.c.agent, links.c.space, links.c.target)
+
+
+def note_path(value: str) -> str:
+    if (not isinstance(value, str) or len(value.encode()) > 700 or "\\" in value
+            or ":" in value or "\0" in value or PurePosixPath(value).suffix.lower() != ".md"
+            or any(not part or part.startswith(".") for part in value.split("/"))):
+        raise ValueError("Expected a relative Markdown note path")
+    return value
+
+
+class SqlDocumentVault:
+    """A space is one ACL domain. The host selects it from verified context.
+
+    All notes in a space must be readable by its authorized readers. Assign
+    distinct spaces to private and shared corpora. The host owns the engine.
+    """
+
+    def __init__(self, engine: AsyncEngine, authorizer,
+                 resolve_space: Callable[[ExecutionContext], Awaitable[str]]):
+        if engine.dialect.name not in {"sqlite", "postgresql"}:
+            raise ValueError("Document vault requires SQLite or PostgreSQL")
+        self.engine = engine
+        self.authorizer = authorizer
+        self.resolve_space = resolve_space
+
+    async def initialize(self):
+        """Install the schema during host provisioning, before starting workers."""
+        async with self.engine.begin() as connection:
+            await connection.run_sync(metadata.create_all)
+            if self.engine.dialect.name == "postgresql":
+                await connection.execute(sa.text("""
+                    CREATE INDEX IF NOT EXISTS oa_vault_search ON oa_vault_notes
+                    USING GIN (to_tsvector('simple', content)) WHERE content IS NOT NULL
+                """))
+            else:
+                await connection.execute(sa.text("""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS oa_vault_search USING fts5(
+                        content
+                    )
+                """))
+
+    async def _scope(self, context, action):
+        if not isinstance(context, ExecutionContext):
+            raise TypeError("A verified execution context is required")
+        space = await self.resolve_space(context)
+        fields = {"tenant": context.tenant_id, "agent": context.agent_id, "space": space}
+        if any(not isinstance(v, str) or not v or len(v.encode()) > 200 for v in fields.values()):
+            raise ValueError("Invalid vault space identity")
+        target = ResourceRef("vault-space", context.tenant_id, space)
+        await require_authorized(self.authorizer, context, action, target, audience=(context.initiator,))
+        await require_authorized(self.authorizer, context, "memory.publish", target, audience=context.audience)
+        return fields
+
+    async def _recheck(self, context, action, scope):
+        if await self._scope(context, action) != scope:
+            raise PermissionError("The selected vault space changed")
+
+    async def read(self, context, path, *, revision=None):
+        scope = await self._scope(context, "memory.read")
+        async with self.engine.connect() as con:
+            stmt = sa.select(notes.c.path, notes.c.title, notes.c.content, notes.c.revision).filter_by(
+                **scope, path=note_path(path)).where(notes.c.content.is_not(None))
+            if revision is not None:
+                if type(revision) is not int or not 1 <= revision < (1 << 63):
+                    raise ValueError("Invalid note revision")
+                stmt = sa.select(versions.c.path, versions.c.content, versions.c.revision).filter_by(
+                    **scope, path=path, revision=revision)
+            row = (await con.execute(stmt)).mappings().one_or_none()
+        await self._recheck(context, "memory.read", scope)
+        if row is None:
+            raise LookupError("Note not found")
+        return dict(row)
+
+    async def list_notes(self, context, *, after=None, limit=50):
+        scope = await self._scope(context, "memory.read")
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("Invalid vault page size")
+        stmt = sa.select(notes.c.path, notes.c.title, notes.c.revision).filter_by(**scope).where(
+            notes.c.content.is_not(None))
+        if after is not None:
+            stmt = stmt.where(notes.c.path > note_path(after))
+        async with self.engine.connect() as con:
+            rows = (await con.execute(stmt.order_by(notes.c.path).limit(limit + 1))).mappings().all()
+        await self._recheck(context, "memory.read", scope)
+        return {"notes": [dict(row) for row in rows[:limit]],
+                "next_cursor": rows[limit - 1]["path"] if len(rows) > limit else None}
+
+    async def search(self, context, *, query, limit=20):
+        scope = await self._scope(context, "memory.read")
+        if not isinstance(query, str) or not query.strip() or len(query) > 1024:
+            raise ValueError("Invalid vault search")
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("Invalid vault page size")
+        if self.engine.dialect.name == "postgresql":
+            stmt = """
+                SELECT path,title,revision FROM oa_vault_notes
+                WHERE tenant=:tenant AND agent=:agent AND space=:space AND content IS NOT NULL
+                AND to_tsvector('simple',content) @@ plainto_tsquery('simple',:query)
+                ORDER BY ts_rank(to_tsvector('simple',content),plainto_tsquery('simple',:query)) DESC,path
+                LIMIT :limit
+            """
+        else:
+            # Treat user input as terms, independent of FTS5 query syntax.
+            query = " AND ".join('"' + word.replace('"', '""') + '"' for word in query.split())
+            stmt = """
+                SELECT n.path,n.title,n.revision FROM oa_vault_search s
+                JOIN oa_vault_notes n ON n.id = s.rowid
+                WHERE oa_vault_search MATCH :query AND n.tenant=:tenant AND n.agent=:agent
+                AND n.space=:space AND n.content IS NOT NULL ORDER BY rank,n.path LIMIT :limit
+            """
+        async with self.engine.connect() as con:
+            rows = (await con.execute(sa.text(stmt), {**scope, "query":query, "limit":limit})).mappings().all()
+        await self._recheck(context, "memory.read", scope)
+        return {"hits":[{"kind":"note", **dict(row)} for row in rows]}
+
+    async def backlinks(self, context, path, *, after=None, limit=50):
+        """Page distinct sources that link to this vault-relative path."""
+        target = link_key(note_path(path))
+        scope = await self._scope(context, "memory.read")
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("Invalid vault page size")
+        stmt = sa.select(links.c.path).filter_by(**scope, target=target)
+        if after is not None:
+            stmt = stmt.where(links.c.path > note_path(after))
+        async with self.engine.connect() as con:
+            rows = (await con.execute(stmt.order_by(links.c.path).limit(limit + 1))).scalars().all()
+        await self._recheck(context, "memory.read", scope)
+        return {"paths": list(rows[:limit]), "next_cursor": rows[limit - 1] if len(rows) > limit else None}
+
+    async def history(self, context, path, *, before=None, limit=50):
+        """Return revision metadata, newest first, for this space only."""
+        scope = await self._scope(context, "memory.read")
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("Invalid vault page size")
+        stmt = sa.select(versions.c.revision).filter_by(**scope, path=note_path(path))
+        if before is not None:
+            if type(before) is not int or before < 1:
+                raise ValueError("Invalid revision cursor")
+            stmt = stmt.where(versions.c.revision < before)
+        async with self.engine.connect() as con:
+            rows = (await con.execute(stmt.order_by(versions.c.revision.desc()).limit(limit + 1))).scalars().all()
+        await self._recheck(context, "memory.read", scope)
+        return {"revisions": list(rows[:limit]), "next_cursor": rows[limit - 1] if len(rows) > limit else None}
+
+    async def write(self, context, path, content, *, expected_revision):
+        if not isinstance(content, str) or len(content.encode()) > 2 << 20 or "\0" in content:
+            raise ValueError("Invalid Markdown content")
+        return await self._change(context, note_path(path), content, expected_revision)
+
+    async def forget(self, context, path, *, expected_revision):
+        if expected_revision == 0:
+            raise ValueError("Forgetting a note requires an existing revision")
+        return await self._change(context, note_path(path), None, expected_revision)
+
+    async def _change(self, context, path, content, expected):
+        await require_unprotected_execution("Document vault")
+        if type(expected) is not int or expected < 0 or expected >= (1 << 63) - 1:
+            raise ValueError("Invalid expected revision")
+        scope = await self._scope(context, "memory.write")
+        key = {**scope, "path":path}
+        parsed = parse_note_text(path, content) if content is not None else None
+        if parsed and not parsed.frontmatter_valid:
+            raise ValueError("Invalid Markdown frontmatter")
+        revision = expected + 1
+        values = {"content":content, "title":parsed.title if parsed else None, "revision":revision}
+        async with self.engine.begin() as con:
+            if expected == 0:
+                # ON CONFLICT is limited to this note's identity. Other database
+                # errors still reach the caller and roll back the transaction.
+                if self.engine.dialect.name == "postgresql":
+                    from sqlalchemy.dialects.postgresql import insert
+                else:
+                    from sqlalchemy.dialects.sqlite import insert
+                stmt = insert(notes).values(**key, **values).on_conflict_do_nothing(
+                    index_elements=list(key))
+            else:
+                stmt = sa.update(notes).filter_by(**key, revision=expected).where(
+                    notes.c.content.is_not(None)).values(**values)
+            changed = (await con.execute(stmt.returning(notes.c.id))).scalar_one_or_none()
+            if changed is None:
+                raise RevisionConflict("Note has a conflicting revision or was forgotten")
+            await con.execute(sa.delete(links).filter_by(**key))
+            if parsed:
+                await con.execute(sa.insert(versions).values(**key, revision=revision, content=content,
+                    author=context.author.key, session_id=context.session_id, run_id=current_run_id()))
+                targets = sorted({link_key(link) for link in parsed.outlinks if len(link_key(link).encode()) <= 700})
+                if targets:
+                    await con.execute(sa.insert(links), [{**key, "target":target} for target in targets])
+            else:
+                await con.execute(sa.delete(versions).filter_by(**key))
+            if self.engine.dialect.name == "sqlite":
+                await con.execute(sa.text("""
+                    DELETE FROM oa_vault_search WHERE rowid=:rowid
+                """), {"rowid": changed})
+                if parsed:
+                    await con.execute(sa.text("""
+                        INSERT INTO oa_vault_search(rowid,content) VALUES (:rowid,:content)
+                    """), {"rowid":changed, "content":content})
+            await self._recheck(context, "memory.write", scope)
+        return {"path":path, "revision":revision, "forgotten":content is None}

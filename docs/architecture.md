@@ -173,6 +173,40 @@ are preserved. Only successful writes from trusted module semantic effects count
 as a save; a custom MCP cannot forge that effect. Read-only or restricted-audience
 memory never imposes an unauthorized write requirement.
 
+### Host-owned document vault
+
+A host can bind a database-backed vault to a workspace-free runtime. Install
+the engine dependencies and the vault module. Supply an async SQLAlchemy engine
+for SQLite (aiosqlite) or PostgreSQL (psycopg 3), a trusted space resolver, and
+the same authorizer used for the runtime.
+
+```python
+from openagent_core.memory.vault.documents import SqlDocumentVault
+from openagent_core.modules import ModuleConfig, ServiceRegistry
+
+vault = SqlDocumentVault(engine, authorizer, resolve_space)
+await vault.initialize()  # provisioning, before workers start
+registry = ServiceRegistry({SqlDocumentVault: vault})
+vault_config = ModuleConfig(frozenset({"service", "agent_tools", "host_api"}),
+                            {"backend": "documents"})
+```
+
+Pass the registry to `RuntimeServices` and select `vault_config` in the
+runtime profile. The host owns engine shutdown. Resolve the space from verified
+identity and grants on each call. One space is a single access domain within a
+tenant and agent. Personal and group vaults need distinct space IDs. The
+authorizer must evaluate the complete audience on `memory.publish` and the
+initiator on `memory.read` or `memory.write` for a `vault-space` resource.
+
+The module exposes Markdown CRUD, revisioned reads, full-text search, cursor
+pagination and incoming links by full vault-relative path. Revision zero creates a
+note. Edits require the observed revision. Forgetting erases all logical revisions
+and search entries and retains a tombstone against stale writes. The host applies
+its own backup retention. Active content, revisions, outgoing links and search
+state change in the same transaction. Agent recall and federated search consult
+the authorized document service. A local vault continues to use the files backend
+and the existing Git and quality tools.
+
 ## Automations
 
 The existing scheduling, timezone/DST, workflow, and delivery algorithms remain.

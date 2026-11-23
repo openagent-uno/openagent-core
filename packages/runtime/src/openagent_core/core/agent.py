@@ -980,8 +980,10 @@ async def _with_recall(agent: Any, session_id: str | None, query: str,
     from openagent_core.memory_access import MemoryAccess, authorized_memory_hits
     runtime, context = current_runtime(), current_execution_context()
     memory_access = runtime.service(MemoryAccess) if runtime is not None else None
-    if (runtime is None or context is None or memory_access is None
-            or context.session_id != session_id):
+    vault = runtime.service("vault.service") if runtime is not None else None
+    document_recall = getattr(vault, "recall_documents", None)
+    if (runtime is None or context is None or context.session_id != session_id
+            or (document_recall is None and memory_access is None)):
         return text
     if runtime.uses_descriptor_profile and "vault" not in runtime.enabled_module_ids:
         return text
@@ -993,10 +995,18 @@ async def _with_recall(agent: Any, session_id: str | None, query: str,
         async def retrieve():
             import time
             started = time.monotonic()
-            candidates = await asyncio.to_thread(_recall_candidates, agent, query, session_id)
-            if runtime.uses_descriptor_profile:
-                candidates = [item for item in candidates
-                              if item.get("kind") in {"note", "skill"}]
+            if document_recall is not None:
+                scope, include, exclude, _ = _recall_scoping(_origin_of(session_id))
+                if scope == "sessions":
+                    return ""
+                limit = min(200, max(1, _recall_int("OPENAGENT_AUTO_RECALL_TOP_K", 3)))
+                candidates = await document_recall(context, query=query, limit=limit)
+                candidates = [item for item in candidates if _path_allowed(item["path"], include, exclude)]
+            else:
+                candidates = await asyncio.to_thread(_recall_candidates, agent, query, session_id)
+                if runtime.uses_descriptor_profile:
+                    candidates = [item for item in candidates
+                                  if item.get("kind") in {"note", "skill"}]
             hits = await authorized_memory_hits(runtime, context, candidates)
             # Public quality summaries must describe exposed memory only, not
             # counts or scores belonging to another audience's private hits.
@@ -2716,9 +2726,11 @@ class Agent:
             ]
         active_module_ids = (runtime.enabled_module_ids if runtime is not None
                              else frozenset())
+        vault = runtime.service("vault.service") if runtime is not None and "vault" in active_module_ids else None
+        uses_file_vault = "vault" in active_module_ids and not hasattr(vault, "recall_documents")
         substitutions = {
-            "OPENAGENT_VAULT_PATH": self._resolve_vault_path() if "vault" in active_module_ids else "",
-            "OPENAGENT_DB_PATH": self._resolve_db_path() if "vault" in active_module_ids else "",
+            "OPENAGENT_VAULT_PATH": self._resolve_vault_path() if uses_file_vault else "",
+            "OPENAGENT_DB_PATH": self._resolve_db_path() if uses_file_vault else "",
             "MCP_CATALOG_SUMMARY": "See the current authorized catalog in the trusted turn context.",
             "SKILLS_INDEX": self._render_skills_index(),
             "PTC_NOTE": self._render_ptc_note(),
