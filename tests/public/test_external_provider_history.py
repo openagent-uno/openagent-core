@@ -1,6 +1,8 @@
 """Exercise the installed native model runner against a local HTTP provider and PostgreSQL."""
 
 import asyncio
+import base64
+import hashlib
 from contextlib import asynccontextmanager
 import json
 import os
@@ -31,6 +33,8 @@ async def test_external_provider_history_across_gateways(tmp_path, monkeypatch):
 
     arrived, release = asyncio.Event(), asyncio.Event()
     wires = []
+    media_bytes = b"\x10\x05\x03\x80"
+    uploaded, resolved = {}, []
 
     async def respond(request):
         payload = await request.json()
@@ -38,7 +42,15 @@ async def test_external_provider_history_across_gateways(tmp_path, monkeypatch):
         latest = messages[-1]["content"]
         text = next(
             value
-            for value in ("turn-one", "turn-two", "turn-three", "private-user")
+            for value in (
+                "turn-one",
+                "turn-two",
+                "turn-three",
+                "private-user",
+                "binary-stream",
+                "binary-completion",
+                "binary-revoked",
+            )
             if value in str(latest)
         )
         wires.append((text, payload))
@@ -46,6 +58,18 @@ async def test_external_provider_history_across_gateways(tmp_path, monkeypatch):
             arrived.set()
             await release.wait()
         content = f"answer to {text}"
+        audio = (
+            {
+                "audio": {
+                    "id": "provider-audio",
+                    "data": base64.b64encode(media_bytes).decode(),
+                    "transcript": content,
+                    "expires_at": 9999999999,
+                }
+            }
+            if text.startswith("binary-")
+            else {}
+        )
         base = {"id": "test-id", "model": "test-model", "created": 1}
         if not payload.get("stream"):
             return web.json_response(
@@ -55,7 +79,7 @@ async def test_external_provider_history_across_gateways(tmp_path, monkeypatch):
                     "choices": [
                         {
                             "index": 0,
-                            "message": {"role": "assistant", "content": content},
+                            "message": {"role": "assistant", "content": content, **audio},
                             "finish_reason": "stop",
                         }
                     ],
@@ -68,7 +92,7 @@ async def test_external_provider_history_across_gateways(tmp_path, monkeypatch):
                 "choices": [
                     {
                         "index": 0,
-                        "delta": {"role": "assistant", "content": content},
+                        "delta": {"role": "assistant", "content": content, **audio},
                         "finish_reason": None,
                     }
                 ],
@@ -85,11 +109,13 @@ async def test_external_provider_history_across_gateways(tmp_path, monkeypatch):
     from openagent_core import ProviderHistory, ProviderHistoryMessage
 
     revoked_sessions = set()
+    revoked_artifacts = set()
 
     class Policy:
         async def authorize(self, context, action, resource, *, audience=()):
             return context.tenant_id == resource.tenant_id and not (
-                action == "session.read" and context.session_id in revoked_sessions
+                (action == "session.read" and context.session_id in revoked_sessions)
+                or (action == "artifact.read" and context.session_id in revoked_artifacts)
             )
 
     @asynccontextmanager
@@ -98,6 +124,32 @@ async def test_external_provider_history_across_gateways(tmp_path, monkeypatch):
         yield ExecutionContext(
             principal, principal, principal, session_id or "s", "agent", (principal,)
         )
+
+    class Publisher:
+        async def publish_content(self, context, content, *, filename, mime_type):
+            from openagent_core.runtime import current_run_id
+
+            key = current_run_id()
+            assert key not in uploaded
+            ref = {
+                "artifact_id": "art_" + uuid4().hex,
+                "artifact_link_id": "link-test",
+                "kind": "voice",
+                "filename": filename,
+                "mime_type": mime_type,
+                "size_bytes": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+            uploaded[key] = (context.session_id, content, ref)
+            return ref
+
+        async def resolve_session_output(self, context, run_id, artifact_id):
+            session_id, _, ref = uploaded[run_id]
+            assert session_id == context.session_id and artifact_id == ref["artifact_id"]
+            resolved.append(run_id)
+            if run_id == "binary-revoked":
+                revoked_artifacts.add(context.session_id)
+            return {**ref, "path": "private-host-path"}
 
     class History:
         def __init__(self, store):
@@ -144,6 +196,7 @@ async def test_external_provider_history_across_gateways(tmp_path, monkeypatch):
                 ),
                 modules=(executor,),
             )
+            runtime.services.registry.bind("attachments.publisher", Publisher())
             if executor_type is GenerateExecutor:
                 runtime.services.registry.bind(ProviderHistory, History(runtime.services.store))
             return TestClient(TestServer(create_app(runtime, resolve)))
@@ -196,8 +249,35 @@ async def test_external_provider_history_across_gateways(tmp_path, monkeypatch):
             for case in ("revoked", "oversized"):
                 await submit(right, case, case)
                 await result(right, case, status="failed")
+            await submit(left, "binary-stream", "media")
+            assert await result(left, "binary-stream") == "answer to binary-stream"
+            events_response = await left.get("/api/v1/runs/binary-stream/events")
+            event_body = await events_response.json()
+            assert "private-host-path" not in str(event_body)
+            assert uploaded["binary-stream"][2]["artifact_id"] in str(event_body)
+            final_response = await left.get("/api/v1/runs/binary-stream/final-answer")
+            assert final_response.status == 200, await final_response.text()
+            final = (await final_response.json())["final_answer"]
+            assert [ref["artifact_id"] for ref in final["attachments"]] == [
+                uploaded["binary-stream"][2]["artifact_id"]
+            ]
+            assert "private-host-path" not in str(final)
+            assert "native_audio_sha256" not in str(final)
+            await submit(right, "binary-completion", "other-media")
+            answer = await result(right, "binary-completion")
+            assert uploaded["binary-completion"][2]["artifact_id"] in answer
+            await submit(left, "binary-revoked", "revoked-media")
+            assert "unavailable" in await result(left, "binary-revoked")
+            final_response = await left.get("/api/v1/runs/binary-revoked/final-answer")
+            assert not (await final_response.json())["final_answer"]["attachments"]
     turns = {key: body for key, body in wires}
-    assert len(wires) == 4
+    assert len(wires) == 7
+    assert resolved == ["binary-stream", "binary-revoked"]
+    assert {key: item[1] for key, item in uploaded.items()} == {
+        "binary-stream": media_bytes,
+        "binary-completion": media_bytes,
+        "binary-revoked": media_bytes,
+    }
     assert not turns["turn-two"].get("stream") and turns["turn-three"]["stream"]
     assert any("member" in tool["function"]["name"] for tool in turns["turn-two"]["tools"])
 
@@ -261,3 +341,16 @@ async def test_narrow_turns_in_shared_session_are_filtered_from_all_public_reads
         assert not (await store.search_sessions(viewer, query="narrow", limit=10))["sessions"]
     finally:
         await store.close()
+
+
+def test_external_media_does_not_follow_file_or_url(tmp_path):
+    from types import SimpleNamespace
+    from openagent_core.models.native_provider import _output_media_bytes
+
+    private = tmp_path / "private.dat"
+    private.write_bytes(b"local bytes")
+    assert _output_media_bytes(SimpleNamespace(filepath=private), allow_file=False) is None
+    assert (
+        _output_media_bytes(SimpleNamespace(url="https://example.invalid/test"), allow_file=False)
+        is None
+    )

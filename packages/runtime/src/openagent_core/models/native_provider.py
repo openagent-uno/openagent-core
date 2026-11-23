@@ -434,7 +434,7 @@ def _output_media_filename(media: Any, kind: str) -> str:
     return name
 
 
-def _output_media_bytes(media: Any) -> bytes | None:
+def _output_media_bytes(media: Any, *, allow_file=True) -> bytes | None:
     """Resolve an output artifact without allowing an unbounded read.
 
     URL-only media is deliberately not downloaded here.  These objects can
@@ -446,10 +446,14 @@ def _output_media_bytes(media: Any) -> bytes | None:
     """
     content = getattr(media, "content", None)
     if isinstance(content, str):
+        if len(content) > _OUTPUT_MEDIA_MAX_BYTES:
+            return None
         data = content.encode("utf-8")
     elif isinstance(content, (bytes, bytearray, memoryview)):
+        if memoryview(content).nbytes > _OUTPUT_MEDIA_MAX_BYTES:
+            return None
         data = bytes(content)
-    elif getattr(media, "filepath", None):
+    elif allow_file and getattr(media, "filepath", None):
         from pathlib import Path
 
         path = Path(str(media.filepath))
@@ -537,21 +541,60 @@ def _output_media_failure(kind: str) -> str:
     return f"\n(Output {kind} could not be saved as an attachment.)\n"
 
 
-def _output_media_markers(
-    source: Any,
-    *,
-    emitted: set[tuple[str, str]] | None = None,
-) -> list[str]:
-    """Convert every typed response artifact to a marker exactly once."""
+async def _publish_model_media(media, kind):
+    from openagent_core.runtime import current_runtime, current_run_id, current_execution_context
+    from openagent_core.artifacts import canonical_artifact_id, remember_native_output
+    from openagent_core.contracts import ResourceRef
+    from openagent_core.memory.vault.privacy import require_unprotected_execution
+    import hashlib
+    import mimetypes
+
+    runtime = current_runtime()
+    if runtime is None or runtime.settings.workspace is not None:
+        return _save_agno_output_media(media, kind)
+    context, run_id = current_execution_context(), current_run_id()
+    publish = getattr(runtime.service("attachments.publisher"), "publish_content", None)
+    content = _output_media_bytes(media, allow_file=False)
+    if context is None or run_id is None or not callable(publish) or not content:
+        return None
+    resource = ResourceRef("session", context.tenant_id, context.session_id)
+    filename = _output_media_filename(media, kind)
+    mime_type = (
+        getattr(media, "mime_type", None)
+        or mimetypes.guess_type(filename)[0]
+        or "application/octet-stream"
+    )
+    try:
+        await require_unprotected_execution("Native model attachment")
+        await runtime.authorize(context, "run.publish", resource, audience=context.audience)
+        await runtime.authorize(context, "artifact.write", resource, audience=context.audience)
+        value = await publish(context, content, filename=filename, mime_type=mime_type)
+        await runtime.authorize(context, "run.publish", resource, audience=context.audience)
+        await runtime.authorize(context, "artifact.write", resource, audience=context.audience)
+    except (PermissionError, LookupError, ValueError, OSError):
+        return None
+    if not isinstance(value, dict) or not canonical_artifact_id(value.get("artifact_id")):
+        return None
+    if (
+        value.get("size_bytes") != len(content)
+        or value.get("sha256") != hashlib.sha256(content).hexdigest()
+    ):
+        return None
+    artifact_id = value["artifact_id"]
+    remember_native_output(run_id, artifact_id)
+    return f"\n[{_OUTPUT_MEDIA_MARKERS[kind]}:artifact:{artifact_id}]\n"
+
+
+def _unique_output_media(source, emitted):
     seen = emitted if emitted is not None else set()
     fields = (
         ("image", "images"),
         ("video", "videos"),
         ("audio", "audio"),
         ("audio", "audios"),
+        ("audio", "response_audio"),
         ("file", "files"),
     )
-    markers: list[str] = []
     for kind, field in fields:
         values = getattr(source, field, None) or []
         if not isinstance(values, (list, tuple)):
@@ -571,11 +614,39 @@ def _output_media_markers(
             # resolving bytes, then surface a text fallback if persistence is
             # impossible.
             seen.add(key)
-            marker = _save_agno_output_media(media, kind)
-            if marker:
-                markers.append(marker)
-            else:
-                markers.append(_output_media_failure(kind))
+            yield kind, media
+
+
+def _output_media_markers(source, *, emitted=None):
+    return [
+        _save_agno_output_media(media, kind) or _output_media_failure(kind)
+        for kind, media in _unique_output_media(source, emitted)
+    ]
+
+
+async def _published_media_markers(source, *, emitted=None, final_answer=None):
+    import hashlib
+
+    audio_digest = (
+        final_answer.pop("native_audio_sha256", None) if isinstance(final_answer, dict) else None
+    )
+    markers = []
+    for kind, media in _unique_output_media(source, emitted):
+        marker = await _publish_model_media(media, kind)
+        markers.append(marker or _output_media_failure(kind))
+        content = getattr(media, "content", None)
+        if (
+            marker
+            and kind == "audio"
+            and audio_digest
+            and isinstance(content, bytes)
+            and len(content) <= _OUTPUT_MEDIA_MAX_BYTES
+            and hashlib.sha256(content).hexdigest() == audio_digest
+        ):
+            # Only bytes attested on the final assistant message can be sent
+            # as its reply. A tool preview earlier in the run has no such proof.
+            final_answer["text"] += marker
+            audio_digest = None
     return markers
 
 
@@ -2094,7 +2165,8 @@ class NativeProvider(ProviderResources, BaseModel):
         # MCP results stay typed through the runtime (Image/Audio/Video/File).
         # Convert them only at OpenAgent's final response boundary; the stream
         # parser turns these internal carriers into CAS-backed AttachmentRefs.
-        output_markers = _output_media_markers(response)
+        final_answer = completed_final_answer(response)
+        output_markers = await _published_media_markers(response,final_answer=final_answer)
         if output_markers:
             base_content = content.rstrip() if isinstance(content, str) else str(content)
             content = f"{base_content}{''.join(output_markers)}"
@@ -2166,7 +2238,7 @@ class NativeProvider(ProviderResources, BaseModel):
             cache_read_tokens=cache_read_tokens,
             stop_reason=stop_reason or "stop",
             model=self.model,
-            final_answer=completed_final_answer(response),
+            final_answer=final_answer,
         )
 
     async def _emit_agno_tool_status(
@@ -2311,7 +2383,7 @@ class NativeProvider(ProviderResources, BaseModel):
                                 marker = None
                                 if key not in emitted_media:
                                     emitted_media.add(key)
-                                    marker = _save_agno_output_media(image, "image")
+                                    marker = await _publish_model_media(image, "image")
                                     if marker is None:
                                         marker = _output_media_failure("image")
                                 if marker:
@@ -2334,7 +2406,7 @@ class NativeProvider(ProviderResources, BaseModel):
                                 await self._emit_agno_tool_status(
                                     on_status, tool_exec,
                                 )
-                            for marker in _output_media_markers(
+                            for marker in await _published_media_markers(
                                 event, emitted=emitted_media,
                             ):
                                 emitted += len(marker)
@@ -2371,8 +2443,8 @@ class NativeProvider(ProviderResources, BaseModel):
                             # generated media and any tool media whose intermediate
                             # event was skipped still surface here. Object-id dedup
                             # prevents a tool artifact being emitted twice.
-                            for marker in _output_media_markers(
-                                event, emitted=emitted_media,
+                            for marker in await _published_media_markers(
+                                event, emitted=emitted_media, final_answer=final_answer if parent_event else None,
                             ):
                                 emitted += len(marker)
                                 yield marker

@@ -849,6 +849,29 @@ class OpenAIChat(Model):
 
         return response.choices[0].finish_reason is not None
 
+    def _response_audio(self, encoded, *, id, expires_at, transcript, stream=False):
+        # The Chat Completions transport returns base64, while the runner
+        # aggregates raw bytes and the artifact uploader validates their digest.
+        import base64
+
+        audio_format = (self.audio or {}).get("format") or ("pcm16" if stream else "wav")
+        mime = {
+            "wav": "audio/wav",
+            "mp3": "audio/mpeg",
+            "opus": "audio/opus",
+            "aac": "audio/aac",
+            "flac": "audio/flac",
+            "pcm16": "audio/pcm",
+        }.get(audio_format, "application/octet-stream")
+        return Audio(
+            content=base64.b64decode(encoded or "", validate=True),
+            id=id or str(uuid4()),
+            expires_at=expires_at,
+            transcript=transcript,
+            format=audio_format,
+            mime_type=mime,
+        )
+
     def _parse_provider_response(
         self,
         response: ChatCompletion,
@@ -899,16 +922,14 @@ class OpenAIChat(Model):
             # If the audio output modality is requested, we can extract an audio response
             try:
                 if isinstance(response_message.audio, dict):
-                    model_response.audio = Audio(
-                        id=response_message.audio.get("id"),
-                        content=response_message.audio.get("data"),
+                    model_response.audio = self._response_audio(
+                        response_message.audio.get("data"), id=response_message.audio.get("id"),
                         expires_at=response_message.audio.get("expires_at"),
                         transcript=response_message.audio.get("transcript"),
                     )
                 else:
-                    model_response.audio = Audio(
-                        id=response_message.audio.id,
-                        content=response_message.audio.data,
+                    model_response.audio = self._response_audio(
+                        response_message.audio.data, id=response_message.audio.id,
                         expires_at=response_message.audio.expires_at,
                         transcript=response_message.audio.transcript,
                     )
@@ -1003,23 +1024,14 @@ class OpenAIChat(Model):
 
                         # Only create Audio object if there's actual content
                         if audio_data is not None:
-                            model_response.audio = Audio(
-                                id=audio_id,
-                                content=audio_data,
-                                expires_at=audio_expires_at,
-                                transcript=audio_transcript,
-                                sample_rate=24000,
-                                mime_type="pcm16",
+                            model_response.audio = self._response_audio(
+                                audio_data, id=audio_id, expires_at=audio_expires_at,
+                                transcript=audio_transcript, stream=True,
                             )
-                        # If no content but there's transcript/metadata, create minimal Audio object
                         elif audio_transcript is not None or audio_id is not None:
-                            model_response.audio = Audio(
-                                id=audio_id or str(uuid4()),
-                                content=b"",
-                                expires_at=audio_expires_at,
-                                transcript=audio_transcript,
-                                sample_rate=24000,
-                                mime_type="pcm16",
+                            model_response.audio = self._response_audio(
+                                "", id=audio_id, expires_at=audio_expires_at,
+                                transcript=audio_transcript, stream=True,
                             )
                     except Exception as e:
                         log_warning(f"Error processing audio: {str(e)}")

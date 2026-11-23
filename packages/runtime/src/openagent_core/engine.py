@@ -120,7 +120,9 @@ class AgentExecutor:
 
 
     async def _execute_agent(self, request, context, runtime):
-        result = await self._execute(request, context, runtime)
+        from .artifacts import native_output_scope
+        with native_output_scope(request.run_id):
+            result = await self._execute(request, context, runtime)
         if self.require_final_answer and not result.strip():
             raise RuntimeError("The agent did not produce a final answer.")
         return result
@@ -180,7 +182,7 @@ class AgentExecutor:
                     from .stream.content_parts import parse_response_content
                     parsed = parse_response_content(final_text, allow_inline_ui=False)
                     if parsed.attachments:
-                        from .artifacts import SESSION_ARTIFACT_PREFIX, session_output_reference
+                        from .artifacts import SESSION_ARTIFACT_PREFIX, session_output_reference, is_native_output, canonical_artifact_id
                         db = getattr(self.agent, "memory_db", None)
                         parts, attachments = [], []
                         unavailable = False
@@ -192,21 +194,59 @@ class AgentExecutor:
                             artifact_marker = value["path"].startswith(SESSION_ARTIFACT_PREFIX)
                             if artifact_marker:
                                 from .memory.vault.privacy import require_unprotected_execution
+                                artifact_id = value["path"].removeprefix(SESSION_ARTIFACT_PREFIX)
                                 try:
                                     await require_unprotected_execution("Session attachment delivery")
-                                    await runtime.authorize(context, "tool.call",
-                                        ResourceRef("tool", context.tenant_id, "attachments/resend_session_attachment"),
-                                        audience=context.audience)
+                                    if not is_native_output(request.run_id,artifact_id):
+                                        await runtime.authorize(context, "tool.call",
+                                            ResourceRef("tool", context.tenant_id, "attachments/resend_session_attachment"),
+                                            audience=context.audience)
                                     await runtime.authorize(context, "session.read",
                                         ResourceRef("session", context.tenant_id, context.session_id),
                                         audience=context.audience)
                                 except PermissionError:
                                     unavailable = True
                                     continue
-                                value = {"artifact_id": value["path"].removeprefix(SESSION_ARTIFACT_PREFIX)}
+                                value = {"artifact_id": artifact_id}
                             ref = await session_output_reference(db, tenant_id=context.tenant_id,
                                 session_id=context.session_id, value=value, link=True) if db is not None else None
                             publisher = runtime.service("attachments.publisher") if hasattr(runtime, "service") else None
+                            if (
+                                ref is None
+                                and artifact_marker
+                                and db is None
+                                and canonical_artifact_id(artifact_id)
+                            ):
+                                resolve = getattr(publisher, "resolve_session_output", None)
+                                if callable(resolve):
+                                    from .memory.artifacts import public_attachment_ref
+
+                                    try:
+                                        resource = ResourceRef(
+                                            "session", context.tenant_id, context.session_id
+                                        )
+                                        await runtime.authorize(
+                                            context,
+                                            "artifact.read",
+                                            resource,
+                                            audience=context.audience,
+                                        )
+                                        verified = await resolve(
+                                            context, request.run_id, artifact_id
+                                        )
+                                        await runtime.authorize(
+                                            context,
+                                            "artifact.read",
+                                            resource,
+                                            audience=context.audience,
+                                        )
+                                        if (
+                                            isinstance(verified, dict)
+                                            and verified.get("artifact_id") == artifact_id
+                                        ):
+                                            ref = public_attachment_ref(verified)
+                                    except (LookupError, PermissionError, ValueError, OSError):
+                                        ref = None
                             if ref is None and not artifact_marker and publisher is not None and db is not None:
                                 try:
                                     value = await publisher.publish(context, value["path"])

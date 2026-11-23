@@ -7,6 +7,8 @@ or an active linked session, and validates content integrity before delivery.
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
@@ -213,6 +215,43 @@ class ContentAttachmentPublisher(Protocol):
     """
     async def publish_content(self, context: Any, content: bytes, *, filename: str,
                               mime_type: str) -> dict[str, Any]: ...
+
+
+class SessionOutputResolver(Protocol):
+    async def resolve_session_output(
+        self, context: Any, run_id: str, artifact_id: str
+    ) -> dict[str, Any]:
+        """Resolve an available authorized output relation in this exact run and session."""
+        ...
+
+
+# Inherited by local subtasks. The run ID keeps a child from contributing a
+# marker to its parent unless that parent independently receives a validated ref.
+_native_outputs = ContextVar("native_model_outputs", default=None)
+
+
+@contextmanager
+def native_output_scope(run_id):
+    token = _native_outputs.set((run_id, set()))
+    try:
+        yield
+    finally:
+        _native_outputs.reset(token)
+
+
+def remember_native_output(run_id, artifact_id):
+    state = _native_outputs.get()
+    if state is not None and state[0] == run_id:
+        state[1].add(artifact_id)
+
+
+def is_native_output(run_id, artifact_id):
+    state = _native_outputs.get()
+    return state is not None and state[0] == run_id and artifact_id in state[1]
+
+
+def canonical_artifact_id(value):
+    return isinstance(value, str) and _ARTIFACT_ID.fullmatch(value) is not None
 
 
 async def find_session_attachments(db, *, tenant_id, session_id, query):

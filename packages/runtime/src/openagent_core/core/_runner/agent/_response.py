@@ -1457,7 +1457,9 @@ def handle_model_response_chunk(
             # Process audio
             if model_response_event.audio is not None:
                 if model_response.audio is None:
-                    model_response.audio = Audio(id=str(uuid4()), content=b"", transcript="")
+                    model_response.audio = Audio(id=str(uuid4()), content=b"", transcript="",
+                                                format=model_response_event.audio.format,
+                                                mime_type=model_response_event.audio.mime_type)
 
                 if model_response_event.audio.id is not None:
                     model_response.audio.id = model_response_event.audio.id  # type: ignore

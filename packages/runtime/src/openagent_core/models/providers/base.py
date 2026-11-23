@@ -1987,7 +1987,9 @@ class Model(ABC):
 
         if model_response_delta.audio is not None and isinstance(model_response_delta.audio, Audio):
             if stream_data.response_audio is None:
-                stream_data.response_audio = Audio(id=str(uuid4()), content="", transcript="")
+                stream_data.response_audio = Audio(id=str(uuid4()), content=b"", transcript="",
+                                                   format=model_response_delta.audio.format,
+                                                   mime_type=model_response_delta.audio.mime_type)
 
             from typing import cast
 

@@ -27,8 +27,13 @@ def completed_final_answer(output: Any) -> dict[str, str] | None:
             or getattr(message, "tool_calls", None)):
         return None
     content = getattr(message, "content", None)
-    if isinstance(content, str):
-        return {"text": content}
+    audio = getattr(getattr(message, "audio_output", None), "content", None)
+    audio_proof = {}
+    if isinstance(audio, bytes) and 0 < len(audio) <= 50 * 1024 * 1024:
+        import hashlib
+        audio_proof = {"native_audio_sha256":hashlib.sha256(audio).hexdigest()}
+    if isinstance(content, str) or (content is None and audio_proof):
+        return {"text": content or "", **audio_proof}
     # Structured textual blocks are read by their provider type, never by
     # guessing which line or paragraph looks final. Unsupported content is
     # explicitly unknown rather than stringified into an invented answer.
@@ -36,5 +41,5 @@ def completed_final_answer(output: Any) -> dict[str, str] | None:
         isinstance(part, dict) and part.get("type") in {"text", "output_text"}
         and isinstance(part.get("text"), str) for part in content
     ):
-        return {"text": "".join(part["text"] for part in content)}
+        return {"text": "".join(part["text"] for part in content), **audio_proof}
     return None
