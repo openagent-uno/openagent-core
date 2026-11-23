@@ -201,6 +201,34 @@ class DocumentVault(unittest.IsolatedAsyncioTestCase):
                 await self.store.read(self.a, path, revision=1)
         self.assertEqual((await self.store.search(self.a, query="privateword"))["hits"], [])
 
+    async def test_retained_projection_keeps_protected_bytes_out_of_host_mirrors(self):
+        await self.store.write(self.a, "policy.md","private cobalt",expected_revision=0)
+        async def read(request,context,runtime):
+            return (await self.store.read(context,"policy.md"))["content"]
+        ident=uuid.uuid4().hex
+        with patch.object(self.runtime.services.executor,"execute",read):
+            await self.runtime.submit(RunRequest(ident,self.a.session_id,ident,"read"),self.a)
+            self.assertEqual((await self.runtime.wait(ident,self.a)).output,"private cobalt")
+        for expired in (False,True):
+            if expired:
+                await self.store.forget(self.a,"policy.md",expected_revision=1)
+            record,page=await self.runtime.retained_run_projection(ident,self.a,after=0,limit=2)
+            self.assertEqual(record.status,"success")
+            self.assertIsNone(record.output)
+            self.assertTrue(page.events)
+            self.assertTrue(all(e.kind=="run.protected" and not e.payload for e in page.events))
+            with self.assertRaises(PermissionError):
+                await self.runtime.retained_run_projection(ident,self.b)
+        independent=self.context("other")
+        ident=uuid.uuid4().hex
+        async def ordinary(request,context,runtime): return "safe reply"
+        with patch.object(self.runtime.services.executor,"execute",ordinary):
+            await self.runtime.submit(RunRequest(ident,independent.session_id,ident,"hello"),independent)
+            await self.runtime.wait(ident,independent)
+        record,page=await self.runtime.retained_run_projection(ident,independent,after=0)
+        self.assertEqual(record.output,"safe reply")
+        self.assertNotIn("run.protected",{e.kind for e in page.events})
+
     async def test_editor_validation_and_raw_material_scope(self):
         admin = self.administration(self.a, validate_on_write=True)
         long_note = "line\n" * 500

@@ -65,3 +65,33 @@ class LegacyDocumentProjections(unittest.IsolatedAsyncioTestCase):
             await page.recheck()
         with self.assertRaises(PermissionError):
             await inspection.authorize(self.user, self.user.session_id)
+
+
+    async def test_management_viewer_binds_the_verified_actor_and_session(self):
+        from contextlib import asynccontextmanager
+        from dataclasses import replace
+        from openagent_core.administration import ManagementContext
+
+        await self.turn(self.user, "read")
+        db = MemoryDB(str(self.rt.services.store.path))
+        await db.connect()
+        self.addAsyncCleanup(db.close)
+        management = ManagementContext(self.owner, self.user.agent_id)
+        resolved = self.user
+
+        @asynccontextmanager
+        async def resolve(context, session_id):
+            self.assertEqual(context, management)
+            self.assertEqual(session_id, self.user.session_id)
+            yield resolved
+
+        inspection = SessionInspection(db, self.policy, runtime=self.rt, document_viewer=resolve)
+        self.assertIsNotNone(await inspection.authorize(management, self.user.session_id))
+        for resolved in (replace(self.user, session_id="different"), replace(self.user, agent_id="different"),
+                         replace(self.user, initiator=replace(self.owner, subject_id="different"))):
+            with self.assertRaises(PermissionError):
+                await inspection.authorize(management, self.user.session_id)
+        resolved = self.user
+        await self.vault.forget(self.user, "source.md", expected_revision=1)
+        with self.assertRaises(PermissionError):
+            await inspection.authorize(management, self.user.session_id)

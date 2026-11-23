@@ -35,3 +35,17 @@ An embedded host reading these historical attachments through
 wraps provider or channel authorization. Its actor still needs ordinary
 artifact and session access. Repositories without a verifiable runtime withhold
 document-dependent bytes.
+
+Durable mirrors can call `runtime.retained_run_projection(run_id, context,
+after=cursor, limit=n)`. It verifies run and replay ACLs and returns a record
+and an optional cursor page. Runs that consumed document revisions expose only
+status, cursors and opaque events to storage outside the live runtime. Use
+`get_run`, `final_answer` or `events_page` to show current content under the
+viewer's live authorization. An independent run can still publish its ordinary
+result to the durable mirror.
+
+For a separate management identity, pass an async context manager as
+`SessionInspection(..., runtime=runtime, document_viewer=resolve)`.
+`resolve(management_context, session_id)` verifies the current credential and
+yields an execution context for that actor, agent and session with its authorized
+audience. The inspection revalidates the underlying protected revisions.

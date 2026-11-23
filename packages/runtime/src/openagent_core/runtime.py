@@ -934,7 +934,7 @@ class Runtime:
             self._run_capability_revisions.pop(request.run_id,None)
             graph.release()
 
-    async def get_run(self, run_id: str, context: ExecutionContext) -> RunRecord:
+    async def _authorized_run_record(self, run_id: str, context: ExecutionContext) -> RunRecord:
         record=await self.services.store.get(run_id)
         if record is None:
             raise LookupError(run_id)
@@ -942,6 +942,10 @@ class Runtime:
         check_run = getattr(self.services.store, 'check_run_access', None)
         if check_run is not None:
             await check_run(context, run_id)
+        return record
+
+    async def get_run(self, run_id: str, context: ExecutionContext) -> RunRecord:
+        record = await self._authorized_run_record(run_id, context)
         from .memory.document_exposure import authorize_document_history
         await authorize_document_history(self, context, run_id=run_id)
         return record
@@ -965,6 +969,42 @@ class Runtime:
         rows = await window(run_id, after, limit + 1) if window else await store.events(run_id, after)
         await self.authorize_replay(run_id, context)
         return RunEventPage.from_window(rows, after, limit)
+
+    async def retained_run_projection(self, run_id: str, context: ExecutionContext, *,
+                                      after: int | None = None, limit: int = 1000) -> tuple[RunRecord, RunEventPage | None]:
+        """A run or event page suitable for a durable host mirror.
+
+        Content from a document-aware run stays in the live-authorized runtime.
+        The host can still advance its cursor and reconcile terminal status after
+        a source expires. Load content before the last marker lookup: reading a
+        protected result commits the run's marker before publishing its bytes.
+        """
+        from dataclasses import replace
+
+        record = await self._authorized_run_record(run_id, context)
+        page = None
+        if after is not None:
+            RunEventPage.validate(after, limit)
+            await self._authorize(context, "run.replay", record.session_id, record.tenant_id)
+            reader = getattr(self.services.store, "event_window", None)
+            if not callable(reader):
+                raise RuntimeError("A durable mirror requires a bounded event reader")
+            rows = await reader(run_id, after, limit + 1)
+            page = RunEventPage.from_window(rows, after, limit)
+            await self._authorize(context, "run.replay", record.session_id, record.tenant_id)
+        record = await self._authorized_run_record(run_id, context)
+        lookup = getattr(self.services.store, "document_sources", None)
+        if not callable(lookup):
+            raise RuntimeError("A durable mirror requires a source-aware run store")
+        if await lookup(context, run_id=run_id):
+            from .memory.document_exposure import require_admitted_audience
+            accepted = await self.services.store.accepted_request(run_id)
+            require_admitted_audience(accepted, context)
+            record = replace(record, output=None)
+            if page is not None:
+                page = replace(page, events=tuple(RunEvent(row.cursor, run_id, "run.protected", {})
+                                                  for row in page.events))
+        return record, page
 
     async def final_answer(self, run_id: str, context: ExecutionContext) -> RunFinalAnswer:
         record = await self.authorize_replay(run_id, context)

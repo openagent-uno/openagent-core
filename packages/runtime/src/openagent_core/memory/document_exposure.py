@@ -120,6 +120,12 @@ async def saw_notes(vault, context, scope, rows):
     await _inherit(vault, turn, tokens)
 
 
+def require_admitted_audience(accepted, viewer):
+    allowed = {accepted.authority, accepted.initiator, *accepted.audience}
+    if not {viewer.authority, viewer.initiator, *viewer.audience}.issubset(allowed):
+        raise PermissionError("The admitted document audience changed")
+
+
 async def authorize_document_history(runtime, viewer, *, run_id=None, session_id=None):
     """Revalidate exact revision tokens on a cold reader, and propagate into a consuming turn."""
     lookup = getattr(runtime.services.store, "document_sources", None)
@@ -140,9 +146,7 @@ async def authorize_document_history(runtime, viewer, *, run_id=None, session_id
         raise PermissionError("Document history exceeds its authorization budget")
     for ident in protected:
         accepted = await runtime.services.store.accepted_request(ident)
-        allowed = {accepted.authority, accepted.initiator, *accepted.audience}
-        if not {viewer.authority, viewer.initiator, *viewer.audience}.issubset(allowed):
-            raise PermissionError("The admitted document audience changed")
+        require_admitted_audience(accepted, viewer)
         if accepted.delegation_id:
             from ..contracts import DelegationService, ExecutionContext
 

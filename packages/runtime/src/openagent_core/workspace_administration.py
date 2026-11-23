@@ -85,9 +85,10 @@ class SkillsLibrary:
 
 
 class SessionInspection:
-    def __init__(self,db,authorizer,*,agent=None,runtime=None):
+    def __init__(self,db,authorizer,*,agent=None,runtime=None,document_viewer=None):
         self.db,self.authorizer,self.agent=db,authorizer,agent
         self.runtime = runtime
+        self.document_viewer = document_viewer
 
     async def authorize(self,context,session_id,*,connection=None):
         from .dream_evidence import dream_run_id
@@ -109,7 +110,18 @@ class SessionInspection:
                     or row["agent_id"] != context.agent_id
                     or not callable(getattr(store, "document_sources", None))):
                 raise PermissionError("Document-dependent history requires its authorized runtime")
-            await authorize_document_history(self.runtime, context, session_id=session_id)
+            from .contracts import ExecutionContext
+            if isinstance(context, ExecutionContext):
+                await authorize_document_history(self.runtime, context, session_id=session_id)
+            elif self.document_viewer is not None:
+                async with self.document_viewer(context, session_id) as viewer:
+                    if (not isinstance(viewer, ExecutionContext) or viewer.authority != context.authority
+                            or viewer.author != context.authority or viewer.initiator != context.authority
+                            or viewer.agent_id != context.agent_id or viewer.session_id != session_id):
+                        raise PermissionError("The host selected a different document viewer")
+                    await authorize_document_history(self.runtime, viewer, session_id=session_id)
+            else:
+                raise PermissionError("A live document viewer is required")
         return dict(row) if row is not None else None
 
     async def list(self,context,*,parent=None,limit=50):
