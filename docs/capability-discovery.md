@@ -42,6 +42,11 @@ through the same authorization, execution and receipt path. Tool-dependent
 requests buffer one decision before publishing output. For a plain request
 without tools, the driver keeps the normal streaming response.
 
+The schema protocol preserves standing system instructions when choosing the
+next action. For example, a writable memory module may instruct the agent to
+save a lasting preference volunteered during conversation. The decision still
+passes through the host's live authorization and normal tool receipt.
+
 The asynchronous gateway offers the current principal's unambiguous
 `DiscoveryPresentation.hot_tools` with their actual parameter schemas.
 Each decision is resolved to the current catalog reference. An absent,
@@ -50,5 +55,15 @@ JSON pointers. Tool results and prior assistant calls remain distinguishable
 in the text-only template. Model quality is specific to the endpoint. Qualify
 a write, an owner read after restart, cross-owner denial and recall from a
 fresh session before enabling this mode on a service.
+
+To qualify spontaneous memory, use two newly provisioned personal spaces.
+In the first, volunteer a recurring preference containing a random value.
+Omit any save request, note path or tool name. Check the model's write receipt,
+the exact value and the originating session and run on the new revision.
+Restart the host, ask about the preference in a new session without its value
+or path, and verify the revision stays unchanged. Check that the other owner
+cannot read the existing note. In separate fresh conversations, use a one-time
+choice, a fact explicitly excluded from memory, and a synthetic credential.
+Compare the vault inventory before and after each of these three cases.
 
 A schema-transport model shortcut requires live permission to call its exact tool at request composition. Source discovery and public inventory continue to use their normal grants. Execution rechecks the call grant again.

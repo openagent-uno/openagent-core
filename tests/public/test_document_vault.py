@@ -145,6 +145,16 @@ class DocumentVault(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await store.search(actor, query="private"))["hits"], [])
 
 
+    async def test_document_profile_exposes_writable_memory_guidance_and_its_exclusions(self):
+        block, = (b for b in self.runtime.prompt_blocks if b.id == "module.vault.documents")
+        write, = (t for t in await self.runtime.capabilities.discover(self.a) if t.name == "vault_write_note")
+        self.assertIn("declaration", block.text)
+        self.assertIn("one-time choices", block.text)
+        self.assertIn("user asks to keep out", block.text)
+        self.assertIn("private keys", block.text)
+        self.assertIn("read-only", block.text)
+        self.assertIn("stated lasting preference", write.description)
+
     async def test_invalid_syntax_never_creates_uncertain_effect_or_changes_the_requested_path(self):
         import re
         [write] = [t for t in await self.runtime.capabilities.discover(self.a) if t.name == "vault_write_note"]

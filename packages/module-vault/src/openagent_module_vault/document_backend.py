@@ -27,13 +27,21 @@ class VaultDescriptor(NativeCapabilityDescriptor):
 
 
 _DOCUMENT_PROMPT = PromptBlock(
-    "module.vault.documents", "2",
-    """Your long-term memory lives in the authorized document vault. For questions
-about the user's preferences, projects or past decisions, call vault_search,
-then vault_read_note on relevant hits before answering. Cite the notes you use.
-Save durable corrections, preferences, decisions and procedures learned during
-work unless the user asks to keep them out of memory. Each note covers one
-idea. Include a title, summary and dates in YAML frontmatter and link related
+    "module.vault.documents", "3",
+    """Your long-term memory lives in the authorized document vault.
+When the user states a lasting personal preference, correction, decision or
+procedure, save the fact before replying if this turn can write memory. A
+declaration such as “I always prefer...” is enough. The user need not ask you
+to remember. Create a short note with vault_write_note, choosing a descriptive
+relative path when none is supplied. Update a known related note if appropriate.
+Capture only the lasting fact the user stated. Skip one-time choices, hypotheticals,
+guesses about others, and anything the user asks to keep out of memory. Never
+store passwords, access tokens, private keys or other credentials. If the turn
+has read-only access, use only the authorized reads.
+Keep lasting decisions and procedures established by verified work as well.
+For a question about preferences, projects or past decisions, search before answering.
+Use vault_read_note on relevant hits and cite the notes you use.
+Each note covers one idea. Include a title, summary and dates in YAML frontmatter and link related
 notes using [[folder/name]]. Preserve the requested vault-relative note path exactly,
 including its spelling, case and folders. Use paths such as topics/manual.md.
 If the user supplies an invalid path, ask for a valid vault-relative path.
@@ -109,7 +117,8 @@ class DocumentModule:
         actions = (
             ("vault_read_note", self.store.read, "Read the Markdown and current revision of a note.",
              {"path": path, "revision": {"type": "integer", "minimum": 1}}, ["path"], {"vault.read", "vault.recall.path"}),
-            ("vault_write_note", self.store.write, "Save Markdown when its current revision matches.",
+            ("vault_write_note", self.store.write, "Record a stated lasting preference, correction or decision, "
+             "or save requested Markdown. Create a new note with expected_revision=0.",
              {"path": path, "content": {"type": "string"}, "expected_revision": revision},
              ["path", "content", "expected_revision"], {"vault.write"}),
             ("vault_search", self.store.search, "Search the authorized memory space by words.",

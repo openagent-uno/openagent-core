@@ -198,6 +198,13 @@ tenant and agent. Personal and group vaults need distinct space IDs. The
 authorizer must evaluate the complete audience on `memory.publish` and the
 initiator on `memory.read` or `memory.write` for a `vault-space` resource.
 
+With the agent tools enabled, the module instructs the agent to record a
+lasting preference or correction volunteered in conversation, subject to the
+turn's write grant. One-time choices, credentials and statements excluded by
+the user are outside that instruction. A successful note revision carries its
+originating run and session. Hosts can inspect the revision and qualify this
+behavior with their configured model.
+
 The module exposes Markdown CRUD, revisioned reads, full-text search, cursor
 pagination and incoming links by full vault-relative path. Revision zero creates a
 note. Edits require the observed revision. Forgetting erases all logical revisions
