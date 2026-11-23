@@ -87,6 +87,8 @@ class _Registration:
     invocation_provenance: Callable | None = None
     privacy_fenced: Mapping[str, bool] | bool = False
     references: dict[str, tuple[str, ToolDefinition]] = field(default_factory=dict)
+    partition: str | None = None
+    remote_instance: tuple[str, int] | None = None
 
 
 EffectObserver = Callable[[ToolDescriptor, Mapping[str, Any], Any, ExecutionContext, str], Awaitable[None]]
@@ -127,11 +129,13 @@ class CapabilityCatalog:
                  target_label: str, lease: CapabilityLease | None = None,
                  trusted_effects: Mapping[str, frozenset[str]] | frozenset[str] = frozenset(),
                  graph_generation: int | None = None, result_provenance: Callable | None = None,
-                 privacy_fenced: Mapping[str, bool] | bool = False, invocation_provenance: Callable | None = None) -> None:
+                 privacy_fenced: Mapping[str, bool] | bool = False, invocation_provenance: Callable | None = None,
+                 partition: str | None = None, remote_instance: tuple[str, int] | None = None) -> None:
         self._register(source_id, source, executor, target_label=target_label, managed=True,
                        lease=lease, trusted_effects=trusted_effects,
                        graph_generation=graph_generation, result_provenance=result_provenance,
-                       privacy_fenced=privacy_fenced,invocation_provenance=invocation_provenance)
+                       privacy_fenced=privacy_fenced,invocation_provenance=invocation_provenance,
+                       partition=partition,remote_instance=remote_instance)
 
     def register_user_source(self, source_id: str, source: CapabilitySource, executor: ToolExecutor, *,
                              target_label: str, graph_generation: int | None = None) -> None:
@@ -149,12 +153,19 @@ class CapabilityCatalog:
                   target_label: str, managed: bool, lease: CapabilityLease | None = None,
                   trusted_effects: Mapping[str, frozenset[str]] | frozenset[str] = frozenset(),
                   graph_generation: int | None = None, result_provenance: Callable | None = None,
-                  privacy_fenced: Mapping[str, bool] | bool = False, invocation_provenance: Callable | None = None) -> None:
+                  privacy_fenced: Mapping[str, bool] | bool = False, invocation_provenance: Callable | None = None,
+                  partition: str | None = None, remote_instance: tuple[str, int] | None = None) -> None:
         key = (source_id, graph_generation)
         if not source_id or key in self._sources:
             raise ValueError("Capability source IDs must be unique")
         if lease and lease.source_id != source_id:
             raise ValueError("The lease must identify this exact source")
+        if partition is not None and (not isinstance(partition, str) or not 0 < len(partition) <= 200):
+            raise ValueError("Invalid catalog partition")
+        if remote_instance is not None and (not isinstance(remote_instance, tuple) or len(remote_instance) != 2
+                or not isinstance(remote_instance[0], str) or not 0 < len(remote_instance[0]) <= 256
+                or type(remote_instance[1]) is not int or remote_instance[1] < 1):
+            raise ValueError("Invalid remote execution host identity")
         if not (type(privacy_fenced) is bool or (isinstance(privacy_fenced,Mapping)
                 and all(isinstance(name,str) and type(value) is bool for name,value in privacy_fenced.items()))):
             raise ValueError('Privacy writer admission must be a trusted boolean policy')
@@ -162,6 +173,8 @@ class CapabilityCatalog:
                                      lease, trusted_effects, graph_generation,
                                      self._next_revision(), result_provenance=result_provenance,
                                      privacy_fenced=copy.deepcopy(privacy_fenced),invocation_provenance=invocation_provenance)
+        registration.partition = partition
+        registration.remote_instance = remote_instance
         self._sources[key] = registration
 
     def revoke(self, source_id: str) -> None:
@@ -243,6 +256,7 @@ class CapabilityCatalog:
     def _available(self, registration: _Registration, context: ExecutionContext) -> bool:
         generation, revision = self._execution_snapshot()
         return (not registration.revoked and
+                registration.partition == getattr(context, "catalog_partition", None) and
                 self._sources.get((registration.source_id, registration.graph_generation)) is registration and
                 registration.visible_from_revision <= revision and
                 (registration.graph_generation is None or registration.graph_generation == generation) and
@@ -549,6 +563,10 @@ class CapabilityCatalog:
             host = {"kind":"capability","device_label":registration.target_label,"source_id":registration.source_id}
             if registration.lease is not None:
                 host.update(instance_id=registration.lease.instance_id,generation=registration.lease.generation)
+            elif registration.remote_instance is not None:
+                host.update(instance_id=registration.remote_instance[0], generation=str(registration.remote_instance[1]))
+            if registration.partition is not None:
+                host["catalog_partition"] = registration.partition
             binding = {"tool_ref":tool_ref,"source_id":registration.source_id,"name":definition.name,
                        "target_label":registration.target_label,"effects":sorted(definition.effects),"execution_host":host,
                        "metadata":copy.deepcopy(dict(definition.metadata))}

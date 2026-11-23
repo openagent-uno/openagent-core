@@ -143,7 +143,9 @@ async def synchronize(owner,context):
         if existing is not None:owner.catalog.revoke(source_id)
         elif len(owner.sources)>=4096:raise CapabilityUnavailable('Remote MCP source registration limit reached')
         source=RemoteMcpSource(owner.transport,context,row)
-        owner.catalog.register(source_id,source,source,target_label=row['host_id']+' / '+row['server'])
+        owner.catalog.register(source_id,source,source,target_label=row['host_id']+' / '+row['server'],
+                               partition=context.catalog_partition if owner.partitioned else None,
+                               remote_instance=(row["host_id"], row["generation"]))
         owner.sources[source_id]=source
     retained=owner.owners.get(key,set())
     if not topology.complete:wanted|=retained
@@ -161,10 +163,11 @@ class RemoteMcpRegistry:
     an unavailable feature. transport.call/read receive only exact selectors.
     No host, account, user count, client presence or sharing policy is inferred.
     """
-    def __init__(self, capability_catalog, transport, *, source_prefix="remote_mcp_"):
+    def __init__(self, capability_catalog, transport, *, source_prefix="remote_mcp_", partitioned=False):
         if not isinstance(source_prefix, str) or not _NAME.fullmatch(source_prefix):
             raise ValueError("Invalid remote capability namespace")
         self.catalog, self.transport, self.source_prefix = capability_catalog, transport, source_prefix
+        self.partitioned = partitioned
         self.sources, self.owners = {}, {}
 
     async def synchronize(self, context):

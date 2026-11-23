@@ -46,6 +46,9 @@ class CapabilityLease:
     generation: str
 
 
+CATALOG_PARTITION_PREFIX = "openagent.catalog-partition:"
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionContext:
     author: PrincipalRef
@@ -72,6 +75,17 @@ class ExecutionContext:
             raise ValueError("Deferred work cannot retain temporary capabilities")
         if self.deferred and not self.delegation_id:
             raise ValueError("Deferred work requires an explicit delegation")
+        # A trusted host can issue a context restricted to a separate catalog.
+        # Its selector grants no rights and must never be ambiguous.
+        self.catalog_partition
+
+    @property
+    def catalog_partition(self) -> str | None:
+        values = [s[len(CATALOG_PARTITION_PREFIX):] for s in self.scopes
+                  if isinstance(s, str) and s.startswith(CATALOG_PARTITION_PREFIX)]
+        if len(values) > 1 or (values and (not values[0] or len(values[0]) > 200)):
+            raise ValueError("Invalid execution catalog partition")
+        return values[0] if values else None
 
     @property
     def tenant_id(self) -> str:
