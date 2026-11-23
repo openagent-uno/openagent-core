@@ -10,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from openagent_core.contracts import ExecutionContext, ResourceRef, require_authorized
 from openagent_core.memory.vault.parser import link_key, parse_note_text
 from openagent_core.memory.vault.privacy import require_unprotected_execution
-from openagent_core.runtime import current_run_id
+from openagent_core.runtime import current_run_id, current_runtime
+from .document_dream import DocumentDreamQueue, check_dream_space, is_document_dream
 
 
 class RevisionConflict(ValueError):
@@ -65,15 +66,20 @@ class SqlDocumentVault:
     """
 
     def __init__(self, engine: AsyncEngine, authorizer,
-                 resolve_space: Callable[[ExecutionContext], Awaitable[str]]):
+                 resolve_space: Callable[[ExecutionContext], Awaitable[str]], *, dream_queue: DocumentDreamQueue | None = None):
         if engine.dialect.name not in {"sqlite", "postgresql"}:
             raise ValueError("Document vault requires SQLite or PostgreSQL")
         self.engine = engine
         self.authorizer = authorizer
         self.resolve_space = resolve_space
+        if dream_queue is not None and dream_queue.engine is not engine:
+            raise ValueError("Document dreams must share the vault transaction engine")
+        self.dream_queue = dream_queue
 
     async def initialize(self):
         """Install the schema during host provisioning, before starting workers."""
+        if self.dream_queue is not None:
+            await self.dream_queue.initialize()
         async with self.engine.begin() as connection:
             await connection.run_sync(metadata.create_all)
             if self.engine.dialect.name == "postgresql":
@@ -93,9 +99,15 @@ class SqlDocumentVault:
             raise TypeError("A verified execution context is required")
         space = await self.resolve_space(context)
         fields = {"tenant": context.tenant_id, "agent": context.agent_id, "space": space}
+        check_dream_space(context, fields)
         if any(not isinstance(v, str) or not v or len(v.encode()) > 200 for v in fields.values()):
             raise ValueError("Invalid vault space identity")
         target = ResourceRef("vault-space", context.tenant_id, space)
+        if is_document_dream(context):
+            runtime = current_runtime()
+            if runtime is None or not current_run_id() or not context.deferred or not context.delegation_id:
+                raise PermissionError("A live delegated dream run is required")
+            await runtime.authorize(context, "memory.dream", target, audience=context.audience)
         await require_authorized(self.authorizer, context, action, target, audience=(context.initiator,))
         await require_authorized(self.authorizer, context, "memory.publish", target, audience=context.audience)
         return fields
@@ -262,5 +274,11 @@ class SqlDocumentVault:
                     await con.execute(sa.text("""
                         INSERT INTO oa_vault_search(rowid,content) VALUES (:rowid,:content)
                     """), {"rowid":changed, "content":content})
+            if is_document_dream(context):
+                if self.dream_queue is None:
+                    raise PermissionError("Document maintenance is disabled")
+                await self.dream_queue.verify_dream_write(con, scope, current_run_id())
+            elif self.dream_queue is not None:
+                await self.dream_queue.mark_changed(con, scope)
             await self._recheck(context, "memory.write", scope)
         return {"path":path, "revision":revision, "forgotten":content is None}

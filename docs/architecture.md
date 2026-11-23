@@ -221,6 +221,49 @@ route. Python and TypeScript export `PersonalClient`.
   `q` to search, `path` to read one exact Markdown document and `cursor` to
   continue an ordered list or search. Both catalogs support limits from 1 to 100.
 
+### Scheduled document-vault dreams
+
+The optional document worker sends a memory-maintenance turn through the
+configured runtime executor. It reads and edits notes with the native vault
+tools. The files backend keeps its existing standalone maintenance and Git
+behavior. Document maintenance uses SQL for coordination and requires no
+filesystem, browser, editor, or connected personal device.
+
+Create a `DocumentDreamQueue` with the vault's SQLAlchemy async engine, pass
+it as `dream_queue=` to `SqlDocumentVault`, then call `vault.initialize()`
+at provisioning time. Construct `DocumentDreamWorker(queue, resolve_context,
+vault.resolve_space)`, bind it under its type in the service registry and
+select the vault surfaces `service`, `agent_tools` and `workers`. Omit the
+worker surface on an API-only instance. A host-managed task pool can call
+`worker.run_due_once(runtime)` directly. Each tick admits or observes at
+most one eligible space. Configure fleet capacity, model account and token
+budget through the host's normal admission policy.
+
+Document changes mark their space dirty inside the same transaction. Writes
+in one maintenance pass share a generation. A foreground edit or deletion
+invalidates pending derived writes from that pass. The next pass observes
+the new revision. Worker leases coordinate claims across hosts; after a lost
+receipt a successor reconciles the same run ID through the runtime ledger.
+Terminal failures and denied grants are recorded without replaying effects.
+The next admitted change or explicit request can schedule another pass.
+Supply a host `next_due(scope, now)` callback returning a Unix timestamp to
+select maintenance windows or use the default delay after the first edit.
+A manual `await queue.request_now(vault, interactive_context, request_id)`
+checks the caller's grant and deduplicates the request. Additional manual
+requests join an active pass. Foreground note mutations schedule a new pass.
+
+The trusted `resolve_context(claim)` callback reconstructs a stable, live
+delegation for `claim.tenant`, `claim.agent`, `claim.space` and
+`claim.session_id`, with `claim.context_scope` in its scopes, the authorized
+result audience, `deferred=True` and no interactive device leases. Return
+only a context whose credential scope and tools are restricted to this
+vault; apply that restriction in the host authorizer on every discovery,
+call and publication. The worker checks the catalog at admission and
+requires `memory.dream`, read, write and publication permission. Every vault
+operation rechecks its bound space and live delegation. The maintenance
+session records the engine's answer under the same audience. Note edits
+retain the observed revision and run provenance in the vault history.
+
 ## Automations
 
 The existing scheduling, timezone/DST, workflow, and delivery algorithms remain.

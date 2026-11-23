@@ -12,8 +12,10 @@ class VaultDescriptor(NativeCapabilityDescriptor):
             return super().validate(config)
         if backend != "documents":
             raise ValueError("Unknown vault backend")
-        if "service" not in config.surfaces or config.surfaces - {"service", "agent_tools", "host_api"}:
-            raise ValueError("Document vault needs its service surface and supports agent_tools and host_api")
+        if "service" not in config.surfaces or config.surfaces - {"service", "agent_tools", "host_api", "workers"}:
+            raise ValueError("Invalid document vault surfaces")
+        if "workers" in config.surfaces and "agent_tools" not in config.surfaces:
+            raise ValueError("Document dream workers require native vault tools")
         if set(config.options) - {"backend"}:
             raise ValueError("Document vault storage and policy are supplied by the host service")
 
@@ -87,7 +89,15 @@ class DocumentModule:
 
     async def start(self):
         tools = "agent_tools" in self.context.config.surfaces
+        workers = ()
+        if "workers" in self.context.config.surfaces:
+            from openagent_core.memory.vault.document_dream import DocumentDreamWorker
+            worker = self.context.services.require(DocumentDreamWorker)
+            if worker.queue is not self.store.dream_queue:
+                raise ValueError("The dream worker must use this vault's queue")
+            workers = (worker,)
         self.contribution = ModuleContribution(
+            workers=workers,
             services=(ServiceBinding("vault.service", self),),
             capabilities=(CapabilityContribution(
                 "vault", self.source, self.source, "Authorized memory", trusted_effects=self.effects
