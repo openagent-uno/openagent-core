@@ -9,7 +9,7 @@ _MAX_SOURCES = 2048
 @contextmanager
 def document_turn(runtime, context, run_id):
     parent = _active.get()
-    key = (id(runtime), run_id, context.tenant_id, context.agent_id)
+    key = (id(runtime), run_id, context)
     if run_id is not None and parent and parent[0] == key:
         yield
         return
