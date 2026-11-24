@@ -1,5 +1,7 @@
 # OpenAgent core documentation
 
+[Embedding beta 170](releases/v1.1.0-beta.170.md) covers manual automation request identity and recovery.
+
 ## Architecture and use
 
 - [Beta169 SQLite writer contention and MCP recovery](releases/v1.1.0-beta.169.md).
