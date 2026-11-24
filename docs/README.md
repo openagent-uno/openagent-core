@@ -25,6 +25,7 @@
   [journal/state concurrency](sqlite-commit-concurrency.md) and
   [fallback history](fallback-conversation-history.md).
 
+- [Embedding beta 165](releases/v1.1.0-beta.165.md) covers resource admission and recoverable suspension for private task computers.
 - [Embedding beta 164](releases/v1.1.0-beta.164.md) covers streamed message projection on redelivery.
 - [Core beta 163 — verified document reads in the model loop](releases/v1.1.0-beta.163.md)
 - [Core beta 162 — scoped tools, ranked recall and volunteered preferences](releases/v1.1.0-beta.162.md)
