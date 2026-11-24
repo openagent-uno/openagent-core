@@ -155,6 +155,68 @@ hypervisor and architecture. A VZ base image and qualification on macOS do
 not establish KVM availability, network policy or performance on a particular
 Linux cloud host. [Lima QEMU driver](https://lima-vm.io/docs/config/vmtype/qemu/)
 
+#### Pool capacity and suspension
+
+One computer allocation belongs to a principal, agent, project and task. A
+host can choose a stable task for a personal workspace, or separate task IDs
+for independent project checkouts. The immutable base is selected by the host.
+All workers serving one pool must use the same durable capacity database,
+pool name, limits and hypervisor inventory. Include retained disks and existing
+guests in the operator's capacity planning when enabling a pool on a used host.
+Pre-existing unmetered guests stay outside the budget until the operator
+reconciles their assignments. The database is authoritative for admissions;
+the hypervisor remains authoritative for observed configuration and power state.
+
+```python
+from openagent_core.computer_capacity import ComputerPoolLimits, SqlComputerCapacity
+
+gib = 1024**3
+capacity = SqlComputerCapacity(
+    engine, "private-guests",
+    ComputerPoolLimits(machines=8, machines_per_owner=2, running=4,
+                       running_per_owner=1, cpus=4, memory_bytes=4*gib,
+                       disk_bytes=32*gib),
+)
+provider = LimaComputerProvider(private_home, bases, capacity=capacity)
+broker = TaskComputerBroker(engine, authorizer, provider, provider,
+                            required_capacity=capacity, delegations=grants)
+provider.bind(broker)
+await broker.initialize()
+```
+
+The pool row serializes reservations across controllers in PostgreSQL or
+SQLite. Pool and principal counters change in the same transaction as the
+reservation. Admission reads a fixed number of rows as retained history grows.
+The limits cover the number of retained machines, virtual disk bytes,
+active guests, vCPUs and configured RAM. Counts also have per-principal limits.
+The host can inspect aggregates with `await capacity.usage()`. The operator
+sets the budget to fit the host and any capacity reserved for other services.
+Lima reads each approved base's resource configuration from the hypervisor,
+checks the clone independently and reserves compute before starting it.
+A configured `required_capacity` refuses a provider without the matching
+capacity controller and resource inventory. Hosts that omit the option can
+still use existing unmetered providers.
+
+After attachment, `await broker.suspend(context, task, lease)` requires
+`computer.suspend` for the exact allocation and `computer.base.read` for the
+approved base. It fences the current lease in SQL before stopping the guest.
+The task stays unavailable while a stop is unfinished. A restart or missed
+response can redeliver the same suspend request. A restarted controller can
+also call `broker.suspend(context, task)` to reconcile a suspension already
+recorded in SQL. An online machine still requires its exact lease. Capacity becomes available
+for another guest once the physical stop has been observed. Disk quota remains
+charged through suspension and revocation. Explicitly attaching again wakes
+the same disk and browser profile with a new generation. Previously issued
+tool and viewer handles expire. Redelivery of an older suspend cannot stop
+a newer admitted generation.
+
+A lost clone or start response retains its reservation. Retrying the same
+allocation reconciles the enrolled machine. Retrying a revocation completes
+an interrupted stop. Operators should reconcile outstanding reservations
+against the original hypervisor after failures. Heartbeat expiry by itself
+does not demonstrate that CPUs, memory or disk have been released. There
+is no automatic deletion of guest volumes or redistribution across hosts.
+
 Register approved `(project, base_version)` pairs with a sealed base instance
 and its full Git commit hash. Set up a nonprivileged `oawork` account, a Git
 working tree at `/srv/workspace`, `sudo`, `nft`, and a root-owned
@@ -234,7 +296,12 @@ The test project must contain one committed `seed.txt` with contents
 `OPENAGENT_TEST_LIMA_BROWSER_PAGE` to a controlled guest-reachable fixture
 that sets a persistent `workspace` cookie from `?owner=` and displays
 `Session workspace=<value>`. Run `pytest tests/public/test_lima_task_computers.py`
-on the target hypervisor. The suite powers down its private test allocations.
+on the target hypervisor. The additional capacity qualification takes
+`OPENAGENT_TEST_LIMA_CAPACITY=cpus,memory_bytes,disk_bytes` for the sealed
+base, with Chromium available inside the guest. It serves a synthetic page
+on guest loopback, verifies separate persistent files and cookies, measures
+the guest's CPU/RAM/block devices and exercises transfer of a single active
+slot between two principals. The suite powers down its private test allocations.
 
 Release cohort: `1.1.0b48`. The public contract suite passed 720 tests and
 97 subtests (two optional tests skipped). Package publication, host deployment

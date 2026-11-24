@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 import asyncio
-from dataclasses import asdict, dataclass, replace
 import hashlib
 import math
 import re
 import time
+from contextlib import asynccontextmanager
+from dataclasses import asdict, dataclass, replace
 from typing import Protocol
 from uuid import uuid4
 
@@ -17,6 +17,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from openagent_core.capabilities import CapabilityUnavailable
+from openagent_core.computer_capacity import _initialize_computer_schema
 from openagent_core.contracts import (
     CATALOG_PARTITION_PREFIX,
     ExecutionContext,
@@ -26,8 +27,8 @@ from openagent_core.contracts import (
     canonical_json,
     require_authorized,
 )
-from openagent_core.remote_mcp import RemoteMcpRegistry, catalog as remote_catalog
-
+from openagent_core.remote_mcp import RemoteMcpRegistry
+from openagent_core.remote_mcp import catalog as remote_catalog
 
 schema = sa.MetaData()
 tasks = sa.Table(
@@ -137,6 +138,7 @@ class TaskComputerBroker:
         transport,
         *,
         delegations=None,
+        required_capacity=None,
         clock=time.time,
         max_lease_seconds=300,
     ):
@@ -151,11 +153,22 @@ class TaskComputerBroker:
             transport,
         )
         self.clock, self.max_lease, self.delegations = clock, max_lease_seconds, delegations
+        if required_capacity is not None and (
+            getattr(provider, "capacity", None) is not required_capacity
+            or not callable(getattr(provider, "resource_profile", None))
+            or not callable(getattr(provider, "connection_at", None))
+        ):
+            raise CapabilityUnavailable("The provider cannot enforce the required computer capacity")
+        self.required_capacity = required_capacity
         self._mounts = {}
 
     async def initialize(self):
         async with self.engine.begin() as con:
-            await con.run_sync(schema.create_all)
+            await _initialize_computer_schema(con, schema, tasks)
+        if self.required_capacity is not None:
+            await self.required_capacity.initialize()
+        elif callable(initialize := getattr(self.provider, "initialize_capacity", None)):
+            await initialize()
 
     async def _authorize(self, context, key, action, *, base=None):
         if context.deferred and (self.delegations is None or not await self.delegations.validate(context)):
@@ -190,6 +203,14 @@ class TaskComputerBroker:
         allocation = ComputerAllocation.for_context(context, task)
         base = (task.project, task.base_version)
         await self._authorize(context, allocation.key, "computer.provision", base=base)
+        reserve_capacity = getattr(self.provider, "reserve_allocation_capacity", None)
+        if callable(reserve_capacity) and getattr(self.provider, "capacity", None) is not None:
+            # Refused requests must not accumulate durable task rows or per-task
+            # directories. The provider reservation survives a crash before the
+            # allocation row and is idempotent on redelivery of the same task.
+            existing = await self._row(allocation.key)
+            if existing is None:
+                await reserve_capacity(allocation)
         insert = pg_insert if self.engine.dialect.name == "postgresql" else sqlite_insert
         async with self.engine.begin() as con:
             await con.execute(
@@ -278,7 +299,7 @@ class TaskComputerBroker:
         base = (task.project, task.base_version)
         await self._authorize(context, key, "computer.attach", base=base)
         row = await self._row(key)
-        if not row or row["base_version"] != task.base_version or row["state"] not in {"online", "offline"}:
+        if not row or row["base_version"] != task.base_version or row["state"] not in {"online", "offline", "suspended"}:
             raise CapabilityUnavailable("The task has no eligible computer assignment")
         reconnect = getattr(self.provider, "reconnect", None)
         if callable(reconnect) and row["state"] == "online" and row["expires_at"] <= self.clock():
@@ -297,9 +318,17 @@ class TaskComputerBroker:
                     .values(state="offline", epoch=tasks.c.epoch + 1)
                 )
                 row = await self._row(key, con)
-        if row["state"] == "revoked":
-            raise CapabilityUnavailable("The task assignment was revoked")
-        if callable(reconnect) and row["state"] == "offline" and row["generation"] is not None:
+        if row["state"] not in {"online", "offline", "suspended"}:
+            raise CapabilityUnavailable("The task assignment is unavailable")
+        connection_at = getattr(self.provider, "connection_at", None)
+        if callable(connection_at):
+            conn = await connection_at(
+                allocation, row["machine_id"], admission_epoch=row["epoch"],
+                stale_generation=row["generation"] if row["state"] == "offline" else None,
+            )
+        elif row["state"] == "suspended":
+            raise CapabilityUnavailable("The provider cannot resume a fenced computer")
+        elif callable(reconnect) and row["state"] == "offline" and row["generation"] is not None:
             conn = await reconnect(allocation, row["machine_id"], row["generation"])
         else:
             conn = await self.provider.connection(allocation, row["machine_id"])
@@ -361,6 +390,69 @@ class TaskComputerBroker:
                 ):
                     raise CapabilityUnavailable("The computer changed during attachment")
         return ComputerLease(key, epoch, conn.machine_id, conn.host_id, conn.generation)
+
+    async def suspend(self, context, task, lease: ComputerLease | None = None):
+        """Fence admission before stopping. Redeliver the same lease after interruption."""
+        allocation = ComputerAllocation.for_context(context, task)
+        key = allocation.key
+        base = (task.project, task.base_version)
+        await self._authorize(context, key, "computer.suspend", base=base)
+        if lease is None:
+            interrupted = await self._row(key)
+            if (
+                not interrupted
+                or interrupted["state"] not in {"suspending", "suspended"}
+                or interrupted["base_version"] != task.base_version
+            ):
+                raise CapabilityUnavailable("There is no pending suspension to reconcile")
+            lease = ComputerLease(
+                key,
+                interrupted["epoch"] - 1,
+                interrupted["machine_id"],
+                interrupted["host_id"],
+                interrupted["generation"],
+            )
+        if not isinstance(lease, ComputerLease) or lease.allocation != key:
+            raise CapabilityUnavailable("The computer lease belongs to another assignment")
+        suspend_at = getattr(self.provider, "suspend_at", None)
+        if not callable(suspend_at) or not callable(getattr(self.provider, "connection_at", None)):
+            raise CapabilityUnavailable("The provider cannot suspend a fenced computer")
+        epoch = lease.epoch + 1
+        identity = {
+            "allocation": key,
+            "machine_id": lease.machine_id,
+            "host_id": lease.host_id,
+            "generation": lease.generation,
+            "base_version": task.base_version,
+        }
+        async with self.engine.begin() as con:
+            await con.execute(
+                tasks.update()
+                .filter_by(**identity, state="online", epoch=lease.epoch)
+                .values(state="suspending", epoch=epoch, expires_at=None)
+            )
+            current = (
+                (await con.execute(sa.select(tasks).where(tasks.c.allocation == key)))
+                .mappings()
+                .one_or_none()
+            )
+            if (
+                current is None
+                or current["state"] not in {"suspending", "suspended"}
+                or current["epoch"] != epoch
+                or any(current[k] != v for k, v in identity.items())
+            ):
+                raise CapabilityUnavailable("The computer lease changed")
+            await self._authorize(context, key, "computer.suspend", base=base)
+            if current["state"] == "suspended":
+                return
+        await suspend_at(allocation, epoch)
+        async with self.engine.begin() as con:
+            await con.execute(
+                tasks.update()
+                .filter_by(**identity, state="suspending", epoch=epoch)
+                .values(state="suspended")
+            )
 
     async def disconnected(self, lease: ComputerLease):
         """Trusted registration-loss callback. Old disconnects cannot affect a replacement."""

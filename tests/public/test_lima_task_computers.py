@@ -3,41 +3,58 @@
 import asyncio
 import base64
 import json
-from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import replace
 import os
 import shlex
 import subprocess
 import time
+import unittest
+from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 from uuid import uuid4
 
-from sqlalchemy.ext.asyncio import create_async_engine
-from openagent_core import ExecutionContext, PrincipalRef, Runtime, RuntimeServices, RuntimeSettings
+from openagent_core import (
+    ExecutionContext,
+    PrincipalRef,
+    Runtime,
+    RuntimeServices,
+    RuntimeSettings,
+)
 from openagent_core.capabilities import CapabilityUnavailable
+from openagent_core.computer_capacity import (
+    ComputerPoolLimits,
+    ComputerResources,
+    SqlComputerCapacity,
+)
 from openagent_core.computer_interaction import ComputerInteraction
-from openagent_core.computer_tasks import ComputerAllocation, ComputerTask, TaskComputerBroker
+from openagent_core.computer_tasks import (
+    ComputerAllocation,
+    ComputerTask,
+    TaskComputerBroker,
+)
 from openagent_core.lima_computers import LimaComputerProvider
 from openagent_storage_sqlite import SqliteRuntimeStore
+from sqlalchemy.ext.asyncio import create_async_engine
 
 
 @unittest.skipUnless(
     os.getenv("OPENAGENT_TEST_LIMA_BASE"), "Requires a sealed test VM and dedicated hypervisor"
 )
 class LimaComputers(unittest.IsolatedAsyncioTestCase):
-    async def setup_computers(self, lease_seconds):
+    async def setup_computers(self, lease_seconds, *, limits=None):
         home = os.environ["OPENAGENT_TEST_LIMA_HOME"]
         base = os.environ["OPENAGENT_TEST_LIMA_BASE"]
         commit = os.environ["OPENAGENT_TEST_LIMA_COMMIT"]
         task = ComputerTask("workspace", "change", "sealed")
-        provider = LimaComputerProvider(
-            home, {(task.project, task.base_version): (base, commit)}, lease_seconds=lease_seconds
-        )
         temp = Path(self.enterContext(TemporaryDirectory()))
         engine = create_async_engine("sqlite+aiosqlite:///" + str(temp / "controller.sqlite"))
         self.addAsyncCleanup(engine.dispose)
+        capacity = SqlComputerCapacity(engine, "qualification", limits) if limits is not None else None
+        provider = LimaComputerProvider(
+            home, {(task.project, task.base_version): (base, commit)}, lease_seconds=lease_seconds,
+            capacity=capacity,
+        )
 
         denied = set()
 
@@ -46,7 +63,7 @@ class LimaComputers(unittest.IsolatedAsyncioTestCase):
                 return action not in denied and all(p == context.initiator for p in audience)
 
         policy = Policy()
-        broker = TaskComputerBroker(engine, policy, provider, provider)
+        broker = TaskComputerBroker(engine, policy, provider, provider, required_capacity=capacity)
         provider.bind(broker)
         self.addAsyncCleanup(provider.close)
         await broker.initialize()
@@ -69,6 +86,99 @@ class LimaComputers(unittest.IsolatedAsyncioTestCase):
             result.get("isError"), result.get("content", [])[:1] if result.get("isError") else ""
         )
         return result
+
+    @unittest.skipUnless(os.getenv("OPENAGENT_TEST_LIMA_CAPACITY"), "Requires a sealed guest with Chromium")
+    async def test_two_metered_linux_computers_suspend_resume_and_revoke(self):
+        profile = ComputerResources(*map(int, os.environ["OPENAGENT_TEST_LIMA_CAPACITY"].split(",")))
+        limits = ComputerPoolLimits(2, 1, 1, 1, profile.cpus, profile.memory_bytes, 2 * profile.disk_bytes)
+        provider, broker, task = await self.setup_computers(300, limits=limits)
+        a, b = self.context("alpha"), self.context("bravo")
+        allocations = [ComputerAllocation.for_context(c, task) for c in (a, b)]
+        for allocation in allocations:
+            self.addAsyncCleanup(provider.suspend, allocation)
+        machines = await asyncio.gather(*(broker.provision(context, task) for context in (a, b)))
+        self.assertNotEqual(*machines)
+        for machine in machines:
+            self.assertEqual(await provider.resource_profile(machine), profile)
+        excess = replace(task, task="excess")
+        with self.assertRaises(CapabilityUnavailable):
+            await broker.provision(a, excess)
+        refused = ComputerAllocation.for_context(a, excess)
+        self.assertEqual(await provider._status(provider._machine(refused.key)), "Absent")
+
+        page = """<!doctype html><title>Workspace</title><main></main><script>
+const owner = new URL(location.href).searchParams.get('owner');
+if (['alpha','bravo'].includes(owner)) document.cookie =
+    'workspace=' + owner + '; path=/; max-age=86400; SameSite=Lax';
+document.querySelector('main').textContent = 'Cookie=' + document.cookie;
+</script>"""
+        server = f"""import pathlib, subprocess, sys, time, urllib.request
+root = pathlib.Path('/tmp/oa-capacity-page')
+root.mkdir(exist_ok=True)
+(root / 'index.html').write_text({page!r})
+subprocess.Popen([sys.executable, '-m','http.server','18286','--bind','127.0.0.1',
+                 '--directory',str(root)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                 stderr=subprocess.DEVNULL, start_new_session=True)
+for attempt in range(50):
+    try:
+        assert urllib.request.urlopen('http://127.0.0.1:18286/',timeout=1).read().decode() == {page!r}
+        break
+    except OSError:
+        time.sleep(.1)
+else:
+    raise RuntimeError('Guest HTTP fixture unavailable')
+"""
+
+        async def visit(context, lease, name, *, initialize):
+            async with broker.tools(self.runtime.capabilities, context, lease) as ctx:
+                async def shell(command):
+                    out = await self.call(ctx, "shell_exec", command=command)
+                    return out["structuredContent"]["stdout"]
+                self.assertEqual(int(await shell("nproc")), profile.cpus)
+                memory = int((await shell("awk '/MemTotal/ {print $2}' /proc/meminfo")).strip()) * 1024
+                self.assertLessEqual(memory, profile.memory_bytes)
+                self.assertGreater(memory, profile.memory_bytes * .65)
+                sectors = await shell("for file in /sys/block/*/size; do cat \"$file\"; done")
+                self.assertIn(profile.disk_bytes, [512 * int(value) for value in sectors.split()])
+                document = await self.call(ctx, "read_text_file", path="seed.txt")
+                self.assertEqual(document["content"][0]["text"], "sealed\n" if initialize else name)
+                if initialize:
+                    await self.call(ctx, "write_file", path="seed.txt", content=name)
+                self.assertEqual((await shell("id -un; cat seed.txt")).splitlines(), ["oawork", name])
+                await shell("python3 -c " + shlex.quote(server))
+                tabs = await self.call(ctx, "tabs_context_mcp", createIfEmpty=True)
+                tab = json.loads(tabs["content"][0]["text"].splitlines()[0])["availableTabs"][0]["tabId"]
+                url = "http://127.0.0.1:18286/"
+                await self.call(ctx, "navigate", tabId=tab, url=url)
+                initial = await self.call(ctx, "get_page_text", tabId=tab)
+                expected = "" if initialize else "workspace=" + name
+                self.assertEqual(initial["content"][0]["text"].splitlines()[-1], "Cookie=" + expected)
+                if initialize:
+                    await self.call(ctx, "navigate", tabId=tab, url=url + "?owner=" + name)
+                    text = await self.call(ctx, "get_page_text", tabId=tab)
+                    self.assertEqual(text["content"][0]["text"].splitlines()[-1], "Cookie=workspace=" + name)
+
+        first = await broker.attach(a, task)
+        await visit(a, first, "alpha", initialize=True)
+        with self.assertRaises(CapabilityUnavailable):
+            await broker.attach(b, task)
+        with self.assertRaises(CapabilityUnavailable):
+            await broker.suspend(b, task, first)
+        await broker.suspend(a, task, first)
+        self.assertEqual(await provider._status(first.machine_id), "Stopped")
+        second = await broker.attach(b, task)
+        await visit(b, second, "bravo", initialize=True)
+        await broker.suspend(b, task, second)
+        fresh = await broker.attach(a, task)
+        self.assertEqual(fresh.machine_id, first.machine_id)
+        self.assertGreater(fresh.generation, first.generation)
+        await visit(a, fresh, "alpha", initialize=False)
+        await broker.revoke(a, task)
+        with self.assertRaises(CapabilityUnavailable):
+            await broker.attach(a, task)
+        self.assertEqual(await provider._status(fresh.machine_id), "Stopped")
+        self.assertEqual(await provider.capacity.usage(), {"machines": 2, "disk_bytes": 2*profile.disk_bytes,
+                                                             "running": 0, "cpus": 0, "memory_bytes": 0})
 
     async def test_isolated_snapshot_review_viewer_input_and_revocation(self):
         provider, broker, task = await self.setup_computers(300)

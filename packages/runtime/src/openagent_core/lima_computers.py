@@ -4,26 +4,26 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from contextlib import asynccontextmanager, contextmanager
 import fcntl
 import hashlib
 import ipaddress
 import json
 import os
-from pathlib import Path
 import re
 import shlex
 import tempfile
 import time
+from contextlib import asynccontextmanager, contextmanager
+from pathlib import Path
 from uuid import UUID
 
 import yaml
 
 from ._guest_channel import GuestChannel
 from .capabilities import CapabilityUnavailable
+from .computer_capacity import ComputerResources, SqlComputerCapacity
 from .computer_tasks import ComputerConnection
 from .contracts import canonical_json
-
 
 _NAME = re.compile(r"[a-z][a-z0-9-]{0,46}")
 _KEY = re.compile(r"[0-9a-f]{64}")
@@ -61,8 +61,9 @@ async def _command(argv, *, env, data=b"", limit=_CAP, timeout=180):
 
     async def write():
         try:
-            proc.stdin.write(data)
-            await proc.stdin.drain()
+            if data:
+                proc.stdin.write(data)
+                await proc.stdin.drain()
         finally:
             proc.stdin.close()
 
@@ -93,8 +94,11 @@ class LimaComputerProvider:
     """Local virtualization control plane. Bind one durable private Lima home to one provider."""
 
     def __init__(
-        self, home, bases, *, lease_seconds=60, executable="limactl", ssh="ssh", egress_proxy=None
+        self, home, bases, *, lease_seconds=60, executable="limactl", ssh="ssh", egress_proxy=None, capacity=None
     ):
+        if capacity is not None and not isinstance(capacity, SqlComputerCapacity):
+            raise TypeError("Expected the operator's computer capacity store")
+        self.capacity = capacity
         self.home = Path(home).resolve(strict=True)
         if self.home.stat().st_uid != os.getuid() or self.home.stat().st_mode & 0o077:
             raise PermissionError("The Lima provider requires a private operator-owned directory")
@@ -158,6 +162,44 @@ class LimaComputerProvider:
         if row.get("name") != name:
             raise CapabilityUnavailable("Lima inventory changed")
         return row["status"]
+
+    async def resource_profile(self, name):
+        """Read the exact VM's hypervisor-configured CPU, RAM and virtual disk size."""
+        if not _NAME.fullmatch(name):
+            raise CapabilityUnavailable("Invalid resource inventory identity")
+        row = json.loads(await self._lima("list", "--format", "json", name))
+        if row.get("name") != name or row.get("status") not in {"Stopped", "Running"}:
+            raise CapabilityUnavailable("Computer resources are unavailable")
+        try:
+            return ComputerResources(row["cpus"], row["memory"], row["disk"])
+        except (KeyError, ValueError) as exc:
+            raise CapabilityUnavailable("Incomplete hypervisor resource inventory") from exc
+
+    async def initialize_capacity(self):
+        if self.capacity is not None:
+            await self.capacity.initialize()
+
+    async def reserve_allocation_capacity(self, allocation):
+        spec = self.bases.get((allocation.task.project, allocation.task.base_version))
+        if spec is None:
+            raise PermissionError("Unknown project snapshot")
+        await self.capacity.reserve(allocation, await self.resource_profile(spec[0]))
+
+    async def _reserve(self, directory, allocation, *, machine=None, running=False):
+        marker = directory / "capacity-pool"
+        if marker.exists() and (self.capacity is None or marker.read_text() != self.capacity.pool):
+            raise CapabilityUnavailable("The bound capacity pool is required")
+        if self.capacity is None:
+            return
+        spec = self.bases.get((allocation.task.project, allocation.task.base_version))
+        if spec is None:
+            raise CapabilityUnavailable("The approved resource profile is unavailable")
+        expected = await self.resource_profile(spec[0])
+        if machine is not None and await self.resource_profile(machine) != expected:
+            raise CapabilityUnavailable("The clone resources differ from the approved base")
+        if not marker.exists():
+            _save(marker, self.capacity.pool.encode())
+        await self.capacity.reserve(allocation, expected, running=running)
 
     def _ssh_argv(self, key, command):
         name = self._machine(key)
@@ -267,6 +309,7 @@ if [ -s /run/sshd.pid ]; then kill -HUP "$(cat /run/sshd.pid)"; fi
                 raise CapabilityUnavailable("Existing reservation changed")
             if (directory / "revoked").exists():
                 raise PermissionError("Revoked VM reservation")
+            await self._reserve(directory, allocation)
             if not state.exists():
                 if await self._status(name) != "Absent":
                     raise CapabilityUnavailable("Instance name is already occupied")
@@ -275,6 +318,7 @@ if [ -s /run/sshd.pid ]; then kill -HUP "$(cat /run/sshd.pid)"; fi
                 if await self._status(spec[0]) != "Stopped":
                     raise CapabilityUnavailable("A sealed stopped base VM is required")
                 await self._lima("clone", spec[0], name, "--mount-none")
+            await self._reserve(directory, allocation, machine=name)
             if not (directory / "configured").exists():
                 if await self._status(name) != "Stopped":
                     raise CapabilityUnavailable("Unconfigured clone must be stopped")
@@ -304,13 +348,28 @@ if [ -s /run/sshd.pid ]; then kill -HUP "$(cat /run/sshd.pid)"; fi
         """Reestablish the exact enrollment after its old generation was fenced."""
         return await self._connect(allocation, machine_id, stale_generation=stale_generation)
 
-    async def _connect(self, allocation, machine_id, *, stale_generation):
+    async def connection_at(self, allocation, machine_id, *, admission_epoch, stale_generation=None):
+        return await self._connect(
+            allocation, machine_id, stale_generation=stale_generation, admission_epoch=admission_epoch
+        )
+
+    async def _connect(self, allocation, machine_id, *, stale_generation, admission_epoch=None):
         key = allocation.key
         if self._machine(key) != machine_id:
             raise CapabilityUnavailable("Incorrect VM enrollment")
         async with self._locked(key) as directory:
             if (directory / "revoked").exists() or not (directory / "configured").exists():
                 raise CapabilityUnavailable("VM enrollment unavailable")
+            paused = directory / "suspended-at"
+            if paused.exists() and (admission_epoch is None or admission_epoch < int(paused.read_text())):
+                raise CapabilityUnavailable("The prior computer admission was suspended")
+            activated = directory / "activated-at"
+            previous = int(activated.read_text()) if activated.exists() else -1
+            if admission_epoch is not None and previous > admission_epoch:
+                raise CapabilityUnavailable("The computer admission changed")
+            await self._reserve(directory, allocation, machine=machine_id, running=True)
+            if admission_epoch is not None and admission_epoch > previous:
+                _save(activated, str(admission_epoch).encode())
             status = await self._status(machine_id)
             if status == "Stopped":
                 await self._lima("start", machine_id)
@@ -349,20 +408,39 @@ if [ -s /run/sshd.pid ]; then kill -HUP "$(cat /run/sshd.pid)"; fi
         """Release control connections while leaving VM disks and power state under host control."""
         await asyncio.gather(*(channel.close() for channel in tuple(self._channels.values())))
 
+    async def _stop(self, allocation, directory):
+        if channel := self._channels.get(allocation.key):
+            await channel.close()
+        name = self._machine(allocation.key)
+        if await self._status(name) == "Running":
+            await self._lima("stop", name)
+        if await self._status(name) not in {"Stopped", "Absent"}:
+            raise CapabilityUnavailable("The hypervisor has not confirmed the stop")
+        marker = directory / "capacity-pool"
+        if marker.exists():
+            if self.capacity is None or marker.read_text() != self.capacity.pool:
+                raise CapabilityUnavailable("The bound capacity pool is required")
+            await self.capacity.stopped(allocation)
+
     async def suspend(self, allocation):
-        async with self._locked(allocation.key):
-            if channel := self._channels.get(allocation.key):
-                await channel.close()
-            name = self._machine(allocation.key)
-            if await self._status(name) == "Running":
-                await self._lima("stop", name)
+        """Trusted hypervisor operation. User-facing hosts should call the broker."""
+        async with self._locked(allocation.key) as directory:
+            await self._stop(allocation, directory)
+
+    async def suspend_at(self, allocation, epoch):
+        async with self._locked(allocation.key) as directory:
+            activated = directory / "activated-at"
+            paused = directory / "suspended-at"
+            if ((activated.exists() and int(activated.read_text()) >= epoch)
+                    or (paused.exists() and int(paused.read_text()) > epoch)):
+                raise CapabilityUnavailable("The suspension was overtaken by another admission")
+            _save(paused, str(epoch).encode())
+            await self._stop(allocation, directory)
 
     async def fence(self, allocation):
         async with self._locked(allocation.key) as directory:
             _save(directory / "revoked", b"1")
-            name = self._machine(allocation.key)
-            if await self._status(name) == "Running":
-                await self._lima("stop", name)
+            await self._stop(allocation, directory)
 
     async def _entry(self, context, selectors):
         if self.broker is None:
