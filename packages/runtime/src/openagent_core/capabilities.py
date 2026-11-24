@@ -683,6 +683,22 @@ class CapabilityCatalog:
             await observe_published(definition.name, copy.deepcopy(dict(arguments)), result, context)
         if durable and has_current_publication_guard():
             await check_current_publication()
+        if durable and surface == "model" and provider_call_id and rejection is None:
+            verified = getattr(registration.executor, "verified_tool_read", None)
+            if callable(verified):
+                observation = verified(definition.name, arguments, result, context)
+                if observation is not None:
+                    from .read_convergence import published_read
+
+                    async def reauthorize_read():
+                        # Publication guards run inside runtime.authorize. Check
+                        # the same live host/delegation policy without reentering
+                        # those guards from one of their own callbacks.
+                        for action in ("tool.call", "tool.publish"):
+                            await runtime._authorize_policy(context, action, resource, audience=context.audience)
+                        await recheck_definition()
+
+                    published_read(provider_call_id, tool_ref, definition.name, observation, reauthorize_read)
         return result
 
 

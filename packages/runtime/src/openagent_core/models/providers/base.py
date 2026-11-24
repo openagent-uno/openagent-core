@@ -307,7 +307,12 @@ class Model(ABC):
                 retries_with_guidance_count = kwargs.pop("retries_with_guidance_count", 0)
                 from openagent_core.provider_admission import provider_attempt
                 async with provider_attempt(self) as admitted:
-                    return await admitted.ainvoke(**kwargs)
+                    from openagent_core.read_convergence import decision_after_reads, require_final_text
+                    request, final = await decision_after_reads(
+                        kwargs, schema_transport=getattr(admitted, "_structured_tool_decisions", False))
+                    response = await admitted.ainvoke(**request)
+                    require_final_text(response, final)
+                    return response
             except ModelProviderError as e:
                 last_exception = self.classify_error(e)
                 # Check if error is non-retryable
@@ -413,9 +418,13 @@ class Model(ABC):
                 retries_with_guidance_count = kwargs.pop("retries_with_guidance_count", 0)
                 from openagent_core.provider_admission import provider_attempt, current_admission
                 async with provider_attempt(self) as admitted:
-                    frames = admitted.ainvoke_stream(**kwargs)
+                    from openagent_core.read_convergence import decision_after_reads, require_final_text
+                    request, final = await decision_after_reads(
+                        kwargs, schema_transport=getattr(admitted, "_structured_tool_decisions", False))
+                    frames = admitted.ainvoke_stream(**request)
                     try:
                         async for response in frames:
+                            require_final_text(response, final)
                             emitted = True
                             yield response
                     finally:

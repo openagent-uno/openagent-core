@@ -100,8 +100,9 @@ def execution_scope(runtime: Runtime, context: ExecutionContext, run_id: str | N
               _current_capability_revision.set(capability_revision),
               _current_provider_tool_call.set(None))
     from .memory.document_exposure import document_turn
+    from .read_convergence import verified_read_turn
     try:
-        with document_turn(runtime, context, run_id):
+        with document_turn(runtime, context, run_id), verified_read_turn(runtime, context, run_id):
             yield
     finally:
         _publication_checks.reset(checks)

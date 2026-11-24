@@ -241,6 +241,18 @@ class SqlDocumentVault:
         await self._recheck(context, "memory.read", scope)
         return found is not None
 
+    async def is_current_revision(self, context, path, revision):
+        """Check a live head under the same read and audience policy as a note."""
+        scope = await self._scope(context, "memory.read")
+        if type(revision) is not int or not 1 <= revision < (1 << 63):
+            raise ValueError("Invalid note revision")
+        stmt = sa.select(notes.c.revision).filter_by(
+            **scope, path=note_path(path, allow_generated=True)).where(notes.c.content.is_not(None))
+        async with self.engine.connect() as con:
+            current = await con.scalar(stmt)
+        await self._recheck(context, "memory.read", scope)
+        return current is not None and current == revision
+
     async def read(self, context, path, *, revision=None):
         scope = await self._scope(context, "memory.read")
         async with self.engine.connect() as con:

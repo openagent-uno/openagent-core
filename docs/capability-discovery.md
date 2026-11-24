@@ -68,6 +68,15 @@ Compare the vault inventory before and after each of these three cases.
 
 A schema-transport model shortcut requires live permission to call its exact tool at request composition. Source discovery and public inventory continue to use their normal grants. Execution rechecks the call grant again.
 
+During an admitted turn the asynchronous native and schema provider loops
+recognize consecutive reads of the same live document revision. Two successful
+reads prompt the model to use the evidence or choose a different operation.
+A third unchanged read leads to one answer-only decision. Each read executes
+normally and retains its own receipt. The runtime checks the current revision,
+tool permissions and audience before changing the next decision and rechecks
+publication permissions before exposing the answer. A new head, intervening
+action, failed read, parallel batch or new turn breaks the sequence.
+
 ### Restricting the capability sources of one turn
 
 An embedding host can narrow a run to exact catalog source IDs with

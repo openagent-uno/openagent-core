@@ -97,6 +97,17 @@ class DocumentSource(FunctionSource, DreamVaultSource):
             return self.tools
         return tuple(t for t in self.tools if t.name != REVIEW_TOOL)
 
+    def verified_tool_read(self, name, arguments, result, context):
+        if name != "vault_read_note":
+            return None
+        from openagent_core.read_convergence import VerifiedToolRead
+        path, revision = result["path"], result["revision"]
+
+        async def current():
+            return await self.vault.is_current_revision(context, path, revision)
+
+        return VerifiedToolRead((path, arguments.get("revision"), revision), current)
+
 
 
 class DocumentModule:

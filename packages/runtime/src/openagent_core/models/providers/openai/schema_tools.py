@@ -155,6 +155,7 @@ class SchemaToolChat(OpenAILike):
     """Use the existing SDK, account admission and native tool execution loop."""
 
     authorized_hot_tools: Callable | None = None
+    _structured_tool_decisions = True
 
     async def _async_prepare(self, messages, assistant_message, response_format=None, tools=None, tool_choice=None,
                              run_response=None, compress_tool_results=False):
