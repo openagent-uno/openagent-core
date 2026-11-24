@@ -38,9 +38,14 @@ def context_key(context):
 
 
 async def catalog(transport, context, selectors=None):
-    result = await transport.catalog(context, selectors or {})
+    try:
+        result = await transport.catalog(context, selectors or {})
+    except PermissionError:
+        raise
+    except OSError:
+        result = None
     if result is None:
-        return Topology(available=False)
+        return Topology(complete=False, available=False)
     if not isinstance(result,dict) or not isinstance(result.get('servers'),list) or len(result['servers'])>256:
         raise ValueError('Invalid remote MCP catalog')
     if len(json.dumps(result,allow_nan=False).encode())>2*1024*1024:
@@ -74,18 +79,24 @@ class RemoteMcpSource:
     def __init__(self,transport,context,row):
         self.transport,self.owner,self.row=transport,context_key(context),copy.deepcopy(row)
         self.identity=(row['host_id'],row['generation'],row['server'])
+        self.transport_unavailable = False
+
+    def temporarily_unavailable(self, context):
+        return self.transport_unavailable and context_key(context) == self.owner
 
     async def _current(self,context,*,cache_allowed=False):
         if context_key(context)!=self.owner:
             raise PermissionError('Remote MCP belongs to another principal/session audience')
         cached=_discovery.get() if cache_allowed else None
         topology=cached[1] if cached and cached[0]==self.owner else None
-        if topology is not None and not topology.available:
-            raise CapabilityUnavailable('The current remote MCP topology is unavailable')
         matches=[row for row in topology.rows if (row['host_id'],row['generation'],row['server'])==self.identity] if topology else []
-        if topology is None or not matches and not topology.complete:
+        if topology is None or topology.available and not matches and not topology.complete:
+            self.transport_unavailable = False
             topology=await catalog(self.transport,context,{key:self.row[key] for key in ('host_id','generation','server')})
             matches=[row for row in topology.rows if (row['host_id'],row['generation'],row['server'])==self.identity]
+        self.transport_unavailable = not topology.available
+        if self.transport_unavailable:
+            raise CapabilityUnavailable('The current remote MCP topology is unavailable')
         if (len(matches)!=1 or matches[0]['catalog_digest']!=self.row['catalog_digest']
                 or matches[0]['tools']!=self.row['tools'] or matches[0]['version']!=self.row['version']):
             raise CapabilityUnavailable('The exact remote MCP or provider generation changed')
@@ -133,13 +144,17 @@ class RemoteMcpSource:
 async def synchronize(owner,context):
     key=context_key(context);wanted=set()
     try:topology=await catalog(owner.transport,context)
-    except (PermissionError,ValueError,CapabilityUnavailable):
-        return Topology(complete=False,available=False)
+    except PermissionError:
+        topology=Topology()
+    except (ValueError,CapabilityUnavailable):
+        topology=Topology(complete=False,available=False)
     for row in topology.rows:
         identity=canonical_json([key,row['host_id'],row['generation'],row['server']])
         source_id=owner.source_prefix+hashlib.sha256(identity.encode()).hexdigest()[:48]
         wanted.add(source_id);existing=owner.sources.get(source_id)
-        if existing is not None and existing.row == row:continue
+        if existing is not None and existing.row == row:
+            existing.transport_unavailable = False
+            continue
         if existing is not None:owner.catalog.revoke(source_id)
         elif len(owner.sources)>=4096:raise CapabilityUnavailable('Remote MCP source registration limit reached')
         source=RemoteMcpSource(owner.transport,context,row)
@@ -148,6 +163,9 @@ async def synchronize(owner,context):
                                remote_instance=(row["host_id"], row["generation"]))
         owner.sources[source_id]=source
     retained=owner.owners.get(key,set())
+    if not topology.available:
+        for source_id in retained:
+            owner.sources[source_id].transport_unavailable = True
     if not topology.complete:wanted|=retained
     for source_id in retained-wanted:
         owner.catalog.revoke(source_id);owner.sources.pop(source_id,None)

@@ -19,8 +19,13 @@ snapshot can be used with `registry.discovery_scope(context, topology)` to avoid
 repeating the full topology read for each source. Calls and resource reads
 always revalidate the exact host, generation, server, catalog and principal /
 session / audience before execution and before returning results. An incomplete
-catalog retains previously known sources, but cannot prove they remain usable.
-An unavailable topology publishes no source. Tool metadata and declared resource
+catalog retains previously known sources without making them executable. A
+transport that returns `None` or raises an `OSError` can recover the same
+references after the exact authorized topology returns. During the outage,
+discovery exposes no executable tools or resource URIs. The host may authorize
+`tool.discover_source_status` for the exact source and its current audience.
+A transport `PermissionError` or authoritative removal revokes the binding.
+An interrupted call is never sent a second time. Tool metadata and declared resource
 URIs never authorize access or select a different source. Sources are bounded to
 4096 registrations; hosts should bound the lifetime of their catalog instances.
 

@@ -10,8 +10,13 @@ class Transport:
     def __init__(self):
         self.rows=[{'host_id':'host-a','generation':1,'server':'files','version':'1','catalog_digest':'a'*64,
             'resource_protocol':'mcp-app-resources/1','tools':[{'name':'read','input_schema':{},'_meta':{'ui':{'resourceUri':'ui://view'}}}]}]
-        self.calls=[];self.truncated=False;self.after=None
-    async def catalog(self,context,selectors):return {'servers':self.rows,'truncated':self.truncated}
+        self.calls=[];self.truncated=False;self.after=None;self.offline=False;self.error=None
+    async def catalog(self,context,selectors):
+        if self.error:
+            raise self.error
+        if self.offline:
+            return None
+        return {'servers':self.rows,'truncated':self.truncated}
     async def call(self,context,scope,name,args):
         self.calls.append((scope,name,args))
         if self.after:self.after()
@@ -41,3 +46,48 @@ class RemoteFederation(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(CapabilityUnavailable):await self.catalog.call_tool(self.tool.tool_ref,{},self.context)
         self.transport.truncated=True;await self.registry.synchronize(self.context);self.assertEqual(1,len(self.registry.sources))
         self.transport.truncated=False;await self.registry.synchronize(self.context);self.assertFalse(self.registry.sources)
+
+    async def test_unavailable_topology_retains_binding_and_recovers_the_same_reference(self):
+        self.transport.offline=True
+        topology=await self.registry.synchronize(self.context)
+        self.assertFalse(topology.available)
+        self.assertFalse(topology.complete)
+        self.assertEqual(set(self.registry.sources), {self.tool.source_id})
+        with self.registry.discovery_scope(self.context,topology):
+            self.assertEqual(await self.catalog.discover(self.context), ())
+            status=await self.catalog.temporarily_unavailable_sources(self.context)
+            self.assertEqual([source for source,_ in status], [self.tool.source_id])
+            self.assertEqual(await self.catalog.temporarily_unavailable_sources(
+                replace(self.context, session_id='other')), ())
+        with self.assertRaises(CapabilityUnavailable):
+            await self.catalog.call_tool(self.tool.tool_ref,{},self.context)
+        self.assertEqual(self.transport.calls, [])
+        self.transport.offline=False
+        await self.registry.synchronize(self.context)
+        tools=await self.catalog.discover(self.context)
+        self.assertEqual([tool.tool_ref for tool in tools], [self.tool.tool_ref])
+        self.assertEqual(await self.catalog.temporarily_unavailable_sources(self.context), ())
+        await self.catalog.call_tool(self.tool.tool_ref,{},self.context)
+        self.assertEqual(len(self.transport.calls), 1)
+
+    async def test_transport_failure_retains_while_current_denial_revokes(self):
+        self.transport.error=ConnectionError('fixture link unavailable')
+        self.assertFalse((await self.registry.synchronize(self.context)).available)
+        self.assertTrue(self.registry.sources)
+        self.transport.error=PermissionError('fixture host denied this audience')
+        await self.registry.synchronize(self.context)
+        self.assertFalse(self.registry.sources)
+        self.assertEqual(await self.catalog.temporarily_unavailable_sources(self.context), ())
+        with self.assertRaises(CapabilityUnavailable):
+            await self.catalog.call_tool(self.tool.tool_ref,{},self.context)
+        self.assertEqual(self.transport.calls, [])
+
+    async def test_link_loss_after_dispatch_does_not_repeat_the_tool(self):
+        self.transport.after=lambda:setattr(self.transport,'offline',True)
+        with self.assertRaises(CapabilityUnavailable):
+            await self.catalog.call_tool(self.tool.tool_ref,{},self.context)
+        self.transport.after=None
+        self.transport.offline=False
+        await self.registry.synchronize(self.context)
+        self.assertEqual([tool.tool_ref for tool in await self.catalog.discover(self.context)], [self.tool.tool_ref])
+        self.assertEqual(len(self.transport.calls), 1)
