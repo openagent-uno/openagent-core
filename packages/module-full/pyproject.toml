@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "openagent-modules-full"
-version = "1.1.0b10"
+version = "1.1.0b11"
 description = "Dependency-only full OpenAgent module profile"
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
   "openagent-module-sessions==1.1.0b5",
   "openagent-module-search==1.1.0b3",
-  "openagent-module-vault==1.1.0b5",
+  "openagent-module-vault==1.1.0b6",
   "openagent-module-mcp==1.1.0b2",
   "openagent-module-workflows==1.1.0b2",
   "openagent-module-scheduler==1.1.0b2",
