@@ -60,7 +60,7 @@ def workbook(*, cells=None, second_sheet=False, extra=None, rel=None, strings=No
 
 
 @pytest.mark.parametrize("mime", [XLSX_MIME, "application/octet-stream"])
-@pytest.mark.parametrize("model", [entry(), entry("ics_codex", "gpt-5.6-sol"), entry("local", "claude-sonnet-4-6", ("text", "image", "file"))])
+@pytest.mark.parametrize("model", [entry(), entry("host_codex", "gpt-5.6-sol"), entry("local", "claude-sonnet-4-6", ("text", "image", "file"))])
 def test_two_real_xlsx_preserve_originals_and_extract_values(mime, model):
     files = [File(filepath=FIXTURES / name, filename=name, mime_type=mime, id=f"canonical-{index}")
              for index, name in enumerate(("importi-progetti.xlsx", "elenco-clienti.xlsx"))]
@@ -91,7 +91,7 @@ def test_multisheet_shared_strings_formula_cached_only_and_external_link_not_fet
 @pytest.mark.parametrize('suffix,mime', [('.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
                                        ('.zip', 'application/zip'), ('.bin', 'application/octet-stream'),
                                        ('.opaque', 'application/x-custom-vendor')])
-@pytest.mark.parametrize('model', [entry(), entry('ics_codex', 'gpt-5.6-sol'), entry('anthropic', 'claude-sonnet-4-6', ('text', 'file', 'image'))])
+@pytest.mark.parametrize('model', [entry(), entry('host_codex', 'gpt-5.6-sol'), entry('anthropic', 'claude-sonnet-4-6', ('text', 'file', 'image'))])
 def test_unknown_files_reference_only_for_every_model(tmp_path, suffix, mime, model):
     path = tmp_path / ('客户 Δ' + suffix)
     data = b'\x00\xffDO-NOT-INLINE-BINARY-OR-EXECUTE'

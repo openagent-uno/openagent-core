@@ -117,7 +117,7 @@ acknowledgement, unrelated jobs and publication revocation.
 
 
 Core29 public package qualification is recorded in
-[the immutable-source public receipt](evidence/core-b29-public-2026-10-23.json):
+[the public qualification summary](evidence/core-b29-public-summary-2026-10-23.json):
 all 26 anonymous release assets passed full-byte SHA256 verification; a fresh
 normal public-wheel installation passed pip check, installed version/prefix and
 RECORD checks plus 174 tests and 30 subtests, zero skips. This qualifies the

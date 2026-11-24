@@ -16,9 +16,9 @@ crash-loop.
 
 Safety — why a replay is not a double-reply. An event child session id is the
 deterministic ``event:{event_id}:{delivery_id}``, and the only external event
-(``Replio inbound thread``) is session-bound on the thread id. So a replay of
+(``Ticketing inbound thread``) is session-bound on the thread id. So a replay of
 the same delivery ALWAYS resumes the SAME session — the agent re-runs with its
-own prior transcript, and the customer reply goes through Replio's thread-scoped
+own prior transcript, and the customer reply goes through Ticketing's thread-scoped
 reply_guard, which suppresses a second outbound for an inbound already answered.
 These tests pin the local half of that guarantee (session reuse on replay) and
 model the thread-scoped guard end-to-end.
@@ -32,17 +32,17 @@ import uuid
 from ._framework import TestContext, test
 
 
-class _ReplioSpyAgent:
-    """A stand-in agent that models Replio's thread-scoped reply_guard.
+class _TicketingSpyAgent:
+    """A stand-in agent that models Ticketing's thread-scoped reply_guard.
 
     ``run`` is what ``run_child_session`` calls for an agent without
     ``run_stream``. It "sends a reply" for an inbound at most once per session:
     the second time the identical prompt arrives on the same session (a replay
     of the same inbound), the reply_guard suppresses it — exactly the
-    outbound-newer-than-this-inbound rule enforced server-side in Replio.
+    outbound-newer-than-this-inbound rule enforced server-side in Ticketing.
     """
 
-    name = "replio-spy"
+    name = "ticketing-spy"
     model = None
 
     def __init__(self) -> None:
@@ -115,7 +115,7 @@ async def t_orphan_reenqueued_and_redispatched(ctx: TestContext) -> None:
     path = _fresh_db_path(ctx)
     db = await _make_db(path)
     try:
-        agent = _ReplioSpyAgent()
+        agent = _TicketingSpyAgent()
         eid = await _add_bound_event(db, slug="reap-basic")
         ev = await db.get_event(eid)
 
@@ -163,7 +163,7 @@ async def t_replay_no_double_reply(ctx: TestContext) -> None:
     path = _fresh_db_path(ctx)
     db = await _make_db(path)
     try:
-        agent = _ReplioSpyAgent()
+        agent = _TicketingSpyAgent()
         eid = await _add_bound_event(db, slug="reap-idem")
         ev = await db.get_event(eid)
 
@@ -182,7 +182,7 @@ async def t_replay_no_double_reply(ctx: TestContext) -> None:
         assert did1 in [c["id"] for c in claimed]
         sid_replay = await _dispatch(db, ev, agent, did1, payload1)
 
-        # SAFETY invariant: the replay resumed the SAME session (so Replio's
+        # SAFETY invariant: the replay resumed the SAME session (so Ticketing's
         # thread-scoped reply_guard applies), and NO second customer reply was
         # produced.
         assert sid_replay == sid_first, \
@@ -216,7 +216,7 @@ async def t_new_delivery_processes_once(ctx: TestContext) -> None:
     path = _fresh_db_path(ctx)
     db = await _make_db(path)
     try:
-        agent = _ReplioSpyAgent()
+        agent = _TicketingSpyAgent()
         eid = await _add_bound_event(db, slug="reap-fresh")
         ev = await db.get_event(eid)
 

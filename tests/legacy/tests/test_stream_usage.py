@@ -3,7 +3,7 @@
 ``ModelDispatcher.generate`` has always written a ``usage_log`` row. ``stream``
 wrote nothing — and every surface that matters streams: chat, the channel
 bridges, scheduled tasks, and inbound webhook events. On 2026-07-13/14 the
-Replio webhook lane burned ~412M input tokens across two agents and the ledger
+Ticketing webhook lane burned ~412M input tokens across two agents and the ledger
 held **zero** rows for it. The burn wasn't merely missed; it was invisible by
 construction, and it ended only when the provider ran out of credit.
 
@@ -145,7 +145,7 @@ async def t_pinned_run_is_billed(ctx: TestContext) -> None:
     An Events delivery, a scheduled task with a `model`, a workflow ai-prompt
     override — all pin a model, and a pinned run is handed the provider straight
     from `build_override_model`: it never calls ModelDispatcher.stream at all.
-    With accounting living on the dispatcher, the ENTIRE Replio webhook lane was
+    With accounting living on the dispatcher, the ENTIRE Ticketing webhook lane was
     unbilled — usage_log held zero rows while it burned 412M input tokens.
     Accounting lives on the provider now, so this path bills like any other.
     """
@@ -173,7 +173,7 @@ async def t_pinned_run_is_billed(ctx: TestContext) -> None:
 
         rows = await _usage_rows(db, sid)
         assert len(rows) == 1, (
-            "a model-pinned run must be billed — this is the hole the Replio "
+            "a model-pinned run must be billed — this is the hole the Ticketing "
             f"webhook lane fell through; got {rows}"
         )
         assert rows[0]["input_tokens"] == 12_000

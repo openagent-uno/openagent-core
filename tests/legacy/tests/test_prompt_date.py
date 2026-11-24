@@ -136,10 +136,10 @@ async def t_lean_local_detection(ctx: TestContext) -> None:
             return {"name": name, "base_url": self.url}
 
     event = {"model": "windows-local:qwen-local"}
-    assert await should_use_lean_local_event(event, FakeDb("http://192.168.22.145:8099/v1"))
+    assert await should_use_lean_local_event(event, FakeDb("http://10.254.0.10:8099/v1"))
     assert await should_use_lean_local_scheduled_task(
         {"model": "windows-local:qwen-local"},
-        FakeDb("http://192.168.22.145:8099/v1"),
+        FakeDb("http://10.254.0.10:8099/v1"),
     )
     assert not await should_use_lean_local_event(event, FakeDb("https://api.example.com/v1"))
     assert not await should_use_lean_local_scheduled_task(

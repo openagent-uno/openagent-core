@@ -112,7 +112,7 @@ async def t_tool_search_filters_read_only_argument_drift(_ctx: TestContext) -> N
         reads.append({"path": path})
         return {"path": path}
 
-    async def billingbear_cancel_subscription(
+    async def ledger_cancel_subscription(
         subscription_id: str, confirmation: str,
     ) -> dict[str, str]:
         mutations.append({
@@ -125,7 +125,7 @@ async def t_tool_search_filters_read_only_argument_drift(_ctx: TestContext) -> N
         functions={},
         async_functions={
             "vault_read_note": vault_read_note,
-            "billingbear_cancel_subscription": billingbear_cancel_subscription,
+            "ledger_cancel_subscription": ledger_cancel_subscription,
         },
     )
 
@@ -152,7 +152,7 @@ async def t_tool_search_filters_read_only_argument_drift(_ctx: TestContext) -> N
     try:
         await call(
             server="test",
-            tool="billingbear_cancel_subscription",
+            tool="ledger_cancel_subscription",
             args={
                 "subscription_id": "sub-test",
                 "confirmation": "CONFIRM",
@@ -335,7 +335,7 @@ async def t_agno_generate_run_status_error(_ctx: TestContext) -> None:
     of re-raising. Without an explicit status check the provider treats
     that error string as the model's output and the Telegram bridge
     shows the user a raw Python exception (e.g. ``[Errno 2] No such file
-    or directory``) — caught in production on mixout with the
+    or directory``) — caught in production on remote-host with the
     misconfigured ``deepseek:deepseek-v4-pro`` model. ``generate()``
     must inspect ``response.status`` and raise ``NativeProviderError`` so
     the bridge formats a clean ``⚠️`` message instead.

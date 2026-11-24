@@ -3,7 +3,7 @@
 Bug history
 -----------
 
-**2026-04-16**: mixout-agent came back from an OVH RAM upgrade with
+**2026-04-16**: remote-host-agent came back from an OVH RAM upgrade with
 telegram completely unresponsive. Root cause chain:
 
   - A Hostinger disk-resize on the VPS wiped ``~/.local/share/uv/`` (the
@@ -269,7 +269,7 @@ async def t_exception_isolated(ctx: TestContext) -> None:
     "BaseException (CancelledError) in one MCP doesn't stop the others",
 )
 async def t_baseexception_isolated(ctx: TestContext) -> None:
-    """The mixout-post-upgrade regression.
+    """The remote-host-post-upgrade regression.
 
     The dead ``workspace-mcp`` symlink caused an anyio cancel scope to
     raise ``BaseExceptionGroup`` out of MCPTools.__aenter__. A plain
@@ -348,7 +348,7 @@ async def t_handshake_hang_times_out(ctx: TestContext) -> None:
     "Stealth-failed runtime init recovers via post-enter initialize() retry",
 )
 async def t_stealth_fail_recovers(ctx: TestContext) -> None:
-    """The mixout-2026-05 regression. the runtime's ``MCPTools.initialize()`` wraps
+    """The remote-host-2026-05 regression. the runtime's ``MCPTools.initialize()`` wraps
     its real init in ``except (RuntimeError, BaseException): log_error(...)``.
     When the wrapped init raises a ``BaseExceptionGroup`` from anyio's
     TaskGroup (typical under host load), the runtime swallows it, leaves
@@ -598,7 +598,7 @@ async def t_stagger_only_subprocess(ctx: TestContext) -> None:
 async def t_all_fail_no_raise(ctx: TestContext) -> None:
     """An agent with no working MCPs is degraded but must still boot —
     otherwise the whole process hangs on startup and systemd can't tell
-    anything is wrong. This was the mixout failure mode."""
+    anything is wrong. This was the remote-host failure mode."""
     a = _FakeToolkit("a", enter_exc=RuntimeError("nope"))
     b = _FakeToolkit("b", enter_exc=asyncio.CancelledError())
 

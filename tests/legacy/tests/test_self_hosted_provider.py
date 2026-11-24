@@ -87,7 +87,7 @@ async def test_qwen_lean_event_disables_thinking(ctx: TestContext) -> None:
 
     entries = [{
         "name": "windows-local", "framework": "api-based", "kind": "llm",
-        "enabled": True, "base_url": "http://192.168.22.145:8099/v1",
+        "enabled": True, "base_url": "http://10.254.0.10:8099/v1",
     }]
     provider = NativeProvider(
         model="windows-local:qwen35-local", providers_config=entries,

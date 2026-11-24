@@ -514,7 +514,7 @@ async def t_apply_update_rollback_bare(ctx: TestContext) -> None:
 @test("updater", "_swap_lock serialises concurrent apply_update on the same binary")
 async def t_swap_lock_blocks(ctx: TestContext) -> None:
     """Three OpenAgent services on one VPS share the same binary
-    (example-node-box: openagent + secondary-agent + friday). Without a lock the
+    (example-node-box: openagent + secondary-agent + fixture-agent). Without a lock the
     second to call apply_update would hit ``rename(current → .old)``
     on a path the first already moved away."""
     import asyncio

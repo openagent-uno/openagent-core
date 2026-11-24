@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from unittest.mock import patch
 
 from ._framework import TestContext, test
 
@@ -152,7 +153,7 @@ async def t_guard_backed_promise(ctx: TestContext) -> None:
 
     _guard_on(True)
     model = _FakeModel()
-    with _Trace(enabled=True, rows=[("mark_as_human", "queued"), ("replio_thread_brief", "…")]):
+    with _Trace(enabled=True, rows=[("mark_as_human", "queued"), ("ticketing_thread_brief", "…")]):
         reply = "Thanks — a team member will follow up with you shortly."
         out = await reply_guard.guard_reply(_FakeAgent(model), "sid", "billing", reply)
     assert out == reply, "a promise backed by a real handoff this turn is fine"
@@ -355,7 +356,7 @@ async def t_local_live_action_requires_receipt(ctx: TestContext) -> None:
 
     model = _FakeModel(revised="I found the duplicate charge, but no refund was completed.")
     with lean_local_event_scope(True), _Trace(enabled=True, rows=[
-        ("billingbear_detect_duplicate_subscriptions", '{"duplicatesFound":true}'),
+        ("ledger_detect_duplicate_subscriptions", '{"duplicatesFound":true}'),
     ]):
         out = await reply_guard.guard_reply(
             _FakeAgent(model), "sid", "I was charged twice",
@@ -373,7 +374,7 @@ async def t_local_live_action_with_receipt(ctx: TestContext) -> None:
     draft = "I've refunded the duplicate charge."
     model = _FakeModel()
     with lean_local_event_scope(True), _Trace(enabled=True, rows=[
-        ("billingbear_refund_duplicate_subscriptions", '{"success":true,"refunded":1}'),
+        ("ledger_refund_duplicate_subscriptions", '{"success":true,"refunded":1}'),
     ]):
         out = await reply_guard.guard_reply(
             _FakeAgent(model), "sid", "I was charged twice", draft,
@@ -382,7 +383,7 @@ async def t_local_live_action_with_receipt(ctx: TestContext) -> None:
     assert model.calls == []
 
 
-@test("reply_guard", "lean live account state requires a same-turn BillingBear read")
+@test("reply_guard", "lean live account state requires a same-turn authorized account read")
 async def t_local_live_account_state_grounding(ctx: TestContext) -> None:
     from openagent_core.core import reply_guard
     from openagent_core.core.execution_profile import lean_local_event_scope
@@ -396,8 +397,10 @@ async def t_local_live_account_state_grounding(ctx: TestContext) -> None:
     assert "account email" in out
 
     model = _FakeModel()
-    with lean_local_event_scope(True), _Trace(enabled=True, rows=[
-        ("billingbear_get_v1_customers_by_appUserId", '{"isPremium":true}'),
+    with patch.dict(os.environ, {
+        "OPENAGENT_REPLY_GUARD_ACCOUNT_STATE_TOOLS": "ledger_get_v1_customers_by_appUserId",
+    }), lean_local_event_scope(True), _Trace(enabled=True, rows=[
+        ("ledger_get_v1_customers_by_appUserId", '{"isPremium":true}'),
     ]):
         grounded = await reply_guard.guard_reply(
             _FakeAgent(model), "sid", "I see ads", draft,
@@ -413,7 +416,7 @@ async def t_failed_handoff_is_not_backing(ctx: TestContext) -> None:
 
     model = _FakeModel(revised="Please send the account email and order ID.")
     with lean_local_event_scope(True), _Trace(enabled=True, rows=[
-        ("replio_threads_mark_for_human", "Error from MCP tool: HTTP 500 failed"),
+        ("ticketing_threads_mark_for_human", "Error from MCP tool: HTTP 500 failed"),
     ]):
         out = await reply_guard.guard_reply(
             _FakeAgent(model), "sid", "Help", "A teammate will follow up.",
@@ -607,7 +610,7 @@ async def t_quoted_user_authorization_error(ctx: TestContext) -> None:
     from openagent_core.core import reply_guard
 
     _guard_on(False)
-    user = "Friday mi ha mostrato Not authorized for memory.manage"
+    user = "Fixture agent mi ha mostrato Not authorized for memory.manage"
     draft = (
         "L'errore che hai segnalato, Not authorized for memory.manage, "
         "va verificato con una chiamata reale."
@@ -630,8 +633,8 @@ async def t_local_trace_nested_tool_args(ctx: TestContext) -> None:
             tool_trace.record_execution({
                 "tool_name": "tool_search_call_tool",
                 "tool_args": {
-                    "server": "billingbear",
-                    "tool": "billingbear_get_v1_customers_by_appUserId",
+                    "server": "ledger",
+                    "tool": "ledger_get_v1_customers_by_appUserId",
                     "args": {"appUserId": "abc123", "email": "person@example.com"},
                     "api_key": "must-not-leak",
                 },
@@ -645,7 +648,7 @@ async def t_local_trace_nested_tool_args(ctx: TestContext) -> None:
 
     assert len(rows) == 1
     _name, excerpt = rows[0]
-    assert "billingbear_get_v1_customers_by_appUserId" in excerpt
+    assert "ledger_get_v1_customers_by_appUserId" in excerpt
     assert "abc123" in excerpt
     assert "person@example.com" not in excerpt
     assert "must-not-leak" not in excerpt

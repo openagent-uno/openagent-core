@@ -1,8 +1,8 @@
 """An inbound webhook must not be refused because something else was reading.
 
-The failure (beta-agent, 2-set-2026): every inbound conversation from Replio
+The failure (beta-agent, 2-set-2026): every inbound conversation from Ticketing
 came back HTTP 500 with ``sqlite3.OperationalError: database is locked``, for
-hours, while three task runs sat holding the database. Before Replio had a
+hours, while three task runs sat holding the database. Before Ticketing had a
 durable delivery queue those events were simply gone — the customer wrote and
 the agent never woke up.
 
@@ -270,7 +270,7 @@ async def t_isolated_write_is_bounded(ctx: TestContext) -> None:
     A sibling holding an uncommitted transaction on the SHARED connection now
     BLOCKS them instead of being joined by them — and the global
     ``busy_timeout`` on the agents is three minutes. On a write that sits on
-    an HTTP request that is not a fix, it is a different outage: Replio drops
+    an HTTP request that is not a fix, it is a different outage: Ticketing drops
     a delivery it has waited ten seconds for, which showed up on the receiver
     as ``ConnectionResetError`` while reading the body.
 

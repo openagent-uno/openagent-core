@@ -2,7 +2,7 @@
 
 The gateway's token bypass (``make_auth_middleware``) historically accepted a
 single shared secret, ``OPENAGENT_HTTP_TOKEN``, as a FULL-ACCESS pass for every
-``/api/*`` route. Replio was handed that token so its reply-guard could call
+``/api/*`` route. Ticketing was handed that token so its reply-guard could call
 ``/api/llm/chat/completions`` — but the same token also opens vault, config,
 scheduled-tasks, terminal-backed chat, etc. Least-privilege: a caller that only
 needs the LLM gateway should not be able to reach anything else.

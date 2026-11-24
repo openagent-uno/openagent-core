@@ -334,7 +334,7 @@ async def t_bridge_happy_path(ctx: TestContext) -> None:
 
 @test("bridge_session", "two BridgeSessions in the same agent_dir get distinct keys, certs, ws_urls")
 async def t_bridge_distinct_per_bridge(ctx: TestContext) -> None:
-    """Regression test for v0.12.49 friday outage.
+    """Regression test for v0.12.49 fixture-agent outage.
 
     Pre-fix: telegram + whatsapp on one agent shared a single
     BridgeSession → single device_pubkey → single client_id on the

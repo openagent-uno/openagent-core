@@ -311,7 +311,7 @@ _TEST_MODULES: tuple[str, ...] = (
     # ``MAX(updated_at)`` goes DOWN on a delete, so the hot-reload probe
     # cannot compare with ``>``.
     "test_registry_reload",
-    # Regression: MemoryDB._parse_metadata must always return a dict (mixout
+    # Regression: MemoryDB._parse_metadata must always return a dict (remote-host
     # crash 2026-05-12, sessions row with literal 'null' metadata).
     "test_db_metadata_parse",
     # Live wire / rehydrated transcript parity: the same runtime
@@ -515,7 +515,7 @@ _TEST_MODULES: tuple[str, ...] = (
     # At-least-once event delivery: an orphaned (claimed-but-incomplete)
     # webhook delivery is re-enqueued and re-dispatched instead of dropped as
     # ``failed``, bounded by a replay budget, and a replay resumes the SAME
-    # bound session so Replio's reply_guard blocks a double customer reply.
+    # bound session so Ticketing's reply_guard blocks a double customer reply.
     "test_event_delivery_reenqueue",
     # Pre-delivery precondition: an event can declare a cheap check that
     # settles "is there still work here?" with one HTTP call, so a delivery
@@ -641,7 +641,7 @@ _TEST_MODULES: tuple[str, ...] = (
     "test_shell_hooks",
     "test_tool_labels",
     # Leader system message must not re-ship every member tool name each
-    # turn (BillingBear alone registers ~280). Pure-unit — imports
+    # turn (Ledger alone registers ~280). Pure-unit — imports
     # ``_runner.team._messages`` directly, no pool/gateway.
     "test_member_tools_cap",
     "test_bridges",
@@ -759,7 +759,7 @@ _TEST_MODULES: tuple[str, ...] = (
     # external counter so it never mutates CancelScope objects used by HTTPX.
     "test_anyio_cancel_guard",
     # MCPPool spec.headers forwarding — regression guard for the
-    # auth-gated remote MCP (mixout) 401 → ClosedResourceError chain.
+    # auth-gated remote MCP (remote-host) 401 → ClosedResourceError chain.
     "test_mcp_pool_headers",
     # 11. /api/files endpoint — agent-side attachment delivery to remote clients
     "test_files_endpoint",

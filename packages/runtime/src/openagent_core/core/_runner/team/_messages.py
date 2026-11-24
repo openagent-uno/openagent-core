@@ -58,7 +58,7 @@ def _member_tools_cap() -> int:
     """Cap on how many of a member's tool names are inlined into the team
     leader's system message.
 
-    A single MCP (e.g. BillingBear) can register ~280 tools; listing every
+    A single MCP server can register hundreds of tools; listing every
     name re-ships ~14k chars into every turn of every team run — and the
     leader routes by member role/description, not by copying an exact tool
     key, while the member keeps ALL its tools at runtime regardless. So a

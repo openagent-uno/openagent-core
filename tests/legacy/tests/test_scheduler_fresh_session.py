@@ -172,7 +172,7 @@ async def t_local_task_execution_profile(ctx: TestContext) -> None:
         await db.upsert_provider(
             name="windows-local",
             framework="api-based",
-            base_url="http://192.168.22.145:8099/v1",
+            base_url="http://10.254.0.10:8099/v1",
         )
         task_id = await db.add_task(
             "gemello-dryrun-test", "* * * * *", "DRY RUN - read only",

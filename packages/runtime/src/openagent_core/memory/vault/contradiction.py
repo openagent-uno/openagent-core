@@ -97,7 +97,7 @@ everything. Known and accepted residual FP modes:
   run: ``memory_search``, retired in one note and named in another's old-to-new
   mapping table.
 * A note can retire a subject and then self-correct on the SAME line ("canale
-  primario ... -- NON primario; BillingBear MCP prevale"). The line reads as
+  primario ... -- NON primario; la fonte autorevole prevale"). The line reads as
   affirmative, so it pairs against the note it actually agrees with. Also a
   real FP in the measured run (``example-product-a-admin.py``).
 * An instruction can be scope-limited ("do not use ``send_message`` *in dream

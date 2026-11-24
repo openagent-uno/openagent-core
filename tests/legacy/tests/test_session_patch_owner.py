@@ -137,13 +137,13 @@ async def t_agent_owner_is_typed(ctx: TestContext) -> None:
         db,
         {"title": "ciao"},
         values={
-            "user_handle": "friday",
+            "user_handle": "fixture-agent",
             "client_id": "agent-device",
             "capabilities": ["agent"],
         },
     )
     assert status == 200
-    assert db.calls[0]["client_id"] == "agent:friday", db.calls
+    assert db.calls[0]["client_id"] == "agent:fixture-agent", db.calls
 
 
 @test("session_patch_owner", "no certificate fails closed")

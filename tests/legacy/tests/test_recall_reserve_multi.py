@@ -5,7 +5,7 @@ quasi-duplicato che per volume la seppellirebbe. Con UN solo posto pero' due
 sottoalberi autorevoli se lo contendono, e a ogni turno uno dei due sparisce
 senza che nessuno lo dica.
 
-Il caso misurato il 26-ago-2026 su beta. Le 54 regole permanenti di Replio,
+Il caso misurato il 26-ago-2026 su beta. Le 54 regole permanenti di Ticketing,
 rispecchiate nel vault per renderle trovabili:
 
     similarita' con domande di clienti veri : 0,36 - 0,50

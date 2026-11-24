@@ -38,6 +38,17 @@ Python examples require **Python 3.11+**. Exact dependency versions come from th
 reviewed wheel manifest and each distribution's `pyproject.toml`, not a moving
 README version. A source candidate is not automatically a published release.
 
+## Account-state evidence for lean event replies
+
+Set `OPENAGENT_REPLY_GUARD_ACCOUNT_STATE_TOOLS` in `RuntimeSettings.environment`
+to a comma-separated list of exact tool names as recorded in the trusted tool
+trace. Choose dedicated readers whose results attest the scoped account's
+current state. The guard accepts a claim only when a same-turn successful result
+from one of those tools supports it. Tool arguments, other tools and ambient
+configuration outside that runtime cannot supply this evidence. With the list
+empty, the guard replaces unsupported claims with a request to verify the
+account details.
+
 ## Minimal in-process kernel
 
 Install the exact compatible `openagent-core` and `openagent-storage-sqlite`

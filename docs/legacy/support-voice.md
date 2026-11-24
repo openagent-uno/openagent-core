@@ -26,12 +26,10 @@ guard retries, within the production event's 240-second limit. Tool access remai
 concurrency gate. Public replies respect actual channel limits; private replies
 have space for a complete explanation.
 
-Advertising explanations include the purpose of server funding and the relevant
-free options. An optional video started in Settings grants 30 ad-free minutes;
-a second adds up to an hour, capped at a two-hour accumulated window. Automatic
-ads do not grant the reward, and ad-free time is distinct from Premium. Referral
-and eligible Creator rewards are separate routes. Advertising guidance does not
-replace diagnosis of an overlapping-audio or playback fault.
+Commercial and entitlement terms come from the host's authorized rules and
+current evidence. The writer keeps plan benefits, optional rewards and account
+state distinct. It handles a reported defect using the evidence for that case.
+Lean local events use the host's [account-state evidence setting](../USAGE.md#account-state-evidence-for-lean-event-replies).
 
 Operational unit doubles run with the voice feature disabled to preserve their
 isolated planning contracts. The `support_voice` tests explicitly enable it and
@@ -53,8 +51,8 @@ Guidance uses the same writer/reviewer directly rather than spending a separate
 pair of model calls before writing it. Its product references remain available
 when an attempted documented bug resolution was not sufficient.
 
-A reclaimed human handoff requires a linked task. On that explicit rejection the
-controller calls Replio's idempotent `thread_ensure_support_task`, verifies the
+A reclaimed human handoff requires a linked task. On that explicit rejection
+the controller calls the host's idempotent task operation, verifies the
 persisted thread link, and retries the handoff once. Existing review holds remain
 in place; they can gain ownership without sending another bot message. Unknown
 creation outcomes are not retried blindly. A task is not proof a person has read
@@ -64,6 +62,5 @@ Event history retains valid compact JSON with the delivery result, hold category
 writer failures and ownership outcome even when raw tool receipts exceed the
 history budget. Technical event success remains distinct from sent/blocked/held.
 
-Run `scripts/support_live_regression.py` with model and docs command files for the
-sanitized September 7 multi-turn corpus. Business operations are simulated;
-qualify the produced replies separately through the real Replio guards.
+The historical multi-turn replay uses simulated business operations.
+An embedding host separately qualifies its own reply and delivery guards.

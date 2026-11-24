@@ -1,6 +1,6 @@
 """A closed MCP stream must be replaced, and a failed call must say it failed.
 
-Incident 2026-10-28 (lyra-agent -> Replio, streamable HTTP): one POST timed
+Incident 2026-10-28 (agent to ticketing host, streamable HTTP): one POST timed
 out, the transport's streams closed, and every later call raised
 ``anyio.ClosedResourceError`` from ``send_nowait`` until the process was
 restarted two hours later. ``call_tool`` logged the failed ping and sent into
@@ -89,7 +89,7 @@ class _ReconnectingToolkit:
             self.uninitialized_reentries -= 1
             return self
         self._initialized = True
-        self.functions = {"replio_thread_brief": object(), "replio_threads_respond": object()}
+        self.functions = {"ticketing_thread_brief": object(), "ticketing_threads_respond": object()}
         return self
 
     async def __aexit__(self, *exc):
@@ -126,9 +126,9 @@ def _tool(name: str = "threads_patch"):
 
 class PoolReconnectTests(unittest.IsolatedAsyncioTestCase):
     async def _entered(self, **kwargs):
-        pool = MCPPool([_ServerSpec(name="replio", url="http://replio.invalid/mcp")])
+        pool = MCPPool([_ServerSpec(name="ticketing", url="http://ticketing.invalid/mcp")])
         toolkit = _ReconnectingToolkit(**kwargs)
-        self.assertIs(await pool._safe_enter(toolkit, _ServerSpec(name="replio")), toolkit)
+        self.assertIs(await pool._safe_enter(toolkit, _ServerSpec(name="ticketing")), toolkit)
         pool._connected = True  # what connect_all records; close_all needs it
         self.addAsyncCleanup(pool.close_all)
         return pool, toolkit
@@ -267,7 +267,7 @@ class PoolReconnectTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)
             # Still wedged: the next request replaces the toolkit.
             self.assertFalse(await pool.reconnect_toolkit(toolkit, None))
-            self.assertIs(pool._toolkit_by_name["replio"], fresh)
+            self.assertIs(pool._toolkit_by_name["ticketing"], fresh)
             self.assertEqual(fresh.session.label, "session-1")
             self.assertEqual([s.toolkit for s in pool._toolkit_supervisors], [fresh])
             # The old toolkit is retired: it never reconnects again.
@@ -303,7 +303,7 @@ class PoolReconnectTests(unittest.IsolatedAsyncioTestCase):
             await pool.close_all()
             gate.set()
             self.assertFalse(await replacing)
-            self.assertNotIn("replio", pool._toolkit_by_name)
+            self.assertNotIn("ticketing", pool._toolkit_by_name)
             self.assertEqual(pool._toolkit_supervisors, [])
             self.assertIsNone(fresh.session)  # our build was shut down again
         finally:
@@ -339,7 +339,7 @@ class PoolReconnectTests(unittest.IsolatedAsyncioTestCase):
             gate.set()
             await old_sup.control["replacement"]
             self.assertEqual(builds, 1)
-            self.assertIs(pool._toolkit_by_name["replio"], fresh)
+            self.assertIs(pool._toolkit_by_name["ticketing"], fresh)
             self.assertEqual(fresh.session.label, "session-1")
         finally:
             release.set()
@@ -369,7 +369,7 @@ class PoolReconnectTests(unittest.IsolatedAsyncioTestCase):
             for _ in range(5):
                 await asyncio.sleep(0)
             self.assertEqual(builds, 0)
-            self.assertNotIn("replio", pool._toolkit_by_name)
+            self.assertNotIn("ticketing", pool._toolkit_by_name)
         finally:
             release.set()
             pool_module._MCP_CLOSE_TIMEOUT, pool_module._MCP_RECONNECT_WAIT = saved
@@ -400,9 +400,9 @@ class PoolReconnectTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(await pool.reconnect_toolkit(toolkit, None))
             await old_sup.control["replacement"]
             self.assertEqual(recoveries, [fresh])
-            self.assertIs(pool._toolkit_by_name["replio"], fresh)
-            self.assertEqual(pool._tool_counts["replio"], 0)
-            self.assertIn("replio", pool._last_connect_error)
+            self.assertIs(pool._toolkit_by_name["ticketing"], fresh)
+            self.assertEqual(pool._tool_counts["ticketing"], 0)
+            self.assertIn("ticketing", pool._last_connect_error)
         finally:
             release.set()
             pool_module._MCP_CLOSE_TIMEOUT, pool_module._MCP_RECONNECT_WAIT = saved
@@ -416,7 +416,7 @@ class EntrypointTests(unittest.IsolatedAsyncioTestCase):
     async def test_dead_ping_reconnects_and_calls_once_on_the_new_session(self):
         pool = MCPPool([])
         toolkit = _ReconnectingToolkit()
-        await pool._safe_enter(toolkit, _ServerSpec(name="replio"))
+        await pool._safe_enter(toolkit, _ServerSpec(name="ticketing"))
         pool._connected = True
         self.addAsyncCleanup(pool.close_all)
         dead = toolkit.session
@@ -445,7 +445,7 @@ class EntrypointTests(unittest.IsolatedAsyncioTestCase):
     async def test_call_that_dies_mid_flight_is_not_retried_but_next_call_works(self):
         pool = MCPPool([])
         toolkit = _ReconnectingToolkit()
-        await pool._safe_enter(toolkit, _ServerSpec(name="replio"))
+        await pool._safe_enter(toolkit, _ServerSpec(name="ticketing"))
         pool._connected = True
         self.addAsyncCleanup(pool.close_all)
         first = toolkit.session
@@ -468,7 +468,7 @@ class EntrypointTests(unittest.IsolatedAsyncioTestCase):
     async def test_call_after_a_failed_reconnect_tries_again(self):
         pool = MCPPool([])
         toolkit = _ReconnectingToolkit(fail_reentries=1)
-        await pool._safe_enter(toolkit, _ServerSpec(name="replio"))
+        await pool._safe_enter(toolkit, _ServerSpec(name="ticketing"))
         pool._connected = True
         self.addAsyncCleanup(pool.close_all)
         dead = toolkit.session
@@ -486,7 +486,7 @@ class EntrypointTests(unittest.IsolatedAsyncioTestCase):
     async def test_call_arriving_mid_reconnect_waits_for_the_handshake(self):
         pool = MCPPool([])
         toolkit = _ReconnectingToolkit()
-        await pool._safe_enter(toolkit, _ServerSpec(name="replio"))
+        await pool._safe_enter(toolkit, _ServerSpec(name="ticketing"))
         pool._connected = True
         self.addAsyncCleanup(pool.close_all)
         toolkit.reentry_gate = asyncio.Event()

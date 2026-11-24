@@ -26,14 +26,14 @@ async def t_prompt_template_payload_shapes(ctx: TestContext) -> None:
     direct = render_prompt_template(
         "raw={{payload.payload.thread_id}}/{{payload.event}}/{{payload.thread_id}}",
         payload={"thread_id": "T-raw"},
-        event={"name": "Replio inbound thread", "slug": "replio-thread", "type": "generic"},
+        event={"name": "Ticketing inbound thread", "slug": "ticketing-thread", "type": "generic"},
     )
-    assert "T-raw/replio-thread/T-raw" in direct, direct
+    assert "T-raw/ticketing-thread/T-raw" in direct, direct
 
     enveloped = render_prompt_template(
         "envelope={{payload.payload.thread_id}}/{{payload.event}}",
         payload={"event": "thread.follow_up", "payload": {"thread_id": "T-envelope"}},
-        event={"name": "Replio inbound thread", "slug": "replio-thread", "type": "generic"},
+        event={"name": "Ticketing inbound thread", "slug": "ticketing-thread", "type": "generic"},
     )
     assert "T-envelope/thread.follow_up" in enveloped, enveloped
 
@@ -62,7 +62,7 @@ async def t_event_db_roundtrip(ctx: TestContext) -> None:
             execution_policy={
                 "max_tool_calls": 5,
                 "timeout_seconds": 45,
-                "allowed_tool_families": ["replio"],
+                "allowed_tool_families": ["ticketing"],
             },
         )
         # A public read never returns the encrypted secret.
@@ -76,7 +76,7 @@ async def t_event_db_roundtrip(ctx: TestContext) -> None:
         assert pub["execution_policy"] == {
             "max_tool_calls": 5,
             "timeout_seconds": 45.0,
-            "allowed_tool_families": ["replio"],
+            "allowed_tool_families": ["ticketing"],
         }
         # The private read (webhook-auth path) does — and it decrypts back.
         priv = await db.get_event(eid, include_secret=True)
@@ -368,7 +368,7 @@ async def t_dispatch_prompt(ctx: TestContext) -> None:
             execution_policy={
                 "max_tool_calls": 5,
                 "timeout_seconds": 45,
-                "allowed_tool_families": ["replio"],
+                "allowed_tool_families": ["ticketing"],
             },
         )
         ev = await db.get_event(eid)
@@ -382,7 +382,7 @@ async def t_dispatch_prompt(ctx: TestContext) -> None:
         assert any("ale" in p for p in agent.prompts), agent.prompts
         assert any("untrusted" in p.lower() for p in agent.prompts), "missing injection guard"
         assert agent.policies[-1]["max_tool_calls"] == 5
-        assert agent.tool_scopes[-1] == frozenset({"replio"})
+        assert agent.tool_scopes[-1] == frozenset({"ticketing"})
         # The delivery links the produced child session.
         row = await db.get_event_delivery(did)
         assert row["status"] == "success" and row["session_id"], row
@@ -481,7 +481,7 @@ async def t_dispatch_task_context(ctx: TestContext) -> None:
             execution_policy={
                 "max_tool_calls": 10,
                 "timeout_seconds": 90,
-                "allowed_tool_families": ["replio", "billingbear"],
+                "allowed_tool_families": ["ticketing", "ledger"],
             },
         )
         clear, enc, hint = make_secret_material(db_path=str(ctx.db_path))
@@ -491,7 +491,7 @@ async def t_dispatch_task_context(ctx: TestContext) -> None:
             execution_policy={
                 "max_tool_calls": 4,
                 "timeout_seconds": 60,
-                "allowed_tool_families": ["replio", "events-manager"],
+                "allowed_tool_families": ["ticketing", "events-manager"],
             },
         )
         ev = await db.get_event(eid)
@@ -508,9 +508,9 @@ async def t_dispatch_task_context(ctx: TestContext) -> None:
         assert agent.policies[-1] == {
             "max_tool_calls": 4,
             "timeout_seconds": 60.0,
-            "allowed_tool_families": ["replio"],
+            "allowed_tool_families": ["ticketing"],
         }
-        assert agent.tool_scopes[-1] == frozenset({"replio"})
+        assert agent.tool_scopes[-1] == frozenset({"ticketing"})
         row = await db.get_event_delivery(did)
         assert row["task_run_id"], row
     finally:

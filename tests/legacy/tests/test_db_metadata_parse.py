@@ -1,6 +1,6 @@
 """Regression: ``MemoryDB._parse_metadata`` must always return a dict.
 
-Production crash on mixout (3 occurrences) — ``upsert_session`` raised
+Production crash on remote-host (3 occurrences) — ``upsert_session`` raised
 ``TypeError: 'NoneType' object does not support item assignment`` at the
 ``meta["client_id"] = client_id`` assignment. Root cause: the
 ``metadata`` column held the literal JSON ``"null"`` (decodes to

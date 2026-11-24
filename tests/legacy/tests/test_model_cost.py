@@ -36,7 +36,7 @@ So they get explicit guards.
 5. **The framework prompt stays shared across sessions.** The ``<session-id>``
    tag must stay OUTSIDE the cached prefix, or each session writes its own
    ~10.8k entry and shares nothing — which makes caching *more* expensive than
-   no caching for the single-call webhook sessions (Replio) that never read
+   no caching for the single-call webhook sessions (Ticketing) that never read
    their own write back.
 
 All pure-unit: no network, no DB, no live provider calls. The Anthropic
@@ -468,7 +468,7 @@ async def t_session_id_outside_cached_prefix(ctx: TestContext) -> None:
 
 @test("model_cost", "two different sessions share one cached framework prefix")
 async def t_framework_prefix_shared_across_sessions(ctx: TestContext) -> None:
-    """The Replio case: a webhook delivery can create a fresh single-call session.
+    """The Ticketing case: a webhook delivery can create a fresh single-call session.
 
     If the cached prefix were per-session it would pay the 1.25x write and
     never read it back — caching would cost MORE than not caching. Sharing the

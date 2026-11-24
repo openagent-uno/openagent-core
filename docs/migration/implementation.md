@@ -32,7 +32,7 @@ The original embedding-host documentation edits remain untouched.
 | embedding-host | Public wheel consumer, no-overlay image, CP delivery/projection, provider/model/skills/session/event/webhook APIs | Workflow/import activation, files/device/voice/WS parity, full-stack UI |
 | Data | Fenced snapshot/restore API, additive ancestry, exact history migration, operator tenant attestation | Actual coordinated per-agent cutover remains separate from rehearsal |
 | Distribution | Frozen macOS server, Electron build, installed CLI and independent dependency manifests | Final signed assets and full transition update chain |
-| Replio reference | Installed fixed-catalog consumer with external identities | Repeat against final library snapshot |
+| Embedding qualification | Installed fixed-catalog host with external identities | Repeat against final library snapshot |
 
 ## Verified evidence so far
 

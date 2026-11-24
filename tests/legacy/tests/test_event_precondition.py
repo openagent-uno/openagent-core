@@ -25,7 +25,7 @@ _PAYLOAD = {"payload": {"thread_id": "th_abc123"}}
 def _spec(**over) -> dict:
     spec = {
         "type": "http",
-        "url": "http://replio/threads/{payload.payload.thread_id}",
+        "url": "http://ticketing.invalid/threads/{payload.payload.thread_id}",
         "headers": {"Authorization": "Bearer ${TEST_PRECOND_KEY}"},
         "skip_when": {"path": "waiting_for_team", "equals": False},
         "skip_output": "already handled",
@@ -84,7 +84,7 @@ async def t_skip_on_match(_ctx: TestContext) -> None:
     assert skip is True, "an unambiguous match must skip"
     assert reason == "already handled", reason
     url, headers, timeout = fetch.calls[0]
-    assert url == "http://replio/threads/th_abc123", url          # payload interpolated
+    assert url == "http://ticketing.invalid/threads/th_abc123", url          # payload interpolated
     assert headers["Authorization"] == "Bearer k-secret", headers  # env interpolated
     assert 0 < timeout <= 30
 
@@ -120,7 +120,7 @@ async def t_fails_open(_ctx: TestContext) -> None:
         "skip_when missing":    ({"type": "http", "url": "http://x"}, _Fetch(body={})),
         "no equals clause":     (_spec(skip_when={"path": "waiting_for_team"}),
                                  _Fetch(body={"waiting_for_team": False})),
-        "payload ref missing":  (_spec(url="http://replio/{payload.nope.here}"),
+        "payload ref missing":  (_spec(url="http://ticketing.invalid/{payload.nope.here}"),
                                  _Fetch(body={"waiting_for_team": False})),
     }
     try:

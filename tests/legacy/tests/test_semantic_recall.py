@@ -1329,7 +1329,7 @@ async def t_recall_block_skills_leg(ctx: TestContext) -> None:
 
 
 # ─── the recall QUERY: marker-scoped span ─────────────────────────────────────
-# Measured 2026-08-25 on the live replio-thread lane: the orchestration prompt
+# Measured 2026-08-25 on the live ticketing-thread lane: the orchestration prompt
 # around the customer's sentence had grown to 12,159 chars, and embedding all of
 # it put the note that answers the question at #244-#262 instead of #1. At
 # top_k 6 the right note was never injected. These pin the fix and its fallbacks.

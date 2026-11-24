@@ -32,7 +32,7 @@ async def _mkdb(path):
         """
     )
     await conn.execute(
-        "INSERT INTO events (id, name, slug) VALUES ('ev1','Replio inbound','replio-thread')")
+        "INSERT INTO events (id, name, slug) VALUES ('ev1','Ticketing inbound','ticketing-thread')")
     await conn.commit()
     return conn
 
@@ -47,7 +47,7 @@ async def test_bulk_insert(ctx: TestContext) -> None:
     try:
         ids = ["t-%d" % i for i in range(15)]
         res = await S.trigger_events(
-            "replio-thread", [{"payload": {"thread_id": t}} for t in ids])
+            "ticketing-thread", [{"payload": {"thread_id": t}} for t in ids])
         assert res["count"] == 15, res
         assert len(set(res["delivery_ids"])) == 15, "delivery_id duplicati"
 
@@ -73,7 +73,7 @@ async def test_empty_is_noop(ctx: TestContext) -> None:
     orig = S._get_conn
     S._get_conn = lambda: _ret(conn)  # noqa: SLF001
     try:
-        res = await S.trigger_events("replio-thread", [])
+        res = await S.trigger_events("ticketing-thread", [])
         assert res["count"] == 0 and res["delivery_ids"] == [], res
         cur = await conn.execute("SELECT count(*) c FROM event_deliveries")
         assert (await cur.fetchone())["c"] == 0, "ha scritto righe su lista vuota"

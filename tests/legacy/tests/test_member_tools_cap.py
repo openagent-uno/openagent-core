@@ -1,4 +1,4 @@
-"""A team member backed by a large MCP (BillingBear registers ~280 tools)
+"""A team member backed by a large MCP (Ledger registers ~280 tools)
 must not re-ship every tool name into the leader's system message on every
 turn. ``get_members_system_message_content`` caps the inlined list to a sample
 plus a count; the member keeps all its tools at runtime, and the leader routes
@@ -72,25 +72,25 @@ def _render(monkeypatch_target: Any, member: Any, cap: str | None) -> str:
 
 @test("member_tools_cap", "a 300-tool member is capped to a sample + (+N more), not 300 names")
 async def t_caps_large_member(_ctx: TestContext) -> None:
-    tools = [f"billingbear_tool_{i:03d}" for i in range(300)]
+    tools = [f"ledger_tool_{i:03d}" for i in range(300)]
     out = _render(M, _FakeMember("billing", tools), cap="40")
-    assert "billingbear_tool_000" in out           # the sample is present
-    assert "billingbear_tool_299" not in out        # the tail is elided
+    assert "ledger_tool_000" in out           # the sample is present
+    assert "ledger_tool_299" not in out        # the tail is elided
     assert "(+260 more)" in out                     # 300 - 40
-    assert out.count("billingbear_tool_") == 40      # exactly the cap listed
+    assert out.count("ledger_tool_") == 40      # exactly the cap listed
     assert len(out) < 3000                           # nowhere near the ~14k bloat
 
 
 @test("member_tools_cap", "a small member is listed in full (unchanged behaviour)")
 async def t_small_member_unchanged(_ctx: TestContext) -> None:
-    tools = ["replio_respond", "replio_brief", "vault_write"]
+    tools = ["ticketing_respond", "ticketing_brief", "vault_write"]
     out = _render(M, _FakeMember("support", tools), cap="40")
-    assert "Tools: replio_respond, replio_brief, vault_write" in out
+    assert "Tools: ticketing_respond, ticketing_brief, vault_write" in out
     assert "more)" not in out
 
 
 @test("member_tools_cap", "cap=0 omits the tool listing entirely")
 async def t_cap_zero_omits(_ctx: TestContext) -> None:
-    out = _render(M, _FakeMember("billing", ["billingbear_a", "billingbear_b"]), cap="0")
-    assert "billingbear_a" not in out
+    out = _render(M, _FakeMember("billing", ["ledger_a", "ledger_b"]), cap="0")
+    assert "ledger_a" not in out
     assert "Tools" not in out

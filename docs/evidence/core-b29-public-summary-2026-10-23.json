@@ -193,14 +193,6 @@
       "sha256": "f1badbdc5a236a7c86b337bcc5852e1fbc62f3bc24197b519e1887012a0a047e",
       "version": "1.1.0b29",
       "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/openagent_storage_sqlite-1.1.0b29-py3-none-any.whl"
-    },
-    {
-      "bytes": 5085,
-      "file": "replio_agent_example-1.1.0b2-py3-none-any.whl",
-      "name": "replio-agent-example",
-      "sha256": "eee3e59b0230f48aca30355a9d5290101e7ecc7dbcfe9d94145c9922249e7746",
-      "version": "1.1.0b2",
-      "url": "https://github.com/openagent-uno/openagent-core/releases/download/v1.1.0-beta.29/replio_agent_example-1.1.0b2-py3-none-any.whl"
     }
   ],
   "allWheelsCanonicalFreshSource": true,
@@ -216,5 +208,12 @@
   "liveProviderQualified": false,
   "nativePackageQualified": false,
   "embeddingHostChanged": false,
-  "paidCI": false
+  "paidCI": false,
+  "retiredHostExample": {
+    "bytes": 5085,
+    "sha256": "eee3e59b0230f48aca30355a9d5290101e7ecc7dbcfe9d94145c9922249e7746",
+    "version": "1.1.0b2"
+  },
+  "originalReceiptSHA256": "61f0191bd04422c6c833fb4732cedcc538ab15077069d8dbd0f34f52ef31023d",
+  "receiptScope": "Repository summary. The immutably published manifest supplies the full historical asset inventory."
 }

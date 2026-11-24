@@ -125,11 +125,11 @@ async def t_rest_chat_gets_meaningful_title(_ctx: TestContext) -> None:
     assert db.calls == [], "a technical command is not a title"
     await _record_session_owner(
         gateway, "rest-chat", "ios-rest", "marco",
-        "  Start   BuzzerBeater locally with Aspire!  ",
+        "  Start   the sample service locally with Aspire!  ",
     )
     assert db.calls == [{
         "session_id": "rest-chat", "client_id": None, "device_id": None,
-        "title": "Start BuzzerBeater locally with Aspire",
+        "title": "Start the sample service locally with Aspire",
     }], db.calls
 
 

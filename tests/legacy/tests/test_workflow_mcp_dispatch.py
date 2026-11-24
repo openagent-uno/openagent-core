@@ -489,7 +489,7 @@ async def t_validate_repairs_double_prefix(ctx: TestContext) -> None:
     """When an LLM emits mcp_name + '_' + already-prefixed tool_name
     (e.g. tool_name='shell_shell_exec' for MCP 'shell'), the validator
     must strip the redundant prefix and repair in place rather than
-    raising a ValidationError. Regression for the mixout Git Sync
+    raising a ValidationError. Regression for the remote-host Git Sync
     workflow that kept crashing with ValidationError: shell_shell_exec."""
     from openagent_core.workflow.validate import validate_graph
 
@@ -530,7 +530,7 @@ async def t_executor_accepts_arguments_alias(ctx: TestContext) -> None:
     ``_h_mcp_tool``, ``cfg.get('args')`` returned ``{}``, the wrapped
     function was called with no kwargs, and the workflow died with
     ``TypeError: shell_exec() missing 1 required positional argument:
-    'command'``. Regression for the Mixout Daily Release Check workflow
+    'command'``. Regression for the Remote host Daily Release Check workflow
     (run 9b0eb495-…)."""
     from openagent_core.workflow.executor import (
         WorkflowExecutor, _RunCtx, _h_mcp_tool,

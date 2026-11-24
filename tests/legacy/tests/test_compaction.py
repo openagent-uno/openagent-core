@@ -1650,7 +1650,7 @@ async def t_summary_transcript_untouched_when_it_fits(ctx: TestContext) -> None:
 async def t_summary_transcript_absolute_ceiling(ctx: TestContext) -> None:
     """A huge context window must not license a huge subscription-proxy call.
 
-    Regression from Friday: a 200k-window Claude row received one ~77k-token
+    Regression from Fixture agent: a 200k-window Claude row received one ~77k-token
     compaction request, the OAuth account rate-limited it immediately, and the
     live Telegram turn then had no provider. One run alone was larger than the
     desired clamp, so the fitter must suffix-trim that boundary run too.
@@ -1745,7 +1745,7 @@ async def t_token_estimate_margins_a_foreign_tokenizer(_ctx: TestContext) -> Non
 
     # A transcript-shaped sample: JSON, ids, paths, non-English — not prose.
     text = json.dumps({
-        "tool": "replio_thread_brief",
+        "tool": "ticketing_thread_brief",
         "thread_id": "5e547cd3-b137-4add-8130-cf8261655405",
         "body": "porque me sale la suscripción cancelada si tiene que estar "
                 "activa, me podéis ayudar" * 40,

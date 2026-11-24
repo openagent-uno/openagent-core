@@ -4,7 +4,7 @@ transport when an MCP has ``url`` set.
 Bug history
 -----------
 
-**2026-05-25**: Field reproduction against ``https://mcp.mixout.ai/`` with a
+**2026-05-25**: Field reproduction against ``https://remote-mcp.invalid/`` with a
 known-good Bearer token. ``_ServerSpec.headers`` was being populated correctly
 from YAML and from DB rows, but ``_build_and_enter_toolkit`` constructed
 ``MCPTools(url=..., transport="streamable-http", ...)`` *without* a
@@ -94,7 +94,7 @@ async def t_headers_forwarded_to_transport(ctx: TestContext) -> None:
         from openagent_core.mcp.pool import MCPPool, _ServerSpec
 
         spec = _ServerSpec(
-            name="mixout",
+            name="remote-host",
             url="https://example.invalid/",
             headers={"Authorization": "Bearer test"},
         )

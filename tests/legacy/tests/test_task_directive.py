@@ -35,13 +35,13 @@ async def t_parse(_ctx: TestContext) -> None:
     directives = task_directive.parse(
         "Send the approved reply.\n\n"
         "[[execute]]\n"
-        "server: replio\n"
+        "server: ticketing\n"
         "tool: threads_respond\n"
         'args: {"thread_id": "t-1", "body_text": "Hola"}\n'
         "[[/execute]]\n"
     )
     assert len(directives) == 1, directives
-    assert directives[0].server == "replio"
+    assert directives[0].server == "ticketing"
     assert directives[0].tool == "threads_respond"
     assert directives[0].args == {"thread_id": "t-1", "body_text": "Hola"}
     assert "[[execute]]" not in task_directive.strip(
@@ -55,7 +55,7 @@ async def t_parse_errors(_ctx: TestContext) -> None:
 
     for body in (
         "[[execute]]\ntool: threads_respond\n[[/execute]]",          # no server
-        "[[execute]]\nserver: replio\n[[/execute]]",                 # no tool
+        "[[execute]]\nserver: ticketing\n[[/execute]]",                 # no tool
         "[[execute]]\nserver: r\ntool: t\nargs: {oops\n[[/execute]]",  # bad JSON
         '[[execute]]\nserver: r\ntool: t\nargs: ["a"]\n[[/execute]]',  # not an object
     ):
@@ -85,15 +85,15 @@ async def t_execute(_ctx: TestContext) -> None:
     async def never_called(thread_id: str) -> dict[str, Any]:
         raise AssertionError("a directive after a failed one must not run")
 
-    pool = _Pool({"replio": _Toolkit({
-        "replio_threads_respond": threads_respond,
-        "replio_threads_patch": threads_patch,
-        "replio_threads_tags_add": never_called,
+    pool = _Pool({"ticketing": _Toolkit({
+        "ticketing_threads_respond": threads_respond,
+        "ticketing_threads_patch": threads_patch,
+        "ticketing_threads_tags_add": never_called,
     })})
 
     text = "Hola, tu Premium ya esta activo."
     ok, receipts = await execute(pool, [
-        Directive("replio", "threads_respond", {"thread_id": "t", "body_text": text}),
+        Directive("ticketing", "threads_respond", {"thread_id": "t", "body_text": text}),
     ])
     assert ok is True, receipts
     assert seen[0]["body_text"] == text
@@ -104,8 +104,8 @@ async def t_execute(_ctx: TestContext) -> None:
 
     # A failure fails the task and never falls through to the next block.
     ok, receipts = await execute(pool, [
-        Directive("replio", "threads_patch", {"thread_id": "t", "patch": {"x": 1}}),
-        Directive("replio", "threads_tags_add", {"thread_id": "t"}),
+        Directive("ticketing", "threads_patch", {"thread_id": "t", "patch": {"x": 1}}),
+        Directive("ticketing", "threads_tags_add", {"thread_id": "t"}),
     ])
     assert ok is False, receipts
     assert len(receipts) == 1, receipts

@@ -949,7 +949,7 @@ async def t_telegram_duplicate_update_rejected(ctx: TestContext) -> None:
     assert bridge._is_fresh_update(u1), "first sight must be fresh"
 
     # Replay the SAME update_id. This is the exact scenario that caused
-    # mixout to reply with a cached-looking copy of the previous turn.
+    # remote-host to reply with a cached-looking copy of the previous turn.
     u1_replay = _FakeTgUpdate(update_id=1001, text="hello")
     assert not bridge._is_fresh_update(u1_replay), "replay must be rejected"
 
@@ -1784,13 +1784,13 @@ async def t_friendly_memory_labels(ctx: TestContext) -> None:
         "tool_args": {
             "server": "vault",
             "tool": "read_note",
-            "args": {"path": "project_viki_ops.md"},
+            "args": {"path": "project_workspace_ops.md"},
         },
     })
     evt = parse_status_event(dispatched_read)
     assert evt is not None and evt.tool == "read_note" and evt.server == "vault"
-    assert format_tool_message(dispatched_read) == "📖 Recalling — project_viki_ops"
-    assert format_tool_status(dispatched_read) == "Recalling project_viki_ops"
+    assert format_tool_message(dispatched_read) == "📖 Recalling — project_workspace_ops"
+    assert format_tool_status(dispatched_read) == "Recalling project_workspace_ops"
 
     # Search has no single note → verb + quoted query, no note title.
     dispatched_search = json.dumps({

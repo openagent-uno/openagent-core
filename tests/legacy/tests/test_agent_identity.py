@@ -87,7 +87,7 @@ def _fixture(ctx: TestContext, label: str = "identity"):
     directory.mkdir(parents=True)
     path = directory / "openagent.yaml"
     raw = {
-        "name": "Friday",
+        "name": "Fixture agent",
         "system_prompt": "Original private persona",
         "models": {"entry": "local:test", "options": ["a", "b"]},
         "environment": {"TOKEN": "${UNCHANGED_SECRET_REFERENCE}"},
@@ -206,7 +206,7 @@ async def t_owner_acl(ctx: TestContext) -> None:
         gateway=gateway,
     )
     before = path.read_bytes()
-    for actor in (None, _actor("friday", "agent"), _actor("bob")):
+    for actor in (None, _actor("fixture-agent", "agent"), _actor("bob")):
         try:
             await service.update(actor, name="Unauthorized")
         except AgentIdentityPermissionError:
@@ -217,7 +217,7 @@ async def t_owner_acl(ctx: TestContext) -> None:
         assert gateway.messages == []
 
     owner_view = await service.get(_actor())
-    assert owner_view["name"] == "Friday"
+    assert owner_view["name"] == "Fixture agent"
     assert owner_view["system_prompt"] == "Original private persona"
     assert owner_view["framework_prompt_mutable"] is False
 
@@ -362,7 +362,7 @@ async def t_rest_contract(ctx: TestContext) -> None:
     read_response = await api.handle_get(_Request(gateway))
     read = _payload(read_response)
     assert read_response.status == 200
-    assert read["name"] == "Friday"
+    assert read["name"] == "Fixture agent"
     assert read["framework_prompt_mutable"] is False
 
     invalid = await api.handle_patch(_Request(
@@ -378,7 +378,7 @@ async def t_rest_contract(ctx: TestContext) -> None:
         body={"name": "Forbidden"},
     ))
     assert denied.status == 403
-    assert yaml.safe_load(path.read_text(encoding="utf-8"))["name"] == "Friday"
+    assert yaml.safe_load(path.read_text(encoding="utf-8"))["name"] == "Fixture agent"
 
     changed = await api.handle_patch(_Request(
         gateway,
@@ -429,7 +429,7 @@ async def t_legacy_config_routes_delegate(ctx: TestContext) -> None:
     denied.match_info = {"section": "name"}
     denied_response = await config_api.handle_patch(denied)
     assert denied_response.status == 403
-    assert yaml.safe_load(path.read_text(encoding="utf-8"))["name"] == "Friday"
+    assert yaml.safe_load(path.read_text(encoding="utf-8"))["name"] == "Fixture agent"
 
     owner = _Request(gateway, body="Legacy Nova")
     owner.match_info = {"section": "name"}

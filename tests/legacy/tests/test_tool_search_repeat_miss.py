@@ -177,14 +177,14 @@ async def t_execution_scope_enforced(_ctx: TestContext) -> None:
         return "done"
 
     pool = _Pool({
-        "replio": _Toolkit({"replio_read": _ok}),
+        "ticketing": _Toolkit({"ticketing_read": _ok}),
         "shell": _Toolkit({"shell_exec": _ok}),
     })
-    token = tool_scope.set_tool_allowlist(["replio"])
+    token = tool_scope.set_tool_allowlist(["ticketing"])
     try:
-        assert [row["name"] for row in adapters._list_servers_impl(pool)] == ["replio"]
+        assert [row["name"] for row in adapters._list_servers_impl(pool)] == ["ticketing"]
         assert await adapters._call_tool_impl(
-            pool, "replio", "replio_read", {},
+            pool, "ticketing", "ticketing_read", {},
         ) == "done"
         for operation in (
             lambda: adapters._list_tools_impl(pool, "shell"),

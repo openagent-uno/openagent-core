@@ -114,7 +114,7 @@ def lean_local_tool_families(prompt: str, available: "Iterable[str]") -> list[st
 
     A pinned local task ran against the agent's whole MCP surface: measured on
     Qwen3-30B, a task that only had to send one approved sentence spent ten
-    tool calls exploring BillingBear and never reached the send. A small model
+    tool calls exploring a remote account catalog and never reached the send. A small model
     treats a large surface as an invitation.
 
     So: when the prompt names servers explicitly, restrict the run to those

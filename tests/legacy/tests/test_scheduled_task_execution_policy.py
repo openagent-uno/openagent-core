@@ -14,11 +14,11 @@ async def t_policy_validation(_ctx: TestContext) -> None:
     assert normalize_execution_policy({
         "max_tool_calls": "6",
         "timeout_seconds": 90,
-        "allowed_tool_families": ["replio", "replio", "billingbear"],
+        "allowed_tool_families": ["ticketing", "ticketing", "ledger"],
     }) == {
         "max_tool_calls": 6,
         "timeout_seconds": 90.0,
-        "allowed_tool_families": ["replio", "billingbear"],
+        "allowed_tool_families": ["ticketing", "ledger"],
     }
     assert normalize_execution_policy({"allowed_tool_families": []}) == {
         "allowed_tool_families": []
@@ -26,7 +26,7 @@ async def t_policy_validation(_ctx: TestContext) -> None:
     for bad in (
         {"max_tool_calls": 0},
         {"timeout_seconds": 1},
-        {"allowed_tool_families": "replio"},
+        {"allowed_tool_families": "ticketing"},
         {"max_tools": 6},
     ):
         try:
@@ -40,17 +40,17 @@ async def t_policy_validation(_ctx: TestContext) -> None:
         {
             "max_tool_calls": 4,
             "timeout_seconds": 60,
-            "allowed_tool_families": ["replio", "events-manager"],
+            "allowed_tool_families": ["ticketing", "events-manager"],
         },
         {
             "max_tool_calls": 10,
             "timeout_seconds": 30,
-            "allowed_tool_families": ["replio", "billingbear"],
+            "allowed_tool_families": ["ticketing", "ledger"],
         },
     ) == {
         "max_tool_calls": 4,
         "timeout_seconds": 30.0,
-        "allowed_tool_families": ["replio"],
+        "allowed_tool_families": ["ticketing"],
     }
 
 
@@ -67,7 +67,7 @@ async def t_policy_db_roundtrip(ctx: TestContext) -> None:
             execution_policy={
                 "max_tool_calls": 6,
                 "timeout_seconds": 90,
-                "allowed_tool_families": ["replio"],
+                "allowed_tool_families": ["ticketing"],
             },
         )
         raw = await db.get_task(tid)
@@ -76,7 +76,7 @@ async def t_policy_db_roundtrip(ctx: TestContext) -> None:
         assert surfaced["execution_policy"] == {
             "max_tool_calls": 6,
             "timeout_seconds": 90.0,
-            "allowed_tool_families": ["replio"],
+            "allowed_tool_families": ["ticketing"],
         }
         assert "execution_policy_json" not in surfaced
 
@@ -148,7 +148,7 @@ async def t_policy_cache_key(_ctx: TestContext) -> None:
     assert plain == system == "system"
 
     policy_token = set_execution_policy({"max_tool_calls": 6})
-    scope_token = set_tool_allowlist(["replio"])
+    scope_token = set_tool_allowlist(["ticketing"])
     try:
         bounded, real_system = _execution_cache_key("system")
     finally:
@@ -156,7 +156,7 @@ async def t_policy_cache_key(_ctx: TestContext) -> None:
         reset_execution_policy(policy_token)
     assert bounded != plain
     assert real_system == "system"
-    assert "replio" in bounded and "max_tool_calls" in bounded
+    assert "ticketing" in bounded and "max_tool_calls" in bounded
 
 
 @test("scheduled_task_execution_policy", "scheduler installs and then resets the envelope")
@@ -200,14 +200,14 @@ async def t_scheduler_policy_scope(ctx: TestContext) -> None:
             execution_policy={
                 "max_tool_calls": 6,
                 "timeout_seconds": 30,
-                "allowed_tool_families": ["replio"],
+                "allowed_tool_families": ["ticketing"],
             },
         )
         task = await db.get_task(task_id)
         spy = SpyAgent()
         # An explicit operator policy is authoritative. The lean-local prompt
         # heuristic may under-detect a server (the scorer names tool methods,
-        # not the word "replio") and must not intersect the grant down to zero.
+        # not the word "ticketing") and must not intersect the grant down to zero.
         with (
             patch(
                 "openagent_core.core.execution_profile.should_use_lean_local_scheduled_task",
@@ -222,9 +222,9 @@ async def t_scheduler_policy_scope(ctx: TestContext) -> None:
         assert spy.seen_policy == {
             "max_tool_calls": 6,
             "timeout_seconds": 30.0,
-            "allowed_tool_families": ["replio"],
+            "allowed_tool_families": ["ticketing"],
         }
-        assert spy.seen_tools == frozenset({"replio"})
+        assert spy.seen_tools == frozenset({"ticketing"})
         assert current_execution_policy() is None
         assert current_tool_allowlist() is None
         run = (await db.list_task_runs(task_id, limit=1))[0]

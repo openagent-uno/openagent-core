@@ -8,13 +8,57 @@ class _Agent:
     model = None
 
 
-def test_generic_admin_read_does_not_authorize_account_state() -> None:
+def test_only_an_explicit_exact_account_reader_supports_account_state(monkeypatch) -> None:
     from openagent_core.core.reply_guard import _trace_supports_account_state
 
+    key = "OPENAGENT_REPLY_GUARD_ACCOUNT_STATE_TOOLS"
     reply = "Your subscription is active."
-    result = 'result={"isPremium":true,"status":"active"}'
-    assert not _trace_supports_account_state(reply, [("host_admin.read", result)])
-    assert _trace_supports_account_state(reply, [("billingbear.read", result)])
+    result = 'result={"status":"active"}'
+    monkeypatch.delenv(key, raising=False)
+    assert not _trace_supports_account_state(reply, [("account.read", result)])
+
+    monkeypatch.setenv(key, " account.read , , tenancy.read ")
+    assert _trace_supports_account_state(reply, [("account.read", result)])
+    assert _trace_supports_account_state(reply, [("tenancy.read", result)])
+    assert not _trace_supports_account_state(reply, [("account.read_other", result)])
+    assert not _trace_supports_account_state(
+        reply, [("host_admin.read", 'account.read ' + result)],
+    )
+    assert not _trace_supports_account_state(
+        reply, [("account.read", 'Error from MCP tool: ' + result)],
+    )
+
+    assert not _trace_supports_account_state(
+        reply, [("account.read", 'args={"status":"active"} result={"found":true}')],
+    )
+    assert not _trace_supports_account_state(
+        reply, [("account.read", 'args={"label":" example result=x"} result=Error from MCP tool')],
+    )
+    assert _trace_supports_account_state(
+        reply, [("account.read", 'args={"label":"error report"} result={"status":"active"}')],
+    )
+
+
+def test_account_state_authorities_do_not_cross_runtime_boundaries(tmp_path, monkeypatch) -> None:
+    from openagent_core import Runtime, RuntimeServices, RuntimeSettings
+    from openagent_core.core.reply_guard import _trace_supports_account_state
+    from openagent_core.runtime import runtime_scope
+
+    key = "OPENAGENT_REPLY_GUARD_ACCOUNT_STATE_TOOLS"
+    monkeypatch.setenv(key, "ambient.read")
+    first = Runtime(
+        RuntimeSettings("agent-a", tmp_path, environment=((key, "account.read"),)),
+        RuntimeServices(object(), object(), object()),
+    )
+    second = Runtime(RuntimeSettings("agent-b", tmp_path), RuntimeServices(object(), object(), object()))
+    reply = "Your subscription is active."
+    result = 'result={"status":"active"}'
+    with runtime_scope(first):
+        assert _trace_supports_account_state(reply, [("account.read", result)])
+        assert not _trace_supports_account_state(reply, [("ambient.read", result)])
+    with runtime_scope(second):
+        assert not _trace_supports_account_state(reply, [("account.read", result)])
+        assert not _trace_supports_account_state(reply, [("ambient.read", result)])
 
 
 def _guard(user_message: str, reply: str, rows: list[tuple[str, str]]) -> str:

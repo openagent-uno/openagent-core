@@ -49,12 +49,12 @@ async def t_tool_search_denylist(ctx: TestContext) -> None:
         parameters={"type": "object"},
     )
     toolkit = SimpleNamespace(functions={
-        "replio_thread_create_task": create_fn,
-        "replio_thread_link_task": link_fn,
+        "ticketing_thread_create_task": create_fn,
+        "ticketing_thread_link_task": link_fn,
     })
 
     class Pool:
-        _toolkit_by_name = {"replio": toolkit}
+        _toolkit_by_name = {"ticketing": toolkit}
 
         def toolkit_by_name(self, name):
             return self._toolkit_by_name.get(name)
@@ -62,27 +62,27 @@ async def t_tool_search_denylist(ctx: TestContext) -> None:
     pool = Pool()
     env_name = "OPENAGENT_MCP_TOOL_DENYLIST"
     previous = os.environ.get(env_name)
-    os.environ[env_name] = "replio:thread_create_task"
+    os.environ[env_name] = "ticketing:thread_create_task"
     try:
-        listed = _list_tools_impl(pool, "replio")
-        assert [item["name"] for item in listed] == ["replio_thread_link_task"]
-        assert _list_servers_impl(pool) == [{"name": "replio", "tool_count": 1}]
+        listed = _list_tools_impl(pool, "ticketing")
+        assert [item["name"] for item in listed] == ["ticketing_thread_link_task"]
+        assert _list_servers_impl(pool) == [{"name": "ticketing", "tool_count": 1}]
 
-        for tool_name in ("thread_create_task", "replio_thread_create_task"):
+        for tool_name in ("thread_create_task", "ticketing_thread_create_task"):
             try:
-                _describe_tool_impl(pool, "replio", tool_name)
+                _describe_tool_impl(pool, "ticketing", tool_name)
                 raise AssertionError(f"denied tool {tool_name} was describable")
             except PermissionError as exc:
                 assert env_name in str(exc)
             try:
-                await _call_tool_impl(pool, "replio", tool_name, {"thread_id": "t1"})
+                await _call_tool_impl(pool, "ticketing", tool_name, {"thread_id": "t1"})
                 raise AssertionError(f"denied tool {tool_name} was callable")
             except PermissionError as exc:
                 assert env_name in str(exc)
 
         allowed = await _call_tool_impl(
             pool,
-            "replio",
+            "ticketing",
             "thread_link_task",
             {"thread_id": "t1", "external_task_id": "cu1"},
         )

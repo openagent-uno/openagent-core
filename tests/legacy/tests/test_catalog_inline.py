@@ -34,15 +34,15 @@ async def t_builtin_inlined(ctx: TestContext) -> None:
 async def t_thirdparty_not_inlined(ctx: TestContext) -> None:
     prev = os.environ.pop("OPENAGENT_INLINE_TOOL_KEYS_SERVERS", None)
     try:
-        keys = ["replio_threads_respond", "replio_docs_search"]
-        out = _render({"replio": len(keys)}, {"replio": "org support MCP"}, {"replio": keys})
+        keys = ["ticketing_threads_respond", "ticketing_docs_search"]
+        out = _render({"ticketing": len(keys)}, {"ticketing": "org support MCP"}, {"ticketing": keys})
         # New prompts advertise canonical, location-qualified IDs only. A
         # legacy unprefixed name still means server-side at the call boundary,
         # but must never be suggested to a model.
-        assert "``server:replio``" in out, out        # server line present
-        assert "``replio``" not in out, out
+        assert "``server:ticketing``" in out, out        # server line present
+        assert "``ticketing``" not in out, out
         assert "tools:" not in out, out               # but no key list
-        assert "replio_docs_search" not in out, out
+        assert "ticketing_docs_search" not in out, out
     finally:
         if prev is not None:
             os.environ["OPENAGENT_INLINE_TOOL_KEYS_SERVERS"] = prev
@@ -53,12 +53,12 @@ async def t_operator_optin_full(ctx: TestContext) -> None:
     from openagent_core.core.prompts import _INLINE_TOOL_KEYS_CAP
 
     # 37 keys — more than the builtin cap; the whole point is none is dropped.
-    keys = sorted(f"replio_tool_{i:02d}" for i in range(37))
+    keys = sorted(f"ticketing_tool_{i:02d}" for i in range(37))
     prev = os.environ.get("OPENAGENT_INLINE_TOOL_KEYS_SERVERS")
-    os.environ["OPENAGENT_INLINE_TOOL_KEYS_SERVERS"] = "replio, billingbear"
+    os.environ["OPENAGENT_INLINE_TOOL_KEYS_SERVERS"] = "ticketing, ledger"
     try:
         assert len(keys) > _INLINE_TOOL_KEYS_CAP  # guards the "no cap" claim
-        out = _render({"replio": len(keys)}, {"replio": "org support MCP"}, {"replio": keys})
+        out = _render({"ticketing": len(keys)}, {"ticketing": "org support MCP"}, {"ticketing": keys})
         assert "tools:" in out, out
         for k in keys:                                   # every key surfaced
             assert k in out, f"missing {k}\n{out}"
@@ -76,8 +76,8 @@ async def t_env_parsing(ctx: TestContext) -> None:
 
     prev = os.environ.get("OPENAGENT_INLINE_TOOL_KEYS_SERVERS")
     try:
-        os.environ["OPENAGENT_INLINE_TOOL_KEYS_SERVERS"] = "  replio , ,billingbear,, clickup "
-        assert _operator_inline_servers() == frozenset({"replio", "billingbear", "clickup"})
+        os.environ["OPENAGENT_INLINE_TOOL_KEYS_SERVERS"] = "  ticketing , ,ledger,, clickup "
+        assert _operator_inline_servers() == frozenset({"ticketing", "ledger", "clickup"})
         os.environ["OPENAGENT_INLINE_TOOL_KEYS_SERVERS"] = ""
         assert _operator_inline_servers() == frozenset()
         os.environ.pop("OPENAGENT_INLINE_TOOL_KEYS_SERVERS", None)

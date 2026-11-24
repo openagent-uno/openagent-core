@@ -179,9 +179,11 @@ transactions retain the host's schema and query plan.
 
 ## Source provenance
 
-The protocol implementations were adapted from the MIT-declared projects
-[claude-sub-proxy at 1ed2f90](https://github.com/Spicy-Sparks/claude-sub-proxy/tree/1ed2f90d43ffad3d367bc54d22b74a8a07c69a36)
-and [codex-sub-proxy at 812594d](https://github.com/Spicy-Sparks/codex-sub-proxy/tree/812594d298946bb1d2d496682fad092c99222472).
+The protocol implementations were adapted from the MIT-licensed Claude and
+Codex proxy implementations at revisions `1ed2f90d43ffad3d367bc54d22b74a8a07c69a36`
+and `812594d298946bb1d2d496682fad092c99222472`, respectively. The packaged
+[license notice](../packages/runtime/src/openagent_core/subscriptions/NOTICE.txt)
+records their attribution.
 Core replaces their process-global configuration, HTTP-server lifecycle and
 implicit local credential adoption with explicit instance-owned services.
 The original Claude translation regressions are retained in Core. Repository

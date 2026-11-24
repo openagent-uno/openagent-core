@@ -47,6 +47,7 @@ from openagent_core.core.logging import elog
 
 _ENABLED_ENV = "OPENAGENT_REPLY_GUARD_ENABLED"
 _BACKING_TOOLS_ENV = "OPENAGENT_REPLY_GUARD_BACKING_TOOLS"
+_ACCOUNT_STATE_TOOLS_ENV = "OPENAGENT_REPLY_GUARD_ACCOUNT_STATE_TOOLS"
 
 # A runtime authorization error is a receipt, not prose the model may infer.
 # This exact family came from a production Telegram turn where the assistant
@@ -534,18 +535,24 @@ _TRACE_ERROR = re.compile(
 )
 
 
-def _trace_result_succeeded(excerpt: str) -> bool:
-    """Conservative success check for a completed MCP call excerpt.
-
-    The runtime records MCP protocol errors as ``Error from MCP tool``. Some
-    successful servers return ``success:true`` while others return the updated
-    object or a short ``queued``/``ok`` acknowledgement. A non-empty result is
-    therefore acceptable only when it carries no explicit failure marker.
-    """
+def _successful_trace_result(excerpt: str) -> str | None:
+    """Read the successful result, excluding any attached tool arguments."""
     value = str(excerpt or "").strip()
-    if " result=" in value:
-        value = value.split(" result=", 1)[1].strip()
-    return bool(value) and not bool(_TRACE_ERROR.search(value))
+    if value.startswith("args="):
+        try:
+            _, end = json.JSONDecoder().raw_decode(value, idx=len("args="))
+        except ValueError:
+            return None
+        marker = " result="
+        if not value.startswith(marker, end):
+            return None
+        value = value[end + len(marker):].strip()
+    return value if value and not _TRACE_ERROR.search(value) else None
+
+
+def _trace_result_succeeded(excerpt: str) -> bool:
+    """Treat empty results or explicit MCP failure markers as insufficient."""
+    return _successful_trace_result(excerpt) is not None
 
 
 def unbacked_authorization_errors(
@@ -663,7 +670,12 @@ def _trace_supports_completed_action(
 def _trace_supports_account_state(
     reply: str, rows: list[tuple[str, str]],
 ) -> bool:
-    """Require a same-turn authoritative BillingBear read for state."""
+    """Require a same-turn read from an exact host-selected account tool."""
+    authoritative_tools = {
+        name.strip()
+        for name in runtime_environment().get(_ACCOUNT_STATE_TOOLS_ENV, "").split(",")
+        if name.strip()
+    }
     low_reply = (reply or "").lower()
     wants_active = bool(re.search(r"\b(?:active|attiv[oa])\b", low_reply)) and not bool(
         re.search(r"\b(?:inactive|inattiv[oa])\b", low_reply)
@@ -673,12 +685,12 @@ def _trace_supports_account_state(
         low_reply,
     ))
     for name, excerpt in rows:
-        tool_identity = f"{name} {excerpt}".lower()
-        if "billingbear" not in tool_identity:
+        if name not in authoritative_tools:
             continue
-        value = str(excerpt or "").lower()
-        if not _trace_result_succeeded(value):
+        result = _successful_trace_result(excerpt)
+        if result is None:
             continue
+        value = result.lower()
         if wants_active and re.search(
             r"[\"']?ispremium[\"']?\s*[:=]\s*true\b|"
             r"[\"']?status[\"']?\s*[:=]\s*[\"']active[\"']",
