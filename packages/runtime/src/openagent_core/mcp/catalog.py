@@ -39,6 +39,37 @@ class PoolCapabilitySource:
         if getattr(self.toolkit, "capability_generation", NotImplemented) is None:
             raise CapabilityUnavailable("The current MCP connection has no complete catalog")
 
+    @property
+    def temporarily_unavailable(self):
+        if self.toolkit_name not in getattr(self.pool, "_startup_pending", ()):
+            return None
+        return self._report_unavailable
+
+    def _report_unavailable(self, context: ExecutionContext) -> bool:
+        """Called only for an exact registration with authorized status visibility."""
+        from .servers.tool_search.adapters import _require_server_allowed, _tool_is_denied
+        if (self.toolkit_name not in getattr(self.pool, "_startup_pending", ())
+                or self.pool.toolkit_by_name(self.toolkit_name) is not self.toolkit):
+            return False
+        try:
+            _require_server_allowed(self.toolkit_name)
+        except PermissionError:
+            return False
+        if _tool_is_denied(self.toolkit_name, "*"):
+            return False
+        self.pool.schedule_startup_retry(self.toolkit_name)
+        return True
+
+    def temporarily_unavailable_tool(self, name: str, context: ExecutionContext) -> bool:
+        # The source-status grant alone does not attest access to every
+        # previously learned tool while its descriptors are unavailable.
+        from .servers.tool_search.adapters import _tool_is_denied
+        return not _tool_is_denied(self.toolkit_name, name) and self._report_unavailable(context)
+
+    def _tool_generation(self, name):
+        generation = getattr(self.toolkit, "tool_generation", None)
+        return generation(name) if callable(generation) else None
+
     def _metadata(self, function) -> dict:
         metadata = dict(getattr(function, "mcp_metadata", None) or {})
         generation = getattr(self.toolkit, "capability_generation", NotImplemented)
@@ -87,7 +118,8 @@ class PoolCapabilitySource:
         except (PermissionError, CapabilityUnavailable):
             return ()
         return tuple(ToolDefinition(name, getattr(fn, "description", "") or "",
-                                    getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()), self._metadata(fn))
+                                    getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()), self._metadata(fn),
+                                    binding_generation=self._tool_generation(name))
                      for name, fn in _functions_dict(self.toolkit).items()
                      if not _tool_is_denied(self.toolkit_name, name))
 
@@ -98,15 +130,16 @@ class PoolCapabilitySource:
         _require_server_allowed(self.toolkit_name)
         functions = {**_functions_dict(self.toolkit), **getattr(self.toolkit, "_app_functions", {})}
         return tuple(ToolDefinition(name, getattr(fn, "description", "") or "",
-            getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()), self._metadata(fn))
+            getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()), self._metadata(fn),
+                                    binding_generation=self._tool_generation(name))
             for name, fn in functions.items() if not _tool_is_denied(self.toolkit_name, name)
             and tool_visible(getattr(fn, "mcp_metadata", None) or {}, "app"))
 
     @asynccontextmanager
-    async def _app_session(self, context: ExecutionContext):
+    async def _app_session(self, context: ExecutionContext, *, tool_name: str | None = None):
         self._check()
         from openagent_core.core._runner.utils.mcp import mcp_capability_generation_scope
-        with mcp_capability_generation_scope(self.toolkit) as check_generation:
+        with mcp_capability_generation_scope(self.toolkit, tool_name) as check_generation:
             session = getattr(self.toolkit, "session", None)
             ephemeral = None
             try:
@@ -151,7 +184,7 @@ class PoolCapabilitySource:
         key, function = matches[0]
         if _tool_is_denied(self.toolkit_name, key) or not tool_visible(getattr(function, "mcp_metadata", None) or {}, "app"):
             raise PermissionError("App tool is not granted")
-        async with self._app_session(context) as session:
+        async with self._app_session(context, tool_name=key) as session:
             result = await session.call_tool(getattr(function, "mcp_name", None) or name, dict(arguments))
         return result
 
@@ -165,7 +198,7 @@ class PoolCapabilitySource:
         from .servers.tool_search.adapters import _invoke_registered_tool
         self._check()
         from openagent_core.core._runner.utils.mcp import mcp_capability_generation_scope
-        with mcp_capability_generation_scope(self.toolkit):
+        with mcp_capability_generation_scope(self.toolkit, name):
             result = await _invoke_registered_tool(self.pool, self.toolkit_name, name, arguments)
             self._check()
             return result
@@ -344,22 +377,6 @@ def revoke_delegated_device_capabilities(catalog: CapabilityCatalog,
         catalog.revoke(source_id)
 
 
-class _PendingStartupSource(PoolCapabilitySource):
-    def temporarily_unavailable(self, context: ExecutionContext) -> bool:
-        """Called only for an exact registration with authorized status visibility."""
-        from .servers.tool_search.adapters import _require_server_allowed, _tool_is_denied
-        if self.toolkit is not None or self.toolkit_name not in self.pool._startup_pending:
-            return False
-        try:
-            _require_server_allowed(self.toolkit_name)
-        except PermissionError:
-            return False
-        if _tool_is_denied(self.toolkit_name, "*"):
-            return False
-        self.pool.schedule_startup_retry(self.toolkit_name)
-        return True
-
-
 class PoolCatalogBinding:
     def __init__(self, pool: Any, catalog: CapabilityCatalog, *, trusted_modules: tuple[str, ...],
                  target_label: str = "Agent workspace", user_sources: frozenset[str] = frozenset(),
@@ -412,8 +429,7 @@ class PoolCatalogBinding:
                     if semantics.recalls_content and semantics.path_argument:
                         tags.add("vault.recall." + semantics.path_argument)
                     effects[tool] = frozenset(tags)
-            adapter = _PendingStartupSource if toolkit is None else PoolCapabilitySource
-            source = adapter(self.pool, name, toolkit, effects=effects)
+            source = PoolCapabilitySource(self.pool, name, toolkit, effects=effects)
             registered = self.source_wrapper(name, source, name in self.user_sources) \
                 if self.source_wrapper is not None else source
             if name in self.user_sources:

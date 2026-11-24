@@ -919,8 +919,6 @@ class MCPPool:
                     await asyncio.sleep(_STARTUP_STAGGER_SECONDS)
                 first_subprocess = False
                 toolkit = await self._build_and_enter_toolkit(spec)
-                if toolkit is None and spec.is_stdio and self._initial_timeout(spec):
-                    self._startup_pending[spec.name] = spec
                 if toolkit is not None:
                     self._runtime_toolkits.append(toolkit)
                     self._toolkit_by_name[spec.name] = toolkit
@@ -969,6 +967,7 @@ class MCPPool:
                             "Authorization header, and transport)",
                         )
                         elog("mcp.dormant", level="warning", name=spec.name)
+                self._update_pending_handshake(spec, self._toolkit_by_name.get(spec.name))
 
             # 2. In-process MCPs — loaded by importing the adapter module and
             #    calling the named factory functions. No subprocess is spawned.
@@ -1042,8 +1041,25 @@ class MCPPool:
             if self._capability_binding is not None:
                 self._capability_binding.sync()
 
-    def _initial_timeout(self, spec: _ServerSpec) -> bool:
-        return self._connection_failures.get(spec.name) == {"code": "timeout", "phase": "connect"}
+    def _handshake_retryable(self, spec: _ServerSpec) -> bool:
+        failure = self._connection_failures.get(spec.name, {})
+        return (not spec.in_process and bool(spec.is_stdio or spec.url)
+                and failure.get("phase") in {"connect", "reconnect", "session.initialize", "build_tools"}
+                and failure.get("code") in {"timeout", "transport_unreachable", "service_unavailable", "transport_closed"})
+
+    def _update_pending_handshake(self, spec: _ServerSpec, toolkit: Any | None) -> None:
+        if (toolkit is None or not _toolkit_ready(toolkit)) and self._handshake_retryable(spec):
+            self._startup_pending[spec.name] = spec
+            if self._connected:
+                self.schedule_startup_retry(spec.name)
+        else:
+            self._startup_pending.pop(spec.name, None)
+
+    def _reconnect_failed(self, spec: _ServerSpec, toolkit: Any, error: BaseException) -> None:
+        if not self._connected or self._toolkit_by_name.get(spec.name) is not toolkit:
+            return
+        self._record_connection_failure(spec.name, error, "reconnect")
+        self._update_pending_handshake(spec, None)
 
     def schedule_startup_retry(self, name: str) -> None:
         """Coalesce recovery demand without waiting on a subprocess in a turn."""
@@ -1073,6 +1089,16 @@ class MCPPool:
                 for attempt in range(3):
                     await asyncio.sleep(delay * (2 ** attempt))
                     async with self._startup_retry_slot:
+                        if self._startup_pending.get(name) is not spec:
+                            return
+                        existing = self._toolkit_by_name.get(name)
+                        if existing is not None:
+                            # An established transport keeps its registration and
+                            # supervisor. Reconnect only the handshake, never a call.
+                            await self.reconnect_toolkit(existing, reason="catalog_recovery")
+                            if name not in self._startup_pending:
+                                return
+                            continue
                         elog("mcp.startup_retry", name=name, attempt=attempt + 1)
                         toolkit = await self._build_and_enter_toolkit(spec)
                         if toolkit is not None:
@@ -1086,11 +1112,11 @@ class MCPPool:
                             self._runtime_toolkits.append(toolkit)
                             self._toolkit_by_name[name] = toolkit
                             self._tool_counts[name] = self._toolkit_tool_count(toolkit)
-                        if toolkit is not None or not self._initial_timeout(spec):
-                            self._startup_pending.pop(name, None)
-                            self._catalog_summary_cache = None
-                            if self._capability_binding is not None:
-                                self._capability_binding.sync()
+                        self._update_pending_handshake(spec, toolkit)
+                        self._catalog_summary_cache = None
+                        if self._capability_binding is not None:
+                            self._capability_binding.sync()
+                        if name not in self._startup_pending:
                             return
                 # Demand from an authorized principal may open one new burst
                 # after cooldown. Idle, permanently broken services stop here.
@@ -1457,6 +1483,7 @@ class MCPPool:
                              reason="transport_lost" if lost else "requested")
                         await _close(stack)
                         stack = None
+                        self._reconnect_failed(spec, toolkit, e)
                         _resolve_pending(False)
                         continue
                     except BaseException as e:  # noqa: BLE001
@@ -1465,11 +1492,15 @@ class MCPPool:
                              reason="transport_lost" if lost else "requested")
                         await _close(stack)
                         stack = None
+                        self._reconnect_failed(spec, toolkit, e)
                         _resolve_pending(False)
                         continue
                     if control["closing"]:
                         return
                     control["ready"] = True
+                    if self._toolkit_by_name.get(spec.name) is toolkit:
+                        self._startup_pending.pop(spec.name, None)
+                        self._connection_failures.pop(spec.name, None)
                     if control.pop("auto_reconnect", False):
                         # Nobody asked: no initiator will log the outcome.
                         elog("mcp.session_reconnected", name=spec.name,
@@ -1679,6 +1710,7 @@ class MCPPool:
                     sup.name, "replacement connected but exposed 0 tools",
                 )
                 elog("mcp.dormant", level="warning", name=sup.name)
+        self._update_pending_handshake(spec, new_toolkit)
         self._catalog_summary_cache = None
         if self._capability_binding is not None:
             self._capability_binding.sync()
@@ -2080,16 +2112,38 @@ class MCPPool:
         # messages/data may contain credentials, URLs, subprocess output or PII.
         from openagent_core.core._runner.utils.mcp import _session_is_dead
         from .secret_refs import SecretReferenceError
-        if isinstance(error, SecretReferenceError):
+        import ssl
+        import httpx
+        chain = []
+        seen = set()
+        remaining = [error]
+        while remaining:
+            item = remaining.pop()
+            if item is None or id(item) in seen:
+                continue
+            seen.add(id(item))
+            chain.append(item)
+            remaining.extend(getattr(item, "exceptions", ()))
+            remaining.extend((item.__cause__, item.__context__))
+        statuses = {item.response.status_code for item in chain if isinstance(item, httpx.HTTPStatusError)}
+        # A cancelled AnyIO supervisor can carry both "connection closed" and
+        # an HTTP rejection. Explicit denials and TLS validation win.
+        if any(isinstance(item, SecretReferenceError) for item in chain):
             code = "secret_unavailable"
+        elif statuses.intersection({401, 403, 407}) or any(isinstance(item, PermissionError) for item in chain):
+            code = "permission_denied"
+        elif any(isinstance(item, FileNotFoundError) for item in chain):
+            code = "process_not_found"
+        elif any(isinstance(item, ssl.SSLError) for item in chain):
+            code = "tls_failed"
+        elif statuses:
+            code = "service_unavailable" if statuses <= {408, 500, 502, 503, 504} else "http_rejected"
+        elif any(isinstance(item, (TimeoutError, httpx.TimeoutException)) for item in chain):
+            code = "timeout"
+        elif any(isinstance(item, (httpx.NetworkError, ConnectionError)) for item in chain):
+            code = "transport_unreachable"
         elif _session_is_dead(error):
             code = "transport_closed"
-        elif isinstance(error, TimeoutError):
-            code = "timeout"
-        elif isinstance(error, FileNotFoundError):
-            code = "process_not_found"
-        elif isinstance(error, PermissionError):
-            code = "permission_denied"
         else:
             code = "initialization_failed"
         self._connection_failures[name] = {"code": code, "phase": phase}

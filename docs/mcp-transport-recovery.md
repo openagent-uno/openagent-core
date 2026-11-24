@@ -45,10 +45,11 @@ records 61 passing targeted cases. The full public run has seven catalogue cases
 that also fail on the unmodified baseline in the same environment; it is not an
 entirely green suite and does not certify installed packages.
 
-## First stdio handshake
+## Bounded reconnect for configured sources
 
-An enabled local stdio source can time out before it has a toolkit or a
-supervisor to reconnect. The pool keeps that exact configured source and
+A configured stdio or streamable HTTP source can fail before it has a
+toolkit or a supervisor. After a timeout, connection loss, or transient
+HTTP response (408, 500, 502, 503 or 504), the pool keeps that source and
 starts up to three fresh handshakes in the background. Each uses the normal
 connection deadline. The first retry waits five seconds by default and the
 next two wait twice and four times that interval. Set
@@ -56,7 +57,7 @@ next two wait twice and four times that interval. Set
 the base interval (0.05 to 300 seconds). One initial recovery handshake runs
 at a time per pool. Parallel turns share the attempt.
 
-If all three attempts time out, the pool waits for authorized source discovery
+If all three attempts fail transiently, the pool waits for authorized discovery
 before opening a new burst. The cooldown is the greater of 60 seconds and
 eight times the base interval. Closing the pool or reloading its configuration
 cancels pending retries. Once the handshake succeeds, a newly admitted turn
@@ -76,5 +77,37 @@ Authorized source listing and exact tool searches then report
 map shows the same state. The pending registration issues no callable
 reference or schema. To a caller without status visibility, exact discovery
 has the same result as an unknown source. Startup configuration failures
-such as missing executables and secret resolution errors retain their
-operator diagnostics. This recovery applies to local stdio commands.
+such as missing executables, TLS or authorization errors retain their
+operator diagnostics. An established session whose reconnect fails can
+enter the same bounded cycle. Reconnection performs a handshake and reads
+the new catalog. The caller must select a current reference before acting.
+
+## Previously discovered references
+
+The model broker can return `{"status": "stale_reference"}` when an exact
+reference previously issued to this execution context has a new definition
+on the same registration. It can report `temporarily_unavailable` during a
+temporary outage if current policy permits both status and the exact tool.
+Both outcomes occur before sending a tool call. Fresh discovery must still
+pass current source, audience and tool policy. The broker never substitutes
+another source with a matching name.
+
+A complete MCP catalog refresh also tracks each continuously present tool.
+Removing a tool and restoring it with identical metadata issues a fresh
+reference, even on the same connection. Other unchanged tools keep their
+references. Model and app calls recheck the selected tool across credential
+resolution and transport awaits. The regression in
+`tests/public/test_mcp_app_connection_generation.py` also removes and
+restores a tool while its pre-call ping is in flight.
+
+Evidence is held in memory for the 4,096 most recently discovered reference
+and context pairs. Removal, replacement, revocation, a different audience,
+eviction or a process restart leaves the ordinary unknown-reference response.
+This preserves privacy when there is insufficient evidence to diagnose an old
+reference. The cache stores a fingerprint of the execution context and retains neither its principals nor response payloads.
+
+`tests/public/test_mcp_initial_timeout.py` exercises a real stdio subprocess
+and an authenticated agent turn. `tests/public/test_mcp_recovery_boundaries.py`
+covers HTTP errors, a refused TCP connection, reconnect, reload and restart.
+It also drops the response after a test server completes a write, verifies the
+write occurred once, and checks that a later read can use the restored service.

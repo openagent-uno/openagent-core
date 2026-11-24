@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import inspect
 import secrets
 import time
@@ -7,6 +8,7 @@ from dataclasses import asdict
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Tuple, Union
 
+from openagent_core.contracts import canonical_json
 from openagent_core.mcp._runtime import Toolkit
 from openagent_core.mcp._runtime.function import Function, classification_from_mcp_annotations
 from openagent_core.mcp._runtime.mcp.params import SSEClientParams, StreamableHTTPClientParams
@@ -199,6 +201,7 @@ class MCPTools(Toolkit):
         self._app_functions: dict[str, Any] = {}
         self._catalog_session: Any = None
         self._catalog_generation: str | None = None
+        self._tool_generations: dict[str, tuple[bytes, str]] = {}
         self._catalog_available = False
 
         def cleanup():
@@ -212,6 +215,11 @@ class MCPTools(Toolkit):
     @property
     def initialized(self) -> bool:
         return self._initialized
+
+    def tool_generation(self, name: str) -> str | None:
+        """Identity of one tool continuously present in complete catalogs."""
+        item = self._tool_generations.get(name)
+        return item[1] if item is not None and self.capability_generation is not None else None
 
     @property
     def capability_generation(self) -> str | None:
@@ -583,7 +591,9 @@ class MCPTools(Toolkit):
             try:
                 await owned.__aexit__(exc_type, exc_val, exc_tb)
             except BaseException as error:
-                if first_error is None:
+                if first_error is None or (
+                    isinstance(first_error, asyncio.CancelledError) and not isinstance(error, asyncio.CancelledError)
+                ):
                     first_error = error
         if first_error is not None:
             raise first_error
@@ -604,14 +614,19 @@ class MCPTools(Toolkit):
     async def __aenter__(self) -> "MCPTools":
         try:
             await self._connect()
-        except BaseException:
+        except BaseException as opening:
             # enter_async_context registers __aexit__ only after this returns.
             # Unwind here on the SAME task; shield/wait_for would create a new
             # task and violate AnyIO cancel-scope ownership.
             try:
                 await self._close_main_contexts()
-            except BaseException:
+            except BaseException as cleanup:
                 log_debug("MCP partial-entry cleanup failed")
+                if isinstance(opening, asyncio.CancelledError) and not isinstance(cleanup, asyncio.CancelledError):
+                    # The SDK task group cancelled its supervisor and only
+                    # delivered the HTTP failure when the transport unwound.
+                    # Keep caller cancellation semantics and its actual cause.
+                    raise opening from cleanup
             raise
         return self
 
@@ -679,6 +694,8 @@ class MCPTools(Toolkit):
                     if name not in self._mcp_function_names
                 }
                 mcp_function_names: set[str] = set()
+                prior_tools = self._tool_generations if session is self._catalog_session else {}
+                next_tools = {}
                 app_functions: dict[str, Any] = {}
                 from openagent_core.capabilities import tool_visible
                 # Register only after every page and definition was validated.
@@ -719,6 +736,12 @@ class MCPTools(Toolkit):
                             cache_ttl=self.cache_ttl,
                         )
 
+                        # A removed tool can return with byte-identical schema and
+                        # name on this same connection. Its old handles stay retired.
+                        digest = hashlib.sha256(canonical_json(tool.model_dump(mode="json", by_alias=True)).encode()).digest()
+                        prior = prior_tools.get(f.name)
+                        next_tools[f.name] = prior if prior and prior[0] == digest else (digest, secrets.token_urlsafe(24))
+
                         # Register the Function with the toolkit
                         if tool_visible(f.mcp_metadata, "model"):
                             functions[f.name] = f
@@ -733,6 +756,7 @@ class MCPTools(Toolkit):
                 if session is not self._catalog_session:
                     self._catalog_generation = secrets.token_urlsafe(24)
                 self._catalog_session = session
+                self._tool_generations = next_tools
                 self.functions = functions
                 self._mcp_function_names = mcp_function_names
                 self._app_functions = app_functions

@@ -1,5 +1,6 @@
 """One catalog and dispatcher for functions, MCPs and connected applications."""
 from __future__ import annotations
+from collections import OrderedDict
 from dataclasses import dataclass, field, replace, asdict, is_dataclass
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 import copy
@@ -28,6 +29,24 @@ class CapabilityUnavailable(LookupError):
     pass
 
 
+class PreDispatchReferenceError(CapabilityUnavailable):
+    """A classification for an exact, rejected reference before dispatch."""
+
+    def __init__(self, message: str, *, call_id: str | None = None):
+        super().__init__(message)
+        self.call_id = call_id
+
+
+class StaleCapabilityReference(PreDispatchReferenceError):
+    """Previously issued to this exact context. Fresh discovery is required."""
+    status = "stale_reference"
+
+
+class CapabilitySourceTemporarilyUnavailable(PreDispatchReferenceError):
+    """The host currently authorizes disclosure of this source's outage."""
+    status = "temporarily_unavailable"
+
+
 def ui_resource_uri(metadata: Mapping[str, Any]) -> Any:
     """Read the current and legacy MCP Apps URI spelling as presentation data."""
     if not isinstance(metadata, Mapping):
@@ -53,6 +72,9 @@ class ToolDefinition:
     input_schema: Mapping[str, Any]
     effects: frozenset[str] = frozenset()
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    # A trusted source may retire an individual tool within a live registration.
+    # This contributes to its opaque reference, never its provider-facing schema.
+    binding_generation: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +144,10 @@ class CapabilityCatalog:
         self.observers = observers
         self._sources: dict[tuple[str, int | None], _Registration] = {}
         self._refs: dict[str, tuple[_Registration, ToolDefinition]] = {}
+        # Only an exact context that actually obtained the opaque reference
+        # may receive a more specific failure. Receipts confer no authority,
+        # retain no toolkit, and naturally expire on restart or eviction.
+        self._discovery_receipts: OrderedDict[tuple[str, str], tuple[str, int | None, int, str]] = OrderedDict()
         self._revision = 0
         self._active_generation: int | None = None
 
@@ -366,6 +392,7 @@ class CapabilityCatalog:
     async def discover(self, context: ExecutionContext, *, source_id: str | None = None) -> tuple[ToolDescriptor, ...]:
         """Discover current tools, optionally limiting discovery to one host-selected source."""
         result: list[ToolDescriptor] = []
+        context_fingerprint = None
         for registration in self._registrations_for_context(context):
             if source_id is not None and registration.source_id != source_id:
                 continue
@@ -393,6 +420,17 @@ class CapabilityCatalog:
                     self._refs[reference] = registration, definition
                 else:
                     reference = previous[0]
+                if isinstance(context, ExecutionContext):
+                    if context_fingerprint is None:
+                        context_fingerprint = context.coalescing_key
+                    receipt = (reference, context_fingerprint)
+                    self._discovery_receipts[receipt] = (
+                        registration.source_id, registration.graph_generation,
+                        registration.visible_from_revision, definition.name,
+                    )
+                    self._discovery_receipts.move_to_end(receipt)
+                    if len(self._discovery_receipts) > 4096:
+                        self._discovery_receipts.popitem(last=False)
                 result.append(self._descriptor(reference, registration, definition))
         return tuple(result)
 
@@ -401,10 +439,51 @@ class CapabilityCatalog:
         return ToolDescriptor(reference, definition.name, definition.description, copy.deepcopy(definition.input_schema),
                               registration.source_id, registration.target_label, definition.effects, copy.deepcopy(definition.metadata))
 
+    async def reference_failure(self, tool_ref: str, context: ExecutionContext, *, call_id: str | None = None) -> CapabilityUnavailable:
+        """Classify a rejected model reference without invoking or replacing its destination."""
+        unknown = CapabilityUnavailable("Unknown or revoked tool reference; discover current tools")
+        if not isinstance(context, ExecutionContext) or not isinstance(tool_ref, str):
+            return unknown
+        receipt = self._discovery_receipts.get((tool_ref, context.coalescing_key))
+        if receipt is None:
+            return unknown
+        source_id, generation, revision, name = receipt
+        registration = self._sources.get((source_id, generation))
+        if (registration is None or registration.visible_from_revision != revision
+                or not self._available(registration, context)):
+            return unknown
+        source = ResourceRef("capability", context.tenant_id, source_id)
+        tool = ResourceRef("tool", context.tenant_id, source_id + "/" + name)
+        if not await self.authorizer.authorize(context, "tool.discover", source, audience=context.audience):
+            return unknown
+        if not await self.authorizer.authorize(context, "tool.call", tool, audience=context.audience):
+            return unknown
+        tool_status = getattr(registration.source, "temporarily_unavailable_tool", None)
+        if (callable(tool_status) and await self.temporarily_unavailable_sources(context, source_id=source_id)
+                and await self.authorizer.authorize(context, "tool.call", tool, audience=context.audience)
+                and self._available(registration, context) and tool_status(name, context) is True):
+            return CapabilitySourceTemporarilyUnavailable("Source temporarily unavailable. Retry discovery later.", call_id=call_id)
+        try:
+            definitions = await registration.source.discover(context)
+        except (PermissionError, CapabilityUnavailable):
+            return unknown
+        binding = self._refs.get(tool_ref)
+        trusted = registration.trusted_effects
+        current = [replace(d, effects=d.effects & (trusted.get(name, frozenset()) if isinstance(trusted, Mapping) else trusted))
+                   for d in definitions if d.name == name and tool_visible(d.metadata, "model")]
+        if len(current) != 1 or (binding is not None and binding[0] is registration and binding[1] == current[0]):
+            return unknown
+        if (self._available(registration, context)
+                and await self.authorizer.authorize(context, "tool.discover", source, audience=context.audience)
+                and await self.authorizer.authorize(context, "tool.call", tool, audience=context.audience)
+                and self._available(registration, context)):
+            return StaleCapabilityReference("Tool reference expired. Discover its current definition again.", call_id=call_id)
+        return unknown
+
     async def _current_binding(self, tool_ref: str, context: ExecutionContext):
         binding = self._refs.get(tool_ref)
         if binding is None:
-            raise CapabilityUnavailable("Unknown or revoked tool reference; discover current tools")
+            raise await self.reference_failure(tool_ref, context)
         registration, definition = binding
         if not self._available(registration, context):
             raise CapabilityUnavailable("The exact capability instance is unavailable")
@@ -415,7 +494,7 @@ class CapabilityCatalog:
             if isinstance(registration.trusted_effects, Mapping) else registration.trusted_effects))
             for d in await registration.source.discover(context))
         if definition not in definitions or not self._available(registration, context):
-            raise CapabilityUnavailable("Tool was removed or changed after discovery")
+            raise await self.reference_failure(tool_ref, context)
         return registration, definition, definitions
 
     async def describe_tool(self, tool_ref: str, context: ExecutionContext) -> ToolDescriptor:
@@ -571,7 +650,7 @@ class CapabilityCatalog:
         call_id = call_id or secrets.token_urlsafe(24)
         binding = self._refs.get(tool_ref)
         if binding is None:
-            raise CapabilityUnavailable("Unknown or revoked tool reference; discover current tools")
+            raise await self.reference_failure(tool_ref, context, call_id=call_id)
         registration, definition = binding
         if not self._available(registration, context):
             raise CapabilityUnavailable("The exact capability instance is unavailable")
@@ -601,7 +680,7 @@ class CapabilityCatalog:
         if not tool_visible(definition.metadata, surface):
             raise PermissionError("Tool is not visible to this presentation surface")
         if definition not in current or not self._available(registration, context):
-            raise CapabilityUnavailable("Tool was removed or changed after discovery")
+            raise await self.reference_failure(tool_ref, context, call_id=call_id)
         # Source-owned, side-effect-free syntax checks run only after live
         # authorization and before a durable invocation can claim any effect.
         validate_arguments = getattr(registration.source, "validate_tool_arguments", None)
@@ -690,6 +769,10 @@ class CapabilityCatalog:
             if durable:
                 await runtime.services.store.finish_tool(run_id,call_id,
                     error={"error_type":type(exc).__name__,"effects":"unknown","retry_allowed":False})
+            if isinstance(exc, PreDispatchReferenceError):
+                # An executor or publication callback might have raised the same
+                # diagnostic after an effect. Only our pre-dispatch proof is safe.
+                raise CapabilityUnavailable("Tool outcome is unconfirmed; do not repeat the action") from exc
             raise
         if durable:
             if rejection is not None:

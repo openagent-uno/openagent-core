@@ -650,7 +650,10 @@ async def _describe_scoped_tool_impl(pool: Any, tool_ref: str) -> dict[str, Any]
     catalog, context = _authorized_catalog(pool)
     tools = [tool for tool in await catalog.discover(context) if tool.tool_ref == tool_ref]
     if len(tools) != 1:
-        raise LookupError("Unknown or revoked reference; discover the current tools")
+        error = await catalog.reference_failure(tool_ref, context)
+        if getattr(error, "status", None):
+            return {"status": error.status}
+        raise error
     return _descriptor_wire(tools[0])
 
 
@@ -1126,7 +1129,15 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
 
     async def invoke_for_model(catalog, context, tool_ref, args):
         invocation = secrets.token_urlsafe(24)
-        value = await catalog.call_tool(tool_ref, _decode_tool_args(args), context, call_id=invocation)
+        from openagent_core.capabilities import CapabilityUnavailable, PreDispatchReferenceError
+        try:
+            value = await catalog.call_tool(tool_ref, _decode_tool_args(args), context, call_id=invocation)
+        except PreDispatchReferenceError as error:
+            # An observer may make another lookup after the requested tool
+            # already executed. Only this invocation's admission is actionable.
+            if error.call_id != invocation:
+                raise CapabilityUnavailable("Tool outcome is unconfirmed; do not repeat the action") from error
+            return {"status": error.status}
         envelope = coerce_mcp_result_to_jsonable(value)
         result = pages.first(envelope, context=context, tool_ref=tool_ref, invocation=invocation)
         return await present_result(result)
