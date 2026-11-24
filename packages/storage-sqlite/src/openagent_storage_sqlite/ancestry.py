@@ -16,8 +16,16 @@ def ensure_delegated_ancestry(db):
             WHEN NEW.delegated_parent_run_id IS NOT NULL AND NOT EXISTS
                 (SELECT 1 FROM session_runs p WHERE p.id=NEW.delegated_parent_run_id AND p.tenant_id=NEW.tenant_id)
             BEGIN SELECT RAISE(ABORT,'Delegated parent belongs to a different tenant'); END''')
-    # Earlier migration snapshots already stored the exact relation in their
-    # immutable admission evidence. Only verified same-tenant parents qualify.
+    # Modern writers record ancestry when admitting the run. Apply the older
+    # evidence once in the same transaction as the migration marker.
+    db.execute('''CREATE TABLE IF NOT EXISTS runtime_storage_migrations (
+        migration TEXT PRIMARY KEY
+    ) STRICT''')
+    new = db.execute("INSERT OR IGNORE INTO runtime_storage_migrations VALUES('delegated-ancestry-v1')")
+    if not new.rowcount:
+        return
+    # Earlier snapshots stored the exact relation in immutable admission
+    # evidence. Only verified same-tenant parents qualify.
     db.execute('''UPDATE session_runs AS child
         SET delegated_parent_run_id=json_extract(child.metadata_json,'$.execution_context.parent_run_id')
         WHERE child.delegated_parent_run_id IS NULL

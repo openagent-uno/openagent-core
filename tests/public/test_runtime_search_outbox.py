@@ -59,7 +59,11 @@ class RuntimeSearchOutbox(unittest.IsolatedAsyncioTestCase):
 
     async def test_atomic_write_retry_restart_backfill_and_index_loss(self):
         from openagent_core.memory.db import MemoryDB
-        from openagent_core.memory.operational.search import operational_search_path
+        from openagent_core.memory.operational.search import (
+            operational_search_path,
+            operational_search_status,
+            warm_operational_search,
+        )
         with TemporaryDirectory() as directory:
             store = SqliteRuntimeStore(Path(directory)/'state.sqlite3')
             principal = PrincipalRef('host', 'tenant', 'alice')
@@ -96,9 +100,16 @@ class RuntimeSearchOutbox(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual((await query(sentinel, ['tools']))['hits'], [])
                 # Emulate an early-beta database whose canonical rows had no intents.
                 store.connection.execute('DELETE FROM search_outbox')
+                store.connection.execute('DROP TABLE runtime_search_intent_repair')
                 await store.close()
                 store = SqliteRuntimeStore(Path(directory)/'state.sqlite3')
                 await store.start()
+                self.assertEqual(store.connection.execute('SELECT count(*) FROM search_outbox').fetchone()[0], 0)
+                self.assertEqual((await operational_search_status(db))['state'], 'warming')
+                during_repair = await query('orchid', ['chats','tools'])
+                self.assertFalse(during_repair['index']['complete'])
+                self.assertEqual(during_repair['hits'], [])
+                await warm_operational_search(db)
                 restored = store.connection.execute('SELECT count(*) FROM search_outbox').fetchone()[0]
                 # The durable tool card is also a canonical message. Its outbox
                 # intent must survive rebuild alongside the separate tool record.
@@ -115,6 +126,74 @@ class RuntimeSearchOutbox(unittest.IsolatedAsyncioTestCase):
                     "SELECT tool_call_id, status FROM session_messages WHERE role='tool'"
                 ).fetchall()
                 self.assertEqual([tuple(row) for row in anchor], [('call', 'complete')])
+            finally:
+                await db.close()
+                await store.close()
+
+    async def test_repair_resumes_between_pages_and_never_blocks_on_a_live_writer(self):
+        from openagent_core.memory.db import MemoryDB
+        from openagent_core.memory.operational import search as search_module, search_repair
+        from openagent_core.memory.operational.search import sync_operational_search, warm_operational_search
+
+        with TemporaryDirectory() as directory:
+            store = SqliteRuntimeStore(Path(directory) / 'history.db')
+            principal = PrincipalRef('host', 'tenant', 'alice')
+            context = ExecutionContext(principal, principal, principal, 'earlier', 'agent', (principal,))
+            await store.start()
+            db = MemoryDB(str(store.path))
+            await db.connect()
+            try:
+                for number in range(3):
+                    run = f'past-{number}'
+                    await store.accept(RunRequest(run, 'earlier', run, 'historic receipt'), context)
+                    await store.transition(run, 'running')
+                    await store.transition(run, 'success', output='historic response')
+                old_message = store.connection.execute(
+                    "SELECT id FROM session_messages ORDER BY id LIMIT 1"
+                ).fetchone()[0]
+                store.connection.execute('DELETE FROM search_outbox')
+                store.connection.execute("""INSERT INTO search_outbox
+                  (tenant_id,source_kind,source_id,operation,source_version,acl_version,committed_at_ms)
+                  VALUES('tenant','message',?,'delete',99,99,1)""", (old_message,))
+                store.connection.execute('DROP TABLE runtime_search_intent_repair')
+                await store.close()
+                await store.start()
+                def cursor():
+                    return store.connection.execute(
+                        "SELECT after_id FROM runtime_search_intent_repair WHERE source_kind='message'"
+                    ).fetchone()[0]
+                with patch.object(search_repair, '_BATCH_SIZE', 2):
+                    held_writer = sqlite3.connect(store.path, isolation_level=None)
+                    try:
+                        held_writer.execute('BEGIN IMMEDIATE')
+                        status = await asyncio.wait_for(sync_operational_search(db), timeout=1)
+                        self.assertEqual(status.state, 'warming')
+                        self.assertIsNone(cursor())
+                    finally:
+                        held_writer.close()
+                    self.assertEqual((await sync_operational_search(db)).state, 'warming')
+                    committed_cursor = cursor()
+                    self.assertIsNotNone(committed_cursor)
+                    await store.close()
+                    await store.start()
+                    self.assertEqual(cursor(), committed_cursor)
+                    current = RunRequest('current', 'earlier', 'current', 'interactive input')
+                    accepted, new = await asyncio.wait_for(store.accept(current, context), timeout=1)
+                    self.assertTrue(new)
+                    self.assertEqual(accepted.status, 'queued')
+                    self.assertTrue((await warm_operational_search(db)).ready)
+                self.assertFalse(await search_repair.runtime_search_repair_pending(await db._ensure_connected()))
+                current_rows = store.connection.execute(
+                    "SELECT count(*) FROM session_messages WHERE run_id='current'"
+                ).fetchone()[0]
+                self.assertEqual(current_rows, 1)
+                self.assertIsNone(store.connection.execute(
+                    "SELECT 1 FROM search_outbox WHERE source_id=? AND operation='upsert'", (old_message,)
+                ).fetchone())
+                with patch.object(search_module, 'advance_runtime_search_repair', side_effect=AssertionError('repeated repair')):
+                    await store.close()
+                    await store.start()
+                    self.assertTrue((await sync_operational_search(db)).ready)
             finally:
                 await db.close()
                 await store.close()

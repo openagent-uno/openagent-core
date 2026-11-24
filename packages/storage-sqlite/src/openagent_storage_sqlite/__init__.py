@@ -21,8 +21,9 @@ import base64
 from openagent_core.persistence import run_sync
 from openagent_core.content_privacy import PrivacyConflict,PrivacyFence
 from openagent_core.configuration import sqlite_busy_timeout_ms, sqlite_busy_timeout_s
+from openagent_core.memory.operational.search_repair import initialize_runtime_search_repair
 
-from .search import enqueue_source, restore_runtime_search_intents
+from .search import enqueue_source
 from . import dream_activity, legacy_continuation
 from .ancestry import ensure_delegated_ancestry
 from .tool_invocation import read_tool_invocation as _read_saved_tool_invocation, read_tool_invocation_binding as _read_tool_binding
@@ -126,6 +127,10 @@ class SqliteRuntimeStore:
                 db.execute("""CREATE INDEX IF NOT EXISTS idx_runtime_operation_origin ON session_runs(
                     json_extract(metadata_json,'$.operation_continuation.origin_run_id'))
                     WHERE json_extract(metadata_json,'$.operation_continuation.origin_run_id') IS NOT NULL""")
+                db.execute("""CREATE INDEX IF NOT EXISTS idx_runtime_unfinished_runs ON session_runs(id)
+                    WHERE finished_at_ms IS NULL AND json_extract(metadata_json,'$.runtime_contract')=1""")
+                db.execute("""CREATE INDEX IF NOT EXISTS idx_runtime_unfinished_tools ON tool_invocations(session_run_id,tool_call_id)
+                    WHERE finished_at_ms IS NULL AND session_run_id IS NOT NULL""")
                 db.execute("""CREATE TABLE IF NOT EXISTS oa_document_run_sources(
                     run_id TEXT NOT NULL REFERENCES session_runs(id) ON DELETE CASCADE,
                     session_id TEXT NOT NULL, source_id TEXT NOT NULL,
@@ -145,7 +150,7 @@ class SqliteRuntimeStore:
                     END""")
                 legacy_continuation.initialize(db)
                 ensure_delegated_ancestry(db)
-                restore_runtime_search_intents(db, int(time.time()*1000))
+                initialize_runtime_search_repair(db)
         except BaseException:
             self._close()
             raise
@@ -623,7 +628,10 @@ class SqliteRuntimeStore:
         return tuple(RunEvent(row[0],row[1],row[2],json.loads(row[3])) for row in rows)
 
     def _recover(self) -> None:
-        pending=self.connection.execute("SELECT t.session_run_id,t.tool_call_id FROM tool_invocations t JOIN session_runs r ON r.id=t.session_run_id WHERE json_extract(r.metadata_json,'$.runtime_contract')=1 AND t.finished_at_ms IS NULL").fetchall()
+        pending=self.connection.execute("""SELECT t.session_run_id,t.tool_call_id
+            FROM tool_invocations t JOIN session_runs r ON r.id=t.session_run_id
+            WHERE t.finished_at_ms IS NULL AND t.session_run_id IS NOT NULL
+              AND json_extract(r.metadata_json,'$.runtime_contract')=1""").fetchall()
         for row in pending:
             self._finish_tool(row[0],row[1],error={'reason':'runtime_restarted','effects':'unknown','retry_allowed':False})
         rows=self.connection.execute("SELECT id FROM session_runs WHERE json_extract(metadata_json,'$.runtime_contract')=1 AND finished_at_ms IS NULL").fetchall()

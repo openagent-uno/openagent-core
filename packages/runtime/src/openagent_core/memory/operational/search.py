@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .schema import operational_search_schema_sql
+from .search_repair import advance_runtime_search_repair, runtime_search_repair_pending
 
 
 CONSUMER_ID = "operational-fts-v1"
@@ -92,6 +93,10 @@ def operational_search_path(canonical_path: str | Path) -> Path:
     if target == source or "vault" in lowered or "transcript_index" in lowered:
         raise RuntimeError("operational search path collides with a canonical or vault index")
     return target
+
+
+def _repair_status(path: Path) -> SearchIndexStatus:
+    return SearchIndexStatus(False, "warming", "unavailable", 0, 0, 1, None, str(path))
 
 
 def _harden_index_files(path: Path) -> None:
@@ -951,10 +956,15 @@ async def _sync_operational_search_unlocked(
     *,
     limit: int = 10_000,
     source_conn: Any | None = None,
+    repair_sources: bool = True,
 ) -> SearchIndexStatus:
     source = source_conn if source_conn is not None else await db._ensure_connected()
     db_path = Path(str(db.db_path)).resolve()
     target = operational_search_path(db_path)
+    if repair_sources and await runtime_search_repair_pending(source):
+        pending = await _index_thread_call(advance_runtime_search_repair, db_path)
+        if pending:
+            return _repair_status(target)
     source_state = await (
         await source.execute(
             "SELECT db_instance_id, schema_version FROM operational_storage_state WHERE singleton_id=1"
@@ -1187,9 +1197,11 @@ def _status_from_conn(conn: sqlite3.Connection, path: Path) -> SearchIndexStatus
 
 async def operational_search_status(db: Any) -> dict[str, Any]:
     path = operational_search_path(db.db_path)
+    source = await db._ensure_connected()
+    if await runtime_search_repair_pending(source):
+        return dict(_repair_status(path).__dict__)
     if not path.exists():
         return {"ready": False, "state": "unavailable", "generation": "unavailable", "seq": 0, "documents": 0, "pending": 0, "path": str(path)}
-    source = await db._ensure_connected()
     source_state = await (
         await source.execute(
             "SELECT db_instance_id, schema_version FROM operational_storage_state WHERE singleton_id=1"
@@ -1285,7 +1297,7 @@ async def refresh_privacy_search(db: Any, *, through_seq: int, batch_size: int =
         finally:
             index.close()
         while True:
-            status=await _sync_operational_search_unlocked(db,limit=batch_size)
+            status=await _sync_operational_search_unlocked(db,limit=batch_size,repair_sources=False)
             if status.seq>=through_seq:
                 break
             if status.pending==0:

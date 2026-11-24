@@ -139,17 +139,22 @@ async def maintain_operational_storage(
                         break
                     await asyncio.sleep(0)
                 coverage = await projection_coverage_async(conn)
+                history_ready = bool(coverage['complete'])
+                published_search_warming = False
                 while True:
                     search = await operational_search_status(db)
                     head = int((await (await conn.execute('SELECT COALESCE(MAX(seq),0) FROM search_outbox')).fetchone())[0])
                     if bool(search.get('ready')) and int(search.get('seq') or 0) >= head:
                         break
+                    if not published_search_warming:
+                        await publish(OperationalMaintenanceStatus(history_ready, search))
+                        published_search_warming = True
                     status = await sync_operational_search(db, limit=1000, source_conn=conn)
                     search = dict(status.__dict__)
                     if status.ready and status.seq >= head:
                         break
-                    await asyncio.sleep(0)
-                last_status = OperationalMaintenanceStatus(bool(coverage['complete']), dict(search))
+                    await asyncio.sleep(.01 if status.generation == 'unavailable' and status.state == 'warming' else 0)
+                last_status = OperationalMaintenanceStatus(history_ready, dict(search))
                 stamp = _index_stamp(index_path)
                 audit_at = time.monotonic() + audit_interval
                 failed = False

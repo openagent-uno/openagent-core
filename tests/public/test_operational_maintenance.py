@@ -70,6 +70,19 @@ class OperationalMaintenanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.store.get('run')).status, 'success')
         self.assertEqual(self.store.connection.execute('SELECT COUNT(*) FROM session_messages').fetchone()[0], 2)
 
+    async def test_reports_history_ready_while_repairing_previous_search_intents(self):
+        await self.write()
+        self.store.connection.execute('DELETE FROM search_outbox')
+        self.store.connection.execute('DROP TABLE runtime_search_intent_repair')
+        await self.store.close()
+        await self.store.start()
+        await self.start_worker()
+        self.assertTrue(any(status.history_ready and status.search.get('state') == 'warming'
+                            for status in self.updates))
+        self.assertEqual((await self.store.get('run')).status, 'success')
+        with sqlite3.connect(search.operational_search_path(self.store.path)) as index:
+            self.assertGreater(index.execute("SELECT COUNT(*) FROM search_fts WHERE search_fts MATCH 'orchid'").fetchone()[0], 0)
+
     async def test_lost_index_is_rebuilt_while_canonical_history_is_preserved(self):
         await self.start_worker()
         seq = await self.write()

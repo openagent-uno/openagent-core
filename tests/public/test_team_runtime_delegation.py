@@ -444,6 +444,11 @@ class TeamRuntimeDelegation(unittest.IsolatedAsyncioTestCase):
         before = await self.runtime.children("parent", self.context)
         events = await self.runtime.events("parent", 0, self.context)
         settings, path = self.runtime.settings, self.runtime.services.store.path
+        db = self.runtime.services.store.connection
+        # Model an early snapshot containing admission evidence without the
+        # materialized delegation column or its migration marker.
+        db.execute("UPDATE session_runs SET delegated_parent_run_id=NULL WHERE id=?", (before[0].run_id,))
+        db.execute("DELETE FROM runtime_storage_migrations WHERE migration='delegated-ancestry-v1'")
         await self.runtime.close()
         executor = TeamExecutor(self)
         reopened = Runtime(settings, RuntimeServices(SqliteRuntimeStore(path), executor, self.policy))
