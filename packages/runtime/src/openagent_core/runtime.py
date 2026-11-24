@@ -305,6 +305,7 @@ class Runtime:
         self._applied_module_migrations: set[tuple[str, int]] = set()
         self._started = False
         self._closing = False
+        self._close_waiters = 0
         self._started_modules: list[RuntimeModule] = []
         self._tasks: dict[str, asyncio.Task] = {}
         self._child_slots: dict[int, asyncio.Semaphore] = {}
@@ -543,6 +544,15 @@ class Runtime:
             self._started = True
 
     async def close(self) -> None:
+        # A module may still be preparing a detached admission while shutdown
+        # waits for that module. It must not queue behind the shutdown lock.
+        self._close_waiters += 1
+        try:
+            await self._close()
+        finally:
+            self._close_waiters -= 1
+
+    async def _close(self) -> None:
         async with self._lifecycle:
             if self._closing:
                 return
@@ -758,6 +768,8 @@ class Runtime:
 
     async def _submit(self, request: RunRequest, context: ExecutionContext, executor: AgentExecutor) -> RunRecord:
         from .persistence import complete_before_cancelling
+        if self._close_waiters or self._closing:
+            raise RuntimeError('Runtime is not accepting work')
         async with self._lifecycle:
             self._admission()
             # Lifecycle writers hold this lock while waiting for already-entered

@@ -74,19 +74,33 @@ class AutomationRuntime:
 
     async def ready(self):return self.running
 
-    def launch(self,kind,row,*,request_id,inputs=None):
+    def launch(self,kind,row,*,request_id,inputs=None,run_id=None,trigger="manual"):
         """Track a host-authorized manual firing independent of HTTP lifetime."""
         if not self.running:raise RuntimeError("Automation runtime is not started")
         from .runtime import runtime_scope
         async def execute():
             with runtime_scope(self.runtime):
-                if kind=="scheduled_task":
-                    if "scheduler" not in self._domains:raise RuntimeError("The scheduler module is not active")
-                    return await self.scheduler.run_task(row,trigger="manual",request_id=request_id)
-                if kind=="workflow":
-                    if "workflows" not in self._domains:raise RuntimeError("The workflows module is not active")
-                    return await self.scheduler.run_workflow(row,trigger="manual",request_id=request_id,inputs=inputs)
-                raise ValueError("Unknown automation kind")
+                db = self.scheduler.db
+                if kind == "scheduled_task":
+                    domain = "scheduler"
+                    claim = db.claim_pending_task_requests
+                    dispatch = self.scheduler._run_requested_task
+                elif kind == "workflow":
+                    domain = "workflows"
+                    claim = db.claim_pending_workflow_requests
+                    dispatch = self.scheduler._run_requested_workflow
+                else:
+                    raise ValueError("Unknown automation kind")
+                if domain not in self._domains:
+                    raise RuntimeError(f"The {domain} module is not active")
+                projection = await db.enqueue_manual_automation(
+                    kind, row["id"], request_id, inputs, run_id=run_id, trigger=trigger)
+                reserved = await claim(limit=1, definition_ids=(row["id"],), reserve_runs=True, only_id=projection)
+                if reserved:
+                    return await dispatch(reserved[0], row, propagate=True)
+                # A prior or concurrent claimant owns execution. The host reads
+                # the existing projection with its current per-run authority.
+                return None
         return self.scheduler._spawn_workflow(execute())
 
     async def cancel_runs(self,kind,definition_id,run_ids):
@@ -97,7 +111,11 @@ class AutomationRuntime:
         flagged=[]
         async with repository.transaction() as connection:
             for run_id in run_ids:
-                cursor=await connection.execute(f"UPDATE {table} SET status='cancelling' WHERE id=? AND {column}=? AND status='running'",(run_id,definition_id))
+                cursor=await connection.execute(
+                    f"UPDATE {table} SET status=CASE WHEN status='queued' THEN 'cancelled' ELSE 'cancelling' END, "
+                    "finished_at=CASE WHEN status='queued' THEN CAST(strftime('%s','now') AS REAL) ELSE finished_at END "
+                    f"WHERE id=? AND {column}=? AND status IN ('queued','starting','running')",
+                    (run_id,definition_id))
                 if cursor.rowcount:flagged.append(run_id)
         return flagged
 

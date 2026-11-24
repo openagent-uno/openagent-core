@@ -33,55 +33,22 @@ async def flag_workflow_runs_cancelling(
     workflow_id: str,
     run_id: str | None = None,
 ) -> list[str]:
-    """Flag the ``running`` run(s) of a workflow ``cancelling``; return their ids.
+    """Cancel a queued reservation or flag a started run under the same workflow.
 
-    ``run_id`` targets a single run; omit it to stop every running run of the
-    workflow (the common case — most workflows have one). A ``run_id`` that
-    belongs to a *different* workflow matches nothing: the id pair is checked
-    in one predicate so a stop can never reach across workflows.
-
-    Two invariants ride on the ``status = 'running'`` guard being in both the
-    SELECT and the UPDATE:
-
-    * **A settled run is never resurrected.** A run that reaches ``success``
-      between the SELECT and the UPDATE would otherwise be rewritten to
-      ``cancelling``, and the scheduler's drain — finding no live task — would
-      finalize the successful run as ``cancelled``. History would record a
-      lie. (Note this is the mirror image of the invariant
-      ``MemoryDB.update_workflow_run`` enforces, which keeps a run flagged a
-      hair *before* it finished from escaping to ``success``. Stop wins the
-      race it entered first, and only that one.)
-    * **A double-stop is a no-op.** The second call sees the rows already in
-      ``cancelling``, not ``running``, so it flags nothing and reports zero
-      rather than re-flagging a run that is already on its way down.
-
-    Returns ``[]`` when nothing is running — which is a normal answer (the run
-    finished, or was already stopped), not an error.
+    The guarded update returns only rows changed by this request. Terminal
+    runs and repeated stops are never reported as newly cancelled.
     """
-    if run_id:
-        cursor = await conn.execute(
-            "SELECT id FROM workflow_runs "
-            "WHERE id = ? AND workflow_id = ? AND status = 'running'",
-            (run_id, workflow_id),
-        )
-    else:
-        cursor = await conn.execute(
-            "SELECT id FROM workflow_runs "
-            "WHERE workflow_id = ? AND status = 'running'",
-            (workflow_id,),
-        )
-    target_ids = [r["id"] for r in await cursor.fetchall()]
-    if not target_ids:
-        return []
-
-    placeholders = ",".join("?" for _ in target_ids)
-    await conn.execute(
-        f"UPDATE workflow_runs SET status = 'cancelling' "
-        f"WHERE id IN ({placeholders}) AND status = 'running'",
-        target_ids,
+    target = " AND id=?" if run_id is not None else ""
+    params = (workflow_id, run_id) if run_id is not None else (workflow_id,)
+    cursor = await conn.execute(
+        "UPDATE workflow_runs SET status=CASE WHEN status='queued' THEN 'cancelled' ELSE 'cancelling' END, "
+        "finished_at=CASE WHEN status='queued' THEN CAST(strftime('%s','now') AS REAL) ELSE finished_at END "
+        "WHERE workflow_id=? AND status IN ('queued','starting','running')" + target + " RETURNING id",
+        params,
     )
+    changed = [row["id"] for row in await cursor.fetchall()]
     await conn.commit()
-    return target_ids
+    return changed
 
 
 async def await_runs_terminal(

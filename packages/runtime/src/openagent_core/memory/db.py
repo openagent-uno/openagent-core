@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from openagent_core.instance_state import InstanceMapping
+from openagent_core.contracts import IdempotencyConflict
 from openagent_core.configuration import (
     runtime_environment, sqlite_busy_timeout_ms, sqlite_busy_timeout_s,
 )
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -666,6 +668,16 @@ CREATE TABLE IF NOT EXISTS workflow_run_requests (
     created_at    REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_wfreq_unclaimed ON workflow_run_requests(claimed_at);
+
+-- Bind an embedding host's caller key to its one queue occurrence. The host
+-- keeps authorizing the original caller key even when another worker claims it.
+CREATE TABLE IF NOT EXISTS manual_automation_requests (
+    request_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    definition_id TEXT NOT NULL,
+    input_digest TEXT NOT NULL,
+    run_id TEXT NOT NULL UNIQUE
+);
 
 -- ── Network / identity / coordinator ──
 --
@@ -3386,7 +3398,8 @@ class MemoryDB:
         double "stop" can't resurrect a settled run."""
         async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
             rows = await conn.execute_fetchall(
-                "UPDATE task_runs SET status='cancelling' "
+                "UPDATE task_runs SET status=CASE WHEN status='queued' THEN 'cancelled' ELSE 'cancelling' END, "
+                "finished_at=CASE WHEN status='queued' THEN CAST(strftime('%s','now') AS REAL) ELSE finished_at END "
                 "WHERE task_id=? AND status IN ('queued','running') RETURNING id", (task_id,),
             )
             return [r[0] for r in rows]
@@ -3437,9 +3450,68 @@ class MemoryDB:
             )
         return req_id
 
+    async def enqueue_manual_automation(self, kind, definition_id, request_id, inputs, *, run_id=None, trigger="manual"):
+        """Register an explicit host launch without changing its external request or projected run ID."""
+        if kind not in {"scheduled_task", "workflow"}:
+            raise ValueError("Unknown automation kind")
+        if trigger != "manual" and not (kind == "workflow" and trigger == "api"):
+            raise ValueError("Invalid manual launch trigger")
+        if not all(isinstance(v, str) and v and len(v) <= 512 for v in (definition_id, request_id)):
+            raise ValueError("Expected bounded definition and request IDs")
+        if inputs is None:
+            inputs = {}
+        if not isinstance(inputs, dict):
+            raise ValueError("Manual launch inputs must be an object")
+        encoded = json.dumps(inputs, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        digest = hashlib.sha256((trigger + "\n" + encoded).encode()).hexdigest()
+        prefix = "task" if kind == "scheduled_task" else "workflow"
+        if run_id is None:
+            run_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{prefix}:{definition_id}:{request_id}"))
+        if not isinstance(run_id, str) or not run_id or len(run_id) > 512:
+            raise ValueError("Expected a bounded projection ID")
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            prior = await conn.execute_fetchall(
+                "SELECT kind,definition_id,input_digest,run_id FROM manual_automation_requests WHERE request_id=?",
+                (request_id,),
+            )
+            if prior:
+                if tuple(prior[0]) != (kind, definition_id, digest, run_id):
+                    raise IdempotencyConflict("Manual request is already bound to a different occurrence")
+                return run_id
+            if await conn.execute_fetchall(
+                "SELECT run_id FROM manual_automation_requests WHERE run_id=? UNION ALL "
+                "SELECT id FROM task_runs WHERE id=? UNION ALL SELECT id FROM workflow_runs WHERE id=? UNION ALL "
+                "SELECT id FROM task_run_requests WHERE id=? UNION ALL SELECT id FROM workflow_run_requests WHERE id=?",
+                (run_id,) * 5,
+            ):
+                raise IdempotencyConflict("Existing occurrence has no matching manual request receipt")
+            await conn.execute(
+                "INSERT INTO manual_automation_requests VALUES(?,?,?,?,?)",
+                (request_id, kind, definition_id, digest, run_id),
+            )
+            if kind == "scheduled_task":
+                await conn.execute(
+                    "INSERT INTO task_runs(id,task_id,trigger,status,started_at) VALUES(?,?,'manual','queued',?)",
+                    (run_id, definition_id, time.time()),
+                )
+                await conn.execute(
+                    "INSERT INTO task_run_requests(id,task_id,trigger,run_id,created_at) VALUES(?,?,'manual',?,?)",
+                    (run_id, definition_id, run_id, time.time()),
+                )
+            else:
+                await conn.execute(
+                    "INSERT INTO workflow_runs(id,workflow_id,trigger,inputs_json,status,started_at) "
+                    "VALUES(?,?,?,?,'queued',?)", (run_id, definition_id, trigger, encoded, time.time()),
+                )
+                await conn.execute(
+                    "INSERT INTO workflow_run_requests(id,workflow_id,inputs_json,trigger,run_id,created_at) "
+                    "VALUES(?,?,?,?,?,?)", (run_id, definition_id, encoded, trigger, run_id, time.time()),
+                )
+        return run_id
+
     async def _claim_authorized_requests(self, table: str, definition_column: str, *, limit: int,
                                          definition_ids: tuple[str, ...] | None = None,
-                                         reserve_runs: bool = False) -> list[dict]:
+                                         reserve_runs: bool = False, only_id: str | None = None) -> list[dict]:
         if definition_ids == () or limit <= 0:
             return []
         if (table, definition_column) not in {("task_run_requests", "task_id"), ("workflow_run_requests", "workflow_id")}:
@@ -3447,14 +3519,18 @@ class MemoryDB:
         run_table = "task_runs" if table == "task_run_requests" else "workflow_runs"
         clause = f" AND {definition_column} IN (SELECT value FROM json_each(?))" if definition_ids is not None else ""
         values = [json.dumps(definition_ids)] if definition_ids is not None else []
+        if only_id is not None:
+            clause += " AND id=?"
+            values.append(only_id)
         now = time.time()
         unclaimed = "claimed_at IS NULL"
         bindings = [now, *values]
         if reserve_runs:
             # A stalled coroutine may lose its reservation before dispatch. Only
             # a queued row can transfer to the new claimant; begin uses its claim CAS.
-            unclaimed = (f"(claimed_at IS NULL OR (id IN (SELECT id FROM {run_table} WHERE status='queued') "
-                         "AND id=run_id AND claimed_at < ?))")
+            unclaimed = (f"((run_id IS NULL AND claimed_at IS NULL) OR (id=run_id AND "
+                         f"id IN (SELECT id FROM {run_table} WHERE status='queued') "
+                         "AND (claimed_at IS NULL OR claimed_at < ?)))")
             bindings = [now - 30.0, *bindings]
         pending = f"SELECT id FROM {table} WHERE {unclaimed} AND created_at <= ?{clause}"
         async with self._scheduler_reader() as reader:
@@ -3466,7 +3542,14 @@ class MemoryDB:
                 [now, *bindings, int(limit)])
             claimed = [dict(row) for row in rows]
             if reserve_runs:
+                host_requests = dict(await conn.execute_fetchall(
+                    "SELECT run_id,request_id FROM manual_automation_requests "
+                    "WHERE run_id IN (SELECT value FROM json_each(?))",
+                    (json.dumps([row["id"] for row in claimed]),),
+                ))
                 for row in claimed:
+                    if row["id"] in host_requests:
+                        row["host_request_id"] = host_requests[row["id"]]
                     if row["run_id"] is None:
                         columns = "id," + definition_column + ",trigger,status,started_at"
                         data = [row["id"], row[definition_column], row["trigger"], "queued", now]
@@ -3488,10 +3571,10 @@ class MemoryDB:
 
     async def claim_pending_task_requests(self, *, limit: int = 20,
                                          definition_ids: tuple[str, ...] | None = None,
-                                         reserve_runs: bool = False) -> list[dict]:
+                                         reserve_runs: bool = False, only_id: str | None = None) -> list[dict]:
         """Claim authorized definitions, optionally reserving the projection before dispatch."""
         return await self._claim_authorized_requests("task_run_requests", "task_id",
-            limit=limit, definition_ids=definition_ids, reserve_runs=reserve_runs)
+            limit=limit, definition_ids=definition_ids, reserve_runs=reserve_runs, only_id=only_id)
 
     async def begin_requested_task_run(self, request: dict, *, session_id: str | None) -> bool:
         """The only transition that permits dispatch of a newly reserved manual firing."""
@@ -5160,11 +5243,28 @@ class MemoryDB:
             )
         return req_id
 
+    async def pending_workflow_schedules(self, *, after=None, limit: int = 20):
+        """Inspect a bounded page for a host with grants limited to individual schedules."""
+        values = [time.time(), time.time() - 30]
+        cursor = ""
+        if after is not None:
+            cursor = " AND (created_at,id)>(?,?)"
+            values.extend(after)
+        async with self._scheduler_reader() as conn:
+            rows = await conn.execute_fetchall(
+                "SELECT id,workflow_id,schedule_json,created_at FROM workflow_run_requests "
+                "WHERE schedule_json IS NOT NULL AND created_at<=? AND "
+                "(claimed_at IS NULL OR (claimed_at<? AND id=run_id AND EXISTS "
+                "(SELECT 1 FROM workflow_runs WHERE id=workflow_run_requests.id AND status='queued')))"
+                + cursor + " ORDER BY created_at,id LIMIT ?", (*values, limit),
+            )
+        return [(row["id"], row["workflow_id"], json.loads(row["schedule_json"]), row["created_at"]) for row in rows]
+
     async def claim_pending_workflow_requests(self, *, limit: int = 5,
                                              definition_ids: tuple[str, ...] | None = None,
-                                             reserve_runs: bool = False) -> list[dict]:
+                                             reserve_runs: bool = False, only_id: str | None = None) -> list[dict]:
         rows = await self._claim_authorized_requests("workflow_run_requests", "workflow_id",
-            limit=limit, definition_ids=definition_ids, reserve_runs=reserve_runs)
+            limit=limit, definition_ids=definition_ids, reserve_runs=reserve_runs, only_id=only_id)
         for row in rows:
             scheduled = row.pop("schedule_json", None)
             if scheduled is not None:

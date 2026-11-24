@@ -336,6 +336,7 @@ class Scheduler:
         # Entries are added the moment the run_id is known and removed in
         # the run's ``finally`` — the map only ever holds live runs.
         self._workflow_run_tasks: dict[str, asyncio.Task] = {}
+        self._workflow_schedule_cursor = None
         self._scheduled_run_tasks: dict[str, asyncio.Task] = {}
         # Number of event-delivery dispatch turns currently in flight. The
         # bound that stops a burst from jamming the pipeline: each drain tick
@@ -701,7 +702,7 @@ class Scheduler:
                 self._run_requested_task(req, task)
             )
 
-    async def _run_requested_task(self, request: dict, task: dict) -> None:
+    async def _run_requested_task(self, request: dict, task: dict, *, propagate: bool = False):
         """Run one claimed request and continue a bounded retry chain safely.
 
         Product automation admission raises a generic wrapper exception after
@@ -720,18 +721,23 @@ class Scheduler:
             if not await self.db.begin_requested_task_run(request, session_id=session_id):
                 return
             task = {**task, "_preclaimed_run_id": reserved, "_preclaimed_session_id": session_id}
+            if "host_request_id" in request:
+                task["_manual_request_id"] = request["host_request_id"]
             if trigger == "schedule":
                 await self._run_preclaimed_task(task, claimed_at=request["claimed_at"])
                 return
+        result = None
         try:
-            await self.run_task(
-                task, trigger=trigger, request_id=request.get("id"),
+            result = await self.run_task(
+                task, trigger=trigger, request_id=request.get("host_request_id", request.get("id")),
             )
         except (RunAdmissionPending, AdmissionCapacityExceeded) as exc:
             if not reserved:
                 raise
             await self.db.defer_unadmitted_occurrence("task", reserved, task["id"], retry_after=_admission_delay(exc),
                                                       trigger=trigger, claimed_at=request["claimed_at"])
+            if propagate:
+                raise
             return
         except asyncio.CancelledError:
             if reserved:
@@ -742,6 +748,8 @@ class Scheduler:
         except Exception as exc:  # noqa: BLE001 — detached failure is durable below
             if reserved:
                 await self._record_task_finish(reserved, task, status="failed", error=str(exc) or type(exc).__name__)
+            if propagate:
+                raise
             elog(
                 "scheduler.task_request_failed",
                 level="warning",
@@ -760,6 +768,7 @@ class Scheduler:
             and row.get("status") == "failed"
         ):
             await self._maybe_schedule_task_retry(task, row)
+        return result
 
     def _background_slots(self) -> int:
         limit = max(1, _env_int("OPENAGENT_BACKGROUND_RUN_CONCURRENCY", 3))
@@ -1846,11 +1855,27 @@ class Scheduler:
 
         # AI-enqueued + manually-enqueued workflow runs (Phase 2).
         try:
-            if not self.domain_enabled("workflows"):
-                requests = []
-            else:
-                requests = await self.db.claim_pending_workflow_requests(limit=min(5, self._background_slots()), reserve_runs=True,
-                    definition_ids=await self.execution_service.authorized_definition_ids("workflow") if self.execution_service else ())
+            requests = []
+            limit = min(5, self._background_slots())
+            if self.domain_enabled("workflows") and self.execution_service and limit:
+                definitions = await self.execution_service.authorized_definition_ids("workflow")
+                schedule_policy = getattr(self.execution_service, "schedule_authorized", None)
+                if schedule_policy is not None:
+                    pending = await self.db.pending_workflow_schedules(after=self._workflow_schedule_cursor)
+                    for key, workflow_id, schedule, created in pending:
+                        self._workflow_schedule_cursor = (created, key)
+                        if workflow_id not in definitions:
+                            workflow = await self.db.get_workflow(workflow_id)
+                            if workflow and await schedule_policy(workflow, schedule):
+                                requests.extend(await self.db.claim_pending_workflow_requests(
+                                    limit=1, definition_ids=(workflow_id,), only_id=key, reserve_runs=True))
+                        if len(requests) == limit:
+                            break
+                    else:
+                        if len(pending) < 20:
+                            self._workflow_schedule_cursor = None
+                requests.extend(await self.db.claim_pending_workflow_requests(
+                    limit=limit-len(requests), reserve_runs=True, definition_ids=definitions))
         except Exception as e:  # noqa: BLE001
             # 37e99bd dropped explicit BEGIN/ROLLBACK from the claim path,
             # but both signatures still surface across example host / example-node
@@ -1876,7 +1901,7 @@ class Scheduler:
                 continue
             self._spawn_workflow(self._run_requested_workflow(req, wf))
 
-    async def _run_requested_workflow(self, request: dict, workflow: dict) -> None:
+    async def _run_requested_workflow(self, request: dict, workflow: dict, *, propagate: bool = False):
         if not await self.db.begin_requested_workflow_run(request):
             return
         run_id = request["run_id"]
@@ -1885,13 +1910,19 @@ class Scheduler:
             check = getattr(self.execution_service, "schedule_authorized", None)
             if schedule is not None and check is not None and not await check(workflow, schedule):
                 raise PermissionError("Workflow schedule is no longer authorized")
-            await self._run_workflow(
+            host_key = request.get("host_request_id", request["id"])
+            if "host_request_id" in request:
+                workflow = {**workflow, "_manual_request_id": host_key}
+            return await self._run_workflow(
                 workflow, trigger=request.get("trigger") or "api", inputs=request.get("inputs") or {},
-                request_id=request["id"], run_id=run_id, entry_node_id=schedule["node_id"] if schedule else None,
+                request_id=host_key, queue_request_id=request["id"], run_id=run_id,
+                entry_node_id=schedule["node_id"] if schedule else None,
             )
         except (RunAdmissionPending, AdmissionCapacityExceeded) as exc:
             await self.db.defer_unadmitted_occurrence("workflow", run_id, workflow["id"], retry_after=_admission_delay(exc),
                                                       trigger=request["trigger"], claimed_at=request["claimed_at"])
+            if propagate:
+                raise
         except asyncio.CancelledError:
             await self.db.update_workflow_run(run_id, status="cancelled", finished_at=time.time())
             raise
@@ -2009,13 +2040,23 @@ class Scheduler:
 
     async def run_workflow(self, wf: dict, *, trigger: str, inputs: dict | None = None,
                            request_id: str | None = None, entry_node_id: str | None = None,
-                           run_id: str | None = None):
+                           run_id: str | None = None, queue_request_id: str | None = None):
         if not self.domain_enabled("workflows"):
             raise RuntimeError("The workflows module is not active")
         if self.execution_service is None:
             raise PermissionError("A workflow requires a host automation execution service")
+        execute = self._execute_workflow
+        if queue_request_id is not None:
+            async def execute_claimed(definition, **options):
+                if definition["id"] != wf["id"] or options.get("run_id") != run_id:
+                    raise ValueError("Workflow execution does not match its reservation")
+                # The host authorizes the original request or schedule. Only
+                # the scheduler consumes the internal queue occurrence.
+                options["request_id"] = queue_request_id
+                return await self._execute_workflow(definition, **options)
+            execute = execute_claimed
         return await self.execution_service.run_workflow(self, wf, trigger=trigger, inputs=inputs,
-            request_id=request_id, entry_node_id=entry_node_id, run_id=run_id, execute=self._execute_workflow)
+            request_id=request_id, entry_node_id=entry_node_id, run_id=run_id, execute=execute)
 
     async def _run_workflow(self, wf: dict, **kwargs):
         """Compatibility adapter; every path uses the same public admission."""

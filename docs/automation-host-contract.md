@@ -24,6 +24,27 @@ item limit, so the cursor determines whether more rows are available.
 
 `AutomationRuntime.launch(kind, row, request_id=..., inputs=...)` starts a tracked manual firing without attaching its lifetime to HTTP. `cancel_runs(kind, definition_id, run_ids)` flags only the exact host-authorized projected IDs and preserves the scheduler's cancellation drain. Hosts check each execution's immutable access scope before exposing output or stopping it. Cancellation has been verified on both the workflow projection and canonical run.
 
+The host must authorize the original request and every observation. In the agent's
+definition store, a manual key binds to one kind, definition ID, input digest,
+trigger and projected run ID. A concurrent or completed retry returns without
+executing again or disclosing the earlier output. The host reads the projection
+under current per-run authority. A changed binding raises `ValueError`. A
+pre-existing projection without a matching receipt also fails closed. The
+default projection is UUIDv5 under the URL namespace using
+`task:{definition_id}:{request_id}` or `workflow:{definition_id}:{request_id}`.
+Use the optional `run_id` for an established host-specific projection convention.
+The trigger defaults to `manual`. A workflow can preserve `trigger="api"`.
+
+The claim and projection use the same SQLite scheduling queue as other manual
+requests. The canonical runtime may use SQLite or PostgreSQL. The execution
+service receives the original external key, including after recovery, and must
+exchange its current grant before doing work. A claimed task also supplies
+`_manual_request_id` and its reserved physical `_preclaimed_run_id`.
+Schedule-node authorization remains independent of a grant for the whole
+workflow. A stopped queued occurrence cannot begin. A claim interrupted before
+dispatch can transfer under the existing compare-and-swap. Once execution starts,
+generic queue recovery cannot repeat effects with an unknown outcome.
+
 ## Interrupted execution and projection limits
 
 On startup the scheduler recalculates the next occurrence of enabled tasks.
