@@ -66,6 +66,10 @@ class PoolCapabilitySource:
         from .servers.tool_search.adapters import _tool_is_denied
         return not _tool_is_denied(self.toolkit_name, name) and self._report_unavailable(context)
 
+    def _tool_generation(self, name):
+        generation = getattr(self.toolkit, "tool_generation", None)
+        return generation(name) if callable(generation) else None
+
     def _metadata(self, function) -> dict:
         metadata = dict(getattr(function, "mcp_metadata", None) or {})
         generation = getattr(self.toolkit, "capability_generation", NotImplemented)
@@ -114,7 +118,8 @@ class PoolCapabilitySource:
         except (PermissionError, CapabilityUnavailable):
             return ()
         return tuple(ToolDefinition(name, getattr(fn, "description", "") or "",
-                                    getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()), self._metadata(fn))
+                                    getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()), self._metadata(fn),
+                                    binding_generation=self._tool_generation(name))
                      for name, fn in _functions_dict(self.toolkit).items()
                      if not _tool_is_denied(self.toolkit_name, name))
 
@@ -125,15 +130,16 @@ class PoolCapabilitySource:
         _require_server_allowed(self.toolkit_name)
         functions = {**_functions_dict(self.toolkit), **getattr(self.toolkit, "_app_functions", {})}
         return tuple(ToolDefinition(name, getattr(fn, "description", "") or "",
-            getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()), self._metadata(fn))
+            getattr(fn, "parameters", None) or {}, self.effects.get(name, frozenset()), self._metadata(fn),
+                                    binding_generation=self._tool_generation(name))
             for name, fn in functions.items() if not _tool_is_denied(self.toolkit_name, name)
             and tool_visible(getattr(fn, "mcp_metadata", None) or {}, "app"))
 
     @asynccontextmanager
-    async def _app_session(self, context: ExecutionContext):
+    async def _app_session(self, context: ExecutionContext, *, tool_name: str | None = None):
         self._check()
         from openagent_core.core._runner.utils.mcp import mcp_capability_generation_scope
-        with mcp_capability_generation_scope(self.toolkit) as check_generation:
+        with mcp_capability_generation_scope(self.toolkit, tool_name) as check_generation:
             session = getattr(self.toolkit, "session", None)
             ephemeral = None
             try:
@@ -178,7 +184,7 @@ class PoolCapabilitySource:
         key, function = matches[0]
         if _tool_is_denied(self.toolkit_name, key) or not tool_visible(getattr(function, "mcp_metadata", None) or {}, "app"):
             raise PermissionError("App tool is not granted")
-        async with self._app_session(context) as session:
+        async with self._app_session(context, tool_name=key) as session:
             result = await session.call_tool(getattr(function, "mcp_name", None) or name, dict(arguments))
         return result
 
@@ -192,7 +198,7 @@ class PoolCapabilitySource:
         from .servers.tool_search.adapters import _invoke_registered_tool
         self._check()
         from openagent_core.core._runner.utils.mcp import mcp_capability_generation_scope
-        with mcp_capability_generation_scope(self.toolkit):
+        with mcp_capability_generation_scope(self.toolkit, name):
             result = await _invoke_registered_tool(self.pool, self.toolkit_name, name, arguments)
             self._check()
             return result

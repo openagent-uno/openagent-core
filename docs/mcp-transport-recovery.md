@@ -92,6 +92,14 @@ Both outcomes occur before sending a tool call. Fresh discovery must still
 pass current source, audience and tool policy. The broker never substitutes
 another source with a matching name.
 
+A complete MCP catalog refresh also tracks each continuously present tool.
+Removing a tool and restoring it with identical metadata issues a fresh
+reference, even on the same connection. Other unchanged tools keep their
+references. Model and app calls recheck the selected tool across credential
+resolution and transport awaits. The regression in
+`tests/public/test_mcp_app_connection_generation.py` also removes and
+restores a tool while its pre-call ping is in flight.
+
 Evidence is held in memory for the 4,096 most recently discovered reference
 and context pairs. Removal, replacement, revocation, a different audience,
 eviction or a process restart leaves the ordinary unknown-reference response.

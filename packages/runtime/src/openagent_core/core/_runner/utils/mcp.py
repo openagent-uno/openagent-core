@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 # A catalog-authorized call must not migrate to a replacement connection while
 # awaiting readiness, credentials, ping or provider I/O. Unscoped legacy calls
 # retain their existing recovery behavior.
-_capability_generation_scope: ContextVar[tuple[object, str] | None] = ContextVar(
+_capability_generation_scope: ContextVar[tuple[object, str, str | None, str | None] | None] = ContextVar(
     "openagent_mcp_capability_generation", default=None
 )
 
@@ -49,13 +49,14 @@ _capability_generation_scope: ContextVar[tuple[object, str] | None] = ContextVar
 def _check_capability_generation(instance) -> None:
     expected = _capability_generation_scope.get()
     if expected is not None and expected[0] is instance:
-        if getattr(instance, "capability_generation", None) != expected[1]:
+        if (getattr(instance, "capability_generation", None) != expected[1]
+                or (expected[3] is not None and instance.tool_generation(expected[2]) != expected[3])):
             from openagent_core.capabilities import CapabilityUnavailable
-            raise CapabilityUnavailable("The exact MCP connection changed or its catalog is unavailable")
+            raise CapabilityUnavailable("The exact MCP tool or connection changed or its catalog is unavailable")
 
 
 @contextmanager
-def mcp_capability_generation_scope(instance):
+def mcp_capability_generation_scope(instance, tool_name=None):
     generation = getattr(instance, "capability_generation", NotImplemented)
     if generation is NotImplemented:
         yield lambda: None
@@ -63,7 +64,9 @@ def mcp_capability_generation_scope(instance):
     if generation is None:
         from openagent_core.capabilities import CapabilityUnavailable
         raise CapabilityUnavailable("The current MCP connection has no complete catalog")
-    token = _capability_generation_scope.set((instance, generation))
+    get_tool_generation = getattr(instance, "tool_generation", None)
+    leaf = get_tool_generation(tool_name) if tool_name is not None and callable(get_tool_generation) else None
+    token = _capability_generation_scope.set((instance, generation, tool_name, leaf))
     try:
         yield lambda: _check_capability_generation(instance)
         _check_capability_generation(instance)

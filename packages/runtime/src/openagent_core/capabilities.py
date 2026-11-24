@@ -72,6 +72,9 @@ class ToolDefinition:
     input_schema: Mapping[str, Any]
     effects: frozenset[str] = frozenset()
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    # A trusted source may retire an individual tool within a live registration.
+    # This contributes to its opaque reference, never its provider-facing schema.
+    binding_generation: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

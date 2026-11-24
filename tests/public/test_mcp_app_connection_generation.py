@@ -89,6 +89,29 @@ class ConnectionGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(generation, self.toolkit.capability_generation)
         self.assertEqual(self.ref, next(t.tool_ref for t in await self.catalog.discover(self.context) if t.name == "show"))
 
+    async def test_removed_and_readded_identical_tool_keeps_its_neighbors_and_retires_old_handles(self):
+        tools = list(self.first.list_tools.return_value.tools)
+        before = {t.name: t.tool_ref for t in await self.catalog.discover(self.context)}
+
+        async def remove_and_readd():
+            self.first.list_tools.return_value = ListToolsResult(tools=[t for t in tools if t.name != "mutate"])
+            await self.toolkit.build_tools()
+            self.first.list_tools.return_value = ListToolsResult(tools=tools)
+            await self.toolkit.build_tools()
+
+        await remove_and_readd()
+        with self.assertRaises(CapabilityUnavailable):
+            await self.catalog.describe_tool(before["mutate"], self.context)
+        current = {t.name: t.tool_ref for t in await self.catalog.discover(self.context)}
+        self.assertEqual(current["show"], before["show"])
+        self.assertNotEqual(current["mutate"], before["mutate"])
+        await self.service.request(self.view["handle"], "authorize", {}, self.context)
+
+        self.first.send_ping.side_effect = remove_and_readd
+        with self.assertRaises(CapabilityUnavailable):
+            await self.catalog.call_tool(current["mutate"], {}, self.context)
+        self.first.call_tool.assert_not_awaited()
+
     async def test_uninitialized_replacement_and_failed_refresh_hide_retained_functions(self):
         self.first.list_tools.side_effect = RuntimeError("owned failed refresh on same connection")
         with self.assertRaises(RuntimeError):
