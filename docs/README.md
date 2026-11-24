@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta168 PostgreSQL worker renewal, health and replacement](releases/v1.1.0-beta.168.md).
+
 - [Beta167 optional readiness checks before run admission](releases/v1.1.0-beta.167.md).
 
 - [Beta158 exact engine envelope attestation](releases/v1.1.0-beta.158.md).
