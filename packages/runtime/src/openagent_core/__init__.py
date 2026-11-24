@@ -24,7 +24,7 @@ from .modules import (MODULE_API_VERSION, MODULE_SURFACES, CapabilityContributio
     ModuleReferenceInspector, ModuleResolutionError,
     ModuleStatus, ReconfigureReceipt, RuntimeProfile, ServiceBinding, ServiceRegistry)
 
-__version__ = '1.1.0b165'
+__version__ = '1.1.0b166'
 __all__ = ['Runtime','RuntimeSettings','RuntimeServices','ProviderHistory','ProviderHistoryMessage','ProviderAccount','ProviderRoute','ProviderAdmission','PrincipalRef','ExecutionContext',
     'CapabilityLease','ResourceRef','RunRequest','AcceptedRunRequest','RunRecord','RunEvent','RunEventPage','RunFinalAnswer','RunReplayReader','Authorizer','ConfirmedDelivery',
     'IdentityDirectory','RuntimeStore','SessionRef','SessionStore','ModelCatalog','CredentialResolver','DelegationService',
