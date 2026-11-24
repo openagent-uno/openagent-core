@@ -1,0 +1,44 @@
+"""Disposable stdio MCP whose startup and calls are observable by its parent test."""
+
+import json
+from pathlib import Path
+import sys
+import time
+
+directory = Path(sys.argv[1])
+with (directory / "starts").open("a") as log:
+    log.write("start\n")
+
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    method = request["method"]
+    if method == "initialize":
+        while not (directory / "ready").exists():
+            time.sleep(0.01)
+        result = {
+            "protocolVersion": request["params"]["protocolVersion"],
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "local-fixture", "version": "1"},
+        }
+    elif method == "tools/list":
+        result = {
+            "tools": [
+                {
+                    "name": "read_sample",
+                    "description": "Read a sample",
+                    "inputSchema": {"type": "object", "properties": {}},
+                }
+            ]
+        }
+    elif method == "tools/call":
+        with (directory / "calls").open("a") as log:
+            log.write("call\n")
+        result = {"content": [{"type": "text", "text": "local-stdio-answer"}]}
+    else:
+        result = {}
+    print(
+        json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}),
+        flush=True,
+    )

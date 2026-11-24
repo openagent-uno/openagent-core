@@ -33,7 +33,7 @@ class PoolCapabilitySource:
                 prepare()
 
     def _check(self) -> None:
-        if (self.pool.toolkit_by_name(self.toolkit_name) is not self.toolkit
+        if (self.toolkit is None or self.pool.toolkit_by_name(self.toolkit_name) is not self.toolkit
                 or self.media is not (self.pool.media_executor(self.toolkit_name) if callable(getattr(self.pool, "media_executor", None)) else None)):
             raise CapabilityUnavailable("The registered MCP instance was removed or replaced")
         if getattr(self.toolkit, "capability_generation", NotImplemented) is None:
@@ -73,6 +73,8 @@ class PoolCapabilitySource:
         # Schema-only host administration; the catalog authorizes this path
         # twice and does not issue tool references or bind an agent principal.
         from .servers.tool_search.adapters import _functions_dict
+        if self.toolkit is None:
+            return ()
         self._check()
         return tuple(ToolDefinition(name, getattr(fn, "description", "") or "",
             getattr(fn, "parameters", None) or {}, metadata=self._metadata(fn)) for name, fn in _functions_dict(self.toolkit).items())
@@ -342,6 +344,22 @@ def revoke_delegated_device_capabilities(catalog: CapabilityCatalog,
         catalog.revoke(source_id)
 
 
+class _PendingStartupSource(PoolCapabilitySource):
+    def temporarily_unavailable(self, context: ExecutionContext) -> bool:
+        """Called only for an exact registration with authorized status visibility."""
+        from .servers.tool_search.adapters import _require_server_allowed, _tool_is_denied
+        if self.toolkit is not None or self.toolkit_name not in self.pool._startup_pending:
+            return False
+        try:
+            _require_server_allowed(self.toolkit_name)
+        except PermissionError:
+            return False
+        if _tool_is_denied(self.toolkit_name, "*"):
+            return False
+        self.pool.schedule_startup_retry(self.toolkit_name)
+        return True
+
+
 class PoolCatalogBinding:
     def __init__(self, pool: Any, catalog: CapabilityCatalog, *, trusted_modules: tuple[str, ...],
                  target_label: str = "Agent workspace", user_sources: frozenset[str] = frozenset(),
@@ -370,8 +388,9 @@ class PoolCatalogBinding:
     def sync(self) -> None:
         current = {name: toolkit for name, toolkit in self.pool._toolkit_by_name.items()
                    if name != "tool-search"}
+        current.update({name: None for name in getattr(self.pool, "_startup_pending", {}) if name not in current})
         for name, source in tuple(self.sources.items()):
-            if (current.get(name) is not source.toolkit or source.media is not self.pool.media_executor(name)):
+            if (name not in current or current[name] is not source.toolkit or source.media is not self.pool.media_executor(name)):
                 self.catalog.revoke_registration(name, self.graph_generation)
                 del self.sources[name]
         specs = {spec.name: spec for spec in self.pool.specs}
@@ -393,7 +412,8 @@ class PoolCatalogBinding:
                     if semantics.recalls_content and semantics.path_argument:
                         tags.add("vault.recall." + semantics.path_argument)
                     effects[tool] = frozenset(tags)
-            source = PoolCapabilitySource(self.pool, name, toolkit, effects=effects)
+            adapter = _PendingStartupSource if toolkit is None else PoolCapabilitySource
+            source = adapter(self.pool, name, toolkit, effects=effects)
             registered = self.source_wrapper(name, source, name in self.user_sources) \
                 if self.source_wrapper is not None else source
             if name in self.user_sources:

@@ -305,6 +305,36 @@ class CapabilityCatalog:
         return any(registration.source_id == source_id
                    for registration in self._registrations_for_context(context))
 
+    async def temporarily_unavailable_sources(
+        self, context: ExecutionContext, *, source_id: str | None = None,
+    ) -> tuple[tuple[str, str], ...]:
+        """Report host-authorized source names only. Never issue a tool reference.
+
+        A tool-specific grant cannot prove the right to learn that a source
+        exists. The host must explicitly authorize status visibility for this
+        exact registration and the entire audience. A filtering source wrapper
+        must also explicitly support reporting its underlying source's status.
+        """
+        result = []
+        for registration in self._registrations_for_context(context):
+            if source_id is not None and registration.source_id != source_id:
+                continue
+            status = getattr(registration.source, "temporarily_unavailable", None)
+            if not callable(status):
+                continue
+            resource = ResourceRef("capability", context.tenant_id, registration.source_id)
+            if not await self.authorizer.authorize(context, "tool.discover", resource, audience=context.audience):
+                continue
+            if not await self.authorizer.authorize(
+                context, "tool.discover_source_status", resource, audience=context.audience,
+            ):
+                continue
+            # The availability predicate is synchronous. A wrapper that filters
+            # tools must explicitly implement and attest this status path too.
+            if self._available(registration, context) and status(context) is True:
+                result.append((registration.source_id, registration.target_label))
+        return tuple(result)
+
     async def inspect(self, context: Any, *, authorizer: Authorizer) -> tuple[ToolInventoryEntry, ...]:
         """Inspect host-owned schema metadata without constructing an agent turn.
 

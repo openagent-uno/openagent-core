@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from openagent_core.configuration import runtime_environment
 import asyncio
+import contextvars
 import importlib
 import inspect
 import logging
@@ -663,6 +664,11 @@ class MCPPool:
         # runtime's blanket-except swallowed) instead of a bare empty tool
         # list. Cleared the moment the MCP connects with tools.
         self._last_connect_error: dict[str, str] = {}
+        self._startup_pending: dict[str, _ServerSpec] = {}
+        self._startup_retries: dict[str, asyncio.Task] = {}
+        self._startup_retry_after: dict[str, float] = {}
+        self._startup_retry_slot = asyncio.Semaphore(1)
+        self._startup_runtime = None
         self._connected = False
         self._lock = asyncio.Lock()
         # In-process MCP state — populated by connect_all for specs with
@@ -827,6 +833,7 @@ class MCPPool:
         new_specs = await self.rebuild_specs()
 
         async with self._lock:
+            await self._stop_startup_retries()
             self._lifecycle_generation = getattr(self, "_lifecycle_generation", 0) + 1
             # Only sources whose spec changed, appeared or disappeared are
             # restarted. A source whose resolved spec is identical keeps its
@@ -912,6 +919,8 @@ class MCPPool:
                     await asyncio.sleep(_STARTUP_STAGGER_SECONDS)
                 first_subprocess = False
                 toolkit = await self._build_and_enter_toolkit(spec)
+                if toolkit is None and spec.is_stdio and self._initial_timeout(spec):
+                    self._startup_pending[spec.name] = spec
                 if toolkit is not None:
                     self._runtime_toolkits.append(toolkit)
                     self._toolkit_by_name[spec.name] = toolkit
@@ -1021,6 +1030,10 @@ class MCPPool:
                 elog("mcp.connect", name=spec.name, tools=count, kind="in_process")
 
             self._connected = True
+            from openagent_core.runtime import current_runtime
+            self._startup_runtime = current_runtime()
+            for name in self._startup_pending:
+                self.schedule_startup_retry(name)
             # Tool counts may have shifted during connect_all (dormant
             # recoveries, fresh in-process tool registrations) — drop
             # the cached catalog summary so the next prompt render
@@ -1028,6 +1041,76 @@ class MCPPool:
             self._catalog_summary_cache = None
             if self._capability_binding is not None:
                 self._capability_binding.sync()
+
+    def _initial_timeout(self, spec: _ServerSpec) -> bool:
+        return self._connection_failures.get(spec.name) == {"code": "timeout", "phase": "connect"}
+
+    def schedule_startup_retry(self, name: str) -> None:
+        """Coalesce recovery demand without waiting on a subprocess in a turn."""
+        spec = self._startup_pending.get(name)
+        now = asyncio.get_running_loop().time()
+        if (spec is None or not self._connected or name in self._startup_retries
+                or now < self._startup_retry_after.get(name, 0)):
+            return
+        task = asyncio.create_task(
+            self._retry_initial_handshake(spec), name=f"mcp-startup-retry:{name}",
+            context=contextvars.Context(),
+        )
+        self._startup_retries[name] = task
+
+    async def _retry_initial_handshake(self, spec: _ServerSpec) -> None:
+        from openagent_core.runtime import runtime_scope
+        name = spec.name
+        try:
+            # A supervised startup owns configured secrets. Never inherit the
+            # identity, execution origin or leases of a turn requesting a retry.
+            with runtime_scope(self._startup_runtime):
+                try:
+                    delay = float(runtime_environment().get("OPENAGENT_MCP_STARTUP_RETRY_SECONDS", "5"))
+                except (TypeError, ValueError):
+                    delay = 5
+                delay = min(300, max(0.05, delay)) if math.isfinite(delay) else 5
+                for attempt in range(3):
+                    await asyncio.sleep(delay * (2 ** attempt))
+                    async with self._startup_retry_slot:
+                        elog("mcp.startup_retry", name=name, attempt=attempt + 1)
+                        toolkit = await self._build_and_enter_toolkit(spec)
+                        if toolkit is not None:
+                            if not _toolkit_ready(toolkit):
+                                # Some SDKs swallow initialize errors on entry.
+                                # Use the normal bounded diagnostic before exposing a replacement.
+                                await self._recover_dormant_toolkit(toolkit, spec)
+                            if _toolkit_ready(toolkit):
+                                self._connection_failures.pop(name, None)
+                                self._last_connect_error.pop(name, None)
+                            self._runtime_toolkits.append(toolkit)
+                            self._toolkit_by_name[name] = toolkit
+                            self._tool_counts[name] = self._toolkit_tool_count(toolkit)
+                        if toolkit is not None or not self._initial_timeout(spec):
+                            self._startup_pending.pop(name, None)
+                            self._catalog_summary_cache = None
+                            if self._capability_binding is not None:
+                                self._capability_binding.sync()
+                            return
+                # Demand from an authorized principal may open one new burst
+                # after cooldown. Idle, permanently broken services stop here.
+                self._startup_retry_after[name] = asyncio.get_running_loop().time() + max(60, delay * 8)
+        except Exception as error:
+            elog("mcp.startup_retry_failed", level="warning", name=name, error_type=type(error).__name__)
+            self._startup_retry_after[name] = asyncio.get_running_loop().time() + 60
+        finally:
+            self._startup_retries.pop(name, None)
+
+    async def _stop_startup_retries(self) -> None:
+        pending = tuple(self._startup_retries.values())
+        for job in pending:
+            job.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._startup_retries.clear()
+        self._startup_retry_after.clear()
+        self._startup_pending.clear()
+        self._startup_runtime = None
 
     @staticmethod
     async def _close_in_process(toolkits: list[Any]) -> None:
@@ -1054,6 +1137,7 @@ class MCPPool:
         async with self._lock:
             if not self._connected:
                 return
+            await self._stop_startup_retries()
             self._lifecycle_generation = getattr(self, "_lifecycle_generation", 0) + 1
             supervisors = list(self._toolkit_supervisors)
             in_process = list(self._in_process_runtime_toolkits)

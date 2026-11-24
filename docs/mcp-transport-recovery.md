@@ -44,3 +44,37 @@ The [7 November source qualification](qualification/mcp-transport-recovery-2026-
 records 61 passing targeted cases. The full public run has seven catalogue cases
 that also fail on the unmodified baseline in the same environment; it is not an
 entirely green suite and does not certify installed packages.
+
+## First stdio handshake
+
+An enabled local stdio source can time out before it has a toolkit or a
+supervisor to reconnect. The pool keeps that exact configured source and
+starts up to three fresh handshakes in the background. Each uses the normal
+connection deadline. The first retry waits five seconds by default and the
+next two wait twice and four times that interval. Set
+`OPENAGENT_MCP_STARTUP_RETRY_SECONDS` in the runtime environment to change
+the base interval (0.05 to 300 seconds). One initial recovery handshake runs
+at a time per pool. Parallel turns share the attempt.
+
+If all three attempts time out, the pool waits for authorized source discovery
+before opening a new burst. The cooldown is the greater of 60 seconds and
+eight times the base interval. Closing the pool or reloading its configuration
+cancels pending retries. Once the handshake succeeds, a newly admitted turn
+can discover and call the tools. Recovery itself sends no tool call.
+
+A host may grant `tool.discover_source_status` for the exact
+`ResourceRef("capability", tenant_id, source_id)` and the entire run audience.
+The catalog also requires ordinary `tool.discover` authorization, an active
+registration and the current turn's source policy. A source wrapper that
+filters its inventory must explicitly support this synchronous predicate to
+publish status. The predicate returns a boolean and is called after both
+decisions. Hosts using tool-level grants can withhold status when no eligible
+descriptor or source-wide grant proves that the audience may know the name.
+
+Authorized source listing and exact tool searches then report
+`status: "temporarily_unavailable"` and zero tools. The model's capability
+map shows the same state. The pending registration issues no callable
+reference or schema. To a caller without status visibility, exact discovery
+has the same result as an unknown source. Startup configuration failures
+such as missing executables and secret resolution errors retain their
+operator diagnostics. This recovery applies to local stdio commands.

@@ -490,6 +490,9 @@ async def _list_scoped_servers_impl(pool: Any) -> list[dict[str, Any]]:
                 "name": tool.name,
                 "description": " ".join(str(tool.description or "").split())[:160],
             })
+    for name, label in await catalog.temporarily_unavailable_sources(context):
+        groups.setdefault(name, {"name": name, "source_ref": name, "target_label": label,
+                                 "tool_count": 0, "status": "temporarily_unavailable"})
     from openagent_core.capability_map import hide_aliases, source_summary
     for hidden in hide_aliases(groups):
         groups.pop(hidden, None)
@@ -603,6 +606,10 @@ async def _list_scoped_tools_impl(
         if canonical != source_ref and any(tool.source_id == canonical for tool in discovered):
             resolved_from, source_ref = source_ref, canonical
         else:
+            for candidate in dict.fromkeys((source_ref, canonical)):
+                if await catalog.temporarily_unavailable_sources(context, source_id=candidate):
+                    return {"source_ref": candidate, "query": query or "", "total": 0, "offset": offset,
+                            "limit": limit, "has_more": False, "tools": [], "status": "temporarily_unavailable"}
             known = sorted({tool.source_id for tool in discovered})
             raise LookupError(f"No authorized source {source_ref!r}. Current sources: {', '.join(known)}")
     if source_ref is None:
@@ -625,6 +632,11 @@ async def _list_scoped_tools_impl(
     if resolved_from is not None:
         result["resolved_from"] = resolved_from
     if not ranked and (query or "").strip():
+        if source_ref is None:
+            unavailable = await catalog.temporarily_unavailable_sources(context)
+            if unavailable:
+                result["unavailable_sources"] = [source for source, _ in unavailable[:limit]]
+                result["unavailable_sources_total"] = len(unavailable)
         presentation = getattr(pool, "discovery_presentation", None)
         overrides = getattr(presentation, "source_summaries", None)
         suggestions = rank_sources(discovered, query or "", overrides)[:3]
@@ -1265,6 +1277,9 @@ def build_runtime_toolkit(*, pool: Any | None = None) -> Any:
         if target_label is not None:
             matches = [tool for tool in matches if tool.target_label == target_label]
         if not matches:
+            unavailable = await catalog.temporarily_unavailable_sources(context, source_id=source_ref)
+            if any(target_label is None or target_label == label for _, label in unavailable):
+                return {"source_ref": source_ref, "status": "temporarily_unavailable"}
             raise LookupError(_named_miss_hint(discovered, source_ref, tool_name))
         if len(matches) > 1:
             targets = sorted({str(tool.target_label) for tool in matches})

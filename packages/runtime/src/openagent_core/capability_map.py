@@ -185,6 +185,9 @@ def render(groups: list[dict[str, Any]], *, max_chars: int = _DEFAULT_MAP_CHARS,
     lines = []
     for group in groups:
         target = f" @ {group['target_label']}" if group["target_label"] else ""
+        if group.get("status") == "temporarily_unavailable":
+            lines.append(f"- {group['source_ref']}{target} (temporarily unavailable, retry discovery in a later turn)")
+            continue
         description = f": {_clip(group['description'], _DESCRIPTION_CHARS)}" if group["description"] else ""
         line = f"- {group['source_ref']}{target} ({group['tool_count']} tools){description}"
         if group["tool_count"] <= _INLINE_TOOL_LIMIT:
@@ -204,7 +207,8 @@ def render(groups: list[dict[str, Any]], *, max_chars: int = _DEFAULT_MAP_CHARS,
         used += len(line) + 1
     if len(kept) < len(lines):
         omitted = ", ".join(g["source_ref"] for g in groups[len(kept):])
-        kept.append(_clip(f"- Also available (call `tool_search_list_servers` for details): {omitted}", 600))
+        label = "More sources" if any(g.get("status") for g in groups[len(kept):]) else "Also available"
+        kept.append(_clip(f"- {label} (call `tool_search_list_servers` for details): {omitted}", 600))
     kept.extend(ready_lines)
     return head + "\n".join(kept) + "\n" + tail
 
@@ -246,7 +250,18 @@ async def render_for_turn(runtime: Any, context: Any, *, overrides: Optional[Map
     wanted = list(hot_tools)
     ready = [tool for pair in wanted for tool in tools
              if (getattr(tool, "source_id", None), getattr(tool, "name", None)) == pair]
-    return render(group_sources(tools, overrides), max_chars=max_chars, named_calls=named_calls, ready=ready)
+    groups = group_sources(tools, overrides)
+    status = getattr(catalog, "temporarily_unavailable_sources", None)
+    if callable(status):
+        try:
+            unavailable = await status(context)
+        except Exception:
+            unavailable = ()
+        known = {group["source_ref"] for group in groups}
+        for source_id, target in unavailable:
+            if source_id not in known:
+                groups.append({"source_ref": source_id, "target_label": target, "status": "temporarily_unavailable"})
+    return render(groups, max_chars=max_chars, named_calls=named_calls, ready=ready)
 
 
 _STEM_SUFFIXES = ("ations", "ation", "ings", "ing", "ies", "ers", "er", "es", "ed", "s")
