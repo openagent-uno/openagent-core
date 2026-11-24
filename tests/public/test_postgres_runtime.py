@@ -271,3 +271,51 @@ async def test_middle_cancellation_relinks_the_queue_and_preserves_order(pg, tmp
     finally:
         first.release.set()
         await asyncio.gather(a.close(), b.close())
+
+async def test_nonadmission_fence_and_visible_receipt_across_probe_races(pg, tmp_path):
+    from openagent_core import RunAdmissionReadiness
+    from openagent_gateway import create_app
+
+    @asynccontextmanager
+    async def resolve(request, action, run_id, session_id):
+        yield make_context(user=request.headers.get("X-Test-Principal", "alice"), session=session_id or "session")
+
+    class Probe:
+        async def retry_after(self, request, context):
+            await entered.put(request.run_id)
+            return await answers.get()
+
+    entered, answers = asyncio.Queue(), asyncio.Queue()
+    first, second = Executor(), Executor()
+    slow = worker(pg(), first, Policy(), tmp_path)
+    fast = worker(pg(), second, Policy(), tmp_path)
+    slow.services.registry.bind(RunAdmissionReadiness, Probe())
+    base = "/api/v1/runs"
+    async with TestClient(TestServer(create_app(slow, resolve))) as left, TestClient(TestServer(create_app(fast, resolve))) as right:
+        for ident, fence_first in (("expired", True), ("admitted", False)):
+            body = dict(run_id=ident, session_id="session", idempotency_key=ident, input="hold")
+            checking = asyncio.create_task(left.post(base, json={**body, "admission_policy":"defer-unready"}))
+            assert await asyncio.wait_for(entered.get(), 3) == ident
+            if fence_first:
+                receipt = await right.post(f"{base}/{ident}/cancel-unadmitted", json={"session_id":"session"})
+                assert receipt.status == 200 and (await receipt.json())["request_digest"] == ""
+            else:
+                assert (await right.post(base, json=body)).status == 202
+                assert await asyncio.wait_for(second.started.get(), 3) == ident
+                receipt = await left.post(f"{base}/{ident}/cancel-unadmitted", json={"session_id":"session"})
+                assert receipt.status == 200 and (await receipt.json())["status"] == "running"
+            await answers.put(15)
+            resulting = await checking
+            assert resulting.status == 202
+            assert (await resulting.json())["status"] == ("cancelled" if fence_first else "running")
+            assert first.started.empty()
+        second.release.set()
+        for _ in range(200):
+            if (await fast.get_run("admitted", make_context())).terminal:
+                break
+            await asyncio.sleep(.01)
+        result = await left.get(base + "/admitted")
+        assert (await result.json())["output"] == "hold"
+        assert second.started.empty()
+        denied = await left.get(base + "/admitted", headers={"X-Test-Principal": "foreign"})
+        assert denied.status == 403

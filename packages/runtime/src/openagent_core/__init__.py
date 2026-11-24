@@ -4,9 +4,9 @@ Optional engine, provider, gateway and storage implementations are imported only
 when selected by the host. Importing this package performs no I/O.
 """
 from .contracts import (PrincipalRef, ExecutionContext, CapabilityLease, ResourceRef,
-    RunRequest, AcceptedRunRequest, RunRecord, RunEvent, RunEventPage, RunFinalAnswer, RunReplayReader, Authorizer, IdentityDirectory, RuntimeStore,
+    RunRequest, RunAdmissionReadiness, RunAdmissionPending, AcceptedRunRequest, RunRecord, RunEvent, RunEventPage, RunFinalAnswer, RunReplayReader, Authorizer, IdentityDirectory, RuntimeStore,
     ModelCatalog, CredentialResolver, DelegationService, IdempotencyConflict, SessionRef, SessionStore)
-from .runtime import Runtime, RuntimeSettings, RuntimeServices
+from .runtime import Runtime, RuntimeSettings, RuntimeServices, deferred_admission_requested
 from .provider_history import ProviderHistory, ProviderHistoryMessage
 from .provider_admission import ProviderAccount, ProviderRoute, ProviderAdmission
 from .deliveries import ConfirmedDelivery
@@ -26,7 +26,7 @@ from .modules import (MODULE_API_VERSION, MODULE_SURFACES, CapabilityContributio
 
 __version__ = '1.1.0b166'
 __all__ = ['Runtime','RuntimeSettings','RuntimeServices','ProviderHistory','ProviderHistoryMessage','ProviderAccount','ProviderRoute','ProviderAdmission','PrincipalRef','ExecutionContext',
-    'CapabilityLease','ResourceRef','RunRequest','AcceptedRunRequest','RunRecord','RunEvent','RunEventPage','RunFinalAnswer','RunReplayReader','Authorizer','ConfirmedDelivery',
+    'CapabilityLease','ResourceRef','RunRequest','RunAdmissionReadiness','RunAdmissionPending','deferred_admission_requested','AcceptedRunRequest','RunRecord','RunEvent','RunEventPage','RunFinalAnswer','RunReplayReader','Authorizer','ConfirmedDelivery',
     'IdentityDirectory','RuntimeStore','SessionRef','SessionStore','ModelCatalog','CredentialResolver','DelegationService',
     'CapabilityCatalog','capability_scope','CapabilitySource','ToolExecutor','ToolDefinition','ToolDescriptor',
     'FunctionSource','CapabilityUnavailable','IdempotencyConflict','EngineExtensions',

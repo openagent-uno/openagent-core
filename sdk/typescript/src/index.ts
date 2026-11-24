@@ -4,6 +4,7 @@ export interface RunRequest {
   idempotency_key: string;
   input: string;
   deadline_seconds?: number | null;
+  admission_policy?: "defer-unready";
   model_ref?: string | null;
   steer_run_id?: string | null;
   attachments?: ReadonlyArray<Record<string, unknown>>;
@@ -40,6 +41,9 @@ const terminal = new Set(["success", "failed", "cancelled", "rejected", "interru
 export class RunHTTPError extends Error {
   constructor(readonly status: number) { super(`Run service returned HTTP ${status}`); }
 }
+export class RunAdmissionPending extends Error {
+  constructor(readonly retryAfterSeconds: number) { super("Run admission is waiting for a host prerequisite"); }
+}
 export class AcceptanceUncertain extends Error {
   constructor(readonly runId: string, options?: ErrorOptions) {
     super("Acceptance is uncertain; reconcile this same run ID", options);
@@ -69,6 +73,12 @@ class HttpClient {
         method, headers, body: body === undefined ? undefined : JSON.stringify(body),
         redirect: "error", signal: controller.signal,
       });
+      if (method === "POST" && path === "" && response.status === 503 && response.headers.has("Retry-After")) {
+        const detail = await response.json().catch(() => null);
+        const delay = detail?.retry_after_seconds;
+        if (detail?.error === "run_admission_pending" && Number.isSafeInteger(delay) && delay >= 1 && delay <= 3600
+            && response.headers.get("Retry-After") === String(delay)) throw new RunAdmissionPending(delay);
+      }
       if (!response.ok) throw new RunHTTPError(response.status);
       return await response.json() as T;
     } finally {
@@ -124,9 +134,15 @@ export class RunClient extends HttpClient {
     const snapshot = structuredClone(input);
     try { return await this.request("POST", "", snapshot, signal); }
     catch (cause) {
-      if (cause instanceof RunHTTPError && cause.status < 500) throw cause;
+      if (cause instanceof RunAdmissionPending || (cause instanceof RunHTTPError && cause.status < 500)) throw cause;
       throw new AcceptanceUncertain(snapshot.run_id, {cause});
     }
+  }
+  cancelUnadmitted(runId: string, sessionId: string, signal?: AbortSignal): Promise<RunRecord> {
+    return this.request("POST", "/" + encodeURIComponent(runId) + "/cancel-unadmitted", {session_id: sessionId}, signal);
+  }
+  cancelInSession(runId: string, sessionId: string, signal?: AbortSignal): Promise<RunRecord> {
+    return this.request("POST", "/" + encodeURIComponent(runId) + "/cancel", {session_id: sessionId}, signal);
   }
   get(runId: string, signal?: AbortSignal): Promise<RunRecord> {
     return this.request("GET", "/" + encodeURIComponent(runId), undefined, signal);

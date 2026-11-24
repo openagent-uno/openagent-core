@@ -58,6 +58,88 @@ class GatewaySDK(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get('run')).status,'success')
         self.assertEqual(await self.client.children('run'),())
 
+    async def test_admission_prerequisite_leaves_no_run_and_preserves_original_receipts(self):
+        probes = []
+        delays = [15, 15, None]
+
+        class Readiness:
+            async def retry_after(self, request, context):
+                probes.append((request.run_id, context.author))
+                return delays.pop(0)
+
+        self.runtime.services.registry.bind(RunAdmissionReadiness, Readiness())
+        request = RunRequest("ordinary", "session", "key", "hello")
+        for _ in range(2):
+            with self.assertRaises(RunAdmissionPending) as waiting:
+                await self.client.submit(request, defer_unready=True)
+            self.assertEqual(waiting.exception.retry_after_seconds, 15)
+            self.assertIsNone(await self.runtime.services.store.get("ordinary"))
+            self.assertEqual(self.calls, [])
+        await self.client.submit(request, defer_unready=True)
+        finished = await self.client.wait(request.run_id, interval=.01)
+        self.assertEqual(await self.client.submit(request, defer_unready=True), finished)
+        self.assertEqual(await self.client.cancel_unadmitted(request.run_id, request.session_id), finished)
+        self.assertEqual((len(probes), self.calls), (3, [request.run_id]))
+        with self.assertRaises(RunHTTPError) as conflict:
+            await self.client.submit(replace(request, input="another"), defer_unready=True)
+        self.assertEqual(conflict.exception.status, 409)
+        with self.assertRaises(RunHTTPError) as denied:
+            await self.client.cancel_unadmitted("fenced", "foreign")
+        self.assertEqual(denied.exception.status, 403)
+        for ident, cancel in (("expiry", self.client.cancel_unadmitted),
+                              ("withdrawn", lambda i, session: self.client.cancel(i, session_id=session))):
+            receipt = await cancel(ident, "session")
+            self.assertTrue(receipt.cancel_requested)
+            self.assertEqual(receipt.request_digest, "")
+            bound = await self.client.submit(replace(request, run_id=ident, idempotency_key=ident), defer_unready=True)
+            self.assertEqual(bound.status, "cancelled")
+            self.assertTrue(bound.request_digest)
+        self.assertEqual(self.calls, ["ordinary"])
+        legacy = replace(request, run_id="legacy", idempotency_key="legacy")
+        await self.client.submit(legacy)
+        old = await self.client.wait("legacy", interval=.01)
+        self.assertEqual(await self.client.submit(legacy, defer_unready=True), old)
+        self.assertEqual(await self.client.submit(request), finished)
+        self.assertEqual(len(probes), 3)
+
+    async def test_probe_has_separate_capacity_and_requires_live_submit_authority(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        probes = []
+
+        class Readiness:
+            async def retry_after(self, request, context):
+                probes.append(request.run_id)
+                if request.run_id == "cold":
+                    entered.set()
+                    await release.wait()
+                    return 10
+                return None
+
+        self.runtime.settings = replace(self.runtime.settings, max_active_runs=1)
+        self.runtime.services.registry.bind(RunAdmissionReadiness, Readiness())
+        request = RunRequest("cold", "session", "key", "hello")
+        bad = RunClient(self.url, lambda: {})
+        with self.assertRaises(RunHTTPError) as denied:
+            await bad.submit(request, defer_unready=True)
+        self.assertEqual(denied.exception.status, 403)
+        self.allowed.clear()
+        with self.assertRaises(RunHTTPError) as denied:
+            await self.client.submit(request, defer_unready=True)
+        self.assertEqual(denied.exception.status, 403)
+        self.assertEqual(probes, [])
+        self.allowed.add("alice")
+        checking = asyncio.create_task(self.client.submit(request, defer_unready=True))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            await self.client.submit(replace(request, run_id="ready", idempotency_key="ready"), defer_unready=True)
+            done = await self.client.wait("ready", interval=.01)
+            self.assertEqual(done.output, "alice: hello")
+        finally:
+            release.set()
+            with self.assertRaises(RunAdmissionPending):
+                await checking
+        self.assertEqual(self.calls, ["ready"])
+
     async def test_wire_cannot_supply_principal_or_unverified_attachment(self):
         async with ClientSession() as http:
             for extra in ({'principal':{'subject_id':'bob'}},{'attachments':[{'path':'/etc/passwd'}]}):

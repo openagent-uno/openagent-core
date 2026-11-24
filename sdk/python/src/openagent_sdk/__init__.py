@@ -12,7 +12,7 @@ from typing import Callable, Mapping, Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
-from openagent_core import RunRequest, RunRecord, RunEvent, RunEventPage, RunFinalAnswer
+from openagent_core import RunAdmissionPending, RunRequest, RunRecord, RunEvent, RunEventPage, RunFinalAnswer
 
 
 class RunHTTPError(RuntimeError):
@@ -61,7 +61,17 @@ class _HTTPClient:
                     if len(raw)>16*1024*1024: raise ValueError('Run response exceeds client limit')
                     return json.loads(raw)
             except HTTPError as error:
-                error.close()
+                with error:
+                    if error.code == 503 and method == "POST" and path == "":
+                        header = error.headers.get("Retry-After")
+                        try:
+                            data = json.loads(error.read(1025))
+                        except (ValueError, UnicodeError):
+                            data = None
+                        delay = data.get("retry_after_seconds") if isinstance(data, dict) else None
+                        if (type(delay) is int and 1 <= delay <= 3600 and str(delay) == header
+                                and data.get("error") == "run_admission_pending"):
+                            raise RunAdmissionPending(delay) from None
                 raise RunHTTPError(error.code) from None
         return await asyncio.to_thread(fetch)
 
@@ -89,9 +99,12 @@ class PersonalClient(_HTTPClient):
 
 
 class RunClient(_HTTPClient):
-    async def submit(self,request: RunRequest) -> RunRecord:
+    async def submit(self,request: RunRequest, *, defer_unready: bool = False) -> RunRecord:
+        body = asdict(request)
+        if defer_unready:
+            body['admission_policy'] = 'defer-unready'
         try:
-            value=await self._request('POST',body=asdict(request))
+            value=await self._request('POST',body=body)
         except RunHTTPError as exc:
             if exc.status >= 500:
                 raise AcceptanceUncertain(request.run_id) from exc
@@ -130,8 +143,13 @@ class RunClient(_HTTPClient):
     async def final_answer(self,run_id: str) -> RunFinalAnswer:
         return RunFinalAnswer(**await self._request('GET','/'+quote(run_id,safe='')+'/final-answer'))
 
-    async def cancel(self,run_id: str) -> RunRecord:
-        return _record(await self._request('POST','/'+quote(run_id,safe='')+'/cancel'))
+    async def cancel(self,run_id: str, *, session_id: str | None = None) -> RunRecord:
+        body = {"session_id": session_id} if session_id is not None else None
+        return _record(await self._request('POST','/'+quote(run_id,safe='')+'/cancel',body))
+
+    async def cancel_unadmitted(self,run_id: str,session_id: str) -> RunRecord:
+        return _record(await self._request('POST','/'+quote(run_id,safe='')+'/cancel-unadmitted',
+                                           {"session_id": session_id}))
 
     async def children(self,run_id: str) -> tuple[RunRecord,...]:
         result=await self._request('GET','/'+quote(run_id,safe='')+'/children')
@@ -145,4 +163,4 @@ class RunClient(_HTTPClient):
             await asyncio.sleep(interval)
 
 
-__all__=['PersonalClient','RunClient','RunRequest','RunRecord','RunEvent','RunEventPage','RunFinalAnswer','RunHTTPError','AcceptanceUncertain']
+__all__=['PersonalClient','RunClient','RunRequest','RunRecord','RunEvent','RunEventPage','RunFinalAnswer','RunHTTPError','RunAdmissionPending','AcceptanceUncertain']

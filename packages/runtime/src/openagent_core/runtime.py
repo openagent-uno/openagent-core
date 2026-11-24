@@ -17,7 +17,7 @@ from .dream_evidence import authorize_dream_history, dream_run_id, is_document_d
 from .modules import (CapabilityContribution, ModuleCatalog,
     ModuleContext, ModuleContribution, ModuleReconfigurationError, ModuleReferenceConflict,
     ModuleStatus, ReconfigureReceipt, RuntimeProfile, ServiceRegistry)
-from .contracts import (AdmissionCapacityExceeded, IdempotencyConflict, AgentExecutor, Authorizer, DelegationService, ExecutionContext,
+from .contracts import (AdmissionCapacityExceeded, RunAdmissionPending, RunAdmissionReadiness, IdempotencyConflict, AgentExecutor, Authorizer, DelegationService, ExecutionContext,
     ResourceRef, RunEvent, RunEventPage, RunFinalAnswer, RunRecord, RunRequest, RuntimeStore, SessionStore,
     ModelCatalog, PrincipalRef, require_authorized)
 
@@ -275,6 +275,14 @@ class _ActiveGraph:
             self.drained.set()
 
 
+_deferred_admission_run = ContextVar("openagent_deferred_admission_run", default=None)
+
+
+def deferred_admission_requested(run_id: str) -> bool:
+    """Whether this exact running request passed through the deferred-admission contract."""
+    return _deferred_admission_run.get() == run_id
+
+
 class Runtime:
     def __init__(self, settings: RuntimeSettings, services: RuntimeServices,
                  modules: tuple[RuntimeModule, ...] = (), *,
@@ -308,6 +316,7 @@ class Runtime:
         self._admissions_idle.set()
         self._accepting: dict[str, asyncio.Event] = {}
         self._admission_io = asyncio.Semaphore(settings.max_admission_writes)
+        self._readiness_io = asyncio.Semaphore(settings.max_admission_writes)
 
     def _build_host_registry(self) -> ServiceRegistry:
         registry = self.services.registry.clone()
@@ -728,8 +737,12 @@ class Runtime:
         else:
             yield
 
-    async def submit(self, request: RunRequest, context: ExecutionContext) -> RunRecord:
-        return await self._submit(request,context,self.services.executor)
+    async def submit(self, request: RunRequest, context: ExecutionContext, *, defer_unready: bool = False) -> RunRecord:
+        token = _deferred_admission_run.set(request.run_id if defer_unready else None)
+        try:
+            return await self._submit(request,context,self.services.executor)
+        finally:
+            _deferred_admission_run.reset(token)
 
     async def execute_operation(self, request: RunRequest, context: ExecutionContext, executor: AgentExecutor) -> RunRecord:
         """Admit a trusted host operation through the same durable run service.
@@ -773,6 +786,13 @@ class Runtime:
             await self._authorize(context,'run.submit',request.session_id,context.tenant_id)
             if request.steer_run_id is not None:
                 await self._steering_target(request,context)
+        readiness = self.service(RunAdmissionReadiness)
+        if deferred_admission_requested(request.run_id) and executor is self.services.executor:
+            async with self._credentials(context):
+                previous = await self._check_admission_readiness(readiness, request, context)
+                if previous is not None and previous.request_digest:
+                    return previous
+                await self._authorize(context, "run.submit", request.session_id, context.tenant_id)
         # A simultaneous retry must see the first admission's durable outcome
         # even when that admission reserved the final slot.
         while pending := self._accepting.get(request.run_id):
@@ -797,6 +817,40 @@ class Runtime:
             del self._accepting[request.run_id]
             pending.set()
 
+    async def _check_admission_readiness(self, readiness, request, context):
+        async def prior_receipt():
+            if await self.services.store.get(request.run_id) is None:
+                return None
+            record = await self.get_run(request.run_id, context)
+            if (record.cancel_requested and record.status == "cancelled" and not record.request_digest
+                    and record.tenant_id == context.tenant_id and record.session_id == context.session_id):
+                return record
+            if record.request_digest != request.fingerprint(context):
+                raise IdempotencyConflict("Different request or authority already admitted")
+            return record
+
+        previous = await prior_receipt()
+        if previous is not None:
+            return previous
+        if readiness is None:
+            raise RunAdmissionPending(15)
+        # A slow prerequisite has its own bounded I/O budget; model execution and
+        # durable writes retain all their slots. Reject excess probes without queuing them.
+        if self._readiness_io.locked():
+            raise AdmissionCapacityExceeded("Admission probe capacity reached")
+        async with self._readiness_io:
+            try:
+                async with asyncio.timeout(10):
+                    delay = await readiness.retry_after(request, context)
+            except TimeoutError:
+                delay = 1
+        if delay is None:
+            return None
+        previous = await prior_receipt()
+        if previous is None:
+            raise RunAdmissionPending(delay)
+        return previous
+
     async def _register_admission(self, request: RunRequest, context: ExecutionContext,
                                   executor: AgentExecutor, graph: _ActiveGraph) -> RunRecord:
         capability_revision = self.capabilities.snapshot_revision()
@@ -814,6 +868,8 @@ class Runtime:
             record, created = await self.services.store.accept(request, context)
         else:
             record, created = await atomic_accept(request, context, profile)
+        if created and record.terminal:
+            return record
         if not created:
             # Returning prior content requires current read authority, even if
             # this worker currently has free execution slots.
@@ -1069,6 +1125,13 @@ class Runtime:
         await self.authorize_replay(run_id, context)
         return request
 
+    async def cancel_unadmitted(self, run_id: str, context: ExecutionContext) -> RunRecord:
+        """Fence a future submission or read the receipt that won the atomic admission race."""
+        self._admission()
+        await self._authorize(context, 'run.cancel', context.session_id, context.tenant_id)
+        await self.services.store.reserve_cancel(run_id, context)
+        return await self.get_run(run_id, context)
+
     async def cancel(self, run_id: str, context: ExecutionContext, *, reserve: bool = False) -> RunRecord:
         if reserve and await self.services.store.get(run_id) is None:
             self._admission()
@@ -1077,6 +1140,8 @@ class Runtime:
             if reserved.terminal:
                 return reserved
         record=await self.get_run(run_id,context)
+        if reserve and record.session_id != context.session_id:
+            raise PermissionError('The cancellation reservation belongs to another session')
         await self._authorize(context,'run.cancel',record.session_id,record.tenant_id)
         if record.terminal:
             return record

@@ -196,13 +196,13 @@ class DurableOperationRunner:
                                 accepted.request.session_id, agent_id, accepted.audience, accepted.scopes,
                                 accepted.delegation_id, (), None, accepted.parent_run_id, accepted.deferred)
 
-    async def submit(self, request, context, *, policy=None):
+    async def submit(self, request, context, *, policy=None, defer_unready=False):
         if isinstance(request, OperationRunRequest):
             raise ValueError('Continuation descriptors are created by the operation runner')
         selected = await resolve_operation(self.resolve_operation, request, context)
         handoff = isinstance(selected, OperationHandoff)
         if selected is None or selected.resume_run_id is not None and not handoff:
-            return await self.runtime.submit(request, context)
+            return await self.runtime.submit(request, context, defer_unready=defer_unready)
         operation = self.operations.get(selected.name)
         if operation is None or context.deferred or context.delegation_id or request.steer_run_id:
             raise PermissionError('A new durable operation requires its interactive authority')

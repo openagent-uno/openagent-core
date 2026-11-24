@@ -118,6 +118,22 @@ class AdmissionCapacityExceeded(RuntimeError):
     """The worker has no remaining in-process execution slots."""
 
 
+class RunAdmissionPending(RuntimeError):
+    """This attempt stopped before admission. Retry the authenticated request under its original key."""
+
+    def __init__(self, retry_after_seconds: int):
+        if type(retry_after_seconds) is not int or not 1 <= retry_after_seconds <= 3600:
+            raise ValueError("Expected a retry interval between 1 and 3600 seconds")
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__("Run admission is waiting for a host prerequisite")
+
+
+class RunAdmissionReadiness(Protocol):
+    async def retry_after(self, request: RunRequest, context: ExecutionContext) -> int | None:
+        """Return None when ready or a bounded retry delay. Never submit inference or run tools."""
+        ...
+
+
 class IdempotencyConflict(ValueError):
     pass
 

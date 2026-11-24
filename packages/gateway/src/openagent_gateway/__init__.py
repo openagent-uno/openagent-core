@@ -4,11 +4,11 @@ from dataclasses import asdict
 from typing import Any
 from aiohttp import web
 from openagent_core import RunEventPage, RunRequest, IdempotencyConflict
-from openagent_core.contracts import AdmissionCapacityExceeded, ServingUnavailable
+from openagent_core.contracts import AdmissionCapacityExceeded, RunAdmissionPending, ServingUnavailable
 from .compression import json_compression
 from .computers import ComputerViewerGateway
 
-_REQUEST_FIELDS={'run_id','session_id','idempotency_key','input','deadline_seconds','model_ref','attachments','steer_run_id'}
+_REQUEST_FIELDS={'run_id','session_id','idempotency_key','input','deadline_seconds','model_ref','attachments','steer_run_id','admission_policy'}
 
 
 def _id(value):
@@ -25,8 +25,8 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
 
     `resolve_context(request, action, run_id, session_id)` must return an async
     context manager containing a verified ExecutionContext. It can keep temporary
-    host credentials scoped around the operation. Only submit has a session_id
-    from the request; other operations resolve their resource through the host.
+    host credentials scoped around the operation. Submit and cancellation reservations may supply a session ID. The host
+    must authorize the exact session before reserving or reading a run.
     An optional Core DurableOperationRunner owns explicitly selected operations
     and their logical origin status. Continuation policy is supplied by the host.
     """
@@ -35,6 +35,11 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
     async def boundary(request,handler):
         try:
             return await handler(request)
+        except RunAdmissionPending as error:
+            return web.json_response(
+                {"error": "run_admission_pending", "retry_after_seconds": error.retry_after_seconds},
+                status=503, headers={"Retry-After": str(error.retry_after_seconds), "Cache-Control": "no-store"},
+            )
         except AdmissionCapacityExceeded:
             return web.json_response({'error': 'capacity_exceeded'}, status=429, headers={'Retry-After': '1'})
         except IdempotencyConflict:
@@ -53,6 +58,9 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
         run_id,session_id=_id(body.get('run_id')),_id(body.get('session_id'))
         _id(body.get('idempotency_key'))
         if not isinstance(body.get('input'),str): raise ValueError('Invalid input')
+        if "admission_policy" in body and body["admission_policy"] != "defer-unready":
+            raise ValueError("Unsupported admission policy")
+        options = {"defer_unready": True} if "admission_policy" in body else {}
         # Reference validation/resolution belongs to the host, not a filesystem
         # path or URL supplied directly by an arbitrary wire client.
         if body.get('attachments') and resolve_attachments is None:
@@ -62,7 +70,7 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
             attachments=tuple(await resolve_attachments(body['attachments'],context)) if body.get('attachments') else ()
             record=await runs.submit(RunRequest(run_id,session_id,body['idempotency_key'],body['input'],
                 deadline_seconds=body.get('deadline_seconds'),model_ref=body.get('model_ref'),attachments=attachments,
-                steer_run_id=_id(body['steer_run_id']) if body.get('steer_run_id') is not None else None),context)
+                steer_run_id=_id(body['steer_run_id']) if body.get('steer_run_id') is not None else None),context,**options)
             return web.json_response(asdict(record),status=202,headers={'Location':prefix+'/'+run_id})
 
     async def read(request):
@@ -88,8 +96,28 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
 
     async def cancel(request):
         run_id=_id(request.match_info['run_id'])
-        async with resolve_context(request,'run.cancel',run_id,None) as context:
-            return web.json_response(asdict(await runs.cancel(run_id,context,reserve=True)))
+        body = await request.json() if request.can_read_body else {}
+        if not isinstance(body, dict) or set(body) - {"session_id"}:
+            raise ValueError("Invalid cancellation reservation")
+        session = _id(body["session_id"]) if "session_id" in body else None
+        async with resolve_context(request,'run.cancel',run_id,session) as context:
+            if session is not None and context.session_id != session:
+                raise PermissionError("Session mismatch")
+            record = await runs.cancel(run_id, context, reserve=True)
+            return web.json_response(asdict(record), headers={"Cache-Control": "no-store"})
+
+    async def cancel_unadmitted(request):
+        run_id = _id(request.match_info["run_id"])
+        body = await request.json()
+        if not isinstance(body, dict) or set(body) != {"session_id"}:
+            raise ValueError("A session is required to fence future admission")
+        session = _id(body["session_id"])
+        async with resolve_context(request, "run.cancel", run_id, session) as context:
+            if context.session_id != session:
+                raise PermissionError("Session mismatch")
+            await runtime.cancel_unadmitted(run_id, context)
+            record = await runs.get_run(run_id, context)
+            return web.json_response(asdict(record), headers={"Cache-Control": "no-store"})
 
     async def children(request):
         run_id=_id(request.match_info['run_id'])
@@ -100,6 +128,7 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
     app.add_routes([web.post(prefix,submit),web.get(prefix+'/{run_id}',read),
         web.get(prefix+'/{run_id}/events',events),web.get(prefix+'/{run_id}/final-answer',final_answer),
         web.post(prefix+'/{run_id}/cancel',cancel),
+        web.post(prefix+'/{run_id}/cancel-unadmitted',cancel_unadmitted),
         web.get(prefix+'/{run_id}/children',children)])
     if resolve_artifact_context is not None:
         from .object_artifacts import add_artifact_route
