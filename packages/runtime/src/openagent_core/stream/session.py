@@ -1752,6 +1752,7 @@ class StreamTurnRunner:
         final_answer = None
         canonical_output = None
         canonical_context = None
+        admitted_run = None
         from openagent_core.stream.content_parts import ContentMarkerStreamFilter
         content_stream_filter = ContentMarkerStreamFilter()
         audio_started = False
@@ -2003,10 +2004,14 @@ class StreamTurnRunner:
                             break
                         terminal_text = event.get("text")
                         final_answer = event.get("final_answer")
+                        from openagent_core.runtime import current_execution_context, current_run_id, current_runtime
+                        runtime = current_runtime()
+                        context = current_execution_context()
+                        run_id = current_run_id()
+                        if (run_id is not None and run_id == getattr(turn_context, "request_id", None)
+                                and context is not None and context.session_id == session_id and runtime is not None):
+                            admitted_run = (context.tenant_id, run_id)
                         if event.get("content_format") == "openagent.canonical-content/v1":
-                            from openagent_core.runtime import current_runtime, current_execution_context
-                            runtime = current_runtime()
-                            context = current_execution_context()
                             if runtime is None or context is None or context.session_id != session_id:
                                 raise PermissionError("Canonical output requires its admitted session context")
                             canonical_output = event
@@ -2230,6 +2235,7 @@ class StreamTurnRunner:
                         role="user",
                         principal=artifact_principal,
                         after_sequence=sequence_floor["user"],
+                        admitted_run=admitted_run,
                     )
                     await link_attachments_to_latest_message(
                         artifact_db,
@@ -2238,6 +2244,7 @@ class StreamTurnRunner:
                         role="assistant",
                         principal=artifact_principal,
                         after_sequence=sequence_floor["assistant"],
+                        admitted_run=admitted_run,
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
@@ -2268,6 +2275,7 @@ class StreamTurnRunner:
                         parts=user_parts,
                         principal=artifact_principal,
                         after_sequence=sequence_floor["user"],
+                        admitted_run=admitted_run,
                     )
                     await persist_parts_for_latest_message(
                         artifact_db,
@@ -2276,6 +2284,7 @@ class StreamTurnRunner:
                         parts=content_parts,
                         principal=artifact_principal,
                         after_sequence=sequence_floor["assistant"],
+                        admitted_run=admitted_run,
                     )
                 except Exception as exc:  # noqa: BLE001
                     # The live answer remains usable and legacy rows remain

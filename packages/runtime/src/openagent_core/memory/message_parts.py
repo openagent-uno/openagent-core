@@ -65,6 +65,20 @@ def _access_context(principal: Any) -> Any | None:
         return None
 
 
+async def projected_message(conn: Any, session_id: str, role: str, after_sequence: int,
+                            admitted_run: tuple[str, str] | None = None) -> Any | None:
+    """Select the visible message for an admitted (tenant, run) or a legacy turn boundary."""
+    query = ("SELECT id, tenant_id, sequence FROM session_messages "
+             "WHERE session_id=? AND role=? AND visibility='user_visible' ")
+    if admitted_run is None:
+        condition, values = "AND sequence>? ", (int(after_sequence),)
+    else:
+        condition, values = "AND tenant_id=? AND run_id=? ", admitted_run
+    cursor = await conn.execute(query + condition + "ORDER BY sequence DESC, ordinal DESC, "
+                                "created_at_ms DESC LIMIT 1", (session_id, role, *values))
+    return await cursor.fetchone()
+
+
 async def _wait_for_message(
     conn: Any,
     session_id: str,
@@ -72,19 +86,12 @@ async def _wait_for_message(
     after_sequence: int,
     *,
     timeout_seconds: float,
+    admitted_run: tuple[str, str] | None = None,
 ) -> Any | None:
     deadline = time.monotonic() + max(0.0, timeout_seconds)
     delay = 0.02
     while True:
-        row = await (
-            await conn.execute(
-                "SELECT id, tenant_id, sequence FROM session_messages "
-                "WHERE session_id=? AND role=? AND visibility='user_visible' "
-                "AND sequence>? ORDER BY sequence DESC, ordinal DESC, "
-                "created_at_ms DESC LIMIT 1",
-                (session_id, role, int(after_sequence)),
-            )
-        ).fetchone()
+        row = await projected_message(conn, session_id, role, after_sequence, admitted_run)
         if row is not None:
             return row
         remaining = deadline - time.monotonic()
@@ -265,12 +272,13 @@ async def persist_parts_for_latest_message(
     principal: Any = None,
     after_sequence: int = -1,
     timeout_seconds: float = PROJECTION_WAIT_SECONDS,
+    admitted_run: tuple[str, str] | None = None,
 ) -> str | None:
     """Persist one immutable ordered part set after normalized projection.
 
-    Projection is intentionally asynchronous on recovery paths.  This helper
-    waits for the first message beyond the captured turn boundary, so a slow
-    projection cannot attach a View or file to the preceding response.
+    An admitted run selects its own projected message, including on replay.
+    Legacy turns wait for their session projection beyond the sequence captured
+    before dispatch. Both paths can wait for asynchronous projection.
     """
 
     if role not in {"user", "assistant"}:
@@ -284,6 +292,7 @@ async def persist_parts_for_latest_message(
             role,
             after_sequence,
             timeout_seconds=timeout_seconds,
+            admitted_run=admitted_run,
         )
         if message is None:
             return None

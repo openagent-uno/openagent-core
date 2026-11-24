@@ -863,6 +863,7 @@ async def link_attachments_to_latest_message(
     principal: Any = None,
     retries: int = 6,
     after_sequence: int = -1,
+    admitted_run: tuple[str, str] | None = None,
 ) -> str | None:
     """Attach durable refs to the latest normalized user/assistant message.
 
@@ -876,17 +877,12 @@ async def link_attachments_to_latest_message(
     if not attachments or role not in {"user", "assistant"}:
         return None
     async with _connection(db) as conn:
+        from openagent_core.memory.message_parts import projected_message
+
         message = None
         attempts = max(1, min(int(retries), 10))
         for attempt in range(attempts):
-            message = await (
-                await conn.execute(
-                    "SELECT id, tenant_id FROM session_messages WHERE session_id=? "
-                    "AND role=? AND visibility='user_visible' AND sequence>? "
-                    "ORDER BY sequence DESC, ordinal DESC, created_at_ms DESC LIMIT 1",
-                    (session_id, role, int(after_sequence)),
-                )
-            ).fetchone()
+            message = await projected_message(conn, session_id, role, after_sequence, admitted_run)
             if message is not None:
                 break
             if attempt + 1 < attempts:

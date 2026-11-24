@@ -243,3 +243,10 @@ Deterministic regressions in `test_workspace_administration.py` and
 text, and AgentExecutor through the standard delivery tool, an explicitly
 selected publisher, real CAS upload, live/history read and current ACL checks.
 These tests do not claim a real provider, browser preview or product acceptance.
+
+When the authenticated request ID matches the observed runtime admission, the stream associates ordered
+message parts and attachments with the visible message in that exact tenant,
+session and run. Replaying a completed turn can therefore reuse its existing
+message even after another turn has appended to the same session. Legacy
+streams without a runtime execution context use the session sequence captured
+before dispatch. Both paths check current access before writing associations.
