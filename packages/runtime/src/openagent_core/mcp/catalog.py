@@ -39,6 +39,33 @@ class PoolCapabilitySource:
         if getattr(self.toolkit, "capability_generation", NotImplemented) is None:
             raise CapabilityUnavailable("The current MCP connection has no complete catalog")
 
+    @property
+    def temporarily_unavailable(self):
+        if self.toolkit_name not in getattr(self.pool, "_startup_pending", ()):
+            return None
+        return self._report_unavailable
+
+    def _report_unavailable(self, context: ExecutionContext) -> bool:
+        """Called only for an exact registration with authorized status visibility."""
+        from .servers.tool_search.adapters import _require_server_allowed, _tool_is_denied
+        if (self.toolkit_name not in getattr(self.pool, "_startup_pending", ())
+                or self.pool.toolkit_by_name(self.toolkit_name) is not self.toolkit):
+            return False
+        try:
+            _require_server_allowed(self.toolkit_name)
+        except PermissionError:
+            return False
+        if _tool_is_denied(self.toolkit_name, "*"):
+            return False
+        self.pool.schedule_startup_retry(self.toolkit_name)
+        return True
+
+    def temporarily_unavailable_tool(self, name: str, context: ExecutionContext) -> bool:
+        # The source-status grant alone does not attest access to every
+        # previously learned tool while its descriptors are unavailable.
+        from .servers.tool_search.adapters import _tool_is_denied
+        return not _tool_is_denied(self.toolkit_name, name) and self._report_unavailable(context)
+
     def _metadata(self, function) -> dict:
         metadata = dict(getattr(function, "mcp_metadata", None) or {})
         generation = getattr(self.toolkit, "capability_generation", NotImplemented)
@@ -344,22 +371,6 @@ def revoke_delegated_device_capabilities(catalog: CapabilityCatalog,
         catalog.revoke(source_id)
 
 
-class _PendingStartupSource(PoolCapabilitySource):
-    def temporarily_unavailable(self, context: ExecutionContext) -> bool:
-        """Called only for an exact registration with authorized status visibility."""
-        from .servers.tool_search.adapters import _require_server_allowed, _tool_is_denied
-        if self.toolkit is not None or self.toolkit_name not in self.pool._startup_pending:
-            return False
-        try:
-            _require_server_allowed(self.toolkit_name)
-        except PermissionError:
-            return False
-        if _tool_is_denied(self.toolkit_name, "*"):
-            return False
-        self.pool.schedule_startup_retry(self.toolkit_name)
-        return True
-
-
 class PoolCatalogBinding:
     def __init__(self, pool: Any, catalog: CapabilityCatalog, *, trusted_modules: tuple[str, ...],
                  target_label: str = "Agent workspace", user_sources: frozenset[str] = frozenset(),
@@ -412,8 +423,7 @@ class PoolCatalogBinding:
                     if semantics.recalls_content and semantics.path_argument:
                         tags.add("vault.recall." + semantics.path_argument)
                     effects[tool] = frozenset(tags)
-            adapter = _PendingStartupSource if toolkit is None else PoolCapabilitySource
-            source = adapter(self.pool, name, toolkit, effects=effects)
+            source = PoolCapabilitySource(self.pool, name, toolkit, effects=effects)
             registered = self.source_wrapper(name, source, name in self.user_sources) \
                 if self.source_wrapper is not None else source
             if name in self.user_sources:

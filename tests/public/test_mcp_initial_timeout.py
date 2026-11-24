@@ -115,7 +115,7 @@ class InitialHandshakeTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(pool._startup_retries)
             self.assertFalse(self.catalog.has_source("sample", self.ctx))
 
-    async def test_non_timeout_and_nonlocal_failures_never_install_status_or_retry(
+    async def test_missing_local_command_and_remote_rejection_never_install_status_or_retry(
         self,
     ):
         specs = [
@@ -127,7 +127,7 @@ class InitialHandshakeTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(pool.close_all)
 
         async def fail(spec):
-            error = TimeoutError() if spec.url else FileNotFoundError()
+            error = PermissionError() if spec.url else FileNotFoundError()
             pool._record_connection_failure(spec.name, error, "connect")
 
         with patch.object(pool, "_build_and_enter_toolkit", fail):

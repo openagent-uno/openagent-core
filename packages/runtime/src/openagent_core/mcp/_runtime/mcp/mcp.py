@@ -583,7 +583,9 @@ class MCPTools(Toolkit):
             try:
                 await owned.__aexit__(exc_type, exc_val, exc_tb)
             except BaseException as error:
-                if first_error is None:
+                if first_error is None or (
+                    isinstance(first_error, asyncio.CancelledError) and not isinstance(error, asyncio.CancelledError)
+                ):
                     first_error = error
         if first_error is not None:
             raise first_error
@@ -604,14 +606,19 @@ class MCPTools(Toolkit):
     async def __aenter__(self) -> "MCPTools":
         try:
             await self._connect()
-        except BaseException:
+        except BaseException as opening:
             # enter_async_context registers __aexit__ only after this returns.
             # Unwind here on the SAME task; shield/wait_for would create a new
             # task and violate AnyIO cancel-scope ownership.
             try:
                 await self._close_main_contexts()
-            except BaseException:
+            except BaseException as cleanup:
                 log_debug("MCP partial-entry cleanup failed")
+                if isinstance(opening, asyncio.CancelledError) and not isinstance(cleanup, asyncio.CancelledError):
+                    # The SDK task group cancelled its supervisor and only
+                    # delivered the HTTP failure when the transport unwound.
+                    # Keep caller cancellation semantics and its actual cause.
+                    raise opening from cleanup
             raise
         return self
 
