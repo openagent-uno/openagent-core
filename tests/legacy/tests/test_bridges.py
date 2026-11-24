@@ -1773,7 +1773,7 @@ async def t_friendly_memory_labels(ctx: TestContext) -> None:
     # Direct (upfront-prefixed) vault write → "Memorizing" + note title.
     assert format_tool_message(
         '{"tool_name":"vault_write_note","tool_call_error":false,'
-        '"tool_args":{"path":"Casa Garda/Brain.md","content":"x"}}'
+        '"tool_args":{"path":"Sample Workspace/Brain.md","content":"x"}}'
     ) == "🧠 Memorizing — Brain"
 
     # Deferred dispatch: tool_search_call_tool(server=vault, tool=read_note)
@@ -1799,10 +1799,10 @@ async def t_friendly_memory_labels(ctx: TestContext) -> None:
         "tool_args": {
             "server": "vault",
             "tool": "search_notes",
-            "args": {"query": "casa garda"},
+            "args": {"query": "sample workspace"},
         },
     })
-    assert format_tool_message(dispatched_search) == "🔍 Searching memory — “casa garda”"
+    assert format_tool_message(dispatched_search) == "🔍 Searching memory — “sample workspace”"
 
     # vault-gate maintenance op (prefixed name) → "Memory maintenance".
     title, detail, _emoji = tool_label(parse_status_event(json.dumps({
