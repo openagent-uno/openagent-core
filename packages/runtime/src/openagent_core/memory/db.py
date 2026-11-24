@@ -659,6 +659,7 @@ CREATE TABLE IF NOT EXISTS workflow_run_requests (
     id            TEXT PRIMARY KEY,
     workflow_id   TEXT NOT NULL,
     inputs_json   TEXT NOT NULL DEFAULT '{}',
+    schedule_json TEXT,
     trigger       TEXT NOT NULL,
     claimed_at    REAL,
     run_id        TEXT,
@@ -1105,11 +1106,16 @@ _WAL_CHECKPOINT_INTERVAL_SECONDS = 300.0
 _LAST_WAL_CHECKPOINT = InstanceMapping('memory/db.py:_LAST_WAL_CHECKPOINT')
 
 
+class AutomationOutcomeWriteError(RuntimeError):
+    """A completed firing could not persist its observed outcome."""
+
+
 class MemoryDB:
     """SQLite storage for OpenAgent's runtime state."""
 
     def __init__(self, db_path: str = "openagent.db"):
         self.db_path = db_path
+        self._memory_uri = f"file:{uuid.uuid4().hex}?mode=memory&cache=shared" if db_path == ":memory:" else None
         self._module_migrations = []
         self._scope_reads: dict[tuple, asyncio.Task] = {}
         self._scope_tasks: set[asyncio.Task] = set()
@@ -1159,6 +1165,11 @@ class MemoryDB:
                     logger.debug("Failed database bootstrap cleanup", exc_info=True)
             raise
 
+    def _open_connection(self, *, timeout: float):
+        # SQLite's literal :memory: opens a different database on each connection.
+        # A private URI keeps the standalone instance's writer and readers together.
+        return aiosqlite.connect(self._memory_uri or self.db_path, uri=self._memory_uri is not None, timeout=timeout)
+
     async def _connect_owned(self) -> None:
         # ``timeout`` is the SQLite-level wait when another connection holds a
         # write lock. WAL mode lets readers proceed without blocking writers,
@@ -1168,9 +1179,7 @@ class MemoryDB:
         # MCP subprocess + a fresh per-test MemoryDB all pointing at the same
         # file), two DDL calls can race. Raise the timeout so the second
         # connect waits a few seconds instead of deadlocking the event loop.
-        self._conn = await aiosqlite.connect(
-            self.db_path, timeout=sqlite_busy_timeout_s(),
-        )
+        self._conn = await self._open_connection(timeout=sqlite_busy_timeout_s())
         self._conn.row_factory = aiosqlite.Row
         # ``busy_timeout`` gives the same guarantee at every subsequent
         # statement on this connection — not just the initial open.
@@ -1454,6 +1463,7 @@ class MemoryDB:
         await self._migrate_task_runs_session_id()
         await self._migrate_scheduled_tasks_model_column()
         await self._migrate_scheduled_tasks_timezone_column()
+        await self._migrate_workflow_request_schedule()
         await self._migrate_workflow_schedules_timezone_column()
         await self._migrate_scheduled_tasks_execution_policy_column()
         await self._migrate_scheduled_tasks_target_session_column()
@@ -1854,6 +1864,15 @@ class MemoryDB:
                 "ALTER TABLE scheduled_tasks ADD COLUMN model TEXT"
             )
             await self._conn.commit()
+
+    async def _migrate_workflow_request_schedule(self) -> None:
+        columns = await self._conn.execute_fetchall("PRAGMA table_info(workflow_run_requests)")
+        if any(column[1] == "schedule_json" for column in columns):
+            return
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            columns = await conn.execute_fetchall("PRAGMA table_info(workflow_run_requests)")
+            if not any(column[1] == "schedule_json" for column in columns):
+                await conn.execute("ALTER TABLE workflow_run_requests ADD COLUMN schedule_json TEXT")
 
     async def _migrate_workflow_schedules_timezone_column(self) -> None:
         conn = await self._ensure_connected()
@@ -2760,10 +2779,8 @@ class MemoryDB:
         """
         if not session_id:
             return
-        conn = await aiosqlite.connect(
-            self.db_path,
-            timeout=sqlite_busy_timeout_s(),
-        )
+        conn = await self._open_connection(timeout=sqlite_busy_timeout_s())
+        conn.row_factory = aiosqlite.Row
         try:
             await conn.execute(f"PRAGMA busy_timeout = {sqlite_busy_timeout_ms()}")
             await conn.execute("PRAGMA foreign_keys = ON")
@@ -2800,10 +2817,7 @@ class MemoryDB:
         # progress" even though the phase operation itself was complete. A
         # short-lived connection is also the clean cross-process transaction
         # boundary promised by the phase CAS.
-        conn = await aiosqlite.connect(
-            self.db_path,
-            timeout=sqlite_busy_timeout_s(),
-        )
+        conn = await self._open_connection(timeout=sqlite_busy_timeout_s())
         try:
             await conn.execute(f"PRAGMA busy_timeout = {sqlite_busy_timeout_ms()}")
             await conn.execute("PRAGMA foreign_keys = ON")
@@ -2814,6 +2828,17 @@ class MemoryDB:
             )
         finally:
             await conn.close()
+
+    @asynccontextmanager
+    async def _scheduler_reader(self):
+        """Read a committed queue/projection without pinning the shared chat connection."""
+        await self._ensure_connected()
+        if not self._owns_connection:
+            yield self._conn
+            return
+        async with self._open_connection(timeout=sqlite_busy_timeout_s()) as conn:
+            conn.row_factory = aiosqlite.Row
+            yield conn
 
     @asynccontextmanager
     async def _isolated_write(self, *, lock_wait_ms: int | None = None):
@@ -2857,9 +2882,7 @@ class MemoryDB:
             yield self._conn
             return
         wait_ms = delivery_lock_wait_ms() if lock_wait_ms is None else lock_wait_ms
-        conn = await aiosqlite.connect(
-            self.db_path, timeout=wait_ms / 1000.0,
-        )
+        conn = await self._open_connection(timeout=wait_ms / 1000.0)
         conn.row_factory = aiosqlite.Row
         try:
             await conn.execute(f"PRAGMA busy_timeout = {wait_ms}")
@@ -2947,11 +2970,15 @@ class MemoryDB:
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
-    async def get_task(self, task_id: str) -> dict | None:
-        conn = await self._ensure_connected()
-        cursor = await conn.execute("SELECT * FROM scheduled_tasks WHERE id = ?", (task_id,))
-        row = await cursor.fetchone()
-        return dict(row) if row else None
+    async def get_task(self, task_id: str, *, committed: bool = False) -> dict | None:
+        query = "SELECT * FROM scheduled_tasks WHERE id=?"
+        if committed:
+            async with self._scheduler_reader() as reader:
+                rows = await reader.execute_fetchall(query, (task_id,))
+        else:
+            conn = await self._ensure_connected()
+            rows = await conn.execute_fetchall(query, (task_id,))
+        return dict(rows[0]) if rows else None
 
     async def update_task(self, task_id: str, **kwargs: Any) -> None:
         conn = await self._ensure_connected()
@@ -3001,26 +3028,11 @@ class MemoryDB:
 
     async def get_due_tasks(self, now: float) -> list[dict]:
         """Get all enabled tasks whose next_run is <= now."""
-        if self._owns_connection:
-            await self._ensure_connected()
-            # The atomic claimant advances schedules on another connection;
-            # a long-lived reader must not repeatedly return its stale cursor.
-            async with aiosqlite.connect(
-                self.db_path, timeout=sqlite_busy_timeout_s(),
-            ) as conn:
-                conn.row_factory = aiosqlite.Row
-                async with conn.execute(
-                    "SELECT * FROM scheduled_tasks WHERE enabled = 1 "
-                    "AND next_run <= ? ORDER BY next_run ASC", (now,),
-                ) as cursor:
-                    return [dict(row) for row in await cursor.fetchall()]
-        conn = await self._ensure_connected()
-        cursor = await conn.execute(
-            "SELECT * FROM scheduled_tasks WHERE enabled = 1 AND next_run <= ? ORDER BY next_run ASC",
-            (now,),
-        )
-        rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+        async with self._scheduler_reader() as conn:
+            rows = await conn.execute_fetchall(
+                "SELECT * FROM scheduled_tasks WHERE enabled=1 AND next_run<=? ORDER BY next_run", (now,)
+            )
+            return [dict(row) for row in rows]
 
     async def claim_due_task_run(
         self,
@@ -3032,6 +3044,7 @@ class MemoryDB:
         disable: bool,
         run_id: str,
         session_id: str | None,
+        reserve: bool = False,
     ) -> bool:
         """Atomically advance one due task and open its durable run row.
 
@@ -3046,14 +3059,7 @@ class MemoryDB:
         from unrelated statements queued on ``MemoryDB._conn``. The exact
         ``expected_next_run`` comparison is the cross-process claim guard.
         """
-        conn = await aiosqlite.connect(
-            self.db_path,
-            timeout=sqlite_busy_timeout_s(),
-        )
-        try:
-            await conn.execute(f"PRAGMA busy_timeout = {sqlite_busy_timeout_ms()}")
-            await conn.execute("PRAGMA foreign_keys = ON")
-            await conn.execute("BEGIN IMMEDIATE")
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
             cursor = await conn.execute(
                 "UPDATE scheduled_tasks SET last_run = ?, next_run = ?, "
                 "enabled = ?, updated_at = ? "
@@ -3068,21 +3074,19 @@ class MemoryDB:
                 ),
             )
             if cursor.rowcount != 1:
-                await conn.rollback()
                 return False
             await conn.execute(
                 "INSERT INTO task_runs "
                 "(id, task_id, trigger, status, started_at, session_id) "
-                "VALUES (?, ?, 'schedule', 'running', ?, ?)",
-                (run_id, task_id, fired_at, session_id),
+                "VALUES (?, ?, 'schedule', ?, ?, ?)",
+                (run_id, task_id, "queued" if reserve else "running", fired_at, session_id),
             )
-            await conn.commit()
+            if reserve:
+                await conn.execute(
+                    "INSERT INTO task_run_requests(id,task_id,trigger,claimed_at,run_id,created_at) "
+                    "VALUES (?,?,'schedule',?,?,?)", (run_id, task_id, fired_at, run_id, fired_at),
+                )
             return True
-        except BaseException:
-            await conn.rollback()
-            raise
-        finally:
-            await conn.close()
 
     # ── Task Runs (scheduled-task execution history) ──
     #
@@ -3102,16 +3106,25 @@ class MemoryDB:
         trigger: str = "schedule",
         run_id: str | None = None,
         session_id: str | None = None,
+        request_id: str | None = None,
     ) -> str:
-        conn = await self._ensure_connected()
+        await self._ensure_connected()
         rid = run_id or str(uuid.uuid4())
-        await conn.execute(
-            "INSERT INTO task_runs "
-            "(id, task_id, trigger, status, started_at, session_id) "
-            "VALUES (?, ?, ?, 'running', ?, ?)",
-            (rid, task_id, trigger, time.time(), session_id),
-        )
-        await conn.commit()
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            await conn.execute(
+                "INSERT INTO task_runs "
+                "(id, task_id, trigger, status, started_at, session_id) "
+                "VALUES (?, ?, ?, 'running', ?, ?)",
+                (rid, task_id, trigger, time.time(), session_id),
+            )
+            if request_id is not None:
+                linked = await conn.execute(
+                    "UPDATE task_run_requests SET run_id=? WHERE id=? AND task_id=? "
+                    "AND claimed_at IS NOT NULL AND (run_id IS NULL OR run_id=?)",
+                    (rid, request_id, task_id, rid),
+                )
+                if linked.rowcount != 1:
+                    raise ValueError("Request does not own this task occurrence")
         return rid
 
     async def update_task_run(self, run_id: str, **kwargs: Any) -> None:
@@ -3128,23 +3141,27 @@ class MemoryDB:
         updates = {k: v for k, v in kwargs.items() if k in allowed}
         if not updates:
             return
-        async with self._isolated_write() as conn:
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
             set_clause = ", ".join(f"{k} = ?" for k in updates)
             where = "WHERE id = ?"
-            if "status" in updates and updates["status"] != "cancelled":
-                where += " AND status != 'cancelling'"
+            status = updates.get("status")
+            if status == "cancelled":
+                where += " AND status IN ('running','cancelling')"
+            elif status == "timed_out":
+                # The canonical deadline distinguishes timeout from the inner
+                # runner's CancelledError after it has recorded cancellation.
+                where += " AND status IN ('running','cancelled')"
+            elif status is not None:
+                where += " AND status = 'running'"
             await conn.execute(
                 f"UPDATE task_runs SET {set_clause} {where}",
                 list(updates.values()) + [run_id],
             )
 
     async def get_task_run(self, run_id: str) -> dict | None:
-        conn = await self._ensure_connected()
-        cursor = await conn.execute(
-            "SELECT * FROM task_runs WHERE id = ?", (run_id,),
-        )
-        row = await cursor.fetchone()
-        return self._row_to_task_run(row) if row else None
+        async with self._scheduler_reader() as conn:
+            rows = await conn.execute_fetchall("SELECT * FROM task_runs WHERE id = ?", (run_id,))
+            return self._row_to_task_run(rows[0]) if rows else None
 
     async def task_run_has_tool_activity(self, run_id: str) -> bool:
         """Whether a scheduled run crossed the external-side-effect boundary.
@@ -3157,19 +3174,14 @@ class MemoryDB:
         if not run_id:
             return True
         try:
-            run = await self.get_task_run(run_id)
-            if run is None:
-                return True
-            conn = await self._ensure_connected()
-            cursor = await conn.execute(
-                "SELECT 1 FROM tool_invocations "
-                "WHERE task_run_id = ? "
-                "   OR (root_kind = 'scheduled_run' AND root_id = ?) "
-                "   OR (? IS NOT NULL AND session_id = ?) "
-                "LIMIT 1",
-                (run_id, run_id, run.get("session_id"), run.get("session_id")),
-            )
-            return await cursor.fetchone() is not None
+            async with self._scheduler_reader() as conn:
+                rows = await conn.execute_fetchall(
+                    "SELECT EXISTS (SELECT 1 FROM tool_invocations i WHERE i.task_run_id=r.id "
+                    "OR (i.root_kind='scheduled_run' AND i.root_id=r.id) "
+                    "OR (r.session_id IS NOT NULL AND i.session_id=r.session_id)) "
+                    "FROM task_runs r WHERE r.id=?", (run_id,),
+                )
+                return not rows or bool(rows[0][0])
         except Exception as error:  # noqa: BLE001 — retry safety fails closed
             logger.warning(
                 "task_run.tool_activity_check_failed run_id=%s error=%s",
@@ -3208,14 +3220,11 @@ class MemoryDB:
         rows the scheduler MCP flagged ``cancelling`` and stops the
         in-flight firing that owns each one. Backed by ``idx_taskruns_status``
         so the scan stays cheap even when only a handful of rows ever match."""
-        conn = await self._ensure_connected()
-        cursor = await conn.execute(
-            "SELECT * FROM task_runs WHERE status = ? "
-            "ORDER BY started_at ASC LIMIT ?",
-            (status, int(limit)),
-        )
-        rows = await cursor.fetchall()
-        return [self._row_to_task_run(r) for r in rows]
+        async with self._scheduler_reader() as conn:
+            rows = await conn.execute_fetchall(
+                "SELECT * FROM task_runs WHERE status=? ORDER BY started_at LIMIT ?", (status, int(limit))
+            )
+            return [self._row_to_task_run(row) for row in rows]
 
     async def reap_orphan_task_runs(self) -> int:
         """Mark every ``task_runs`` row still ``running`` as ``failed`` —
@@ -3224,34 +3233,41 @@ class MemoryDB:
         firing that owned it is gone and there is no resume path, so the
         cosmetic "running" badge would otherwise never clear. Called from
         ``AgentServer.start()``. Returns the number of rows reaped."""
-        conn = await self._ensure_connected()
+        await self._ensure_connected()
         now = time.time()
-        # Reset first so a failed/empty later reap can never reuse the ids from
-        # an earlier call in this process.
         self._last_reaped_task_run_ids = []
-        reaped_rows = await conn.execute_fetchall(
-            "UPDATE task_runs "
-            "SET status='failed', finished_at=?, "
-            "    error=COALESCE(error, '') || "
-            "          CASE WHEN error IS NULL OR error='' THEN '' ELSE ' | ' END || "
-            "          'reaped: orphan from prior process' "
-            "WHERE status='running' RETURNING id",
-            (now,),
-        )
-        # A firing flagged 'cancelling' that the prior process never finalized
-        # (crash between the MCP flag and the scheduler's drain) is also an
-        # orphan — finalize it as 'cancelled' (the requested outcome), kept
-        # distinct from the 'failed' reap above.
-        cancelled_rows = await conn.execute_fetchall(
-            "UPDATE task_runs "
-            "SET status='cancelled', finished_at=?, "
-            "    error=COALESCE(error, '') || "
-            "          CASE WHEN error IS NULL OR error='' THEN '' ELSE ' | ' END || "
-            "          'reaped: stop left pending by prior process' "
-            "WHERE status='cancelling' RETURNING id",
-            (now,),
-        )
-        await conn.commit()
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            # A reserved manual request cannot have reached host dispatch until
+            # its queued -> running CAS. Only these proven unstarted claims are
+            # eligible for replay, retaining the same request and run identity.
+            await conn.execute(
+                "UPDATE task_run_requests SET claimed_at=NULL WHERE claimed_at IS NOT NULL "
+                "AND id=run_id AND EXISTS (SELECT 1 FROM task_runs r WHERE r.id=task_run_requests.id "
+                "AND r.task_id=task_run_requests.task_id AND r.status='queued')"
+            )
+            reaped_rows = await conn.execute_fetchall(
+                "UPDATE task_runs "
+                "SET status='failed', finished_at=?, "
+                "    error=COALESCE(error, '') || "
+                "          CASE WHEN error IS NULL OR error='' THEN '' ELSE ' | ' END || "
+                "          'reaped: orphan from prior process' "
+                "WHERE status='running' RETURNING id",
+                (now,),
+            )
+            # A firing flagged 'cancelling' that the prior process never finalized
+            # (crash between the MCP flag and the scheduler's drain) is also an
+            # orphan — finalize it as 'cancelled' (the requested outcome), kept
+            # distinct from the 'failed' reap above.
+            cancelled_rows = await conn.execute_fetchall(
+                "UPDATE task_runs "
+                "SET status='cancelled', finished_at=?, "
+                "    error=COALESCE(error, '') || "
+                "          CASE WHEN error IS NULL OR error='' THEN '' ELSE ' | ' END || "
+                "          'reaped: stop left pending by prior process' "
+                "WHERE status='cancelling' RETURNING id",
+                (now,),
+            )
+
         self._last_reaped_task_run_ids = [str(row[0]) for row in reaped_rows]
         return len(reaped_rows) + len(cancelled_rows)
 
@@ -3301,11 +3317,11 @@ class MemoryDB:
             "SELECT r.id, r.task_id FROM task_runs AS r "
             "JOIN scheduled_tasks AS t ON t.id = r.task_id "
             f"WHERE r.id IN ({placeholders}) AND r.status = 'failed' "
-            "AND r.error LIKE ? AND t.enabled = 1",
+            "AND r.error LIKE ? AND t.enabled = 1 "
+            "AND NOT EXISTS (SELECT 1 FROM task_run_requests q WHERE q.id=r.id AND q.run_id=r.id)",
             (*run_ids, f"%{marker}%"),
         )
         candidates = [(row[0], row[1]) for row in await cursor.fetchall()]
-        self._last_reaped_task_run_ids = []
 
         requeued: list[str] = []
         for run_id, task_id in candidates:
@@ -3334,15 +3350,23 @@ class MemoryDB:
                 )
                 requeued.append(task_id)
 
+        self._last_reaped_task_run_ids = []
         return requeued
 
     async def prune_task_runs(self, task_id: str, *, keep_last: int = 50) -> int:
         """Delete all but the most recent ``keep_last`` runs for a task.
         Returns the number of rows removed."""
+        async with self._scheduler_reader() as reader:
+            if not await reader.execute_fetchall(
+                "SELECT 1 FROM task_runs WHERE task_id=? AND status NOT IN ('running','queued','cancelling') "
+                "LIMIT 1 OFFSET ?", (task_id, int(keep_last)),
+            ):
+                return 0
         async with self._isolated_write() as conn:
             cursor = await conn.execute(
                 "DELETE FROM task_runs WHERE id IN ("
                 "  SELECT id FROM task_runs WHERE task_id = ? "
+                "  AND status NOT IN ('running','queued','cancelling') "
                 "  ORDER BY started_at DESC LIMIT -1 OFFSET ?"
                 ")",
                 (task_id, int(keep_last)),
@@ -3360,22 +3384,12 @@ class MemoryDB:
         Idempotent — the ``status='running'`` guard on the UPDATE avoids
         clobbering a firing that finished between the SELECT and here, so a
         double "stop" can't resurrect a settled run."""
-        conn = await self._ensure_connected()
-        cursor = await conn.execute(
-            "SELECT id FROM task_runs WHERE task_id = ? AND status = 'running'",
-            (task_id,),
-        )
-        ids = [r["id"] for r in await cursor.fetchall()]
-        if not ids:
-            return []
-        placeholders = ",".join("?" for _ in ids)
-        await conn.execute(
-            f"UPDATE task_runs SET status = 'cancelling' "
-            f"WHERE id IN ({placeholders}) AND status = 'running'",
-            ids,
-        )
-        await conn.commit()
-        return ids
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            rows = await conn.execute_fetchall(
+                "UPDATE task_runs SET status='cancelling' "
+                "WHERE task_id=? AND status IN ('queued','running') RETURNING id", (task_id,),
+            )
+            return [r[0] for r in rows]
 
     async def running_task_ids(self) -> set[str]:
         """Set of task ids that have a firing in flight (``running`` or
@@ -3424,49 +3438,120 @@ class MemoryDB:
         return req_id
 
     async def _claim_authorized_requests(self, table: str, definition_column: str, *, limit: int,
-                                         definition_ids: tuple[str, ...] | None = None) -> list[dict]:
+                                         definition_ids: tuple[str, ...] | None = None,
+                                         reserve_runs: bool = False) -> list[dict]:
         if definition_ids == () or limit <= 0:
             return []
         if (table, definition_column) not in {("task_run_requests", "task_id"), ("workflow_run_requests", "workflow_id")}:
             raise ValueError("Invalid request queue")
+        run_table = "task_runs" if table == "task_run_requests" else "workflow_runs"
         clause = f" AND {definition_column} IN (SELECT value FROM json_each(?))" if definition_ids is not None else ""
         values = [json.dumps(definition_ids)] if definition_ids is not None else []
         now = time.time()
-        async with aiosqlite.connect(self.db_path, timeout=sqlite_busy_timeout_s()) as conn:
-            conn.row_factory = aiosqlite.Row
-            await conn.execute("BEGIN IMMEDIATE")
-            cursor = await conn.execute(
-                f"UPDATE {table} SET claimed_at=? WHERE id IN (SELECT id FROM {table} "
-                f"WHERE claimed_at IS NULL AND created_at <= ?{clause} "
-                f"ORDER BY created_at,id LIMIT ?) AND claimed_at IS NULL RETURNING *",
-                [now, now, *values, int(limit)])
-            rows = [dict(row) for row in await cursor.fetchall()]
-            await conn.commit()
-        return sorted(rows, key=lambda row: (row["created_at"], row["id"]))
+        unclaimed = "claimed_at IS NULL"
+        bindings = [now, *values]
+        if reserve_runs:
+            # A stalled coroutine may lose its reservation before dispatch. Only
+            # a queued row can transfer to the new claimant; begin uses its claim CAS.
+            unclaimed = (f"(claimed_at IS NULL OR (id IN (SELECT id FROM {run_table} WHERE status='queued') "
+                         "AND id=run_id AND claimed_at < ?))")
+            bindings = [now - 30.0, *bindings]
+        pending = f"SELECT id FROM {table} WHERE {unclaimed} AND created_at <= ?{clause}"
+        async with self._scheduler_reader() as reader:
+            if not await reader.execute_fetchall(pending + " LIMIT 1", bindings):
+                return []
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            rows = await conn.execute_fetchall(
+                f"UPDATE {table} SET claimed_at=? WHERE id IN ({pending} ORDER BY created_at,id LIMIT ?) RETURNING *",
+                [now, *bindings, int(limit)])
+            claimed = [dict(row) for row in rows]
+            if reserve_runs:
+                for row in claimed:
+                    if row["run_id"] is None:
+                        columns = "id," + definition_column + ",trigger,status,started_at"
+                        data = [row["id"], row[definition_column], row["trigger"], "queued", now]
+                        if run_table == "workflow_runs":
+                            columns += ",inputs_json"
+                            data.append(row["inputs_json"])
+                        placeholders = ",".join("?" for _ in data)
+                        await conn.execute(f"INSERT INTO {run_table}({columns}) VALUES({placeholders})", data)
+                        await conn.execute(f"UPDATE {table} SET run_id=id WHERE id=?", (row["id"],))
+                        row["run_id"] = row["id"]
+                    else:
+                        reserved = await conn.execute_fetchall(
+                            f"SELECT 1 FROM {run_table} WHERE id=? AND {definition_column}=? AND status='queued'",
+                            (row["id"], row[definition_column]),
+                        )
+                        if row["id"] != row["run_id"] or not reserved:
+                            raise ValueError("Claim does not match a queued occurrence")
+        return sorted(claimed, key=lambda row: (row["created_at"], row["id"]))
 
     async def claim_pending_task_requests(self, *, limit: int = 20,
-                                         definition_ids: tuple[str, ...] | None = None) -> list[dict]:
-        """Claim only currently authorized definitions; unknown grants stay pending."""
+                                         definition_ids: tuple[str, ...] | None = None,
+                                         reserve_runs: bool = False) -> list[dict]:
+        """Claim authorized definitions, optionally reserving the projection before dispatch."""
         return await self._claim_authorized_requests("task_run_requests", "task_id",
-            limit=limit, definition_ids=definition_ids)
+            limit=limit, definition_ids=definition_ids, reserve_runs=reserve_runs)
+
+    async def begin_requested_task_run(self, request: dict, *, session_id: str | None) -> bool:
+        """The only transition that permits dispatch of a newly reserved manual firing."""
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            changed = await conn.execute(
+                "UPDATE task_runs SET status='running',session_id=? WHERE id=? AND task_id=? AND status='queued' "
+                "AND EXISTS (SELECT 1 FROM task_run_requests WHERE id=task_runs.id AND run_id=task_runs.id "
+                "AND task_id=task_runs.task_id AND claimed_at=?)",
+                (session_id, request["run_id"], request["task_id"], request["claimed_at"]),
+            )
+            return changed.rowcount == 1
+
+    async def defer_unadmitted_occurrence(self, kind: str, run_id: str, definition_id: str, *,
+                                          retry_after: int, trigger: str, claimed_at: float | None = None) -> None:
+        """Release only an occurrence the host explicitly rejected before admission."""
+        runs, requests, owner, initial = {
+            "task": ("task_runs", "task_run_requests", "task_id", "running"),
+            "workflow": ("workflow_runs", "workflow_run_requests", "workflow_id", "starting"),
+        }[kind]
+        ready = time.time() + retry_after
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            if claimed_at is None:
+                # A scheduled task had a preclaimed projection but no manual queue row.
+                if kind != "task":
+                    raise ValueError("Expected a claimed workflow request")
+                await conn.execute(
+                    "INSERT INTO task_run_requests(id,task_id,trigger,claimed_at,run_id,created_at) "
+                    "SELECT id,task_id,trigger,started_at,id,? FROM task_runs WHERE id=? AND task_id=? AND status='running'",
+                    (ready, run_id, definition_id),
+                )
+            elif not await conn.execute_fetchall(
+                f"SELECT 1 FROM {requests} WHERE id=? AND run_id=id AND {owner}=? AND claimed_at=? AND trigger=?",
+                (run_id, definition_id, claimed_at, trigger),
+            ):
+                raise ValueError("Occurrence reservation changed before deferral")
+            changed = await conn.execute(
+                f"UPDATE {runs} SET status='queued' WHERE id=? AND {owner}=? AND status=?",
+                (run_id, definition_id, initial),
+            )
+            if changed.rowcount:
+                await conn.execute(
+                    f"UPDATE {requests} SET created_at=?,claimed_at=NULL WHERE id=? AND run_id=id AND {owner}=?",
+                    (ready, run_id, definition_id),
+                )
 
     async def set_task_request_run_id(self, request_id: str, run_id: str) -> None:
         """Link a claimed request to the ``task_runs`` row it spawned so the
         MCP tool's ``wait`` poller can find the firing."""
-        conn = await self._ensure_connected()
-        await conn.execute(
-            "UPDATE task_run_requests SET run_id = ? WHERE id = ?",
-            (run_id, request_id),
-        )
-        await conn.commit()
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            changed = await conn.execute(
+                "UPDATE task_run_requests SET run_id=? WHERE id=? AND (run_id IS NULL OR run_id=?)",
+                (run_id, request_id, run_id),
+            )
+            if changed.rowcount != 1:
+                raise ValueError("Task request is absent or already bound to another occurrence")
 
     async def get_task_run_request(self, request_id: str) -> dict | None:
-        conn = await self._ensure_connected()
-        cursor = await conn.execute(
-            "SELECT * FROM task_run_requests WHERE id = ?", (request_id,),
-        )
-        row = await cursor.fetchone()
-        return dict(row) if row else None
+        async with self._scheduler_reader() as conn:
+            rows = await conn.execute_fetchall("SELECT * FROM task_run_requests WHERE id=?", (request_id,))
+            return dict(rows[0]) if rows else None
 
     # ── Events (webhook channel) ──
     #
@@ -3748,9 +3833,7 @@ class MemoryDB:
         # a second writer would deadlock against it and detach authorization
         # from the enqueue; borrow without committing/closing its connection.
         borrowed = not self._owns_connection
-        conn = self._conn if borrowed else await aiosqlite.connect(
-            self.db_path, timeout=delivery_lock_wait_ms() / 1000.0,
-        )
+        conn = self._conn if borrowed else await self._open_connection(timeout=delivery_lock_wait_ms() / 1000.0)
         try:
             if not borrowed:
                 await conn.execute(f"PRAGMA busy_timeout = {delivery_lock_wait_ms()}")
@@ -3807,9 +3890,7 @@ class MemoryDB:
         # run — so the retry ladder now sits on top of a write that actually
         # waits its turn, instead of on top of one that cannot succeed.
         async def _do() -> None:
-            conn = await aiosqlite.connect(
-                self.db_path, timeout=delivery_lock_wait_ms() / 1000.0,
-            )
+            conn = await self._open_connection(timeout=delivery_lock_wait_ms() / 1000.0)
             try:
                 await conn.execute(f"PRAGMA busy_timeout = {delivery_lock_wait_ms()}")
                 await conn.execute("PRAGMA foreign_keys = ON")
@@ -3869,32 +3950,20 @@ class MemoryDB:
         recovers it if the turn freezes."""
         if definition_ids == () or limit <= 0:
             return []
-        now = time.time()
-        claim_expires = now + _lease_ttl_seconds()
-        # Its own connection, opened with BEGIN IMMEDIATE — the fourth place
-        # this shape was needed, after ``claim_scheduled_task``,
-        # ``add_event_delivery`` and ``update_event_delivery``.
-        #
-        # A claim is a SELECT followed by an UPDATE, which is exactly the read
-        # -then-promote pattern SQLite refuses INSTANTLY when the connection's
-        # snapshot is no longer current — no busy handler, no timeout. Measured
-        # on the example-product-b agent with ingest and finalisation already repaired:
-        # ``scheduler.event_claim_failed`` 49 times in ten minutes, and every
-        # re-enqueued orphan sat unclaimed for ten minutes and more. The
-        # conversation had been captured and was never answered.
-        #
-        # Taking the write lock up front also makes the claim genuinely atomic:
-        # the SELECT and the UPDATE are now one transaction rather than two
-        # statements with a race between them.
-        conn = await aiosqlite.connect(
-            self.db_path, timeout=delivery_lock_wait_ms() / 1000.0,
-        )
-        conn.row_factory = aiosqlite.Row
+        authorized = "AND event_id IN (SELECT value FROM json_each(?))" if definition_ids is not None else ""
+        values = [json.dumps(definition_ids)] if definition_ids is not None else []
+        async with self._scheduler_reader() as reader:
+            if not await reader.execute_fetchall(
+                "SELECT 1 FROM event_deliveries WHERE claimed_at IS NULL AND finished_at IS NULL "
+                + authorized + " LIMIT 1", values,
+            ):
+                return []
         try:
-            await conn.execute(f"PRAGMA busy_timeout = {delivery_lock_wait_ms()}")
-            await conn.execute("PRAGMA foreign_keys = ON")
-            await conn.execute("BEGIN IMMEDIATE")
-            return await self._claim_deliveries_in(conn, limit, now, claim_expires, definition_ids=definition_ids)
+            async with self._isolated_write() as conn:
+                now = time.time()
+                return await self._claim_deliveries_in(
+                    conn, limit, now, now + _lease_ttl_seconds(), definition_ids=definition_ids,
+                )
         except sqlite3.OperationalError as e:
             # The lock did not come free in time. This is a drain tick: taking
             # nothing this time round and trying again in a few seconds is the
@@ -3905,8 +3974,6 @@ class MemoryDB:
                 raise
             logger.info("event claim skipped: write lock busy")
             return []
-        finally:
-            await conn.close()
 
     async def _claim_deliveries_in(
         self, conn, limit: int, now: float, claim_expires: float, *,
@@ -3939,7 +4006,6 @@ class MemoryDB:
             f"WHERE id IN ({placeholders}) AND claimed_at IS NULL",
             [now, claim_expires, self.worker_id, self.worker_pid, *ids],
         )
-        await conn.commit()
         cursor = await conn.execute(
             f"SELECT * FROM event_deliveries "
             f"WHERE id IN ({placeholders}) AND claimed_at = ? "
@@ -3961,19 +4027,15 @@ class MemoryDB:
         (heartbeat stops) is the freeze signal the lease reaper acts on. Wrapped
         in the same bounded lock-surviving retry as ``update_event_delivery``.
         Returns the number of rows updated (0 = the lease was already lost)."""
-        now = time.time()
-        claim_expires = now + _lease_ttl_seconds()
-
         async def _do() -> int:
-            conn = await self._ensure_connected()
-            cur = await conn.execute(
-                "UPDATE event_deliveries "
-                "SET claim_expires = ?, last_heartbeat_at = ? "
-                "WHERE id = ? AND worker_id = ?",
-                (claim_expires, now, delivery_id, worker_id),
-            )
-            await conn.commit()
-            return cur.rowcount or 0
+            async with self._isolated_write() as conn:
+                now = time.time()
+                cur = await conn.execute(
+                    "UPDATE event_deliveries SET claim_expires=?,last_heartbeat_at=? WHERE id=? "
+                    "AND worker_id=? AND status IN ('received','running')",
+                    (now + _lease_ttl_seconds(), now, delivery_id, worker_id),
+                )
+                return cur.rowcount
 
         return await self._write_with_retry(_do)
 
@@ -4028,6 +4090,13 @@ class MemoryDB:
         if max_attempts is None:
             max_attempts = _env_int("OPENAGENT_EVENT_REENQUEUE_MAX_ATTEMPTS", 5)
         max_attempts = max(1, int(max_attempts))
+
+        async with self._scheduler_reader() as reader:
+            if not await reader.execute_fetchall(
+                "SELECT 1 FROM event_deliveries WHERE claim_expires < ? "
+                "AND status IN ('received','running') LIMIT 1", (now,),
+            ):
+                return 0
 
         async def _do() -> tuple[int, int]:
             async with self._isolated_write() as conn:
@@ -4372,40 +4441,33 @@ class MemoryDB:
         Returns the number of rows acted on (re-enqueued + parked); 0 when it
         finds nothing (and it logs only when it acts).
         """
+        if enabled is None:
+            enabled = _env_bool("OPENAGENT_EVENT_REENQUEUE_ENABLED", True)
+        if not enabled:
+            return 0
+        if max_attempts is None:
+            max_attempts = _env_int("OPENAGENT_EVENT_REENQUEUE_MAX_ATTEMPTS", 5)
+        max_attempts = max(1, int(max_attempts))
+        now = time.time()
+        min_claim_age_seconds = max(0.0, float(min_claim_age_seconds))
+        cutoff = now - min_claim_age_seconds
+        try:
+            retry_delay = max(0.0, float(runtime_environment().get("OPENAGENT_EVENT_RETRY_DELAY_SECONDS", "300")))
+        except (TypeError, ValueError):
+            retry_delay = 300.0
+        recover_transient = _env_bool("OPENAGENT_EVENT_REENQUEUE_TRANSIENT", True)
+        async with self._scheduler_reader() as reader:
+            stale = await reader.execute_fetchall(
+                "SELECT 1 FROM event_deliveries WHERE claimed_at <= ? AND (claim_expires IS NULL OR claim_expires < ?) "
+                "AND status IN ('received','running') LIMIT 1", (cutoff, now),
+            )
+            if not stale:
+                if not recover_transient or not await reader.execute_fetchall(
+                    "SELECT 1 FROM event_deliveries WHERE status='failed' AND error LIKE ? AND reenqueue_count < ? "
+                    "AND finished_at <= ? LIMIT 1", (f"%{self._RETRYABLE_TURN_MARK}%", max_attempts, now - retry_delay),
+                ):
+                    return 0
         async with self._isolated_write() as conn:
-            now = time.time()
-
-            def _flag(name: str, default: bool) -> bool:
-                raw = runtime_environment().get(name)
-                if raw is None:
-                    return default
-                return raw.strip().lower() not in ("0", "false", "no", "off", "")
-
-            if enabled is None:
-                enabled = _flag("OPENAGENT_EVENT_REENQUEUE_ENABLED", True)
-            if not enabled:
-                # Kill-switch: unlike the startup reap this does NOT fall back to
-                # mark-failed. A periodic sweep on a live process has no proof a
-                # claimed row is orphaned (that's the whole point of the age gate),
-                # so with re-enqueue disabled the safe action is to do nothing and
-                # let the next restart's reap handle it.
-                return 0
-
-            if max_attempts is None:
-                try:
-                    max_attempts = int(
-                        runtime_environment().get("OPENAGENT_EVENT_REENQUEUE_MAX_ATTEMPTS", "5")
-                    )
-                except (TypeError, ValueError):
-                    max_attempts = 5
-            max_attempts = max(1, int(max_attempts))
-
-            # A row is "stale" only if it was claimed at/before this cutoff. Never
-            # negative — a caller passing 0 would sweep everything, so clamp at 0
-            # and let the caller own the safety of the threshold it chooses.
-            min_claim_age_seconds = max(0.0, float(min_claim_age_seconds))
-            cutoff = now - min_claim_age_seconds
-
             # 1. Park stale in-flight rows over the replay budget FIRST (retire them
             #    here so the re-enqueue below can't bump them past the cap). Only
             #    stale, in-flight rows — a recently-claimed row at the cap is still
@@ -4418,9 +4480,10 @@ class MemoryDB:
                 "          CASE WHEN error IS NULL OR error='' THEN '' ELSE ' | ' END || "
                 "          'stale-sweep: retry budget exhausted (' || reenqueue_count || ' attempts)' "
                 "WHERE claimed_at IS NOT NULL AND claimed_at <= ? "
+                "  AND (claim_expires IS NULL OR claim_expires < ?) "
                 "  AND reenqueue_count >= ? "
                 "  AND status IN ('received','running')",
-                (now, cutoff, max_attempts),
+                (now, cutoff, now, max_attempts),
             )
             parked = parked_cur.rowcount or 0
 
@@ -4434,9 +4497,10 @@ class MemoryDB:
                 "    error='re-enqueued: stale-sweep recovered orphan (attempt ' "
                 "          || (reenqueue_count + 1) || ')' "
                 "WHERE claimed_at IS NOT NULL AND claimed_at <= ? "
+                "  AND (claim_expires IS NULL OR claim_expires < ?) "
                 "  AND reenqueue_count < ? "
                 "  AND status IN ('received','running')",
-                (cutoff, max_attempts),
+                (cutoff, now, max_attempts),
             )
             requeued = requeue_cur.rowcount or 0
 
@@ -4449,13 +4513,8 @@ class MemoryDB:
             #    di un cliente. Il marcatore lo mette il dispatcher SOLO quando la
             #    morte e' transitoria (un guasto permanente non finisce mai qui) e il
             #    tetto dei tentativi resta quello di sempre.
-            try:
-                retry_delay = max(0.0, float(
-                    runtime_environment().get("OPENAGENT_EVENT_RETRY_DELAY_SECONDS", "300")))
-            except (TypeError, ValueError):
-                retry_delay = 300.0
             retried = 0
-            if _flag("OPENAGENT_EVENT_REENQUEUE_TRANSIENT", True):
+            if recover_transient:
                 retry_cur = await conn.execute(
                     "UPDATE event_deliveries "
                     "SET status='received', claimed_at=NULL, finished_at=NULL, "
@@ -4652,16 +4711,12 @@ class MemoryDB:
     async def get_due_schedules(self, now: float) -> list[dict]:
         """Schedules whose next_run_at is <= now. The scheduler loop
         consumes this on every tick to drive per-block triggering."""
-        conn = await self._ensure_connected()
-        cursor = await conn.execute(
-            "SELECT s.* FROM workflow_schedules s "
-            "JOIN workflow_tasks w ON w.id = s.workflow_id "
-            "WHERE s.enabled = 1 AND w.enabled = 1 AND s.next_run_at <= ? "
-            "ORDER BY s.next_run_at ASC",
-            (now,),
-        )
-        rows = await cursor.fetchall()
-        return [self._row_to_schedule(r) for r in rows]
+        async with self._scheduler_reader() as conn:
+            rows = await conn.execute_fetchall(
+                "SELECT s.* FROM workflow_schedules s JOIN workflow_tasks w ON w.id=s.workflow_id "
+                "WHERE s.enabled=1 AND w.enabled=1 AND s.next_run_at<=? ORDER BY s.next_run_at", (now,),
+            )
+            return [self._row_to_schedule(row) for row in rows]
 
     async def upsert_schedule(
         self,
@@ -4724,6 +4779,28 @@ class MemoryDB:
         )
         await conn.commit()
         return sid
+
+    async def enqueue_due_workflow(self, schedule: dict, *, now: float, next_run: float | None) -> bool:
+        """Atomically advance this exact schedule revision and retain its authorized entry node."""
+        occurrence = str(uuid.uuid5(uuid.NAMESPACE_URL, f"workflow:{schedule['id']}:{schedule['next_run_at']}"))
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            changed = await conn.execute(
+                "UPDATE workflow_schedules SET last_run_at=?,next_run_at=?,enabled=?,updated_at=? "
+                "WHERE id=? AND workflow_id=? AND node_id=? AND enabled=1 AND next_run_at=? "
+                "AND cron_expression=? AND timezone IS ? "
+                "AND EXISTS (SELECT 1 FROM workflow_tasks WHERE id=workflow_schedules.workflow_id AND enabled=1)",
+                (now, next_run, int(next_run is not None), now, schedule["id"], schedule["workflow_id"],
+                 schedule["node_id"], schedule["next_run_at"], schedule["cron_expression"], schedule["timezone"]),
+            )
+            if changed.rowcount != 1:
+                return False
+            await conn.execute(
+                "INSERT INTO workflow_run_requests (id,workflow_id,trigger,schedule_json,created_at) "
+                "VALUES (?,?,'schedule',?,?)",
+                (occurrence, schedule["workflow_id"], json.dumps(schedule), now),
+            )
+            await conn.execute("UPDATE workflow_tasks SET last_run_at=?,updated_at=? WHERE id=?", (now, now, schedule["workflow_id"]))
+            return True
 
     async def update_schedule(self, schedule_id: str, **kwargs: Any) -> None:
         allowed = {"cron_expression", "next_run_at", "last_run_at", "enabled", "timezone"}
@@ -4798,16 +4875,34 @@ class MemoryDB:
         trigger: str,
         inputs: dict | None = None,
         run_id: str | None = None,
+        request_id: str | None = None,
     ) -> str:
-        conn = await self._ensure_connected()
+        await self._ensure_connected()
         rid = run_id or str(uuid.uuid4())
-        await conn.execute(
-            "INSERT INTO workflow_runs "
-            "(id, workflow_id, trigger, status, started_at, inputs_json) "
-            "VALUES (?, ?, ?, 'running', ?, ?)",
-            (rid, workflow_id, trigger, time.time(), json.dumps(inputs or {})),
-        )
-        await conn.commit()
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            if request_id is not None and rid == request_id:
+                reserved = await conn.execute(
+                    "UPDATE workflow_runs SET status='running' WHERE id=? AND workflow_id=? "
+                    "AND status='starting' AND EXISTS (SELECT 1 FROM workflow_run_requests "
+                    "WHERE id=workflow_runs.id AND run_id=id AND workflow_id=workflow_runs.workflow_id)",
+                    (rid, workflow_id),
+                )
+                if reserved.rowcount == 1:
+                    return rid
+            await conn.execute(
+                "INSERT INTO workflow_runs "
+                "(id, workflow_id, trigger, status, started_at, inputs_json) "
+                "VALUES (?, ?, ?, 'running', ?, ?)",
+                (rid, workflow_id, trigger, time.time(), json.dumps(inputs or {})),
+            )
+            if request_id is not None:
+                linked = await conn.execute(
+                    "UPDATE workflow_run_requests SET run_id=? WHERE id=? AND workflow_id=? "
+                    "AND claimed_at IS NOT NULL AND (run_id IS NULL OR run_id=?)",
+                    (rid, request_id, workflow_id, rid),
+                )
+                if linked.rowcount != 1:
+                    raise ValueError("Request does not own this workflow occurrence")
         return rid
 
     async def update_workflow_run(self, run_id: str, **kwargs: Any) -> None:
@@ -4838,21 +4933,24 @@ class MemoryDB:
             return
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         where = "WHERE id = ?"
-        if "status" in updates and updates["status"] != "cancelled":
-            where += " AND status != 'cancelling'"
-        async with self._isolated_write() as conn:
+        status = updates.get("status")
+        if status == "cancelled":
+            where += " AND status IN ('queued','starting','running','cancelling')"
+        elif status == "timed_out":
+            where += " AND status IN ('starting','running','cancelled')"
+        elif status is not None:
+            where += " AND status IN ('starting','running')"
+        wait = sqlite_busy_timeout_ms() if status is not None else delivery_lock_wait_ms()
+        async with self._isolated_write(lock_wait_ms=wait) as conn:
             await conn.execute(
                 f"UPDATE workflow_runs SET {set_clause} {where}",
                 list(updates.values()) + [run_id],
             )
 
     async def get_workflow_run(self, run_id: str) -> dict | None:
-        conn = await self._ensure_connected()
-        cursor = await conn.execute(
-            "SELECT * FROM workflow_runs WHERE id = ?", (run_id,),
-        )
-        row = await cursor.fetchone()
-        return self._row_to_workflow_run(row) if row else None
+        async with self._scheduler_reader() as conn:
+            rows = await conn.execute_fetchall("SELECT * FROM workflow_runs WHERE id=?", (run_id,))
+            return self._row_to_workflow_run(rows[0]) if rows else None
 
     async def list_workflow_runs(
         self,
@@ -4884,14 +4982,11 @@ class MemoryDB:
         workflow-manager MCP flagged ``cancelling`` and stops the in-flight
         executor that owns each one. Backed by ``idx_wfruns_status`` so the
         scan stays cheap even when only a handful of rows ever match."""
-        conn = await self._ensure_connected()
-        cursor = await conn.execute(
-            "SELECT * FROM workflow_runs WHERE status = ? "
-            "ORDER BY started_at ASC LIMIT ?",
-            (status, int(limit)),
-        )
-        rows = await cursor.fetchall()
-        return [self._row_to_workflow_run(r) for r in rows]
+        async with self._scheduler_reader() as conn:
+            rows = await conn.execute_fetchall(
+                "SELECT * FROM workflow_runs WHERE status=? ORDER BY started_at LIMIT ?", (status, int(limit))
+            )
+            return [self._row_to_workflow_run(row) for row in rows]
 
     async def reap_orphan_workflow_runs(self) -> int:
         """Mark every workflow_run still in ``running`` as ``failed``.
@@ -4910,33 +5005,37 @@ class MemoryDB:
         marker so the schedule's next tick starts from a clean slate.
         Returns the number of rows reaped (for telemetry).
         """
-        conn = await self._ensure_connected()
+        await self._ensure_connected()
         now = time.time()
-        cursor = await conn.execute(
-            "UPDATE workflow_runs "
-            "SET status='failed', finished_at=?, "
-            "    error=COALESCE(error, '') || "
-            "          CASE WHEN error IS NULL OR error='' THEN '' ELSE ' | ' END || "
-            "          'reaped: orphan from prior process' "
-            "WHERE status='running'",
-            (now,),
-        )
-        reaped = cursor.rowcount or 0
-        # A run flagged 'cancelling' that the prior process never finalized
-        # (crash between the MCP flag and the scheduler's drain) is also an
-        # orphan — finalize it as 'cancelled' (the requested outcome), kept
-        # distinct from the 'failed' reap above.
-        cancel_cursor = await conn.execute(
-            "UPDATE workflow_runs "
-            "SET status='cancelled', finished_at=?, "
-            "    error=COALESCE(error, '') || "
-            "          CASE WHEN error IS NULL OR error='' THEN '' ELSE ' | ' END || "
-            "          'reaped: stop left pending by prior process' "
-            "WHERE status='cancelling'",
-            (now,),
-        )
-        await conn.commit()
-        return reaped + (cancel_cursor.rowcount or 0)
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            await conn.execute(
+                "UPDATE workflow_run_requests SET claimed_at=NULL WHERE id=run_id AND claimed_at IS NOT NULL "
+                "AND id IN (SELECT id FROM workflow_runs WHERE status='queued')"
+            )
+            cursor = await conn.execute(
+                "UPDATE workflow_runs "
+                "SET status='failed', finished_at=?, "
+                "    error=COALESCE(error, '') || "
+                "          CASE WHEN error IS NULL OR error='' THEN '' ELSE ' | ' END || "
+                "          'reaped: orphan from prior process' "
+                "WHERE status IN ('starting','running')",
+                (now,),
+            )
+            reaped = cursor.rowcount or 0
+            # A run flagged 'cancelling' that the prior process never finalized
+            # (crash between the MCP flag and the scheduler's drain) is also an
+            # orphan — finalize it as 'cancelled' (the requested outcome), kept
+            # distinct from the 'failed' reap above.
+            cancel_cursor = await conn.execute(
+                "UPDATE workflow_runs "
+                "SET status='cancelled', finished_at=?, "
+                "    error=COALESCE(error, '') || "
+                "          CASE WHEN error IS NULL OR error='' THEN '' ELSE ' | ' END || "
+                "          'reaped: stop left pending by prior process' "
+                "WHERE status='cancelling'",
+                (now,),
+            )
+            return reaped + (cancel_cursor.rowcount or 0)
 
     async def prune_workflow_runs(
         self,
@@ -4950,6 +5049,7 @@ class MemoryDB:
             cursor = await conn.execute(
                 "DELETE FROM workflow_runs WHERE id IN ("
                 "  SELECT id FROM workflow_runs WHERE workflow_id = ? "
+                "  AND status NOT IN ('queued','starting','running','cancelling') "
                 "  ORDER BY started_at DESC LIMIT -1 OFFSET ?"
                 ")",
                 (workflow_id, int(keep_last)),
@@ -5052,28 +5152,39 @@ class MemoryDB:
         trigger: str,
         inputs: dict | None = None,
     ) -> str:
-        conn = await self._ensure_connected()
         req_id = str(uuid.uuid4())
-        await conn.execute(
-            "INSERT INTO workflow_run_requests "
-            "(id, workflow_id, inputs_json, trigger, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (req_id, workflow_id, json.dumps(inputs or {}), trigger, time.time()),
-        )
-        await conn.commit()
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            await conn.execute(
+                "INSERT INTO workflow_run_requests (id,workflow_id,inputs_json,trigger,created_at) VALUES(?,?,?,?,?)",
+                (req_id, workflow_id, json.dumps(inputs or {}), trigger, time.time()),
+            )
         return req_id
 
     async def claim_pending_workflow_requests(self, *, limit: int = 5,
-                                             definition_ids: tuple[str, ...] | None = None) -> list[dict]:
+                                             definition_ids: tuple[str, ...] | None = None,
+                                             reserve_runs: bool = False) -> list[dict]:
         rows = await self._claim_authorized_requests("workflow_run_requests", "workflow_id",
-            limit=limit, definition_ids=definition_ids)
+            limit=limit, definition_ids=definition_ids, reserve_runs=reserve_runs)
         for row in rows:
+            scheduled = row.pop("schedule_json", None)
+            if scheduled is not None:
+                row["schedule"] = json.loads(scheduled)
             raw = row.pop("inputs_json", "{}") or "{}"
             try:
                 row["inputs"] = json.loads(raw)
             except (TypeError, ValueError):
                 row["inputs"] = {}
         return rows
+
+    async def begin_requested_workflow_run(self, request: dict) -> bool:
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            changed = await conn.execute(
+                "UPDATE workflow_runs SET status='starting' WHERE id=? AND workflow_id=? AND status='queued' "
+                "AND EXISTS (SELECT 1 FROM workflow_run_requests WHERE id=workflow_runs.id AND run_id=id "
+                "AND workflow_id=workflow_runs.workflow_id AND claimed_at=?)",
+                (request["run_id"], request["workflow_id"], request["claimed_at"]),
+            )
+            return changed.rowcount == 1
 
     async def set_workflow_request_run_id(self, request_id: str, run_id: str) -> None:
         """Link a claimed request back to the ``workflow_runs`` row it
@@ -7135,10 +7246,7 @@ class MemoryDB:
         """
         if not session_id:
             return 0
-        conn = await aiosqlite.connect(
-            self.db_path,
-            timeout=sqlite_busy_timeout_s(),
-        )
+        conn = await self._open_connection(timeout=sqlite_busy_timeout_s())
         conn.row_factory = aiosqlite.Row
         changed = 0
         try:
@@ -7273,10 +7381,7 @@ class MemoryDB:
         """
         if not session_id:
             return 0
-        conn = await aiosqlite.connect(
-            self.db_path,
-            timeout=sqlite_busy_timeout_s(),
-        )
+        conn = await self._open_connection(timeout=sqlite_busy_timeout_s())
         conn.row_factory = aiosqlite.Row
         try:
             await conn.execute(f"PRAGMA busy_timeout = {sqlite_busy_timeout_ms()}")

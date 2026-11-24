@@ -61,7 +61,7 @@ async def _set_claimed_at(db, delivery_id: str, ts: float) -> None:
     test simulating "claimed N seconds ago" pokes the column directly."""
     conn = await db._ensure_connected()
     await conn.execute(
-        "UPDATE event_deliveries SET claimed_at = ? WHERE id = ?",
+        "UPDATE event_deliveries SET claimed_at = ?, claim_expires=NULL WHERE id = ?",
         (ts, delivery_id),
     )
     await conn.commit()

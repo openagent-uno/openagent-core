@@ -127,10 +127,17 @@ async def t_finalize_gives_up(ctx: TestContext) -> None:
             if rec.levelno >= logging.ERROR:
                 captured.append(rec.getMessage())
 
+    from openagent_core.memory.db import AutomationOutcomeWriteError
+
     capture = _Capture(level=logging.ERROR)
     logging.getLogger("openagent_core.workflow.executor").addHandler(capture)
     try:
-        await exe._finalize_run(rc, status="failed", error="HTTP 402")
+        try:
+            await exe._finalize_run(rc, status="failed", error="HTTP 402")
+        except AutomationOutcomeWriteError:
+            pass
+        else:
+            raise AssertionError("A missing durable terminal row must stop publication")
     finally:
         logging.getLogger("openagent_core.workflow.executor").removeHandler(capture)
         _restore_sleep(orig_sleep)
