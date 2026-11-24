@@ -99,7 +99,19 @@ class SessionInspection:
         row=await (await conn.execute("SELECT * FROM sessions_v2 WHERE id=? AND deleted_at_ms IS NULL",(session_id,))).fetchone()
         if row is not None and row["tenant_id"] != context.tenant_id:raise PermissionError("Session tenant does not match host provenance")
         require_session_not_quarantined(row)
-        from .memory.legacy_document_history import marked_session
+        from .memory.legacy_document_history import marked_session, protected_projection_sessions
+        from .contracts import ExecutionContext
+        host_scoped = await protected_projection_sessions(conn, {session_id}, host_only=True)
+        if host_scoped and not isinstance(context, ExecutionContext):
+            if self.runtime is None or self.document_viewer is None:
+                raise PermissionError("Host-scoped history requires its live viewer")
+            async with self.document_viewer(context, session_id) as viewer:
+                if (not isinstance(viewer, ExecutionContext) or viewer.authority != context.authority
+                        or viewer.author != context.authority or viewer.initiator != context.authority
+                        or viewer.agent_id != context.agent_id or viewer.session_id != session_id):
+                    raise PermissionError("The host selected a different session viewer")
+                await self.runtime.authorize(viewer, "session.read",
+                    ResourceRef("session", viewer.tenant_id, session_id), audience=viewer.audience)
         if await marked_session(conn, session_id):
             from .memory.document_exposure import authorize_document_history
             store = self.runtime.services.store if self.runtime is not None else None
@@ -110,7 +122,6 @@ class SessionInspection:
                     or row["agent_id"] != context.agent_id
                     or not callable(getattr(store, "document_sources", None))):
                 raise PermissionError("Document-dependent history requires its authorized runtime")
-            from .contracts import ExecutionContext
             if isinstance(context, ExecutionContext):
                 await authorize_document_history(self.runtime, context, session_id=session_id)
             elif self.document_viewer is not None:
@@ -502,9 +513,8 @@ class SessionInspection:
             # Take the storage snapshot first; recheck authority before publishing
             # under the same writer lock so ACL/source changes cannot race the copy.
             await require_authorized(self.authorizer, context, "session.fork", resource)
-            from .dream_evidence import dream_run_id
-            from .memory.legacy_document_history import marked_session
-            if dream_run_id(session_id) or await marked_session(conn, session_id):
+            from .memory.legacy_document_history import protected_projection_sessions
+            if await protected_projection_sessions(conn, {session_id}):
                 raise PermissionError("A text-only fork cannot preserve protected source receipts")
             source = await (await conn.execute(
                 "SELECT title,visibility,agent_id FROM sessions_v2 WHERE id=? AND tenant_id=? AND deleted_at_ms IS NULL",

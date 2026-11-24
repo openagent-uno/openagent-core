@@ -224,3 +224,21 @@ most output in the run's per-model usage (`metrics.details.model`). The model
 the run started with keeps the provider label the envelope gives it. History,
 the rebuilt journal and the live view use the same rule
 (`memory.operational.repository.answering_model`).
+
+## SQLite sessions with a live host grant
+
+When a session's visibility depends on an external resource grant, register its ID in the canonical SQLite database before publishing any transcript. Use the same SQLAlchemy transaction as the host's admission record. The ID is unique within this database. The registry contains no transcript content.
+
+```python
+from sqlalchemy.dialects.sqlite import insert
+from openagent_core.memory.host_scoped_sessions import host_scoped_sessions, initialize_host_scoped_sessions
+
+async with engine.begin() as connection:
+    await initialize_host_scoped_sessions(connection)
+    await connection.execute(
+        insert(host_scoped_sessions).values(session_id=session_id).on_conflict_do_nothing()
+    )
+    await record_host_admission(connection, session_id)
+```
+
+Bind the host's current viewer to `SessionProjectionGuard`. The scalar and batch ACL readers consult it for marked sessions, including administrative operations. The response publisher rechecks access before releasing the result. Search without a viewer suppresses these sessions even if it still holds an earlier cached hit. A plain session fork cannot carry the source grant. Keep the marker with the transcript when backing up or transferring state, and retain the host's resource authorization when restoring it.

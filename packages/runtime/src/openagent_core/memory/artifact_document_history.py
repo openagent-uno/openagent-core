@@ -1,11 +1,12 @@
 """Source receipts for SQLite content-addressed attachment delivery."""
 import json
 
-from .legacy_document_history import SessionProjectionGuard, has_ledger
+from .legacy_document_history import HOST_TABLE, SessionProjectionGuard, has_ledger, projection_tables, protected_projection_sessions
 
 
 _MAX_SOURCES = 2048
 _ORIGINS = "openagent_document_origins"
+_HOST_ORIGINS = "openagent_host_session_origins"
 
 
 async def record_origin(conn, artifact):
@@ -15,7 +16,10 @@ async def record_origin(conn, artifact):
     context, run = current_execution_context(), current_run_id()
     if context is None or not run or context.tenant_id != artifact["tenant_id"]:
         return
-    if not await has_ledger(conn):
+    tables = await projection_tables(conn)
+    if HOST_TABLE in tables and await protected_projection_sessions(conn, {context.session_id}, host_only=True, tables=tables):
+        await _add_origins(conn, artifact, _HOST_ORIGINS, [[context.session_id, run]])
+    if "oa_document_run_sources" not in tables:
         return
     cursor = await conn.execute(
         "SELECT d.source_id FROM oa_document_run_sources d JOIN session_runs r ON d.run_id=r.id "
@@ -25,10 +29,14 @@ async def record_origin(conn, artifact):
     tokens = [r[0] for r in await cursor.fetchall()]
     if not tokens:
         return
-    additions = json.dumps([(context.session_id, run, token) for token in tokens])
+    await _add_origins(conn, artifact, _ORIGINS, [(context.session_id, run, token) for token in tokens])
+
+
+async def _add_origins(conn, artifact, key, receipts):
+    additions = json.dumps(receipts)
     # Union against the current row inside the update. This also protects a
     # shared in-memory SQLite connection when two writers reuse one digest.
-    existing = "$." + _ORIGINS
+    existing = "$." + key
     row = await (await conn.execute(
         """WITH receipts AS MATERIALIZED (
                SELECT value AS receipt FROM artifacts, json_each(artifacts.metadata_json, ?)
@@ -39,8 +47,8 @@ async def record_origin(conn, artifact):
                json((SELECT json_group_array(json(receipt)) FROM receipts)))
            WHERE id=? AND tenant_id=? AND (SELECT COUNT(*) FROM receipts)<=?
            RETURNING id""",
-        (existing, artifact["id"], context.tenant_id, additions,
-         existing, artifact["id"], context.tenant_id, _MAX_SOURCES),
+        (existing, artifact["id"], artifact["tenant_id"], additions,
+         existing, artifact["id"], artifact["tenant_id"], _MAX_SOURCES),
     )).fetchone()
     if row is None:
         raise PermissionError("Attachment document provenance exceeds its limit")
@@ -48,10 +56,30 @@ async def record_origin(conn, artifact):
 
 async def visible(conn, artifact, projection):
     """Require every original session's receipts even for an owner or a deduplicated object."""
-    origins = json.loads(artifact["metadata_json"]).get(_ORIGINS, [])
+    metadata = json.loads(artifact["metadata_json"])
+    origins = metadata.get(_ORIGINS, [])
     if not isinstance(origins, list) or len(origins) > _MAX_SOURCES:
         return False
     sessions = set()
+    scoped = metadata.get(_HOST_ORIGINS, [])
+    if (not isinstance(scoped, list) or len(scoped) > _MAX_SOURCES
+            or any(not isinstance(item, list) or len(item) != 2
+                   or not all(isinstance(part, str) and part for part in item) for item in scoped)):
+        return False
+    if scoped:
+        if HOST_TABLE not in await projection_tables(conn):
+            return False
+        missing = await (await conn.execute(
+            """SELECT 1 FROM json_each(?) AS receipt WHERE NOT EXISTS (
+                   SELECT 1 FROM oa_host_scoped_sessions AS marker
+                   JOIN session_runs AS run ON run.session_id=marker.session_id
+                   WHERE marker.session_id=json_extract(receipt.value, '$[0]')
+                     AND run.id=json_extract(receipt.value, '$[1]') AND run.tenant_id=?
+               ) LIMIT 1""", (json.dumps(scoped), artifact["tenant_id"]),
+        )).fetchone()
+        if missing:
+            return False
+        sessions.update(item[0] for item in scoped)
     if origins:
         if not await has_ledger(conn):
             return False

@@ -122,10 +122,11 @@ def row_is_visible_without_grant(row: Any, access: AccessContext) -> bool:
 async def resource_is_visible(conn, row, access, *, permission="view") -> bool:
     if not await _resource_acl_visible(conn, row, access, permission=permission):
         return False
-    projection = getattr(access, "projection", None)
-    if (projection is not None and permission in {"view", "search"} and
-            "resource_type" in row.keys() and row["resource_type"] == "session"):
-        return bool(await projection.visible(conn, (row["resource_id"],)))
+    if "resource_type" in row.keys() and row["resource_type"] == "session":
+        projection = getattr(access, "projection", None)
+        host_only = permission not in {"view", "search"} or projection is None
+        guard = projection or SessionProjectionGuard()
+        return bool(await guard.visible(conn, (row["resource_id"],), host_only=host_only))
     return True
 
 
@@ -257,10 +258,11 @@ async def resources_are_visible(
             await check_pending()
     await check_pending()
     projection = getattr(access, "projection", None)
-    if projection is not None and permission in {"view", "search"}:
-        sessions = {i: row["resource_id"] for i, row in enumerate(rows) if decisions[i]
-                    and "resource_type" in row.keys() and row["resource_type"] == "session"}
-        allowed = await projection.visible(conn, sessions.values())
+    sessions = {i: row["resource_id"] for i, row in enumerate(rows) if decisions[i]
+                and "resource_type" in row.keys() and row["resource_type"] == "session"}
+    if sessions:
+        guard = projection or SessionProjectionGuard()
+        allowed = await guard.visible(conn, sessions.values(), host_only=permission not in {"view", "search"} or projection is None)
         for index, sid in sessions.items():
             decisions[index] = sid in allowed
     return decisions

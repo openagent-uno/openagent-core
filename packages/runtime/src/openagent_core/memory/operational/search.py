@@ -539,13 +539,11 @@ def _put_document(
     )
 
 
-async def _source_row(conn: Any, source_kind: str, source_id: str, *, ledger=None) -> tuple[dict[str, Any], str, str, str, str] | None:
-    from ..legacy_document_history import has_ledger
-    if ledger is None:
-        ledger = await has_ledger(conn)
-    # This plaintext index has no viewer with which to resolve document permissions.
-    session_filter = (" AND NOT EXISTS (SELECT 1 FROM oa_document_run_sources d WHERE d.session_id=s.id)"
-                      if ledger else "")
+async def _source_row(conn: Any, source_kind: str, source_id: str, *, tables=None) -> tuple[dict[str, Any], str, str, str, str] | None:
+    from ..legacy_document_history import passive_session_filter, projection_tables
+    if tables is None:
+        tables = await projection_tables(conn)
+    session_filter = passive_session_filter(tables, "s.id")
     from openagent_core.dream_evidence import dream_run_id
     if source_kind == "session":
         row = await (
@@ -1016,8 +1014,8 @@ async def _sync_operational_search_unlocked(
             )
         ).fetchall()
         now_ms = int(time.time() * 1000)
-        from ..legacy_document_history import has_ledger
-        ledger = await has_ledger(source)
+        from ..legacy_document_history import projection_tables, protected_projection_sessions
+        tables = await projection_tables(source)
         index.execute("BEGIN IMMEDIATE")
         try:
             for item in outbox:
@@ -1036,16 +1034,11 @@ async def _sync_operational_search_unlocked(
                 }.get(kind)
                 if doc_prefix:
                     _delete_doc(index, f"{doc_prefix}:{source_id}")
-                if ledger and kind == "session":
-                    receipt = await (await source.execute(
-                        "SELECT 1 FROM oa_document_run_sources WHERE session_id=? LIMIT 1", (source_id,),
-                    )).fetchone()
-                    if receipt:
-                        # The first receipt enqueues the session. Evict messages and tools
-                        # written before it even when their original outbox rows were compacted.
-                        await _index_thread_call(_delete_session_documents, index, source_id)
+                if tables and kind == "session" and await protected_projection_sessions(source, {source_id}, tables=tables):
+                    # Evict any earlier cached messages and tools associated with the marked session.
+                    await _index_thread_call(_delete_session_documents, index, source_id)
                 if operation != "delete":
-                    projected = await _source_row(source, kind, source_id, ledger=ledger)
+                    projected = await _source_row(source, kind, source_id, tables=tables)
                     if projected is not None:
                         metadata, match_kind, field, body, identifier = projected
                         metadata.setdefault("source_version", 1)

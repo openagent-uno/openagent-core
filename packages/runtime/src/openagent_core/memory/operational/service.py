@@ -680,13 +680,9 @@ async def search_rows_visible(
         "acl_version",
         "source_version",
     )
-    from ..legacy_document_history import has_ledger
-    document_visibility = ""
-    if await has_ledger(conn):
-        document_visibility = (
-            "AND (h.canonical_resource_type <> 'session' OR NOT EXISTS "
-            "(SELECT 1 FROM oa_document_run_sources d WHERE d.session_id=h.canonical_resource_id))"
-        )
+    from ..legacy_document_history import passive_session_filter, projection_tables
+    exclusions = passive_session_filter(await projection_tables(conn), "h.canonical_resource_id")
+    document_visibility = f"AND (h.canonical_resource_type <> 'session' OR (1=1 {exclusions}))" if exclusions else ""
     authorization_sql = _CANONICAL_AUTHORIZATION_SQL.replace("{document_visibility}", document_visibility)
     for start in range(0, len(candidates), _CANONICAL_AUTHORIZATION_BATCH):
         batch = candidates[start : start + _CANONICAL_AUTHORIZATION_BATCH]
