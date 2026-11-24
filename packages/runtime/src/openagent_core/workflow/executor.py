@@ -48,7 +48,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
-from openagent_core.memory.db import MemoryDB
+from openagent_core.configuration import sqlite_busy_timeout_s
+from openagent_core.memory.db import AutomationOutcomeWriteError, MemoryDB
 from openagent_core.workflow.blocks import BLOCK_CATALOG, get_block_spec
 from openagent_core.workflow.templating import (
     TemplateError,
@@ -230,6 +231,7 @@ class WorkflowExecutor:
         on_status: StatusCallback | None = None,
         run_id: str | None = None,
         entry_node_id: str | None = None,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         """Execute one workflow run.
 
@@ -246,11 +248,12 @@ class WorkflowExecutor:
         slot = await self._acquire_slot(workflow)
 
         async with slot:
+            request_link = {"request_id": request_id} if request_id is not None else {}
             run_id = await self.db.add_workflow_run(
                 workflow_id=workflow_id,
                 trigger=trigger,
                 inputs=inputs or {},
-                run_id=run_id,
+                run_id=run_id, **request_link,
             )
             # Announce the freshly-opened run so the app's Recent feed flips it
             # to "running" live (the feed refreshes on ``workflow`` events).
@@ -688,20 +691,19 @@ class WorkflowExecutor:
         # never recovers in this process — the next scheduled tick or a
         # process restart has to reap it. Retry a few times with
         # exponential backoff so transient locks don't strand the row.
-        for attempt in range(4):
+        started = time.monotonic()
+        for attempt in range(1, 5):
             try:
                 await self.db.update_workflow_run(ctx.run_id, **kwargs)
                 break
-            except sqlite3.OperationalError as e:
-                if attempt == 3:
-                    logger.error(
-                        "workflow %s finalize failed after 4 attempts (%s) — "
-                        "row left in %r state; AgentServer.start() will reap "
-                        "it as an orphan on the next process restart",
-                        ctx.run_id, e, "running",
-                    )
-                else:
-                    await asyncio.sleep(0.5 * (2 ** attempt))
+            except sqlite3.Error as exc:
+                code = getattr(exc, "sqlite_errorcode", 0) & 255
+                busy = code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or str(exc) == "database is locked"
+                delay = 0.5 * 2 ** (attempt - 1)
+                if not busy or attempt == 4 or time.monotonic() - started + delay >= sqlite_busy_timeout_s():
+                    logger.error("workflow %s finalize failed after %d attempts (%s)", ctx.run_id, attempt, exc)
+                    raise AutomationOutcomeWriteError("Could not commit the workflow outcome") from exc
+                await asyncio.sleep(delay)
         # ``last_run_at`` on the workflow row is cosmetic (drives the
         # list UI's "last run" column). A lock here doesn't damage
         # state — log and continue.

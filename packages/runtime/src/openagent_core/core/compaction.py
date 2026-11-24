@@ -63,10 +63,12 @@ from openagent_core.configuration import runtime_environment
 from openagent_core.instance_state import InstanceMapping, InstanceSet
 
 import asyncio
+import hashlib
 import json
 import os
 import re
 import sqlite3
+import threading
 import time
 import uuid
 from functools import lru_cache
@@ -763,7 +765,7 @@ def _load_runs(db_path: str, session_id: str) -> list[dict[str, Any]]:
 
 def _save_runs(db_path: str, session_id: str, runs: list[dict[str, Any]], *,
                privacy_folded_ids: tuple[str, ...] = (), privacy_recap_id: str | None = None,
-               privacy_source_digest: str | None = None) -> bool:
+               privacy_source_digest: str | None = None, cancelled: threading.Event | None = None) -> bool:
     """Persist *runs* back to ``sessions.runs`` for *session_id*.
 
     Touches the row's ``updated_at`` so the session-list UI orders the
@@ -779,14 +781,25 @@ def _save_runs(db_path: str, session_id: str, runs: list[dict[str, Any]], *,
         from openagent_core.memory.db import sqlite_busy_timeout_ms, sqlite_busy_timeout_s
 
         conn = sqlite3.connect(db_path, timeout=sqlite_busy_timeout_s())
-        conn.execute(f"PRAGMA busy_timeout = {sqlite_busy_timeout_ms()}")
+        wait_ms = sqlite_busy_timeout_ms()
+        poll_ms = min(wait_ms, 100) if cancelled is not None else wait_ms
+        conn.execute(f"PRAGMA busy_timeout = {poll_ms}")
     except sqlite3.Error as exc:
         elog("compaction.save_open_failed", level="warning",
              session_id=session_id, error=str(exc))
         return False
     try:
         try:
-            conn.execute('BEGIN IMMEDIATE')
+            deadline = time.monotonic() + wait_ms / 1000
+            while True:
+                if cancelled is not None and cancelled.is_set():
+                    return False
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                    break
+                except sqlite3.OperationalError as exc:
+                    if (getattr(exc, "sqlite_errorcode", 0) & 0xff) != sqlite3.SQLITE_BUSY or time.monotonic() >= deadline:
+                        raise
             cursor = conn.execute(
                 "SELECT runs FROM sessions WHERE session_id = ?",
                 (session_id,),
@@ -794,12 +807,17 @@ def _save_runs(db_path: str, session_id: str, runs: list[dict[str, Any]], *,
             original = cursor.fetchone()
             if original is None:
                 return False
+            from openagent_core.runtime import current_runtime
+            from openagent_core.content_privacy import EngineContentPrivacyWriter
+            runtime = current_runtime()
+            writer = runtime.service(EngineContentPrivacyWriter) if runtime is not None else None
             if privacy_source_digest is not None:
-                import hashlib
                 from openagent_core.memory.operational.projection import loads_maybe_double
                 current = loads_maybe_double(original[0],[])
                 digest = hashlib.sha256(json.dumps(current,sort_keys=True,separators=(',',':')).encode()).hexdigest()
                 if digest != privacy_source_digest:
+                    if writer is None:
+                        return False
                     from openagent_core.content_privacy import PrivacyConflict
                     raise PrivacyConflict('Compaction source changed while the model was summarizing')
             conn.execute(
@@ -807,12 +825,10 @@ def _save_runs(db_path: str, session_id: str, runs: list[dict[str, Any]], *,
                 "WHERE session_id = ?",
                 (json.dumps(runs), int(time.time()), session_id),
             )
-            from openagent_core.runtime import current_runtime
-            from openagent_core.content_privacy import EngineContentPrivacyWriter
-            runtime = current_runtime()
-            writer = runtime.service(EngineContentPrivacyWriter) if runtime is not None else None
             if writer is not None and privacy_recap_id is not None:
                 writer.record_compaction(conn,session_id,runs,privacy_folded_ids,privacy_recap_id)
+            if cancelled is not None and cancelled.is_set():
+                return False
             conn.commit()
             return True
         except sqlite3.Error as exc:
@@ -1765,7 +1781,7 @@ async def compact(
     if not db_path:
         return None
     keep_n = _keep_runs() if keep is None else max(0, int(keep))
-    runs = _load_runs(db_path, session_id)
+    runs = await asyncio.to_thread(_load_runs, db_path, session_id)
 
     # Split into the span to fold and the recent turns to keep verbatim.
     # ``keep_n == 0`` (manual /compact) folds everything; slicing with
@@ -1830,11 +1846,9 @@ async def compact(
     runtime = current_runtime()
     privacy_writer = runtime.service(EngineContentPrivacyWriter) if runtime is not None else None
     folded_ids = tuple(str(run.get('run_id') or run.get('id')) for run in old_runs if isinstance(run,dict) and (run.get('run_id') or run.get('id')))
-    source_digest = None
+    source_digest = hashlib.sha256(json.dumps(runs, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     if privacy_writer is not None:
-        import hashlib
-        privacy_writer.validate_compaction(session_id,folded_ids)
-        source_digest = hashlib.sha256(json.dumps(runs,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        await asyncio.to_thread(privacy_writer.validate_compaction, session_id, folded_ids)
     skills_folded = _skills_loaded_in(old_runs)
     summary = await _summarize_runs(old_runs, model, agent)
     if summary:
@@ -1885,9 +1899,25 @@ async def compact(
     # sets OPENAGENT_COMPACTION_HISTORY_TOOL_RESULT_CHARS.
     kept, results_elided, chars_elided = _trim_kept_tool_results(kept)
     new_runs = [recap_run, *kept]
-    if not _save_runs(db_path, session_id, new_runs,
-                      privacy_folded_ids=folded_ids,privacy_recap_id=recap_run['run_id'],
-                      privacy_source_digest=source_digest):
+    cancelled = threading.Event()
+    save = asyncio.create_task(asyncio.to_thread(
+        _save_runs, db_path, session_id, new_runs, privacy_folded_ids=folded_ids,
+        privacy_recap_id=recap_run["run_id"], privacy_source_digest=source_digest, cancelled=cancelled,
+    ))
+    try:
+        saved = await asyncio.shield(save)
+    except asyncio.CancelledError:
+        # Drain the SQLite writer before releasing the session lock to the next
+        # interactive turn. A pending BEGIN can observe cancellation between polls.
+        cancelled.set()
+        while not save.done():
+            try:
+                await asyncio.shield(save)
+            except asyncio.CancelledError:
+                continue
+        save.result()
+        raise
+    if not saved:
         elog(
             "runtime.compaction.skipped",
             level="warning",
@@ -1905,13 +1935,10 @@ async def compact(
     # live "done" frame is emitted; otherwise the model continues on the recap
     # while a reopened client keeps rendering the pre-compaction transcript.
     db = getattr(agent, "_db", None)
-    project = getattr(db, "_project_operational_session", None)
+    project = getattr(db, "_project_committed_operational_session", None)
     if callable(project):
         try:
             await project(session_id)
-            db_conn = getattr(db, "_conn", None)
-            if db_conn is not None:
-                await db_conn.commit()
         except Exception as exc:  # noqa: BLE001
             elog(
                 "runtime.compaction.projection_deferred",
@@ -2133,7 +2160,7 @@ async def _run_background_compaction(
                     reason="turn_active",
                 )
                 return
-            if not should_compact(session_id, model, agent=agent):
+            if not await asyncio.to_thread(should_compact, session_id, model, agent=agent):
                 return
             elog("runtime.compaction.background_start", session_id=session_id)
             await compact(session_id, model, agent, on_status=on_status)
@@ -2320,7 +2347,7 @@ async def run_start_of_turn(
                         )
             mark_turn_active(session_id)
             registered = True
-            if not preempted and should_compact(session_id, model, agent=agent):
+            if not preempted and await asyncio.to_thread(should_compact, session_id, model, agent=agent):
                 # If we already showed the wait notice, keep compact() silent so
                 # the turn surfaces at most ONE compaction notice; otherwise let
                 # the backstop show its own running→done as it always has.

@@ -19,7 +19,10 @@ overhead for users who never adopt workflows.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import json
+from openagent_core.contracts import AdmissionCapacityExceeded, RunAdmissionPending
+from openagent_core.memory.db import AutomationOutcomeWriteError
 from openagent_core.core.output_preview import RUN_PREVIEW_CHARS, tail_preview
 from openagent_core.configuration import runtime_environment
 import uuid
@@ -282,6 +285,10 @@ def _durable_child_sessions() -> bool:
     return runtime_environment().get("OPENAGENT_SCHEDULER_DURABLE_SESSIONS", "1").strip() not in ("0", "false", "no")
 
 
+def _admission_delay(error: Exception) -> int:
+    return getattr(error, "retry_after_seconds", 2)
+
+
 class Scheduler:
     """Background scheduler that runs agent prompts on cron schedules.
 
@@ -320,6 +327,8 @@ class Scheduler:
         # so different workflows actually run concurrently — the previous
         # design awaited each run inline, serialising the whole tick.
         self._workflow_tasks: set[asyncio.Task] = set()
+        self._claim_lock = asyncio.Lock()
+        self._last_background_pressure = float("-inf")
         # run_id → the ``asyncio.Task`` driving that run, so the
         # cancellation drain can hard-stop a specific in-flight run by
         # cancelling its task. Keyed by ``workflow_runs.id`` /
@@ -430,8 +439,13 @@ class Scheduler:
         """
         task = asyncio.create_task(coro)
         self._workflow_tasks.add(task)
-        task.add_done_callback(self._workflow_tasks.discard)
+        task.add_done_callback(self._on_dispatch_done)
         return task
+
+    def _on_dispatch_done(self, task: asyncio.Task) -> None:
+        self._workflow_tasks.discard(task)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            elog("scheduler.dispatch_failed", level="error", error=str(error) or type(error).__name__)
 
     async def _recalculate_next_runs(self) -> None:
         """On startup, recalculate next_run for all enabled tasks AND
@@ -648,6 +662,11 @@ class Scheduler:
         await self.db.reap_stale_event_deliveries(min_claim_age_seconds=age)
 
     async def _drain_task_run_requests(self) -> None:
+        async with self._claim_lock:
+            if self._background_slots():
+                await self._dispatch_requested_tasks()
+
+    async def _dispatch_requested_tasks(self) -> None:
         """Claim and fire every pending on-demand "run now" request.
 
         Each request fires its task immediately via ``run_task`` with
@@ -659,7 +678,7 @@ class Scheduler:
         try:
             requests = await self.db.claim_pending_task_requests(
                 definition_ids=await self.execution_service.authorized_definition_ids("task") if self.execution_service else (),
-                limit=_CANCEL_SCAN_LIMIT,
+                limit=min(_CANCEL_SCAN_LIMIT, self._background_slots()), reserve_runs=True,
             )
         except Exception as e:  # noqa: BLE001
             elog("scheduler.task_request_claim_failed", level="warning",
@@ -670,7 +689,7 @@ class Scheduler:
                  limit=_CANCEL_SCAN_LIMIT)
         for req in requests:
             task_id = req.get("task_id")
-            task = await self.db.get_task(task_id) if task_id else None
+            task = await self.db.get_task(task_id, committed=True) if task_id else None
             if task is None:
                 # FK cascade should prevent this, but guard anyway.
                 elog("scheduler.task_request_orphan", level="warning",
@@ -691,13 +710,38 @@ class Scheduler:
         from the durable detail whether another attempt is safe.
         """
         trigger = request.get("trigger") or "manual"
+        reserved = request.get("run_id")
+        if reserved is not None:
+            session_id = task.get("target_session_id")
+            if not session_id and _durable_child_sessions():
+                from openagent_core.core.child_session import mint_child_session_id
+
+                session_id = mint_child_session_id("scheduler", {"task_id": task["id"], "run_id": reserved})
+            if not await self.db.begin_requested_task_run(request, session_id=session_id):
+                return
+            task = {**task, "_preclaimed_run_id": reserved, "_preclaimed_session_id": session_id}
+            if trigger == "schedule":
+                await self._run_preclaimed_task(task, claimed_at=request["claimed_at"])
+                return
         try:
             await self.run_task(
                 task, trigger=trigger, request_id=request.get("id"),
             )
+        except (RunAdmissionPending, AdmissionCapacityExceeded) as exc:
+            if not reserved:
+                raise
+            await self.db.defer_unadmitted_occurrence("task", reserved, task["id"], retry_after=_admission_delay(exc),
+                                                      trigger=trigger, claimed_at=request["claimed_at"])
+            return
         except asyncio.CancelledError:
+            if reserved:
+                await self._record_task_finish(reserved, task, status="cancelled", error="Stopped by user")
+            raise
+        except AutomationOutcomeWriteError:
             raise
         except Exception as exc:  # noqa: BLE001 — detached failure is durable below
+            if reserved:
+                await self._record_task_finish(reserved, task, status="failed", error=str(exc) or type(exc).__name__)
             elog(
                 "scheduler.task_request_failed",
                 level="warning",
@@ -716,6 +760,16 @@ class Scheduler:
             and row.get("status") == "failed"
         ):
             await self._maybe_schedule_task_retry(task, row)
+
+    def _background_slots(self) -> int:
+        limit = max(1, _env_int("OPENAGENT_BACKGROUND_RUN_CONCURRENCY", 3))
+        active = sum(not job.done() for job in self._workflow_tasks)
+        free = max(0, limit - active)
+        now = time.monotonic()
+        if not free and now - self._last_background_pressure >= 60:
+            self._last_background_pressure = now
+            elog("scheduler.background_pressure", in_flight=active, concurrency=limit)
+        return free
 
     def _event_dispatch_concurrency(self) -> int:
         """Max event-delivery turns allowed in flight at once (always >= 1).
@@ -747,10 +801,15 @@ class Scheduler:
 
         task = asyncio.create_task(_runner())
         self._workflow_tasks.add(task)
-        task.add_done_callback(self._workflow_tasks.discard)
+        task.add_done_callback(self._on_dispatch_done)
         return task
 
     async def _drain_event_deliveries(self) -> None:
+        async with self._claim_lock:
+            if self._background_slots():
+                await self._dispatch_pending_events()
+
+    async def _dispatch_pending_events(self) -> None:
         """Claim and dispatch pending event deliveries, BOUNDED so a burst can
         never jam the pipeline.
 
@@ -778,7 +837,7 @@ class Scheduler:
         # Only claim what we can immediately dispatch. When the runtime is
         # saturated (in_flight == concurrency) free is 0 and we touch nothing
         # this tick — the queued ``received`` rows wait in the DB for a slot.
-        free = self._event_dispatch_concurrency() - self._event_dispatch_in_flight
+        free = min(self._event_dispatch_concurrency() - self._event_dispatch_in_flight, self._background_slots())
         if free <= 0:
             # Say so. A saturated dispatcher and an empty queue look identical
             # from outside — nothing runs, nothing is logged — and an in-flight
@@ -1157,6 +1216,12 @@ class Scheduler:
                     families=",".join(allowed_families),
                     dropped=max(0, len(available) - len(allowed_families)),
                 )
+        if self.db is not None and not preclaimed_run_id:
+            options = {"request_id": request_id} if request_id is not None else {}
+            await self.db.add_task_run(
+                task_id=task["id"], trigger=trigger, run_id=run_id,
+                session_id=session_id if (durable or target_session) else None, **options,
+            )
         scope_token = (
             set_tool_allowlist(allowed_families)
             if allowed_families is not None else None
@@ -1187,47 +1252,10 @@ class Scheduler:
         if task_name in (SKILL_CURATOR_TASK_NAME, SKILL_DISTILLER_TASK_NAME):
             origin_token = set_write_origin(BACKGROUND)
         elog("task.run", name=task_name)
-        # Record this firing in ``task_runs`` so the dashboard can show a
-        # per-task execution history (status / output preview / timing) —
-        # the scheduled-task analogue of ``workflow_runs``. Best-effort:
-        # logging must never stop the task from running, so the db touch
-        # is guarded and skipped entirely when there's no db (e.g. a
-        # Scheduler constructed with ``db=None`` in unit tests).
-        recorded = bool(preclaimed_run_id)
-        if self.db is not None and not recorded:
-            try:
-                await self.db.add_task_run(
-                    task_id=task["id"], trigger=trigger, run_id=run_id,
-                    session_id=session_id if (durable or target_session) else None,
-                )
-                recorded = True
-            except Exception as e:  # noqa: BLE001
-                elog("task.run_record_failed", level="warning",
-                     name=task_name, error=str(e))
-        # The id to finalize the ``task_runs`` row with — None when the row was
-        # never recorded (so ``_record_task_finish`` no-ops). ``run_id`` itself
-        # stays the real uuid for register/unregister + request linking.
-        finish_run_id = run_id if recorded else None
-        # Once the run row exists, bind this firing's task so the
-        # cancellation drain can hard-stop it on a "completely stop" request.
-        if recorded:
+        finish_run_id = run_id if self.db is not None else None
+        if finish_run_id is not None:
             self._register_run(self._scheduled_run_tasks, run_id)
-            # Surface the in-flight firing to subscribed clients so the
-            # dashboard can flip the tile to "running" and offer a Stop
-            # control — for *every* firing (scheduled tick, run-now from the
-            # app, or run-now from the agent's MCP), not just app-initiated
-            # ones. The matching "no longer running" signal is the finish
-            # broadcast in ``_record_task_finish``.
             self._broadcast("scheduled_task", "updated", task["id"])
-            # When this firing was kicked off by an out-of-process "run now"
-            # request, link the request to this run_id so the MCP tool's
-            # wait-poller can find the firing (mirrors the workflow path).
-            if request_id is not None:
-                try:
-                    await self.db.set_task_request_run_id(request_id, run_id)
-                except Exception as e:  # noqa: BLE001
-                    elog("task.run_request_link_failed", level="warning",
-                         name=task_name, error=str(e))
         try:
             # Pick up any providers/models the REST or MCP layer wrote
             # since the last tick. The gateway fires refresh_registries on
@@ -1380,6 +1408,10 @@ class Scheduler:
                 await self._record_task_finish(
                     finish_run_id, task, status="success", output=str(response),
                 )
+        except AutomationOutcomeWriteError:
+            # A storage failure cannot turn a successful external action into
+            # an execution failure eligible for a fresh attempt.
+            raise
         except asyncio.CancelledError:
             # A stop request (or shutdown) cancelled this firing mid-turn.
             # Finalize the task_runs row as ``cancelled`` — not ``failed`` —
@@ -1424,7 +1456,7 @@ class Scheduler:
                 reset_write_origin(origin_token)
             if scope_token is not None:
                 reset_tool_allowlist(scope_token)
-            if recorded:
+            if finish_run_id is not None:
                 self._unregister_run(self._scheduled_run_tasks, run_id)
             if not durable:
                 # Legacy fire-and-forget: each tick reuses one per-task
@@ -1535,19 +1567,20 @@ class Scheduler:
         output: str | None = None,
         error: str | None = None,
     ) -> None:
-        """Finalize the ``task_runs`` row opened in ``run_task``. No-op when
-        recording was skipped (no db, or the open failed). Best-effort: a
-        failure here is logged, never raised, so a logging hiccup can't
-        turn a healthy task run into a reported failure."""
+        """Commit the terminal outcome before broadcasting or pruning history."""
         if run_id is None or self.db is None:
             return
+        updates: dict = {"status": status, "finished_at": time.time()}
+        if output is not None:
+            updates["output"] = tail_preview(output, _MAX_TASK_RUN_OUTPUT)
+        if error is not None:
+            updates["error"] = tail_preview(error, _MAX_TASK_RUN_OUTPUT)
         try:
-            updates: dict = {"status": status, "finished_at": time.time()}
-            if output is not None:
-                updates["output"] = tail_preview(output, _MAX_TASK_RUN_OUTPUT)
-            if error is not None:
-                updates["error"] = tail_preview(error, _MAX_TASK_RUN_OUTPUT)
             await self.db.update_task_run(run_id, **updates)
+        except Exception as exc:
+            elog("task.run_finish_failed", level="error", name=task.get("name"), error=str(exc))
+            raise AutomationOutcomeWriteError("Could not commit the task outcome") from exc
+        try:
             # Keep the per-task history bounded.
             await self.db.prune_task_runs(task["id"])
             # Opt-in retention for the durable per-firing child sessions under
@@ -1561,10 +1594,10 @@ class Scheduler:
                 await self.db.prune_child_sessions(f"scheduler:{task['id']}", keep=keep)
             self._broadcast("scheduled_task", "updated", task["id"])
         except Exception as e:  # noqa: BLE001
-            elog("task.run_finish_failed", level="warning",
+            elog("task.run_retention_failed", level="warning",
                  name=task.get("name"), error=str(e))
 
-    async def _run_preclaimed_task(self, task: dict) -> None:
+    async def _run_preclaimed_task(self, task: dict, *, claimed_at: float | None = None) -> None:
         """Dispatch a cron run already inserted by ``claim_due_task_run``.
 
         Most task hooks delegate to the real ``run_task``, which finalizes the
@@ -1576,6 +1609,13 @@ class Scheduler:
         run_id = str(task["_preclaimed_run_id"])
         try:
             await self.run_task(task)
+        except (RunAdmissionPending, AdmissionCapacityExceeded) as exc:
+            await self.db.defer_unadmitted_occurrence(
+                "task", run_id, task["id"], retry_after=_admission_delay(exc), trigger="schedule", claimed_at=claimed_at,
+            )
+            return
+        except AutomationOutcomeWriteError:
+            raise
         except asyncio.CancelledError:
             await self._record_task_finish(
                 run_id, task, status="cancelled", error="Stopped by user",
@@ -1686,6 +1726,11 @@ class Scheduler:
         return request_id
 
     async def _check_and_run(self) -> None:
+        async with self._claim_lock:
+            if self._background_slots():
+                await self._dispatch_due()
+
+    async def _dispatch_due(self) -> None:
         """Check for due tasks and execute them.
 
         Each due item is dispatched as its own ``asyncio.Task`` via
@@ -1693,12 +1738,14 @@ class Scheduler:
         parallel. Bookkeeping and the initial ``task_runs`` row are committed
         in one transaction *before* dispatch. A lock failure rolls both back,
         leaving the occurrence due for the next tick; a crash after commit
-        leaves a durable ``running`` row for startup reaping/requeueing.
+        leaves a queued occurrence for startup recovery until dispatch begins.
         """
         now = time.time()
         due_tasks = await self.db.get_due_tasks(now) if self.domain_enabled("scheduler") else []
 
         for task in due_tasks:
+            if not self._background_slots():
+                break
             if self.execution_service is None or not await self.execution_service.definition_authorized("task", task):
                 continue
             elog("scheduler.run_due", name=task["name"])
@@ -1727,6 +1774,7 @@ class Scheduler:
                     disable=one_shot,
                     run_id=run_id,
                     session_id=session_id,
+                    reserve=True,
                 )
                 if not claimed:
                     elog(
@@ -1750,12 +1798,9 @@ class Scheduler:
                     error=str(e) or type(e).__name__,
                 )
                 continue
-            claimed_task = {
-                **task,
-                "_preclaimed_run_id": run_id,
-                "_preclaimed_session_id": session_id,
-            }
-            self._spawn_workflow(self._run_preclaimed_task(claimed_task))
+            claim = {"id": run_id, "run_id": run_id, "task_id": task["id"], "trigger": "schedule",
+                     "claimed_at": now}
+            self._spawn_workflow(self._run_requested_task(claim, task))
 
         # Per-block schedules. Each due row fires its own
         # trigger-schedule node as the entry point; a workflow with
@@ -1768,7 +1813,10 @@ class Scheduler:
         except Exception as e:  # noqa: BLE001
             elog("scheduler.schedules_fetch_failed", level="warning", error=str(e))
             due_schedules = []
+        available = self._background_slots()
         for sched in due_schedules:
+            if available <= 0:
+                break
             wf = await self.db.get_workflow(sched["workflow_id"])
             if wf is None:
                 # FK cascade should prevent this, but guard anyway.
@@ -1789,45 +1837,19 @@ class Scheduler:
             )
             try:
                 cron = sched.get("cron_expression") or ""
-                if is_one_shot_expression(cron):
-                    await self.db.update_schedule(
-                        sched["id"], last_run_at=now, enabled=False,
-                    )
-                else:
-                    await self.db.update_schedule(
-                        sched["id"],
-                        last_run_at=now,
-                        next_run_at=self._next_run(cron, now, sched.get("timezone")),
-                    )
-            except ValueError as e:
-                elog(
-                    "scheduler.schedule_next_run_failed", level="error",
-                    schedule=sched.get("id"), error=str(e),
-                )
-            # Workflow-level last_run_at surfaces "some schedule fired"
-            # to the list UI even when the workflow has many schedules.
-            try:
-                await self.db.update_workflow(
-                    sched["workflow_id"], last_run_at=now,
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            self._broadcast("workflow", "updated", sched["workflow_id"])
-            self._spawn_workflow(
-                self._run_workflow(
-                    wf,
-                    trigger="schedule",
-                    entry_node_id=sched["node_id"],
-                    run_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"workflow:{sched['id']}:{sched.get('next_run_at')}")),
-                )
-            )
+                next_run = None if is_one_shot_expression(cron) else self._next_run(cron, now, sched.get("timezone"))
+                if await self.db.enqueue_due_workflow(sched, now=now, next_run=next_run):
+                    available -= 1
+                    self._broadcast("workflow", "updated", sched["workflow_id"])
+            except (ValueError, sqlite3.Error) as exc:
+                elog("scheduler.schedule_next_run_failed", level="error", schedule=sched.get("id"), error=str(exc))
 
         # AI-enqueued + manually-enqueued workflow runs (Phase 2).
         try:
             if not self.domain_enabled("workflows"):
                 requests = []
             else:
-                requests = await self.db.claim_pending_workflow_requests(limit=5,
+                requests = await self.db.claim_pending_workflow_requests(limit=min(5, self._background_slots()), reserve_runs=True,
                     definition_ids=await self.execution_service.authorized_definition_ids("workflow") if self.execution_service else ())
         except Exception as e:  # noqa: BLE001
             # 37e99bd dropped explicit BEGIN/ROLLBACK from the claim path,
@@ -1852,14 +1874,32 @@ class Scheduler:
                     request_id=req.get("id"), workflow_id=workflow_id,
                 )
                 continue
-            self._spawn_workflow(
-                self._run_workflow(
-                    wf,
-                    trigger=req.get("trigger") or "api",
-                    inputs=req.get("inputs") or {},
-                    request_id=req.get("id"),
-                )
+            self._spawn_workflow(self._run_requested_workflow(req, wf))
+
+    async def _run_requested_workflow(self, request: dict, workflow: dict) -> None:
+        if not await self.db.begin_requested_workflow_run(request):
+            return
+        run_id = request["run_id"]
+        try:
+            schedule = request.get("schedule")
+            check = getattr(self.execution_service, "schedule_authorized", None)
+            if schedule is not None and check is not None and not await check(workflow, schedule):
+                raise PermissionError("Workflow schedule is no longer authorized")
+            await self._run_workflow(
+                workflow, trigger=request.get("trigger") or "api", inputs=request.get("inputs") or {},
+                request_id=request["id"], run_id=run_id, entry_node_id=schedule["node_id"] if schedule else None,
             )
+        except (RunAdmissionPending, AdmissionCapacityExceeded) as exc:
+            await self.db.defer_unadmitted_occurrence("workflow", run_id, workflow["id"], retry_after=_admission_delay(exc),
+                                                      trigger=request["trigger"], claimed_at=request["claimed_at"])
+        except asyncio.CancelledError:
+            await self.db.update_workflow_run(run_id, status="cancelled", finished_at=time.time())
+            raise
+        except AutomationOutcomeWriteError:
+            raise
+        except Exception as exc:
+            await self.db.update_workflow_run(run_id, status="failed", error=str(exc), finished_at=time.time())
+            raise
 
     # ── Workflow helpers (Phase 2) ──
 
@@ -2013,17 +2053,6 @@ class Scheduler:
             trigger=trigger, request_id=request_id,
             entry_node_id=entry_node_id,
         )
-        if request_id is not None:
-            # Link the request row first so a polling MCP tool can move
-            # off "waiting for run_id" the moment the next DB tick lands.
-            try:
-                await self.db.set_workflow_request_run_id(request_id, run_id)
-            except Exception as e:  # noqa: BLE001
-                elog(
-                    "scheduler.workflow_link_failed", level="warning",
-                    request_id=request_id, error=str(e),
-                )
-
         # Bind this run's task so the cancellation drain can hard-stop it.
         # Safe to register before the executor opens the run row: the MCP
         # only flags a row ``cancelling`` once it exists and is ``running``,
@@ -2051,9 +2080,10 @@ class Scheduler:
             from openagent_core.core.execution_origin import execution_origin_scope
 
             with execution_origin_scope(None):
+                request_link = {"request_id": request_id} if request_id is not None else {}
                 final = await executor.run(
                     wf, trigger=trigger, inputs=inputs, run_id=run_id,
-                    entry_node_id=entry_node_id,
+                    entry_node_id=entry_node_id, **request_link,
                 )
             elog(
                 "workflow.done",
@@ -2078,6 +2108,8 @@ class Scheduler:
             except Exception as e:  # noqa: BLE001
                 elog("workflow.cancel_finalize_failed", level="error",
                      run_id=run_id, error=str(e))
+            raise
+        except AutomationOutcomeWriteError:
             raise
         except Exception as e:  # noqa: BLE001
             elog("workflow.error", level="error", name=wf_name, error=str(e))

@@ -256,12 +256,15 @@ async def t_prune(ctx: TestContext) -> None:
         await db.connect()
         task_id = await db.add_task("T", "* * * * *", "p")
 
+        active = await db.add_task_run(task_id=task_id)
         for _ in range(5):
-            await db.add_task_run(task_id=task_id)
+            finished = await db.add_task_run(task_id=task_id)
+            await db.update_task_run(finished, status="success")
 
         removed = await db.prune_task_runs(task_id, keep_last=2)
         assert removed == 3, removed
-        assert len(await db.list_task_runs(task_id, limit=100)) == 2
+        assert len(await db.list_task_runs(task_id, limit=100)) == 3
+        assert (await db.get_task_run(active))["status"] == "running"
 
         await db.close()
     finally:
