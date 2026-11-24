@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta169 SQLite writer contention and MCP recovery](releases/v1.1.0-beta.169.md).
+
 - [Beta168 PostgreSQL worker renewal, health and replacement](releases/v1.1.0-beta.168.md).
 
 - [Beta167 optional readiness checks before run admission](releases/v1.1.0-beta.167.md).
