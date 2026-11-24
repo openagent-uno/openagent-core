@@ -13,6 +13,9 @@ await runtime.start()
 
 Use a dedicated database or private schema with a trusted database role and transport. The role must own or be permitted to create the selected schema and its objects. Each running process creates a data pool (8 connections maximum by default) and a fresh worker identity. Budget one dedicated lease-renewal connection and one notification listener per runtime in addition to the data pool and any optional serving-generation pool. Configure one data pool per runtime and close the runtime during normal shutdown. Schema selection belongs to host configuration. Session IDs are unique within an agent namespace. User identity comes from the host's authenticated execution context.
 
+This adapter stores canonical runs and sessions. Automation definitions, queues,
+and scheduler run projections have their own [scheduling store contract](automation-host-contract.md#durable-cancellation-on-the-scheduling-store).
+
 ## Worker health and replacement
 
 The worker renews its existing identity against the PostgreSQL clock during idle

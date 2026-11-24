@@ -2,6 +2,7 @@
 import asyncio
 import os
 from contextlib import asynccontextmanager
+from functools import partial
 from types import SimpleNamespace
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -158,3 +159,75 @@ async def test_close_during_detached_admission(tmp_path):
     await runtime.start()
     await asyncio.wait_for(runtime.close(), 3)
     assert attempted.is_set()
+
+
+@pytest.mark.parametrize("kind,domain", [("scheduled_task", "scheduler"), ("workflow", "workflows")])
+async def test_exact_cancellation_uses_the_scheduling_store(tmp_path, kind, domain):
+    path = str(tmp_path / "definitions.db")
+    writer, observer = MemoryDB(path), MemoryDB(path)
+    await writer.connect()
+    try:
+        if kind == "workflow":
+            definition = await writer.add_workflow(name="First")
+            unrelated = await writer.add_workflow(name="Second")
+            add_run = writer.add_workflow_run
+            first_scope = {"workflow_id": definition}
+            other_scope = {"workflow_id": unrelated}
+            claim = writer.claim_pending_workflow_requests
+            begin = writer.begin_requested_workflow_run
+            update = writer.update_workflow_run
+            read = observer.get_workflow_run
+        else:
+            definition = await writer.add_task("First", "0 9 * * *", "test")
+            unrelated = await writer.add_task("Second", "0 9 * * *", "test")
+            add_run = writer.add_task_run
+            first_scope = {"task_id": definition}
+            other_scope = {"task_id": unrelated}
+            claim = writer.claim_pending_task_requests
+            begin = partial(writer.begin_requested_task_run, session_id=None)
+            update = writer.update_task_run
+            read = observer.get_task_run
+
+        queued = await writer.enqueue_manual_automation(kind, definition, "queued-request", {})
+        started = await writer.enqueue_manual_automation(kind, definition, "started-request", {})
+        [reserved] = await claim(only_id=started, reserve_runs=True)
+        assert await begin(reserved)
+        [queued_claim] = await claim(only_id=queued, reserve_runs=True)
+        running = await add_run(**first_scope, trigger="manual")
+        settled = await add_run(**first_scope, trigger="manual")
+        await update(settled, status="success", finished_at=123)
+        foreign = await add_run(**other_scope, trigger="manual")
+        omit = await add_run(**first_scope, trigger="manual")
+
+        # The public port can be supplied without exposing a local path.
+        port = SimpleNamespace(flag_automation_runs_cancelling=writer.flag_automation_runs_cancelling)
+        first = AutomationRuntime(port, object(), object())
+        second = AutomationRuntime(observer, object(), object())
+        requested = [running, foreign, queued, running, settled, started, "missing"]
+        receipts = await asyncio.gather(
+            first.cancel_runs(kind, definition, requested),
+            second.cancel_runs(kind, definition, requested),
+        )
+        assert sorted(receipts, key=len) == [[], [running, queued, started]]
+
+        await writer.close()
+        assert await second.cancel_runs(kind, definition, requested) == []
+        assert not await claim(only_id=queued, reserve_runs=True)
+        assert not await begin(queued_claim)
+        for run_id in (running, started):
+            projection = await read(run_id)
+            assert (projection["status"], projection["finished_at"]) == ("cancelling", None)
+        cancelled = await read(queued)
+        assert cancelled["status"] == "cancelled" and cancelled["finished_at"] > 0
+        finished = await read(settled)
+        assert (finished["status"], finished["finished_at"]) == ("success", 123)
+        for run_id in (foreign, omit):
+            assert (await read(run_id))["status"] == "running"
+
+        await second.scheduler.set_enabled_domains({domain})
+        await second.scheduler._drain_cancellations()
+        for run_id in (running, started):
+            assert (await read(run_id))["status"] == "cancelled"
+    finally:
+        await observer.close()
+        await writer.close()

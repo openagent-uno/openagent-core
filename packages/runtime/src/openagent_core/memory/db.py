@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from openagent_core.instance_state import InstanceMapping
-from openagent_core.contracts import IdempotencyConflict
+from openagent_core.contracts import AutomationRunKind, IdempotencyConflict
 from openagent_core.configuration import (
     runtime_environment, sqlite_busy_timeout_ms, sqlite_busy_timeout_s,
 )
@@ -17,6 +17,7 @@ import sqlite3
 import time
 import uuid
 from collections import deque
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -3384,6 +3385,29 @@ class MemoryDB:
                 (task_id, int(keep_last)),
             )
             return cursor.rowcount or 0
+
+    async def flag_automation_runs_cancelling(
+        self, kind: AutomationRunKind, definition_id: str, run_ids: Sequence[str],
+    ) -> list[str]:
+        """Write exact cancellation intents to the scheduler's projections."""
+        table, definition_column = {
+            "workflow": ("workflow_runs", "workflow_id"),
+            "scheduled_task": ("task_runs", "task_id"),
+        }[kind]
+        ordered = tuple(dict.fromkeys(run_ids))
+        if not ordered:
+            return []
+        async with self._isolated_write(lock_wait_ms=sqlite_busy_timeout_ms()) as conn:
+            rows = await conn.execute_fetchall(
+                f"UPDATE {table} "
+                "SET status=CASE WHEN status='queued' THEN 'cancelled' ELSE 'cancelling' END, "
+                "finished_at=CASE WHEN status='queued' THEN CAST(strftime('%s','now') AS REAL) ELSE finished_at END "
+                f"WHERE {definition_column}=? AND status IN ('queued','starting','running') "
+                "AND id IN (SELECT value FROM json_each(?)) RETURNING id",
+                (definition_id, json.dumps(ordered)),
+            )
+            changed = {row["id"] for row in rows}
+        return [run_id for run_id in ordered if run_id in changed]
 
     async def flag_task_runs_cancelling(self, task_id: str) -> list[str]:
         """Flag every currently-``running`` firing of a task as ``cancelling``

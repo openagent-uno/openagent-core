@@ -4,6 +4,7 @@ Optional engine, provider, gateway and storage implementations are imported only
 when selected by the host. Importing this package performs no I/O.
 """
 from .contracts import (PrincipalRef, ExecutionContext, CapabilityLease, ResourceRef,
+    AutomationRunKind, AutomationRunCancellationStore,
     RunRequest, RunAdmissionReadiness, RunAdmissionPending, WorkerLeaseExpired, AcceptedRunRequest, RunRecord, RunEvent, RunEventPage, RunFinalAnswer, RunReplayReader, Authorizer, IdentityDirectory, RuntimeStore,
     ModelCatalog, CredentialResolver, DelegationService, IdempotencyConflict, SessionRef, SessionStore)
 from .runtime import Runtime, RuntimeSettings, RuntimeServices, deferred_admission_requested
@@ -27,6 +28,7 @@ from .modules import (MODULE_API_VERSION, MODULE_SURFACES, CapabilityContributio
 __version__ = '1.1.0b171'
 __all__ = ['Runtime','RuntimeSettings','RuntimeServices','ProviderHistory','ProviderHistoryMessage','ProviderAccount','ProviderRoute','ProviderAdmission','PrincipalRef','ExecutionContext',
     'CapabilityLease','ResourceRef','RunRequest','RunAdmissionReadiness','RunAdmissionPending','WorkerLeaseExpired','deferred_admission_requested','AcceptedRunRequest','RunRecord','RunEvent','RunEventPage','RunFinalAnswer','RunReplayReader','Authorizer','ConfirmedDelivery',
+    'AutomationRunKind','AutomationRunCancellationStore',
     'IdentityDirectory','RuntimeStore','SessionRef','SessionStore','ModelCatalog','CredentialResolver','DelegationService',
     'CapabilityCatalog','capability_scope','CapabilitySource','ToolExecutor','ToolDefinition','ToolDescriptor',
     'FunctionSource','CapabilityUnavailable','IdempotencyConflict','EngineExtensions',

@@ -5,11 +5,30 @@ caller JSON. Credentials do not belong in contexts or persisted run snapshots.
 """
 from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
-from typing import Any, Mapping, Protocol
+from typing import Any, Literal, Mapping, Protocol, Sequence
 import base64
 import binascii
 import hashlib
 import json
+
+
+AutomationRunKind = Literal["scheduled_task", "workflow"]
+
+
+class AutomationRunCancellationStore(Protocol):
+    """Write cancellation intents to the same projections used by the scheduler."""
+
+    async def flag_automation_runs_cancelling(
+        self, kind: AutomationRunKind, definition_id: str, run_ids: Sequence[str],
+    ) -> list[str]:
+        """Atomically transition only the exact host-authorized run IDs.
+
+        Queued projections become terminal. Starting or running projections
+        become cancelling for the owning scheduler to drain. Return changed
+        IDs once, in request order. Missing, unrelated and settled rows and
+        previous cancellation requests are left alone.
+        """
+        ...
 
 
 def canonical_json(value: Any) -> str:

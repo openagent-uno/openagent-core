@@ -5,6 +5,9 @@ submits every firing to Runtime. This facade never manufactures a principal,
 delegation or default automation.
 """
 import asyncio
+from collections.abc import Sequence
+
+from .contracts import AutomationRunCancellationStore, AutomationRunKind
 from .core.scheduler import Scheduler
 
 
@@ -103,21 +106,12 @@ class AutomationRuntime:
                 return None
         return self.scheduler._spawn_workflow(execute())
 
-    async def cancel_runs(self,kind,definition_id,run_ids):
+    async def cancel_runs(
+        self, kind: AutomationRunKind, definition_id: str, run_ids: Sequence[str],
+    ) -> list[str]:
         """Flag only the exact, host-authorized projected run IDs atomically."""
-        from .automation import AutomationRepository
-        table,column={"workflow":("workflow_runs","workflow_id"),"scheduled_task":("task_runs","task_id")}[kind]
-        repository=AutomationRepository(self.scheduler.db.db_path)
-        flagged=[]
-        async with repository.transaction() as connection:
-            for run_id in run_ids:
-                cursor=await connection.execute(
-                    f"UPDATE {table} SET status=CASE WHEN status='queued' THEN 'cancelled' ELSE 'cancelling' END, "
-                    "finished_at=CASE WHEN status='queued' THEN CAST(strftime('%s','now') AS REAL) ELSE finished_at END "
-                    f"WHERE id=? AND {column}=? AND status IN ('queued','starting','running')",
-                    (run_id,definition_id))
-                if cursor.rowcount:flagged.append(run_id)
-        return flagged
+        store: AutomationRunCancellationStore = self.scheduler.db
+        return await store.flag_automation_runs_cancelling(kind, definition_id, run_ids)
 
     async def drain(self):
         """Run one deterministic due/queue pass, also useful for host tests."""

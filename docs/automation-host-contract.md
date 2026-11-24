@@ -45,6 +45,31 @@ workflow. A stopped queued occurrence cannot begin. A claim interrupted before
 dispatch can transfer under the existing compare-and-swap. Once execution starts,
 generic queue recovery cannot repeat effects with an unknown outcome.
 
+## Durable cancellation on the scheduling store
+
+The scheduling store passed to `AutomationRuntime` implements the public
+`AutomationRunCancellationStore` method
+`flag_automation_runs_cancelling(kind, definition_id, run_ids)`. Both the
+cancellation request and the worker draining it use the same durable
+projection store and host scope. SQLite `MemoryDB` implements the method
+using one guarded update in its isolated writer transaction. A queued
+projection becomes `cancelled` and receives its finish time. A starting
+or running projection becomes `cancelling`, which the owning scheduler
+observes and acts on. The returned IDs are the rows changed by this
+request, in input order. Repeated requests and unrelated IDs change
+nothing. The host authorizes the request before recording the intent.
+Callers read canonical run status to confirm when execution stops. See the
+[source qualification](qualification/durable-automation-cancellation-2026-11-24.json).
+
+This is one part of the scheduling store contract. The PostgreSQL
+`RuntimeStore` serves canonical runs. Scheduler definitions, queues,
+atomic occurrence claims, and their run projections still use the legacy
+SQLite implementation. Moving those together requires a scheduling-store
+adapter and durable worker ownership for draining cancellations in a
+multi-worker deployment. A worker cannot infer that a projection is an
+orphan from its absence in that process's task registry. Hosts must send
+cancellation requests to the worker's projection store.
+
 ## Interrupted execution and projection limits
 
 On startup the scheduler recalculates the next occurrence of enabled tasks.

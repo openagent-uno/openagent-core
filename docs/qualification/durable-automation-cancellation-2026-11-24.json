@@ -1,0 +1,20 @@
+{
+  "date": "2026-11-24",
+  "base": "0324cc6b48dab98931519b5d4fde2037f35e7462",
+  "scope": "source qualification",
+  "tests": {
+    "passed": 84,
+    "failed": 0,
+    "skipped": 0,
+    "subtests_passed": 17,
+    "stores": ["SQLite automation projections", "PostgreSQL 17 canonical runtime"],
+    "focused_suites": ["manual automation", "scheduler", "workflows", "events", "transaction ownership", "module architecture", "PostgreSQL runtime", "durable operations"]
+  },
+  "verified": [
+    "The public protocol imports with Python site packages disabled.",
+    "Two independent SQLite writers return each selected run ID exactly once across concurrent cancellation requests.",
+    "A claimed queued run cannot start after cancellation. The scheduling worker drains persisted active cancellation intents.",
+    "An exact cancellation leaves unrelated definitions, unselected projections, and terminal runs untouched."
+  ],
+  "boundary": "PostgreSQL tests cover the canonical runtime with SQLite scheduling projections. No scheduler database migration or distribution was performed."
+}
