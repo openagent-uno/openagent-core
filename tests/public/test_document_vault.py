@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from openagent_core import (
@@ -120,6 +121,48 @@ class DocumentVault(unittest.IsolatedAsyncioTestCase):
         result = await self.runtime.wait(run.run_id, context)
         self.assertEqual(result.status, "success", result)
         return result.output
+
+    async def test_host_observer_shares_mutation_transaction_and_revocation(self):
+        ledger = sa.Table("test_observer_ledger", sa.MetaData(),
+                          sa.Column("id", sa.String(32), primary_key=True),
+                          sa.Column("tenant", sa.String(32), nullable=False),
+                          sa.Column("operation", sa.String(20), nullable=False),
+                          sa.Column("previous_revision", sa.Integer, nullable=False),
+                          sa.Column("revision", sa.Integer, nullable=False))
+        async with self.engine.begin() as con:
+            await con.run_sync(ledger.metadata.create_all)
+
+        calls = []
+
+        async def observe(con, event):
+            self.assertEqual((event.context, event.space, event.path), (self.a, "a", "alpha.md"))
+            calls.append(event.operation)
+            await con.execute(ledger.insert().values(id=event.mutation_id, tenant=event.context.tenant_id,
+                operation=event.operation, previous_revision=event.previous_revision, revision=event.revision))
+            if len(calls) == 2:
+                raise RuntimeError("ledger unavailable")
+            if len(calls) == 4:
+                self.policy.denied = True
+
+        vault = SqlDocumentVault(self.engine, self.policy, self.store.resolve_space, mutation_observer=observe)
+        await vault.write(self.a, "alpha.md", "old value", expected_revision=0)
+        with self.assertRaises(RevisionConflict):
+            await vault.write(self.a, "alpha.md", "duplicate", expected_revision=0)
+        with self.assertRaisesRegex(RuntimeError, "ledger unavailable"):
+            await vault.write(self.a, "alpha.md", "failed value", expected_revision=1)
+        self.assertEqual((await vault.read(self.a, "alpha.md"))["content"], "old value")
+        await vault.write(self.a, "alpha.md", "new value", expected_revision=1)
+        with self.assertRaises(PermissionError):
+            await vault.delete(self.a, "alpha.md", expected_revision=2)
+        self.policy.denied = False
+        self.assertEqual((await vault.read(self.a, "alpha.md"))["content"], "new value")
+        await vault.delete(self.a, "alpha.md", expected_revision=2)
+        await vault.forget(self.a, "alpha.md", expected_revision=3)
+        async with self.engine.connect() as con:
+            observed = (await con.execute(sa.select(ledger.c.operation, ledger.c.previous_revision, ledger.c.revision)
+                .where(ledger.c.tenant == self.tenant).order_by(ledger.c.revision))).all()
+        self.assertEqual(observed, [("create", 0, 1), ("replace", 1, 2), ("delete", 2, 3), ("forget", 3, 4)])
+        self.assertEqual(calls, ["create", "replace", "replace", "delete", "delete", "forget"])
 
     async def test_forget_removes_transitive_copies_and_restores_independent_revision(self):
         store, actor = self.store, self.a

@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 import re
+from typing import Literal
 
 from uuid import uuid4
 
 import sqlalchemy as sa
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from openagent_core.contracts import ExecutionContext, ResourceRef, require_authorized
 from openagent_core.memory.vault.parser import link_key, parse_note_text
@@ -20,6 +22,22 @@ from .document_dream import DocumentDreamQueue, check_dream_space, is_document_d
 
 class RevisionConflict(ValueError):
     """The writer's observed version is no longer current."""
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentVaultMutation:
+    """A newly applied note mutation in the host's vault transaction."""
+
+    mutation_id: str
+    context: ExecutionContext
+    space: str
+    path: str
+    operation: Literal["create", "replace", "delete", "forget"]
+    previous_revision: int
+    revision: int
+
+
+DocumentMutationObserver = Callable[[AsyncConnection, DocumentVaultMutation], Awaitable[None]]
 
 
 metadata = sa.MetaData()
@@ -129,7 +147,9 @@ class SqlDocumentVault:
     """
 
     def __init__(self, engine: AsyncEngine, authorizer,
-                 resolve_space: Callable[[ExecutionContext], Awaitable[str]], *, dream_queue: DocumentDreamQueue | None = None):
+                 resolve_space: Callable[[ExecutionContext], Awaitable[str]], *,
+                 dream_queue: DocumentDreamQueue | None = None,
+                 mutation_observer: DocumentMutationObserver | None = None):
         if engine.dialect.name not in {"sqlite", "postgresql"}:
             raise ValueError("Document vault requires SQLite or PostgreSQL")
         self.engine = engine
@@ -138,6 +158,7 @@ class SqlDocumentVault:
         if dream_queue is not None and dream_queue.engine is not engine:
             raise ValueError("Document dreams must share the vault transaction engine")
         self.dream_queue = dream_queue
+        self.mutation_observer = mutation_observer
 
     async def initialize(self):
         """Install the schema during host provisioning, before starting workers."""
@@ -520,24 +541,28 @@ class SqlDocumentVault:
     async def write(self, context, path, content, *, expected_revision, before_commit=None):
         if not isinstance(content, str) or len(content.encode()) > 2 << 20 or "\0" in content:
             raise ValueError("Invalid Markdown content")
-        return await self._change(context, note_path(path), content, expected_revision, before_commit=before_commit)
+        operation = "create" if expected_revision == 0 else "replace"
+        return await self._change(context, note_path(path), content, expected_revision,
+                                  operation=operation, before_commit=before_commit)
 
     async def delete(self, context, path, *, expected_revision, before_commit=None):
         """Remove a note from the current corpus while retaining its revisions."""
         if expected_revision == 0:
             raise ValueError("Deleting a note requires an existing revision")
-        return await self._change(context, note_path(path), None, expected_revision, before_commit=before_commit)
+        return await self._change(context, note_path(path), None, expected_revision,
+                                  operation="delete", before_commit=before_commit)
 
     async def forget(self, context, path, *, expected_revision):
         if expected_revision == 0:
             raise ValueError("Forgetting a note requires an existing revision")
-        return await self._change(context, note_path(path), None, expected_revision, erase=True)
+        return await self._change(context, note_path(path), None, expected_revision, operation="forget")
 
-    async def _change(self, context, path, content, expected, *, erase=False, before_commit=None):
+    async def _change(self, context, path, content, expected, *, operation, before_commit=None):
         await require_unprotected_execution("Document vault")
         if type(expected) is not int or expected < 0 or expected >= (1 << 63) - 1:
             raise ValueError("Invalid expected revision")
         scope = await self._scope(context, "memory.write")
+        erase = operation == "forget"
         from .document_history import lock_head, native_commit, redact
         async with self.engine.begin() as con:
             head = await lock_head(con, scope)
@@ -560,6 +585,10 @@ class SqlDocumentVault:
                 digest = await forget_derivations(con, self, scope, head, context, path)
             else:
                 digest = await native_commit(con,scope,head,context,[(path,revision,content is not None)],"Document update")
+            if self.mutation_observer is not None:
+                mutation = DocumentVaultMutation(uuid4().hex, context, scope["space"], path,
+                                                 operation, expected, revision)
+                await self.mutation_observer(con, mutation)
             await self._recheck(context, "memory.write", scope)
             if before_commit is not None:
                 await before_commit()

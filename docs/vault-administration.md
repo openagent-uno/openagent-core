@@ -57,6 +57,25 @@ affected generated revisions, invalidates read receipts and follows renames in
 both directions. Independently recreated documents at an earlier name survive
 forgetting the moved document. Run regeneration to publish updated outputs.
 Normal SQL writes maintain search and links in the same transaction.
+
+A host can pass `mutation_observer` to `SqlDocumentVault` to update its own
+SQL projections in the same transaction as an individual note mutation. The
+async observer receives the active SQLAlchemy connection and a
+`DocumentVaultMutation` from `openagent_core.memory.vault.documents`. Its
+fields identify the verified execution context, space, path, operation,
+previous revision and new revision. The opaque `mutation_id` identifies the
+applied mutation and can be stored in a host receipt. The event contains no
+note text.
+
+The observer runs for successful create, replace, delete and forget operations
+through the public single-note methods, including delegated calls through those
+methods. A rejected revision does not invoke it. If the observer raises or the
+final authorization check fails, the vault and observer SQL changes roll back
+together. The observer can update tables in the same database and must leave
+transaction ownership with the vault. Bulk imports, history restore and graph
+maintenance are separate contracts. For forget, the event identifies the
+requested note and invalidation can be scoped to the affected vault space,
+which also covers derived revisions erased by the same transaction.
 `index/sync?force=true` rebuilds these indexes from the canonical contents
 without writing a new content revision.
 

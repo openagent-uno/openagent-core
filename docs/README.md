@@ -1,5 +1,7 @@
 # OpenAgent core documentation
 
+[Embedding beta 171](releases/v1.1.0-beta.171.md) adds transactional observers for SQL vault mutations.
+
 [Embedding beta 170](releases/v1.1.0-beta.170.md) covers manual automation request identity and recovery.
 
 ## Architecture and use
