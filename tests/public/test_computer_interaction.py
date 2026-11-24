@@ -172,3 +172,117 @@ def test_invalid_or_caller_selected_inputs_never_reach_executor(setup, input_eve
         assert not desktops["sandbox"].calls
 
     asyncio.run(check())
+
+
+class StreamingDesktop(Desktop):
+    def __init__(self):
+        super().__init__(definition(metadata={"openagent/liveMedia": "openagent-video/1"}))
+        self.streams = 0
+        self.waiting = asyncio.Event()
+        self.next_packet = asyncio.Event()
+        self.closed = asyncio.Event()
+
+    async def stream_tool(self, name, options, context):
+        assert name == self.tool.name
+        assert options == {"fps": 10}
+        assert current_execution_context() == context
+        self.streams += 1
+        try:
+            yield {"seq": 0}
+            self.waiting.set()
+            await self.next_packet.wait()
+            assert current_execution_context() == context
+            yield {"seq": 1}
+        finally:
+            self.closed.set()
+
+
+async def registered_stream(setup):
+    service, runtime, context, _, _ = setup
+    desktop = StreamingDesktop()
+    runtime.capabilities.register("assigned-display", desktop, desktop, target_label="Workload display")
+    target, = await service.targets(context, source_id="assigned-display")
+    return target["tool_ref"], desktop
+
+
+@pytest.mark.asyncio
+async def test_live_desktop_requires_the_viewer_and_exact_producer(setup):
+    service, _, context, policy, _ = setup
+    tool_ref, desktop = await registered_stream(setup)
+
+    for action in ("run.execute", "tool.call", "tool.publish"):
+        policy.denied.add(action)
+        with pytest.raises(PermissionError):
+            await anext(service.stream(context, tool_ref, {"fps": 10}, source_id="assigned-display"))
+        policy.denied.clear()
+    with pytest.raises(CapabilityUnavailable):
+        await anext(service.stream(context, tool_ref, {"fps": 10}, source_id="sandbox"))
+    with pytest.raises(PermissionError):
+        delayed = replace(context, deferred=True, delegation_id="deferred")
+        await anext(service.stream(delayed, tool_ref, {"fps": 10}))
+    with pytest.raises(ValueError):
+        await anext(service.stream(context, tool_ref, {"environment": {"DISPLAY": ":0"}}))
+    assert desktop.streams == 0
+
+    stream = service.stream(context, tool_ref, {"fps": 10}, source_id="assigned-display")
+    assert await asyncio.create_task(anext(stream)) == {"seq": 0}
+    desktop.next_packet.set()
+    assert await asyncio.create_task(anext(stream)) == {"seq": 1}
+    await stream.aclose()
+    assert desktop.streams == 1 and desktop.closed.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revoked", ["viewer", "producer", "publisher", "registration"])
+async def test_waiting_producer_is_closed_after_revocation(setup, monkeypatch, revoked):
+    from openagent_core import computer_interaction
+
+    monkeypatch.setattr(computer_interaction, "_STREAM_AUTHORIZATION_INTERVAL_SECONDS", 0.01)
+    service, runtime, context, policy, _ = setup
+    tool_ref, desktop = await registered_stream(setup)
+    stream = service.stream(context, tool_ref, {"fps": 10}, source_id="assigned-display")
+    assert await anext(stream) == {"seq": 0}
+    packet = asyncio.create_task(anext(stream))
+    await asyncio.wait_for(desktop.waiting.wait(), 1)
+    if revoked == "registration":
+        runtime.capabilities.revoke("assigned-display")
+        replacement = StreamingDesktop()
+        runtime.capabilities.register("assigned-display", replacement, replacement, target_label="Workload display")
+        error = CapabilityUnavailable
+    else:
+        policy.denied.add({"viewer": "run.execute", "producer": "tool.call", "publisher": "tool.publish"}[revoked])
+        error = PermissionError
+
+    with pytest.raises(error):
+        await asyncio.wait_for(packet, 1)
+    assert desktop.closed.is_set()
+    if revoked == "registration":
+        assert replacement.streams == 0
+
+
+@pytest.mark.asyncio
+async def test_late_media_is_suppressed_and_disconnect_releases_the_producer(setup):
+    service, _, context, policy, _ = setup
+    tool_ref, desktop = await registered_stream(setup)
+    stream = service.stream(context, tool_ref, {"fps": 10}, source_id="assigned-display")
+    assert await anext(stream) == {"seq": 0}
+    packet = asyncio.create_task(anext(stream))
+    await asyncio.wait_for(desktop.waiting.wait(), 1)
+    policy.denied.add("run.execute")
+    desktop.next_packet.set()
+    with pytest.raises(PermissionError):
+        await asyncio.wait_for(packet, 1)
+    assert desktop.closed.is_set()
+
+    policy.denied.clear()
+    desktop.waiting.clear()
+    desktop.closed.clear()
+    desktop.next_packet.clear()
+    stream = service.stream(context, tool_ref, {"fps": 10}, source_id="assigned-display")
+    assert await anext(stream) == {"seq": 0}
+    packet = asyncio.create_task(anext(stream))
+    await asyncio.wait_for(desktop.waiting.wait(), 1)
+    packet.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await packet
+    assert desktop.closed.is_set()

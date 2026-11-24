@@ -61,6 +61,48 @@ media executor. `SessionInspection.participants` returns saved visible human
 authors across the exact authorized session, independently of transcript pages;
 authorship is descriptive and grants no membership or access.
 
+### Live desktop in an authorized session
+
+`ComputerInteraction.stream(context, tool_ref, options, source_id=...)`
+opens media for an exact app-visible desktop. The host authenticates the
+human viewer, resolves the session and chooses the source from its current
+assignment. Core requires `run.execute` for the session as well as the
+producer's `tool.call` and `tool.publish` permissions and registration. It
+checks the active viewer and producer before sending each packet. While
+a packet read is pending it checks them again every two seconds, including
+the exact registration and descriptor. Revocation, cancellation and
+iterator close clean up the producer. A replacement registration is a new
+source that requires fresh discovery and a new view.
+
+Use the optional `NativeDesktopMedia` from `openagent-device-tools` with a
+trusted binary and host-selected environment. On headless X11, start the
+producer in the assigned workload with exactly its `DISPLAY` and
+`XAUTHORITY`. Register it against that workload's desktop tool and grant
+only the current capability lease. Stream requests may supply
+`display_id`, `fps` and `max_duration_seconds`. The producer validates their
+bounds. Command paths, environment and the source selector belong to the host.
+
+```python
+from contextlib import aclosing
+from openagent_core.computer_interaction import ComputerInteraction
+
+desktop = ComputerInteraction(runtime)
+async with aclosing(desktop.stream(
+    verified_context, tool_ref, {"fps": 15}, source_id=assigned_source_id,
+)) as packets:
+    async for packet in packets:
+        await transport.send(packet)
+```
+
+Keep the reader active while serving a view. A transport owns backpressure,
+disconnect detection and explicit iterator closure, including when the viewer
+pauses without requesting further packets. The native producer restarts its
+bounded encoder cycle on the same command and display. Renew host grants for
+that exact registration only. A revoked grant or a different generation
+requires reopening with a fresh context. The encoded packets can travel over
+a host-authenticated transport without writing a video to disk. See the
+[isolated Linux producer qualification](qualification/session-scoped-desktop-stream-2026-11-24.json).
+
 ## Task computers in embedded hosts
 
 `openagent_core.computer_tasks.TaskComputerBroker` connects the existing

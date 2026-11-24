@@ -40,6 +40,17 @@ class OptionalMedia(unittest.IsolatedAsyncioTestCase):
         iterator=self.catalog.stream_tool(self.tool.tool_ref,{},self.context);await anext(iterator)
         with self.assertRaises(CapabilityUnavailable):await anext(iterator)
         self.assertTrue(self.source.closed)
+    async def test_revocation_during_the_callers_publication_check_suppresses_the_packet(self):
+        async def revoke():
+            self.catalog.revoke("source")
+
+        iterator = self.catalog.stream_tool(
+            self.tool.tool_ref, {}, self.context, before_publish=revoke,
+        )
+        with self.assertRaises(CapabilityUnavailable):
+            await anext(iterator)
+        self.assertTrue(self.source.closed)
+
     async def test_wrong_principal_unknown_ref_and_unbounded_options(self):
         with self.assertRaises(CapabilityUnavailable):await anext(self.catalog.stream_tool('unknown',{},self.context))
         with self.assertRaises(ValueError):await anext(self.catalog.stream_tool(self.tool.tool_ref,{'huge':'x'*65536},self.context))

@@ -591,13 +591,17 @@ class CapabilityCatalog:
                     raise ValueError("MCP UI resource blob must contain UTF-8 HTML") from exc
         return result
 
-    async def stream_tool(self, tool_ref: str, options: Mapping[str, Any], context: ExecutionContext):
+    async def stream_tool(
+        self, tool_ref: str, options: Mapping[str, Any], context: ExecutionContext,
+        *, before_publish: Callable[[], Awaitable[None]] | None = None,
+    ):
         """Optional ephemeral media from one exact authorized capability.
 
         Hosts supply the source and transport. Core has no codec, client,
         desktop, identity, user count or networking dependency. Every published
         packet rechecks current authorization; streams are never persisted as
-        reusable grants and never move to a replacement executor.
+        reusable grants and never move to a replacement executor. A trusted
+        caller may require an additional check before each packet is exposed.
         """
         import json
         binding = self._refs.get(tool_ref)
@@ -617,7 +621,8 @@ class CapabilityCatalog:
                 if isinstance(registration.trusted_effects, Mapping) else registration.trusted_effects))
                 for item in await discover(context))
         current = await definitions()
-        if not any(item == definition for item in current):
+        if (definition not in current or not self._available(registration, context)
+                or self._refs.get(tool_ref) is not binding):
             raise CapabilityUnavailable("Stream capability changed")
         if not tool_visible(definition.metadata, "app"):
             raise PermissionError("Stream is not visible to this surface")
@@ -637,6 +642,10 @@ class CapabilityCatalog:
                     raise CapabilityUnavailable("Stream capability changed")
                 if not isinstance(packet, dict) or len(json.dumps(packet, allow_nan=False).encode()) > 2 * 1024 * 1024:
                     raise ValueError("Stream packet exceeds its bound")
+                if before_publish is not None:
+                    await before_publish()
+                if not self._available(registration, context) or self._refs.get(tool_ref) is not binding:
+                    raise CapabilityUnavailable("Stream destination revoked")
                 yield packet
         finally:
             close = getattr(iterator, "aclose", None)

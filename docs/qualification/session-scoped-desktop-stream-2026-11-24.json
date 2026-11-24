@@ -1,0 +1,25 @@
+{
+  "date": "2026-11-24",
+  "base": "0324cc6b48dab98931519b5d4fde2037f35e7462",
+  "scope": "source and isolated native-producer qualification",
+  "public_tests": {
+    "passed": 67,
+    "failed": 0,
+    "skipped": 0,
+    "subtests_passed": 8
+  },
+  "linux_producer": {
+    "distribution": "openagent-device-tools==1.0.0b20",
+    "encoder_version": "0.1.7",
+    "platform": "Debian 13 arm64",
+    "encoder_sha256": "2ce805e6aab887c78d59e515b0f0aef52b52d109b8c5b4b8c484b689bccb57c9",
+    "protocol": "openagent-video/1",
+    "display_dimensions": [[800, 600], [960, 540]],
+    "distinct_h264_keyframes": true,
+    "cross_source_rejected": true,
+    "same_source_cycle_renewed": true,
+    "producer_revocation_reaped": true,
+    "viewer_revocation_reaped": true
+  },
+  "boundary": "Two independent Xvfb servers with separate Xauthority cookies ran in one disposable Linux container. The already released binary produced Annex-B H.264. Production transport and installation were outside this qualification."
+}
