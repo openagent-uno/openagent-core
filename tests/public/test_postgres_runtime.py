@@ -319,3 +319,137 @@ async def test_nonadmission_fence_and_visible_receipt_across_probe_races(pg, tmp
         assert second.started.empty()
         denied = await left.get(base + "/admitted", headers={"X-Test-Principal": "foreign"})
         assert denied.status == 403
+
+
+async def test_idle_worker_renews_while_run_reconciliation_is_blocked(pg):
+    from openagent_core import RunRequest
+
+    store = pg()
+    store.lease_seconds = 3
+    await store.start()
+    try:
+        async with store._db() as blocker:
+            await blocker.execute("LOCK TABLE runs IN ACCESS EXCLUSIVE MODE")
+            async with store._db() as db:
+                original = (await (await db.execute(
+                    "SELECT expires_at FROM workers WHERE id=%s", (store._worker,)
+                )).fetchone())["expires_at"]
+            # Cross the original database deadline with no admitted work.
+            await asyncio.sleep(4)
+            async with store._db() as db:
+                renewed = await (await db.execute(
+                    "SELECT expires_at > %s AND expires_at > clock_timestamp() AS live "
+                    "FROM workers WHERE id=%s", (original, store._worker)
+                )).fetchone()
+            assert renewed and renewed["live"]
+        assert (await store.accept(RunRequest("new", "session", "key", "hello"), make_context()))[1]
+    finally:
+        await store.close()
+
+
+async def test_lost_worker_health_pre_admission_and_replacement_over_http(pg, tmp_path):
+    from openagent_core import RunAdmissionReadiness, RunRequest, WorkerLeaseExpired
+    from openagent_gateway import create_app
+    from openagent_storage_postgres.serving import PostgresServingGeneration
+
+    @asynccontextmanager
+    async def resolve(request, action, run_id, session_id):
+        yield make_context(session=session_id or "session")
+
+    class Ready:
+        async def retry_after(self, request, context):
+            return None
+
+    class UncertainEffect:
+        def __init__(self):
+            self.started, self.cancelled = asyncio.Event(), asyncio.Event()
+
+        async def execute(self, request, context, runtime):
+            await runtime.services.store.begin_tool(request.run_id, "effect", {"name":"delivery", "source_id":"host"}, {})
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                self.cancelled.set()
+
+    a, b = pg(), pg()
+    old_executor = UncertainEffect()
+    stale = worker(a, old_executor, Policy(), tmp_path)
+    fresh_executor = Executor()
+    fresh = worker(b, fresh_executor, Policy(), tmp_path)
+    for runtime in (stale, fresh):
+        runtime.services.registry.bind(RunAdmissionReadiness, Ready())
+    gate = PostgresServingGeneration(a, deployment="fixture", generation=1, binding_sha256="a" * 64)
+    await gate.open()
+    base = "/api/v1/runs"
+    body = dict(run_id="new", session_id="session", idempotency_key="new-key", input="hello")
+    try:
+        async with TestClient(TestServer(create_app(stale, resolve, serving_generation=gate, worker_health=True))) as left:
+            await gate.install()
+            ctx = make_context()
+            assert await a.worker_lease_ready()
+            assert (await left.get("/health/live")).status == 200
+            # A blocked observation is not positive proof of worker loss.
+            async with a._db() as db:
+                await db.execute("LOCK TABLE workers IN ACCESS EXCLUSIVE MODE")
+                ready, live = await asyncio.gather(left.get("/health/ready"), left.get("/health/live"))
+                assert (ready.status, live.status) == (503, 200)
+                assert await ready.json() == await live.json() == {"worker_lease": "unknown"}
+            assert (await left.get("/health/ready")).status == 200
+            # A retired deployment may stay alive but cannot receive new traffic.
+            async with a._db() as db:
+                await db.execute("UPDATE oa_serving_route SET generation=2")
+            ready, live = await asyncio.gather(left.get("/health/ready"), left.get("/health/live"))
+            assert (ready.status, live.status) == (503, 200)
+            assert (await ready.json())["serving_generation"] == "unavailable"
+            async with a._db() as db:
+                await db.execute("UPDATE oa_serving_route SET generation=1")
+            await stale.submit(RunRequest("old", "session", "old-key", "work"), ctx)
+            await asyncio.wait_for(old_executor.started.wait(), 3)
+            old_task = stale._tasks["old"]
+            # Same physical database, a replacement supervisor and an absent
+            # worker row. No data plane write may recreate that identity.
+            async with a._db() as db:
+                await db.execute("DELETE FROM workers WHERE id=%s", (a._worker,))
+            async with TestClient(TestServer(create_app(fresh, resolve, worker_health=True))) as right:
+                await b.recover()
+                await asyncio.wait_for(old_executor.cancelled.wait(), 4)
+                await old_task
+                assert await b.worker_lease_ready() and not await a.worker_lease_ready()
+                for url in ("/health/ready", "/health/live"):
+                    response = await left.get(url)
+                    assert response.status == 503 and await response.json() == {"worker_lease":"expired"}
+                    assert (await right.get(url)).status == 200
+                expired = await left.post(base, json=body)
+                assert expired.status == 503 and await expired.json() == {"error":"worker_lease_expired"}
+                pending = await left.post(base, json={**body, "admission_policy":"defer-unready"})
+                assert pending.status == 503 and (await pending.json())["error"] == "run_admission_pending"
+                assert await a.get("new") is None
+                with pytest.raises(WorkerLeaseExpired):
+                    await a.finish_tool("old", "effect", result="late")
+                assert (await b.get("old")).status == "interrupted"
+                assert (await b.events("old"))[-2].payload["error"]["effects"] == "unknown"
+                assert (await right.post(base, json=body)).status == 202
+                assert (await fresh.wait("new", ctx)).output == "hello"
+                assert (await left.post(base, json={**body, "admission_policy":"defer-unready"})).status == 202
+                assert fresh_executor.started.get_nowait() == "new" and fresh_executor.started.empty()
+    finally:
+        await gate.close()
+
+
+async def test_heartbeat_waiting_on_a_worker_lock_cannot_revive_an_expired_epoch(pg):
+    store = pg()
+    await store.start()
+    try:
+        async with store._db() as db:
+            await db.execute("UPDATE workers SET expires_at=clock_timestamp()+interval '2 seconds' WHERE id=%s",
+                             (store._worker,))
+        async with store._db() as blocker:
+            await blocker.execute("SELECT 1 FROM workers WHERE id=%s FOR SHARE", (store._worker,))
+            # The heartbeat starts before expiry, but can acquire its write lock
+            # only after it. A predicate evaluated before the wait is unsafe.
+            await asyncio.sleep(2.4)
+        await asyncio.wait_for(asyncio.shield(store._heartbeat), 4)
+        assert not await store.worker_lease_ready()
+    finally:
+        await store.close()

@@ -17,7 +17,7 @@ from .dream_evidence import authorize_dream_history, dream_run_id, is_document_d
 from .modules import (CapabilityContribution, ModuleCatalog,
     ModuleContext, ModuleContribution, ModuleReconfigurationError, ModuleReferenceConflict,
     ModuleStatus, ReconfigureReceipt, RuntimeProfile, ServiceRegistry)
-from .contracts import (AdmissionCapacityExceeded, RunAdmissionPending, RunAdmissionReadiness, IdempotencyConflict, AgentExecutor, Authorizer, DelegationService, ExecutionContext,
+from .contracts import (AdmissionCapacityExceeded, WorkerLeaseExpired, RunAdmissionPending, RunAdmissionReadiness, IdempotencyConflict, AgentExecutor, Authorizer, DelegationService, ExecutionContext,
     ResourceRef, RunEvent, RunEventPage, RunFinalAnswer, RunRecord, RunRequest, RuntimeStore, SessionStore,
     ModelCatalog, PrincipalRef, require_authorized)
 
@@ -555,7 +555,7 @@ class Runtime:
                 await asyncio.gather(*tasks, return_exceptions=True)
             # A task cancelled before its first instruction cannot run finally.
             for run_id in tuple(self._tasks):
-                await self.services.store.transition(run_id, 'interrupted', output={'reason':'runtime_closed'})
+                await self._finish_owned_run(run_id, 'interrupted', output={'reason':'runtime_closed'})
             self._tasks.clear()
             errors = []
             graphs = ([self._active_graph] if self._active_graph is not None else []) + list(self._retired_graphs.values())
@@ -817,19 +817,19 @@ class Runtime:
             del self._accepting[request.run_id]
             pending.set()
 
-    async def _check_admission_readiness(self, readiness, request, context):
-        async def prior_receipt():
-            if await self.services.store.get(request.run_id) is None:
-                return None
-            record = await self.get_run(request.run_id, context)
-            if (record.cancel_requested and record.status == "cancelled" and not record.request_digest
-                    and record.tenant_id == context.tenant_id and record.session_id == context.session_id):
-                return record
-            if record.request_digest != request.fingerprint(context):
-                raise IdempotencyConflict("Different request or authority already admitted")
+    async def _existing_admission(self, request, context):
+        if await self.services.store.get(request.run_id) is None:
+            return None
+        record = await self.get_run(request.run_id, context)
+        if (record.cancel_requested and record.status == "cancelled" and not record.request_digest
+                and record.tenant_id == context.tenant_id and record.session_id == context.session_id):
             return record
+        if record.request_digest != request.fingerprint(context):
+            raise IdempotencyConflict("Different request or authority already admitted")
+        return record
 
-        previous = await prior_receipt()
+    async def _check_admission_readiness(self, readiness, request, context):
+        previous = await self._existing_admission(request, context)
         if previous is not None:
             return previous
         if readiness is None:
@@ -846,7 +846,7 @@ class Runtime:
                 delay = 1
         if delay is None:
             return None
-        previous = await prior_receipt()
+        previous = await self._existing_admission(request, context)
         if previous is None:
             raise RunAdmissionPending(delay)
         return previous
@@ -864,10 +864,21 @@ class Runtime:
             "capability_revision": capability_revision,
         }
         atomic_accept = getattr(self.services.store, "accept_with_profile", None)
-        if atomic_accept is None:
-            record, created = await self.services.store.accept(request, context)
-        else:
-            record, created = await atomic_accept(request, context, profile)
+        try:
+            if atomic_accept is None:
+                record, created = await self.services.store.accept(request, context)
+            else:
+                record, created = await atomic_accept(request, context, profile)
+        except WorkerLeaseExpired:
+            if not deferred_admission_requested(request.run_id):
+                raise
+            # The write was fenced before admission. A concurrent worker may
+            # nevertheless have accepted the same key since the readiness check.
+            async with self._credentials(context):
+                previous = await self._existing_admission(request, context)
+                if previous is not None:
+                    return previous
+            raise RunAdmissionPending(1) from None
         if created and record.terminal:
             return record
         if not created:
@@ -917,6 +928,13 @@ class Runtime:
         await self._authorize(context,'run.cancel',target.session_id,target.tenant_id)
         return target
 
+    async def _finish_owned_run(self, run_id, status, *, output=None):
+        try:
+            await self.services.store.transition(run_id, status, output=output)
+        except WorkerLeaseExpired:
+            # Only recovery by a live worker may classify the old effects.
+            return
+
     async def _execute(self, request: RunRequest, context: ExecutionContext, executor: AgentExecutor,
                        graph: _ActiveGraph, capability_revision: int) -> None:
         from .operations import OperationPending
@@ -960,13 +978,15 @@ class Runtime:
                         await self.services.store.transition(request.run_id,'cancelled' if record.cancel_requested else 'success',
                                                              output=None if record.cancel_requested else result)
         except OperationPending as pending:
-            await self.services.store.transition(request.run_id,'timed_out',
+            await self._finish_owned_run(request.run_id,'timed_out',
                                                   output={'reason':'operation_pending','retry_allowed':True,
                                                           'retry_after_seconds':pending.retry_after_seconds})
         except TimeoutError:
-            await self.services.store.transition(request.run_id,'timed_out')
+            await self._finish_owned_run(request.run_id,'timed_out')
         except asyncio.CancelledError:
-            await self.services.store.transition(request.run_id,'interrupted' if self._closing else 'cancelled')
+            await self._finish_owned_run(request.run_id,'interrupted' if self._closing else 'cancelled')
+        except WorkerLeaseExpired:
+            return
         except Exception as exc:
             # Details may include secrets or private provider diagnostics.
             from .content_privacy import ToolResultPrivacyPublisher,PrivacyFence
@@ -984,7 +1004,7 @@ class Runtime:
                     # revocation. Publishing a derived diagnostic would hit
                     # the source fence and leave the run permanently active.
                     error_output=None
-            await self.services.store.transition(request.run_id,'failed',output=error_output)
+            await self._finish_owned_run(request.run_id,'failed',output=error_output)
         finally:
             self._tasks.pop(request.run_id,None)
             self._run_graphs.pop(request.run_id,None)

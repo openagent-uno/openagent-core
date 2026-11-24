@@ -1,13 +1,14 @@
 """PostgreSQL-backed run ledger for an authenticated host's agent."""
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from importlib.resources import files
 import re
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from psycopg import OperationalError, sql
+from psycopg import AsyncConnection, Error, sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
@@ -18,6 +19,7 @@ from openagent_core.contracts import (
     RunEvent,
     RunRecord,
     RunRequest,
+    WorkerLeaseExpired,
     SessionRef,
     TERMINAL_STATUSES,
     canonical_json,
@@ -74,7 +76,7 @@ class PostgresRuntimeStore(Sessions, Operations, ProviderSlots):
             raise ValueError("Invalid pool or worker lease")
         self.agent_id, self.schema, self.lease_seconds = agent_id, schema, lease_seconds
         self._dsn, self._pool_size = dsn, pool_size
-        self._pool = self._heartbeat = self._worker = None
+        self._pool = self._heartbeat = self._maintenance = self._worker = None
         self._executing = {}
         self._notices = RunNotifications(dsn, schema, agent_id)
 
@@ -121,7 +123,8 @@ class PostgresRuntimeStore(Sessions, Operations, ProviderSlots):
                     (self._worker, self.agent_id, self.lease_seconds),
                 )
             self._notices.start()
-            self._heartbeat = asyncio.create_task(self._maintain(), name="openagent-pg-lease")
+            self._maintenance = asyncio.create_task(self._maintain(), name="openagent-pg-recovery")
+            self._heartbeat = asyncio.create_task(self._renew_worker(), name="openagent-pg-lease")
         except BaseException:
             await self._pool.close()
             self._pool = None
@@ -129,10 +132,11 @@ class PostgresRuntimeStore(Sessions, Operations, ProviderSlots):
 
     async def close(self):
         await self._notices.close()
-        if self._heartbeat is not None:
-            self._heartbeat.cancel()
-            await asyncio.gather(self._heartbeat, return_exceptions=True)
-            self._heartbeat = None
+        tasks = [task for task in (self._heartbeat, self._maintenance) if task is not None]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._heartbeat = self._maintenance = None
         if self._pool is not None:
             try:
                 async with self._db() as db:
@@ -144,56 +148,100 @@ class PostgresRuntimeStore(Sessions, Operations, ProviderSlots):
                 await self._pool.close()
                 self._pool = None
 
+    async def worker_lease_ready(self) -> bool:
+        """Read this worker's lease from PG. A failed observation raises instead of reporting loss."""
+        if self._pool is None:
+            return False
+        async with self._db() as db:
+            row = await (await db.execute(
+                "SELECT 1 FROM workers WHERE id=%s AND agent=%s AND expires_at>clock_timestamp()",
+                (self._worker, self.agent_id),
+            )).fetchone()
+            return row is not None
+
+    async def _renew_worker(self):
+        # A saturated run pool or a long reconciliation transaction must not
+        # prevent this process from proving that its own epoch is alive.
+        update = sql.SQL(
+            "WITH locked AS MATERIALIZED (SELECT id,expires_at FROM {schema}.workers "
+            "WHERE id=%s AND agent=%s FOR NO KEY UPDATE) "
+            "UPDATE {schema}.workers AS w SET expires_at=clock_timestamp()+make_interval(secs=>%s) "
+            "FROM locked WHERE w.id=locked.id AND locked.expires_at>clock_timestamp()"
+        ).format(schema=sql.Identifier(self.schema))
+        interval = min(1, self.lease_seconds / 3)
+        connection = None
+        warned = False
+        loop = asyncio.get_running_loop()
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    sent_at = loop.time()
+                    async with asyncio.timeout(self.lease_seconds / 3):
+                        if connection is None:
+                            connection = await AsyncConnection.connect(self._dsn, autocommit=True)
+                        renewed = await connection.execute(update, (self._worker, self.agent_id, self.lease_seconds))
+                    if not renewed.rowcount:
+                        self._maintenance.cancel()
+                        for task in tuple(self._executing.values()):
+                            task.cancel()
+                        logging.getLogger(__name__).error("PostgreSQL worker lease was lost")
+                        return
+                    self._heartbeat_ack = sent_at
+                    warned = False
+                except (OSError, Error, TimeoutError) as error:
+                    if not warned:
+                        logging.getLogger(__name__).warning("PostgreSQL lease renewal unavailable (%s)", type(error).__name__)
+                        warned = True
+                    if connection is not None:
+                        await connection.close()
+                        connection = None
+                    if loop.time() >= self._heartbeat_ack + self.lease_seconds:
+                        for task in tuple(self._executing.values()):
+                            task.cancel()
+        finally:
+            if connection is not None:
+                await connection.close()
+
     async def _maintain(self):
+        warned = False
         while True:
             await asyncio.sleep(min(1, self.lease_seconds / 3))
             try:
                 async with self._db() as db:
-                    sent_at = asyncio.get_running_loop().time()
-                    cur = await db.execute(
-                        """UPDATE workers SET expires_at=clock_timestamp()+make_interval(secs=>%s)
-                        WHERE id=%s AND expires_at>clock_timestamp()""",
-                        (self.lease_seconds, self._worker),
-                    )
-                    if not cur.rowcount:
-                        for task in tuple(self._executing.values()):
-                            task.cancel()
-                        return
-                    cancellations = await (
-                        await db.execute(
-                            """SELECT id FROM runs WHERE worker=%s AND status='running'
-                        AND cancel_requested""",
-                            (self._worker,),
-                        )
-                    ).fetchall()
-                self._heartbeat_ack = sent_at
+                    cancellations = await (await db.execute(
+                        "SELECT id FROM runs WHERE worker=%s AND status='running' AND cancel_requested",
+                        (self._worker,),
+                    )).fetchall()
                 for row in cancellations:
                     task = self._executing.pop(row["id"], None)
                     if task:
                         task.cancel()
                 await self.recover()
-            except (OSError, OperationalError, TimeoutError):
-                # Every write checks the database clock independently. A lost or
-                # expired identity cannot be resurrected by a late heartbeat.
-                continue
+                warned = False
+            except (OSError, Error, TimeoutError) as error:
+                if not warned:
+                    logging.getLogger(__name__).warning("PostgreSQL run maintenance unavailable (%s)", type(error).__name__)
+                    warned = True
 
     async def _fence(self, db):
         existing = await (
             await db.execute(
-                """SELECT id FROM workers WHERE id=%s
-            AND expires_at>clock_timestamp() FOR SHARE""",
-                (self._worker,),
+                """WITH locked AS MATERIALIZED (
+                    SELECT expires_at FROM workers WHERE id=%s AND agent=%s FOR SHARE
+                ) SELECT 1 FROM locked WHERE expires_at>clock_timestamp()""",
+                (self._worker, self.agent_id),
             )
         ).fetchone()
         if existing is None:
-            raise RuntimeError("Worker lease expired")
+            raise WorkerLeaseExpired("Worker lease expired")
 
     async def recover(self):
         async with self._db() as db:
             victims = await (
                 await db.execute(
-                    """SELECT r.* FROM runs r JOIN workers w ON r.worker=w.id
-                WHERE r.agent=%s AND w.expires_at<=clock_timestamp() AND r.status IN ('queued','running')
+                    """SELECT r.* FROM runs r LEFT JOIN workers w ON r.worker=w.id
+                WHERE r.agent=%s AND (w.id IS NULL OR w.expires_at<=clock_timestamp()) AND r.status IN ('queued','running')
                 ORDER BY r.ordinal LIMIT 128 FOR UPDATE OF r SKIP LOCKED""",
                     (self.agent_id,),
                 )

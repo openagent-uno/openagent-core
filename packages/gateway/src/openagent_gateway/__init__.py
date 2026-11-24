@@ -1,10 +1,11 @@
 """Optional HTTP transport. Authentication and identity belong to the host."""
 from __future__ import annotations
+import asyncio
 from dataclasses import asdict
 from typing import Any
 from aiohttp import web
 from openagent_core import RunEventPage, RunRequest, IdempotencyConflict
-from openagent_core.contracts import AdmissionCapacityExceeded, RunAdmissionPending, ServingUnavailable
+from openagent_core.contracts import AdmissionCapacityExceeded, RunAdmissionPending, ServingUnavailable, WorkerLeaseExpired
 from .compression import json_compression
 from .computers import ComputerViewerGateway
 
@@ -20,7 +21,7 @@ def _id(value):
 def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lifecycle=True,
                prefix='/api/v1/runs', durable_operations=None, resolve_personal_context=None,
                personal_prefix='/api/v1/me', resolve_artifact_context=None, computer_viewer=None,
-               serving_generation=None):
+               serving_generation=None, worker_health=False):
     """Build routes without starting a listener or creating identities.
 
     `resolve_context(request, action, run_id, session_id)` must return an async
@@ -40,6 +41,9 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
                 {"error": "run_admission_pending", "retry_after_seconds": error.retry_after_seconds},
                 status=503, headers={"Retry-After": str(error.retry_after_seconds), "Cache-Control": "no-store"},
             )
+        except WorkerLeaseExpired:
+            return web.json_response({"error": "worker_lease_expired"}, status=503,
+                                     headers={"Retry-After": "1", "Cache-Control": "no-store"})
         except AdmissionCapacityExceeded:
             return web.json_response({'error': 'capacity_exceeded'}, status=429, headers={'Retry-After': '1'})
         except IdempotencyConflict:
@@ -147,6 +151,8 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
             raise ValueError('The serving fence must use the active runtime store')
         @web.middleware
         async def serving_fence(request, handler):
+            if worker_health and request.match_info.handler is health:
+                return await handler(request)
             try:
                 async with serving_generation.serving():
                     return await handler(request)
@@ -154,6 +160,35 @@ def create_app(runtime, resolve_context, *, resolve_attachments=None, manage_lif
                 return web.json_response({'error': 'serving_generation_unavailable'}, status=503,
                                          headers={'Retry-After': '1', 'Cache-Control': 'no-store'})
         app.middlewares.insert(0, serving_fence)
+    if worker_health:
+        probe = getattr(runtime.services.store, "worker_lease_ready", None)
+        if not callable(probe):
+            raise ValueError("Worker health requires an authoritative worker lease probe")
+
+        async def health(request):
+            live = request.path == "/health/live"
+            state = "unknown"
+            details = {}
+            try:
+                async with asyncio.timeout(2):
+                    state = "ready" if await probe() else "expired"
+                    if state == "ready" and not live and serving_generation is not None:
+                        async with serving_generation.serving():
+                            pass
+            except ServingUnavailable:
+                if state == "ready":
+                    details["serving_generation"] = "unavailable"
+            except Exception:
+                # A failed observation can drain traffic, while only confirmed
+                # loss of this worker identity should trigger replacement.
+                if state == "ready":
+                    details["serving_generation"] = "unknown"
+            available = not details and (state == "ready" or (live and state == "unknown"))
+            return web.json_response({"worker_lease": state, **details}, status=200 if available else 503,
+                                     headers={"Cache-Control": "no-store"})
+
+        app.router.add_get("/health/ready", health)
+        app.router.add_get("/health/live", health)
     if computer_viewer is not None:
         computer_viewer.install(app, runtime, resolve_context)
     return app

@@ -114,6 +114,10 @@ class ServingUnavailable(RuntimeError):
     """The deployment is fenced or the operator must drain writers before switching."""
 
 
+class WorkerLeaseExpired(RuntimeError):
+    """This process has definitively lost its storage write identity."""
+
+
 class AdmissionCapacityExceeded(RuntimeError):
     """The worker has no remaining in-process execution slots."""
 

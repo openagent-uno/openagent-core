@@ -11,7 +11,35 @@ runtime = Runtime(settings, RuntimeServices(store, executor, authorizer))
 await runtime.start()
 ```
 
-Use a dedicated database or private schema with a trusted database role and transport. The role must own or be permitted to create the selected schema and its objects. Each running process creates a pool (8 connections maximum by default) and a fresh worker identity. Budget the product of replica count and pool size against the database connection limit. Use a single pool per runtime and close the runtime during normal shutdown. Schema selection belongs to host configuration. Session IDs are unique within an agent namespace. User identity comes from the host's authenticated execution context.
+Use a dedicated database or private schema with a trusted database role and transport. The role must own or be permitted to create the selected schema and its objects. Each running process creates a data pool (8 connections maximum by default) and a fresh worker identity. Budget one dedicated lease-renewal connection and one notification listener per runtime in addition to the data pool and any optional serving-generation pool. Configure one data pool per runtime and close the runtime during normal shutdown. Schema selection belongs to host configuration. Session IDs are unique within an agent namespace. User identity comes from the host's authenticated execution context.
+
+## Worker health and replacement
+
+The worker renews its existing identity against the PostgreSQL clock during idle
+periods and while requests are running. Run cancellation and orphan recovery
+use a different task and connection, so a slow ledger query cannot pause
+renewal. The heartbeat never revives an expired or missing identity.
+
+`await store.worker_lease_ready()` checks the exact worker, including while
+another worker for the same agent is healthy. It returns false for a stopped
+store or an expired or missing identity. A failed database observation raises.
+To monitor these conditions over HTTP, create the optional gateway with
+`worker_health=True`. Its two GET endpoints return `worker_lease` and disable
+caching.
+
+| Observation | /health/ready | /health/live |
+| --- | --- | --- |
+| Valid worker and serving generation | 200 ready | 200 ready |
+| Expired or missing worker | 503 expired | 503 expired |
+| Database check failed or exceeded two seconds | 503 unknown | 200 unknown |
+| Valid worker with unavailable serving generation | 503 ready with serving_generation | 200 ready |
+
+Route traffic using readiness. A supervisor may replace a process after confirmed
+lease loss. The replacement starts a new runtime and identity. Recovery marks
+ambiguous work interrupted and records unfinished effects as unknown. Retrying
+under the original run ID can return an authorized existing receipt. A deferred
+request fenced before admission can receive the regular retryable pending result.
+A fenced write otherwise returns HTTP 503 with `worker_lease_expired`.
 
 ## Ownership and ordering
 
