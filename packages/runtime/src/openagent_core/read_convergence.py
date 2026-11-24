@@ -61,7 +61,14 @@ def published_read(call_id, tool_ref, tool_name, read, authorize):
 
 async def decision_after_reads(request, *, schema_transport=False):
     state = _active.get()
-    if not state or len(state.calls) < 2 or not request.get("tools") or request.get("tool_choice") not in (None, "auto"):
+    if not state or not request.get("tools") or request.get("tool_choice") not in (None, "auto"):
+        return request, False
+    from .dream_evidence import is_document_dream
+    runtime, context, _ = state.identity
+    if is_document_dream(context):
+        from .memory.vault.document_dream import ground_maintenance_decision
+        request = await ground_maintenance_decision(runtime, context, request)
+    if len(state.calls) < 2 or request.get("tool_choice") not in (None, "auto"):
         return request, False
     messages = request["messages"]
     index = len(messages)

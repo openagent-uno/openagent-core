@@ -138,6 +138,46 @@ class DocumentDream(unittest.IsolatedAsyncioTestCase):
         await self.runtime.start()
         self.addAsyncCleanup(self.runtime.close)
 
+    async def test_maintenance_sample_uses_current_scoped_edits_and_rechecks_authority(self):
+        from openagent_core.memory.vault.document_dream import ground_maintenance_decision
+        from openagent_core.models.providers.message import Message
+
+        other = replace(self.p, subject_id="colleague")
+        foreign = ExecutionContext(other, other, other, "other-session", self.agent_id, (other,))
+        await self.vault.write(foreign, "foreign.md", "Private content", expected_revision=0)
+        await self.vault.write(self.user, "z-last-in-index.md", "Before edit", expected_revision=0)
+        await self.vault.write(self.user, "a-first-in-index.md", "Related note", expected_revision=0)
+        await self.vault.write(self.user, "drop.md", "Removed", expected_revision=0)
+        await self.vault.forget(self.user, "drop.md", expected_revision=1)
+        await self.vault.write(self.user, "z-last-in-index.md", "Current " * 150, expected_revision=1)
+        await self.queue.request_now(self.vault, self.user, "inventory")
+        async def inspect(prompt, **kwargs):
+            context = current_execution_context()
+            observed = await self.vault.maintenance_sample(context)
+            self.assertEqual([(n["path"], n["revision"]) for n in observed],
+                             [("z-last-in-index.md", 2), ("a-first-in-index.md", 1)])
+            self.assertLessEqual(len(observed[0]["excerpt"]), 768)
+            message = Message(role="user", content=DOCUMENT_DREAM_PROMPT)
+            request = {"messages": [message], "tools": [{"type":"function", "function":{"name":"tool_search_call_tool"}}]}
+            grounded = await ground_maintenance_decision(self.runtime, context, request)
+            self.assertEqual(grounded["tool_choice"], "required")
+            self.assertNotIn("Private content", grounded["messages"][0].content)
+            self.assertNotIn("Removed", grounded["messages"][0].content)
+            self.assertEqual(message.content, DOCUMENT_DREAM_PROMPT)
+            self.policy.enabled = False
+            try:
+                with self.assertRaises(PermissionError):
+                    await ground_maintenance_decision(self.runtime, context, request)
+            finally:
+                self.policy.enabled = True
+            yield {"kind": "done", "text": "Inspected", "final_answer": {"text": "Inspected"}}
+
+        self.agent.run_stream = inspect
+        run = await self.worker.run_due_once(self.runtime, scope={"tenant": self.user.tenant_id,
+            "agent": self.agent_id, "space": self.p.subject_id})
+        result = await self.runtime.wait(run.run_id, self.last)
+        self.assertEqual(result.status, "success", result.output)
+
     async def test_an_admitted_scheduler_occurrence_uses_one_vault_only_run(self):
         from openagent_core.contracts import RunRequest
         await self.vault.write(self.user, "manual.md", "manual", expected_revision=0)

@@ -270,6 +270,43 @@ class SqlDocumentVault:
         await saw_notes(self, context, scope, [row])
         return dict(row)
 
+    async def maintenance_sample(self, context):
+        """Read a bounded excerpt from current revisions in the latest scoped edits."""
+        from .document_history import commits, edits
+
+        if not is_document_dream(context):
+            raise PermissionError("A document maintenance delegation is required")
+        scope = await self._scope(context, "memory.read")
+        head_query = (sa.select(commits.c.digest).filter_by(**scope)
+                      .order_by(commits.c.serial.desc()).limit(4))
+        async with self.engine.connect() as con:
+            heads = (await con.scalars(head_query)).all()
+            if heads:
+                # Limit each index range before joining current documents. A bulk
+                # import can contain millions of paths in a single commit.
+                pages = []
+                for rank, digest in enumerate(heads):
+                    page = (sa.select(edits.c.path, edits.c.present)
+                            .filter_by(**scope, digest=digest).order_by(edits.c.path).limit(4).subquery())
+                    pages.append(sa.select(page.c.path, sa.literal(rank).label("rank")).where(page.c.present))
+                recent = sa.union_all(*pages).subquery()
+                stmt = (sa.select(notes.c.path, notes.c.revision,
+                                  sa.func.substr(notes.c.content, 1, 768).label("excerpt"))
+                        .select_from(recent).join(notes, notes.c.path == recent.c.path)
+                        .where(*(notes.c[k] == value for k, value in scope.items()), notes.c.content.is_not(None))
+                        .order_by(recent.c.rank, recent.c.path))
+                rows = (await con.execute(stmt)).mappings().all()
+            else:
+                rows = []
+        await self._recheck(context, "memory.read", scope)
+        sample = {}
+        for row in rows:
+            sample.setdefault(row["path"], dict(row))
+            if len(sample) == 4:
+                break
+        await saw_notes(self, context, scope, sample.values())
+        return list(sample.values())
+
     async def list_notes(self, context, *, after=None, limit=50):
         scope = await self._scope(context, "memory.read")
         if type(limit) is not int or not 1 <= limit <= 200:

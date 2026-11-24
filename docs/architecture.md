@@ -266,6 +266,15 @@ worker surface on an API-only instance. A host-managed task pool can call
 `worker.run_due_once(runtime)` directly. Each tick admits or observes at
 most one eligible space. Configure fleet capacity, model account and token
 budget through the host's normal admission policy.
+The model's document-maintenance decisions can include a bounded sample of
+current authorized notes from the last four commits. The native provider reads
+at most four excerpts of 768 characters using the indexed scope journal. Current
+membership, vault grants and note provenance apply to publication. A populated
+sample starts a tool step on providers offering document reads or the tool
+catalog. The model can then inspect related notes, preserve text, add a supported
+link or finish without an edit. The durable request retains the same input
+across worker replacement.
+
 
 Document tools preserve case, spaces and Unicode in a supplied vault-relative
 Markdown path. Their catalog checks malformed arguments after authorization and
