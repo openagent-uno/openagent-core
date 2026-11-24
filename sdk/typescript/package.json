@@ -1,6 +1,6 @@
 {
   "name": "@openagent/sdk",
-  "version": "1.0.0-beta.3",
+  "version": "1.0.0-beta.4",
   "type": "module",
   "files": ["dist/index.js", "dist/index.d.ts"],
   "exports": {".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"}},

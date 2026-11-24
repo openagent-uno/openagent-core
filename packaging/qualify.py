@@ -175,13 +175,20 @@ assert not {'yaml', 'aiosqlite', 'sqlalchemy', 'mcp', 'rich'} & sys.modules.keys
     # modules and package data, rather than importing those source directories.
     run(python, "-m", "pytest", "-o", "pythonpath=", "tests/public", "tests/prompts", "-q",
         "--junitxml", directory / "public-engine-tests.xml")
+    javascript_sdk = {
+        "name": packed["name"],
+        "version": packed["version"],
+        "file": archive.name,
+        "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+    }
+    manifest["javascript_sdk"] = javascript_sdk
+    (directory / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     receipt = {"format": 1, "status": "development-tests-passed" if manifest["dirty_snapshot"] else "installed-engine-tests-passed",
                "repository_commit": revision, "core_version": version,
                "manifest_sha256": hashlib.sha256((directory / "manifest.json").read_bytes()).hexdigest(),
                "dirty_source": manifest["dirty_snapshot"], "dependency_check": "passed",
                "typescript": "locked SDK build, unit test and live gateway fixture passed",
-               "javascript_sdk": {"name": packed["name"], "version": packed["version"], "file": archive.name,
-                                  "sha256": hashlib.sha256(archive.read_bytes()).hexdigest()},
+               "javascript_sdk": javascript_sdk,
                "subscription_host": "isolated subscription-only installation and both service lifecycles passed",
                "python_suites": ["tests/public", "tests/prompts"],
                "models_or_live_channels_qualified": False}

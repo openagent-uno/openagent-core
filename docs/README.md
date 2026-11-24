@@ -2,6 +2,8 @@
 
 ## Architecture and use
 
+- [Beta167 optional readiness checks before run admission](releases/v1.1.0-beta.167.md).
+
 - [Beta158 exact engine envelope attestation](releases/v1.1.0-beta.158.md).
 - [Beta157 archived engine history and canonical run associations](releases/v1.1.0-beta.157.md).
 
