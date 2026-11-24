@@ -50,14 +50,14 @@ def _index_stamp(path: Path) -> tuple:
     return tuple(stamps)
 
 
-async def _pending(conn: Any, through_seq: int) -> bool:
+async def _pending(conn: Any, through_seq: int | None) -> bool:
     row = await (await conn.execute(
         'SELECT EXISTS(SELECT 1 FROM legacy_session_changes '
         'WHERE processed_at_ms IS NULL) '
         'OR EXISTS(SELECT 1 FROM operational_automation_changes '
         'WHERE processed_at_ms IS NULL) '
-        'OR EXISTS(SELECT 1 FROM search_outbox WHERE seq>?)',
-        (through_seq,),
+        'OR (? IS NOT NULL AND EXISTS(SELECT 1 FROM search_outbox WHERE seq>?))',
+        (through_seq, through_seq),
     )).fetchone()
     return bool(row[0])
 
@@ -141,6 +141,7 @@ async def maintain_operational_storage(
                 coverage = await projection_coverage_async(conn)
                 history_ready = bool(coverage['complete'])
                 published_search_warming = False
+                projections_changed = False
                 while True:
                     search = await operational_search_status(db)
                     head = int((await (await conn.execute('SELECT COALESCE(MAX(seq),0) FROM search_outbox')).fetchone())[0])
@@ -153,7 +154,14 @@ async def maintain_operational_storage(
                     search = dict(status.__dict__)
                     if status.ready and status.seq >= head:
                         break
+                    # New canonical changes should not wait behind a long
+                    # repair or rebuild of the derived search index.
+                    projections_changed = await _pending(conn, None)
+                    if projections_changed:
+                        break
                     await asyncio.sleep(.01 if status.generation == 'unavailable' and status.state == 'warming' else 0)
+                if projections_changed:
+                    continue
                 last_status = OperationalMaintenanceStatus(history_ready, dict(search))
                 stamp = _index_stamp(index_path)
                 audit_at = time.monotonic() + audit_interval

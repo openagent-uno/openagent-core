@@ -83,6 +83,29 @@ class OperationalMaintenanceTests(unittest.IsolatedAsyncioTestCase):
         with sqlite3.connect(search.operational_search_path(self.store.path)) as index:
             self.assertGreater(index.execute("SELECT COUNT(*) FROM search_fts WHERE search_fts MATCH 'orchid'").fetchone()[0], 0)
 
+    async def test_canonical_automation_projection_advances_while_search_is_held(self):
+        await self.write()
+        self.store.connection.execute('DROP TABLE runtime_search_intent_repair')
+        await self.store.close()
+        await self.store.start()
+        with patch.object(search, 'advance_runtime_search_repair', return_value=True):
+            self.task = asyncio.create_task(maintenance.maintain_operational_storage(
+                self.db, self.updates.append, poll_interval=.005))
+            await self.wait_for(lambda: self.updates and self.updates[-1].search.get('state') == 'warming')
+            task_id = await self.db.add_task('New scheduled definition', '0 0 * * *', 'Fixture')
+            async def await_projection():
+                while True:
+                    row = await (await self.db._conn.execute(
+                        """SELECT 1 FROM operational_automation_changes WHERE resource_id=?
+                            AND processed_at_ms IS NOT NULL""", (task_id,)
+                    )).fetchone()
+                    if row is not None:
+                        return
+                    await asyncio.sleep(.005)
+            await asyncio.wait_for(await_projection(), timeout=2)
+            self.assertFalse(self.updates[-1].search['ready'])
+            await self.stop_worker()
+
     async def test_lost_index_is_rebuilt_while_canonical_history_is_preserved(self):
         await self.start_worker()
         seq = await self.write()
