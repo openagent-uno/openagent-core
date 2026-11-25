@@ -191,3 +191,11 @@ export class RunClient extends HttpClient {
     }
   }
 }
+
+export {
+  classifyModelFailure,
+  reconcileTurnCompletion,
+  type CommittedEffect,
+  type ModelFailureKind,
+  type TurnCompletion,
+} from './host-turn.js';

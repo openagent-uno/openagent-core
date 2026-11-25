@@ -187,3 +187,17 @@ transfer and client rendering separately on the intended authenticated route.
 
 
 The 1.1.0-beta.153 release carries `openagent-sdk-1.0.0-beta.3.tgz`. Install the release asset in a JavaScript or TypeScript host, and retain its integrity in the application's package lock. The SHA-256 is in `engine-qualification.json`. Use `RunClient.iterEvents(runId, after, limit, signal)` or Python's `RunClient.iter_events(run_id, after, limit=...)` for sequential replay. The cursor advances after each page, and a viewer can stop iterating without fetching later pages.
+
+### Provider and completion contracts for TypeScript hosts
+
+The TypeScript SDK exports `classifyModelFailure(status, body)` for HTTP
+provider adapters. Quota exhaustion is terminal for the same account, even
+when a provider uses HTTP 429. Retry transient failures within the host's
+budget. A host may relax a forced tool choice only for an explicit
+`unsupported_tool_choice` classification.
+
+Use `reconcileTurnCompletion` with the authored final text and committed
+effect receipts. When no final text was authored, the contract keeps
+confirmed, pending and uncertain effects available for a localized host
+reply. Rejected effects alone cannot justify a success claim. A delivery
+receipt attests only the transport outcome it records.
