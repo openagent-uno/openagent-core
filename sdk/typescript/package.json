@@ -1,8 +1,8 @@
 {
   "name": "@openagent/sdk",
-  "version": "1.0.0-beta.4",
+  "version": "1.0.0-beta.5",
   "type": "module",
-  "files": ["dist/index.js", "dist/index.d.ts"],
+  "files": ["dist"],
   "exports": {".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"}},
   "scripts": {"build": "tsc -p tsconfig.json", "pretest": "npm run build", "test": "node --test test/*.test.mjs"},
   "devDependencies": {"typescript": "5.9.3"}
