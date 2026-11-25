@@ -1568,7 +1568,7 @@ async def t_coalesce_merge_two(ctx: TestContext) -> None:
         await sess.close()
 
     msgs = [c["message"] for c in agent.calls]
-    assert msgs == ["A", "B\n\nC"], (
+    assert len(msgs) == 2 and msgs[0] == "A" and msgs[1].endswith("Unfinished request\nA\n\nLatest instruction\nB\n\nC"), (
         f"merged burst should dispatch one turn with joined text; got {msgs}"
     )
 
@@ -1604,7 +1604,7 @@ async def t_coalesce_extends(ctx: TestContext) -> None:
         await sess.close()
 
     msgs = [c["message"] for c in agent.calls]
-    assert msgs == ["A", "B\n\nC\n\nD\n\nE\n\nF"], (
+    assert len(msgs) == 2 and msgs[0] == "A" and msgs[1].endswith("Unfinished request\nA\n\nLatest instruction\nB\n\nC\n\nD\n\nE\n\nF"), (
         f"5-message burst should merge into one turn; got {msgs}"
     )
 
@@ -1914,7 +1914,7 @@ async def t_coalesce_stt_folds_buffer(ctx: TestContext) -> None:
         await sess.close()
 
     msgs = [c["message"] for c in agent.calls]
-    assert msgs == ["A", "B\n\nC\n\nand also D"], (
+    assert len(msgs) == 2 and msgs[0] == "A" and msgs[1].endswith("Unfinished request\nA\n\nLatest instruction\nB\n\nC\n\nand also D"), (
         f"STT must fold the typed buffer into the merged turn; got {msgs}"
     )
     assert sess._pending_burst == [], "buffer should have been flushed"

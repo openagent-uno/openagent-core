@@ -132,6 +132,47 @@ class AnswerPropagation(unittest.IsolatedAsyncioTestCase):
             self.assertEqual("Final.",reply.final_answer["text"])
         finally: await session.close()
 
+    async def test_text_stream_continues_the_unfinished_request(self):
+        from openagent_core.stream.events import TextFinal
+        from openagent_core.stream.session import StreamSession
+
+        for same_sender in (True, False):
+            with self.subTest(same_sender=same_sender):
+                finished = asyncio.Queue()
+                inputs = asyncio.Queue()
+
+                class Agent:
+                    name = "fixture"
+                    db = None
+
+                    async def run_stream(self, *, message, **kwargs):
+                        inputs.put_nowait(message)
+                        if message == "Start the work":
+                            yield {"kind": "delta", "text": "Draft from the first attempt"}
+                            await finished.get()
+                        yield {"kind": "done", "text": "Completed"}
+
+                async def no_provider(_db):
+                    return None
+
+                session = StreamSession(Agent(), client_id="fixture", session_id="s", coalesce_window_ms=10)
+                await session.start(stt_factory=no_provider, tts_factory=no_provider)
+                try:
+                    first = TextFinal(session_id="s", text="Start the work", author={"handle": "first"})
+                    update = TextFinal(session_id="s", text="Also check the result",
+                                       author={"handle": "first" if same_sender else "second"})
+                    await session.push_in(first, ingress_identity="origin")
+                    self.assertEqual(await asyncio.wait_for(inputs.get(), 2), first.text)
+                    await session.push_in(update, ingress_identity="origin" if same_sender else "other")
+                    actual = await asyncio.wait_for(inputs.get(), 2)
+                    if same_sender:
+                        self.assertIn(first.text, actual)
+                        self.assertTrue(actual.endswith(update.text))
+                    else:
+                        self.assertEqual(actual, update.text)
+                finally:
+                    await session.close()
+
     async def test_engine_persists_full_text_and_separate_final_envelope(self):
         from openagent_core.engine import AgentExecutor
         from openagent_core.workspace_administration import SessionInspection

@@ -293,6 +293,30 @@ class Contracts(unittest.IsolatedAsyncioTestCase):
         self.executor.hold.set();await self.r.wait('later',context)
         self.assertEqual(len(self.executor.calls),3)
 
+    async def test_steering_retains_only_authorized_unfinished_inputs(self):
+        self.executor.hold = asyncio.Event()
+        await self.r.start()
+        old = replace(self.request("old"), input="Start the work")
+        await self.r.submit(old, self.ctx)
+        self.assertEqual(await asyncio.wait_for(self.executor.started.get(), 2), "old")
+        update = replace(self.request("update", steer_run_id="old"), input="Also check the result")
+        await self.r.submit(update, self.ctx)
+        self.assertEqual(await asyncio.wait_for(self.executor.started.get(), 2), "update")
+        final = replace(self.request("final", steer_run_id="update"), input="Report the outcome")
+        await self.r.submit(final, self.ctx)
+        self.assertEqual(await asyncio.wait_for(self.executor.started.get(), 2), "final")
+        self.assertEqual(await self.r.steering_inputs(final, self.ctx),
+                         ("Start the work", "Also check the result"))
+        self.assertEqual((await self.r.accepted_request("final", self.ctx)).request, final)
+        bob = PrincipalRef("host", "tenant", "bob")
+        self.assertEqual(await self.r.steering_inputs(final, replace(self.ctx, audience=(self.p, bob))), ())
+        self.policy.denied.add("run.replay")
+        self.assertEqual(await self.r.steering_inputs(final, self.ctx), ())
+        self.policy.denied.clear()
+        self.executor.hold.set()
+        await self.r.wait("final", self.ctx)
+        self.assertEqual(await self.r.steering_inputs(self.request("later", steer_run_id="final"), self.ctx), ())
+
     async def test_steering_requires_target_authorization_before_admission(self):
         await self.r.start();await self.r.submit(self.request('old'),self.ctx)
         self.policy.denied.add('run.cancel')

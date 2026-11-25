@@ -21,7 +21,7 @@ import logging
 import tempfile
 import weakref
 from collections import defaultdict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Awaitable, Callable
 
 import json
@@ -32,6 +32,7 @@ from openagent_core.voice.tts_base import BaseTTS
 from openagent_core.core.identity_context import human_author
 from openagent_core.core.on_behalf_context import OnBehalfIdentity
 from openagent_core.core.logging import elog
+from openagent_core.steering import continuation_input
 from openagent_core.stream.events import (
     Attachment,
     AudioChunk,
@@ -297,6 +298,7 @@ class StreamSession:
         # its late frames must never inherit the replacement turn's ingress.
         self._current_turn_token: object | None = None
         self._current_turn_started: bool = False
+        self._current_turn_answered = False
         # Reason for the active task cancellation currently being
         # orchestrated by ``_cancel_active_turn``. ``None`` means any
         # CancelledError escaping the runner was unexpected (for
@@ -1303,13 +1305,7 @@ class StreamSession:
             # costs one debounce window of latency but guarantees the
             # whole burst reaches the agent as ONE merged turn.
             if self._current_turn and not self._current_turn.done():
-                # ``salvage_to_burst`` re-buffers the in-flight turn's
-                # input if the agent hasn't engaged yet (drain race).
-                await self._cancel_active_turn(
-                    reason="user_text",
-                    suppress_completion=True,
-                    salvage_to_burst=True,
-                )
+                msg = await self._steer_active_text(msg, execution_origin, ingress_identity)
             # A burst is scoped to one exact execution host. If another client
             # instance writes into the same durable session during the debounce
             # window, flush the first burst as its own turn rather than ever
@@ -1334,6 +1330,31 @@ class StreamSession:
             self._event_ingresses[id(msg)] = ingress_identity
             self._pending_burst.append(msg)
             self._restart_burst_timer()
+
+    async def _steer_active_text(
+        self, msg: TextFinal, execution_origin: Any, ingress_identity: Any,
+    ) -> TextFinal:
+        previous = self._current_turn_msg
+        previous_context = getattr(self._current_turn_ingress, "turn_context", None)
+        current_context = getattr(ingress_identity, "turn_context", None)
+        same_source = (
+            previous is not None and previous.source == msg.source == "user_typed"
+            and previous.author == msg.author
+            and _same_execution_origin(self._current_turn_origin, execution_origin)
+            and _same_ingress(self._current_turn_ingress, ingress_identity)
+            and getattr(previous_context, "on_behalf_identity", None)
+            == getattr(current_context, "on_behalf_identity", None)
+        )
+        # A not-yet-engaged turn can still join the ordinary debounce burst.
+        # A running turn leaves tool results in history and needs its
+        # unfinished instructions explicitly carried into the successor.
+        if same_source and self._current_turn_started and not self._current_turn_answered:
+            msg = replace(msg, text=continuation_input((previous.text,), msg.text),
+                          attachments=(*previous.attachments, *msg.attachments))
+        await self._cancel_active_turn(
+            reason="user_text", suppress_completion=True, salvage_to_burst=True,
+        )
+        return msg
 
     async def _dispatch_turn(
         self,
@@ -1422,6 +1443,7 @@ class StreamSession:
         turn_token = object()
         self._current_turn_token = turn_token
         self._current_turn_started = False
+        self._current_turn_answered = False
         # Prefer a per-message author carried on the inbound frame (a
         # bridge multiplexing several humans onto one session sets it so
         # each message attributes to the right person); fall back to the
@@ -2354,6 +2376,9 @@ class StreamTurnRunner:
             else:
                 turn_reason = TURN_END_COMPLETED
                 turn_error = ""
+            if (turn_reason == TURN_END_COMPLETED and not sess._suppress_runner_completion
+                    and sess._current_turn_token is turn_token):
+                sess._current_turn_answered = True
             await publish(TurnComplete(
                 session_id=session_id,
                 seq=sess.next_seq(),

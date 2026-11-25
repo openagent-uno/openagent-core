@@ -947,6 +947,36 @@ class Runtime:
             # Only recovery by a live worker may classify the old effects.
             return
 
+    async def steering_inputs(self, request: RunRequest, context: ExecutionContext) -> tuple[str, ...]:
+        """Return unfinished input from the exact steering ancestry the caller can read.
+
+        Executors can call this under the successor's current authority. The
+        admitted request, its idempotency key and its author stay unchanged.
+        """
+        if request.session_id != context.session_id:
+            raise ValueError("Steering context must identify the request session")
+        previous, seen = [], {request.run_id}
+        target_id = request.steer_run_id
+        while target_id is not None and target_id not in seen:
+            seen.add(target_id)
+            try:
+                record = await self.get_run(target_id, context)
+                if (record.session_id != request.session_id or record.tenant_id != context.tenant_id
+                        or record.status not in {"cancelled", "interrupted"}):
+                    break
+                accepted = await self.accepted_request(target_id, context)
+            except (LookupError, PermissionError):
+                break
+            if (
+                accepted.author != context.author or accepted.initiator != context.initiator
+                or accepted.authority != context.authority or accepted.audience != context.audience
+                or accepted.deferred != context.deferred or accepted.delegation_id != context.delegation_id
+            ):
+                break
+            previous.append(accepted.request.input)
+            target_id = accepted.request.steer_run_id
+        return tuple(reversed(previous))
+
     async def _execute(self, request: RunRequest, context: ExecutionContext, executor: AgentExecutor,
                        graph: _ActiveGraph, capability_revision: int) -> None:
         from .operations import OperationPending

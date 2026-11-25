@@ -38,6 +38,22 @@ Python examples require **Python 3.11+**. Exact dependency versions come from th
 reviewed wheel manifest and each distribution's `pyproject.toml`, not a moving
 README version. A source candidate is not automatically a published release.
 
+## Steering an active turn
+
+A runtime client submits a new `RunRequest` with `steer_run_id` set to the
+exact run it observed. Use a new stable request ID for the new input and
+reuse it on redelivery. The runtime authorizes cancellation of that target,
+then executes the successor with completed tool results available in session history. The default engine presents the successor with the unfinished
+instructions from its steering ancestry, plus the latest instruction.
+Earlier input is read under the successor's exact session, author, authority
+and audience. A custom executor can read that input through
+`await runtime.steering_inputs(request, context)`. Its original admitted
+request remains independently inspectable.
+
+The shared text stream applies the same continuation behavior when
+consecutive inputs come from the same authenticated conversation and
+execution origin. An explicit stop discards the pending continuation.
+
 ## Account-state evidence for lean event replies
 
 Set `OPENAGENT_REPLY_GUARD_ACCOUNT_STATE_TOOLS` in `RuntimeSettings.environment`
