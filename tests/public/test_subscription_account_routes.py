@@ -1,5 +1,6 @@
 """Same-model account failover preserves settings, budgets, usage and stream boundaries."""
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -104,6 +105,75 @@ def test_sync_stream_and_call_respect_the_same_boundary():
     a.rows = [ModelResponse()]
     with pytest.raises(ModelProviderError): list(a.invoke_stream())
     assert b.calls == 2
+
+
+def test_relay_stream_preserves_the_status_of_a_request_refusal():
+    from openagent_core.subscriptions.errors import REFUSED, SubscriptionError, completion_failure
+
+    envelope = {"error": SubscriptionError(422, REFUSED).public()}
+    assert completion_failure("claude", envelope, 200).status == 422
+    assert completion_failure("claude", envelope, 403).status == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize(("wire_error", "after_delta", "expected_status"), [
+    ({"code": 401}, False, None),
+    ({"code": "subscription_reconnect_required"}, False, None),
+    ({"code": 401}, True, 401),
+    ({"code": 400}, False, 400),
+    ({"code": "subscription_refused"}, False, 400),
+    ({"code": "subscription_refused", "status": 422}, False, 422),
+    ({"code": "unknown_failure"}, False, 502),
+])
+async def test_sdk_stream_error_keeps_status_and_account_boundary(synchronous, wire_error, after_delta, expected_status):
+    calls, received = [], []
+
+    def delta(content):
+        return {"id": "id", "object": "chat.completion.chunk", "created": 1, "model": "fixture",
+                "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]}
+
+    def serve(request):
+        account = request.url.host
+        calls.append(account)
+        if account == "first.test":
+            events = [delta("partial")] if after_delta else []
+            events.append({"error": {"message": "fixture", "type": "fixture_error", **wire_error}})
+        else:
+            events = [delta("recovered")]
+        body = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, text=body)
+
+    factory = httpx.Client if synchronous else httpx.AsyncClient
+    clients = [factory(transport=httpx.MockTransport(serve)) for _ in range(2)]
+    first, second = [OpenAILike(id="fixture", api_key="fixture", base_url=f"https://{host}/v1",
+                               http_client=client, max_retries=0)
+                     for host, client in zip(("first.test", "second.test"), clients)]
+    first._openagent_account_routes = policy(first, second)
+    args = ([Message(role="user", content="fixture")], Message(role="assistant"))
+    try:
+        if synchronous:
+            for frame in first.invoke_stream(*args):
+                received.append(frame.content)
+        else:
+            async for frame in first.ainvoke_stream(*args):
+                received.append(frame.content)
+    except ModelProviderError as error:
+        assert error.status_code == expected_status
+    else:
+        assert expected_status is None
+    finally:
+        for client in clients:
+            if synchronous:
+                client.close()
+            else:
+                await client.aclose()
+    if expected_status is None:
+        assert calls == ["first.test", "second.test"]
+        assert received == ["recovered"]
+    else:
+        assert calls == ["first.test"]
+        assert received == (["partial"] if after_delta else [])
 
 
 @pytest.mark.asyncio

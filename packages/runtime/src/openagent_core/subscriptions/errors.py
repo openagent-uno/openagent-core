@@ -42,7 +42,7 @@ class SubscriptionError(Exception):
         if self.code==USAGE_LIMIT and self.resets_at_ms:
             when=datetime.fromtimestamp(self.resets_at_ms/1000,timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
             message=f"{message} It resets at {when}."
-        error={'message':message,'type':self.code,'code':self.code}
+        error={'message':message,'type':self.code,'code':self.code,'status':self.status}
         if self.resets_at_ms: error['resets_at_ms']=self.resets_at_ms
         return error
 
@@ -194,14 +194,33 @@ def bounded_sse_lines(lines, *, max_line_bytes=4 << 20, max_total_bytes=32 << 20
             close()
 
 
+_PUBLIC_ERROR_STATUSES = {
+    USAGE_LIMIT: 429, RATE_LIMITED: 429, RECONNECT: 401,
+    # Older relays used this code for several client errors. A generic refusal
+    # alone cannot authorize retrying the request on another account.
+    REFUSED: 400,
+    UNAVAILABLE: 503, NOT_CONNECTED: 409, "subscription_inference_failed": 502,
+}
+
+
+def stream_error_status(error: dict) -> int | None:
+    """Read structured error status when an SSE reply already sent its headers."""
+    code = error.get("code")
+    for value in (error.get("status"), code):
+        if type(value) is int and 400 <= value <= 599:
+            return value
+    return _PUBLIC_ERROR_STATUSES.get(code) if isinstance(code, str) else None
+
+
 def completion_failure(vendor, payload, status, headers=None):
     """Decode Core's public envelope without trusting an upstream message."""
     error = payload.get('error') if isinstance(payload, dict) else None
     code = error.get('code') if isinstance(error, dict) else None
-    statuses = {USAGE_LIMIT: 429, RATE_LIMITED: 429, RECONNECT: 401, REFUSED: 403,
-                UNAVAILABLE: 503, NOT_CONNECTED: 409, 'subscription_inference_failed': 502}
-    if isinstance(code, str) and code in statuses:
+    if status < 400:
+        embedded_status = stream_error_status(error) if isinstance(error, dict) else None
+        status = embedded_status or 502
+    if isinstance(code, str) and code in _PUBLIC_ERROR_STATUSES:
         retry = _number((headers or {}).get('retry-after'))
-        return SubscriptionError(status if status >= 400 else statuses[code], code,
+        return SubscriptionError(status, code,
                                  resets_at_ms=_number(error.get('resets_at_ms')), retry_after_s=retry)
-    return upstream_failure(vendor, status if status >= 400 else 502, payload, headers)
+    return upstream_failure(vendor, status, payload, headers)

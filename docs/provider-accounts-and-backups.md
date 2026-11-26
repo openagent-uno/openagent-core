@@ -44,6 +44,12 @@ Streams rotate only before provider output; local request markers are excluded.
 After provider output starts, a failure is surfaced without replay, so nothing
 is duplicated.
 
+OpenAI-compatible streams can report an error in an SSE frame after sending
+HTTP 200 headers. The driver preserves numeric error codes and the subscription
+relay's typed codes. An initial authentication error can therefore select the
+next eligible account in the same request. An error after the first provider
+frame ends the stream with its original status.
+
 `metadata.accounts[*].api_key` is write-only: provider rows returned by the
 management API show `api_key_display` instead, like the provider's own key.
 

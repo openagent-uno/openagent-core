@@ -10,6 +10,7 @@ import httpx
 from pydantic import BaseModel
 
 from openagent_core.core.runtime_errors import ContextWindowExceededError, ModelAuthenticationError, ModelProviderError
+from openagent_core.subscriptions.errors import stream_error_status
 from openagent_core.stream.media import Audio
 from openagent_core.provider_admission import openai_account_model
 from openagent_core.models.providers.base import Model
@@ -23,7 +24,7 @@ from openagent_core.core._runner.utils.openai import _format_file_for_message, a
 from openagent_core.core._runner.utils.reasoning import extract_thinking_content
 
 try:
-    from openai import APIConnectionError, APIStatusError, RateLimitError
+    from openai import APIConnectionError, APIError, APIStatusError, RateLimitError
     from openai import AsyncOpenAI as AsyncOpenAIClient
     from openai import OpenAI as OpenAIClient
     from openai.types import CompletionUsage
@@ -31,6 +32,19 @@ try:
     from openai.types.chat.chat_completion_chunk import ChoiceDelta, ChoiceDeltaToolCall
 except (ImportError, ModuleNotFoundError):
     raise ImportError("`openai` not installed. Please install using `pip install openai`")
+
+
+def _stream_model_error(error: Exception, model_name: str | None, model_id: str) -> ModelProviderError:
+    # A failure after the HTTP 200 headers arrives as an SDK APIError. Its
+    # structured body still carries the provider's status, including before
+    # the first output frame when the account route can safely recover.
+    status = None
+    if isinstance(error, APIError) and isinstance(error.body, dict):
+        body = error.body.get("error", error.body)
+        if isinstance(body, dict):
+            status = stream_error_status(body)
+    return ModelProviderError(message=str(error), status_code=status or 502,
+                              model_name=model_name, model_id=model_id)
 
 
 @dataclass
@@ -693,7 +707,7 @@ class OpenAIChat(Model):
             raise e
         except Exception as e:
             log_error(f"Error from OpenAI API: {str(e)}")
-            raise ModelProviderError(message=str(e), model_name=self.name, model_id=self.id) from e
+            raise _stream_model_error(e, self.name, self.id) from e
 
     @account_astream
     async def ainvoke_stream(
@@ -795,7 +809,7 @@ class OpenAIChat(Model):
             raise e
         except Exception as e:
             log_error(f"Error from OpenAI API: {str(e)}")
-            raise ModelProviderError(message=str(e), model_name=self.name, model_id=self.id) from e
+            raise _stream_model_error(e, self.name, self.id) from e
 
     @staticmethod
     def parse_tool_calls(tool_calls_data: List[ChoiceDeltaToolCall]) -> List[Dict[str, Any]]:
