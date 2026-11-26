@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openagent-storage-postgres"
-version = "1.1.0b179"
+version = "1.1.0b180"
 requires-python = ">=3.11"
-dependencies = ["openagent-core==1.1.0b179", "psycopg[binary,pool]>=3.2,<4"]
+dependencies = ["openagent-core==1.1.0b180", "psycopg[binary,pool]>=3.2,<4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
