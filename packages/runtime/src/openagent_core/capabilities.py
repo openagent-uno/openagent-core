@@ -738,6 +738,7 @@ class CapabilityCatalog:
             await recheck_definition()
             invoke = getattr(registration.executor, "call_app_tool", registration.executor.call_tool) if surface == "app" else registration.executor.call_tool
             rejection = None
+            delivery_markers: list[str] = []
             try:
                 result = await invoke(definition.name, copy.deepcopy(dict(arguments)), context)
             except ToolPreconditionFailed as error:
@@ -774,6 +775,16 @@ class CapabilityCatalog:
                 if not self._available(registration, context):
                     raise CapabilityUnavailable("The invocation source was revoked while resolving result provenance")
                 await recheck_definition()
+            if durable and surface == "model" and isinstance(envelope, dict) and isinstance(envelope.get("content"), list):
+                from .artifacts import publish_tool_file_resources, tool_file_delivery
+
+                if any(tool_file_delivery(block) is not None for block in envelope["content"]):
+                    if registration.result_provenance is not None or registration.invocation_provenance is not None:
+                        raise PermissionError("An attested file result requires an attachment publisher that preserves its provenance")
+                    result, delivery_markers = await publish_tool_file_resources(envelope)
+                    envelope = result
+                    await authorize("tool.publish")
+                    await recheck_definition()
         except BaseException as exc:
             if durable:
                 await runtime.services.store.finish_tool(run_id,call_id,
@@ -805,6 +816,14 @@ class CapabilityCatalog:
             await observe_published(definition.name, copy.deepcopy(dict(arguments)), result, context)
         if durable and has_current_publication_guard():
             await check_current_publication()
+        if delivery_markers:
+            from .artifacts import SESSION_ARTIFACT_PREFIX, remember_native_output
+            from .core.output_delivery import record_delivery
+
+            for marker in delivery_markers:
+                artifact_id = marker[len(f"[FILE:{SESSION_ARTIFACT_PREFIX}"):-1]
+                remember_native_output(run_id, artifact_id)
+                record_delivery(marker)
         if durable and surface == "model" and provider_call_id and rejection is None:
             verified = getattr(registration.executor, "verified_tool_read", None)
             if callable(verified):

@@ -1057,37 +1057,14 @@ async def _model_visible_result(envelope: Any, *, video_frame_extractor=None) ->
 
 async def _tool_image_delivery_marker(content: bytes, mime: str, index: int) -> str | None:
     """Give admitted pixels an optional current-session delivery reference."""
-    from openagent_core.runtime import current_runtime, current_execution_context, current_run_id
-    runtime, context = current_runtime(), current_execution_context()
-    if runtime is None or context is None or not current_run_id():
-        return None
-    lookup = getattr(runtime, "service", None)
-    publisher = lookup("attachments.publisher") if callable(lookup) else None
-    publish = getattr(publisher, "publish_content", None)
-    if not callable(publish):
-        return None
-    from openagent_core.memory.vault.privacy import require_unprotected_execution
-    from openagent_core.artifacts import SESSION_ARTIFACT_PREFIX, session_output_reference
     import mimetypes
-    verified = None
-    try:
-        await require_unprotected_execution("Tool result attachment delivery")
-        extension = mimetypes.guess_extension(mime) or ".bin"
-        ref = await publish(context, content, filename=f"tool-image-{index + 1}{extension}", mime_type=mime)
-        db = getattr(getattr(runtime.services.executor, "agent", None), "memory_db", None)
-        verified = await session_output_reference(db, tenant_id=context.tenant_id,
-            session_id=context.session_id, value=ref) if db is not None else None
-    except Exception as exc:
-        # Delivery is optional; keep the admitted preview if its publisher is
-        # unavailable. Revocation still fails closed at the fresh check below.
-        import logging
-        logging.getLogger(__name__).warning("Tool image publication unavailable (%s)", type(exc).__name__)
-    from openagent_core.contracts import ResourceRef, require_authorized
-    await require_authorized(runtime.services.authorizer, context, "run.publish",
-        ResourceRef("session", context.tenant_id, context.session_id), audience=context.audience)
-    if verified is None:
-        return None
-    return f"[FILE:{SESSION_ARTIFACT_PREFIX}{verified['artifact_id']}]"
+
+    extension = mimetypes.guess_extension(mime) or ".bin"
+    from openagent_core.artifacts import tool_delivery_marker
+
+    return await tool_delivery_marker(content, mime, f"tool-image-{index + 1}{extension}")
+
+
 
 
 async def _call_tool_impl(pool: Any, source_ref: str, tool: str, args: dict | str | None = None) -> Any:

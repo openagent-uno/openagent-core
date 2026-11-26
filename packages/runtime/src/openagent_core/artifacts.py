@@ -7,6 +7,7 @@ or an active linked session, and validates content integrity before delivery.
 from __future__ import annotations
 
 import asyncio
+import base64
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -200,8 +201,10 @@ class ArtifactRepository:
         async with self._writes:
             with tempfile.TemporaryDirectory(prefix="upload-", dir=root) as temporary:
                 source = Path(temporary) / "bytes"
-                source.write_bytes(content)
-                task = asyncio.create_task(asyncio.to_thread(_copy_into_cas, source, root / "sha256/00/pending", self.max_input_bytes))
+                def stage_and_copy():
+                    source.write_bytes(content)
+                    return _copy_into_cas(source, root / "sha256/00/pending", self.max_input_bytes)
+                task = asyncio.create_task(asyncio.to_thread(stage_and_copy))
                 try:
                     digest, size = await asyncio.shield(task)
                 except asyncio.CancelledError:
@@ -314,6 +317,100 @@ def remember_native_output(run_id, artifact_id):
 def is_native_output(run_id, artifact_id):
     state = _native_outputs.get()
     return state is not None and state[0] == run_id and artifact_id in state[1]
+
+
+async def tool_delivery_marker(content: bytes, mime: str, filename: str, *, verify_bytes: bool = False) -> str | None:
+    from openagent_core.runtime import current_runtime, current_execution_context, current_run_id
+    runtime, context = current_runtime(), current_execution_context()
+    run_id = current_run_id()
+    if runtime is None or context is None or not run_id:
+        return None
+    lookup = getattr(runtime, "service", None)
+    publisher = lookup("attachments.publisher") if callable(lookup) else None
+    publish = getattr(publisher, "publish_content", None)
+    if not callable(publish):
+        return None
+    from openagent_core.memory.vault.privacy import require_unprotected_execution
+    resource = ResourceRef("session", context.tenant_id, context.session_id)
+    authorizer = runtime.services.authorizer
+    verified = None
+    try:
+        await require_unprotected_execution("Tool result attachment delivery")
+        await require_authorized(authorizer, context, "run.publish", resource, audience=context.audience)
+        db = getattr(getattr(runtime.services.executor, "agent", None), "memory_db", None)
+        resolve = getattr(publisher, "resolve_session_output", None)
+        if db is not None or callable(resolve):
+            ref = await publish(context, content, filename=filename, mime_type=mime)
+            if db is not None:
+                verified = await session_output_reference(db, tenant_id=context.tenant_id,
+                    session_id=context.session_id, value=ref)
+            elif isinstance(ref, dict) and canonical_artifact_id(ref.get("artifact_id")):
+                await runtime.authorize(context, "artifact.read", resource, audience=context.audience)
+                candidate = await resolve(context, run_id, ref["artifact_id"])
+                await runtime.authorize(context, "artifact.read", resource, audience=context.audience)
+                if isinstance(candidate, dict) and candidate.get("artifact_id") == ref["artifact_id"]:
+                    verified = candidate
+            if verify_bytes and verified is not None:
+                digest = await asyncio.to_thread(lambda: hashlib.sha256(content).hexdigest())
+                if verified.get("size_bytes") != len(content) or verified.get("sha256") != digest:
+                    verified = None
+    except Exception as exc:
+        # Delivery is optional; keep the admitted preview if its publisher is
+        # unavailable. Revocation still fails closed at the fresh check below.
+        verified = None
+        import logging
+        logging.getLogger(__name__).warning("Tool attachment publication unavailable (%s)", type(exc).__name__)
+    await require_authorized(authorizer, context, "run.publish", resource, audience=context.audience)
+    if verified is None:
+        return None
+    return f"[FILE:{SESSION_ARTIFACT_PREFIX}{verified['artifact_id']}]"
+
+
+def tool_file_delivery(block: Any) -> dict[str, Any] | None:
+    if not isinstance(block, dict) or block.get("type") != "resource":
+        return None
+    metadata = block.get("_meta")
+    delivery = metadata.get("openagent/file-delivery") if isinstance(metadata, dict) else None
+    return delivery if isinstance(delivery, dict) else None
+
+
+async def publish_tool_file_resources(envelope: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Replace explicitly offered binary resources with scoped delivery markers.
+
+    The model receives metadata and a session artifact reference. Opaque file
+    bytes never enter its text context or the result pagination cache.
+    """
+    import mimetypes
+    from openagent_core.memory.artifacts import safe_attachment_filename
+
+    result = []
+    markers = []
+    remaining = 32 * 1024 * 1024
+    for block in envelope["content"]:
+        delivery = tool_file_delivery(block)
+        if delivery is None:
+            result.append(block)
+            continue
+        resource = block.get("resource")
+        filename = safe_attachment_filename(delivery.get("filename") or "download")
+        marker = None
+        blob = resource.get("blob") if isinstance(resource, dict) else None
+        if isinstance(blob, str) and len(blob) <= 4 * ((remaining + 2) // 3) and envelope.get("isError") is not True:
+            try:
+                content = await asyncio.to_thread(base64.b64decode, blob, validate=True)
+            except ValueError:
+                pass
+            else:
+                if len(content) <= remaining:
+                    remaining -= len(content)
+                    mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+                    marker = await tool_delivery_marker(content, mime, filename, verify_bytes=True)
+        if marker is not None:
+            markers.append(marker)
+        notice = (f"File {filename} is available in this session. To send it to the user, include {marker}."
+                  if marker else f"File {filename} could not be added to this session.")
+        result.append({"type": "text", "text": notice})
+    return {**envelope, "content": result}, markers
 
 
 def canonical_artifact_id(value):

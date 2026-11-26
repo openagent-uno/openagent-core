@@ -1,9 +1,11 @@
 import os
+import base64
 import uuid
 import unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
 from sqlalchemy.ext.asyncio import create_async_engine
 from openagent_core.contracts import ExecutionContext, PrincipalRef
@@ -61,6 +63,43 @@ class ObjectArtifacts(unittest.IsolatedAsyncioTestCase):
         self.denied.add("artifact.publish")
         with self.assertRaises(PermissionError):
             await anext(chunks)
+
+    async def test_tool_file_requires_matching_run_scoped_publisher_receipt(self):
+        from openagent_core.artifacts import publish_tool_file_resources
+        from openagent_core.contracts import require_authorized
+
+        data = b"fixture bytes"
+        blob = base64.b64encode(data).decode("ascii")
+        envelope = {"content": [{"type": "resource",
+            "resource": {"uri": "urn:fixture:download", "blob": blob},
+            "_meta": {"openagent/file-delivery": {"filename": "fixture.dat"}}}]}
+
+        async def authorize(context, action, resource, *, audience=()):
+            await require_authorized(self, context, action, resource, audience=audience)
+
+        runtime = SimpleNamespace(services=SimpleNamespace(authorizer=self, executor=None),
+            authorize=authorize, service={"attachments.publisher": self.store}.get)
+        run_id = "fixture-file-offer"
+        with execution_scope(runtime, self.ctx, run_id):
+            projected, (marker,) = await publish_tool_file_resources(envelope)
+            self.assertIn(marker, projected["content"][0]["text"])
+            self.assertNotIn(blob, str(projected))
+            ident = marker.removeprefix("[FILE:artifact:").removesuffix("]")
+            ref = await self.store.resolve_session_output(self.ctx, run_id, ident)
+            self.assertEqual(ref["size_bytes"], len(data))
+            self.assertEqual(b"".join([chunk async for chunk in self.store.read_stream(self.ctx, ident)]), data)
+
+            async def resolve_wrong_size(context, owner_run, artifact_id):
+                return {**await self.store.resolve_session_output(context, owner_run, artifact_id),
+                        "size_bytes": len(data) + 1}
+
+            unreliable = SimpleNamespace(publish_content=self.store.publish_content,
+                resolve_session_output=resolve_wrong_size)
+            runtime.service = {"attachments.publisher": unreliable}.get
+            rejected, markers = await publish_tool_file_resources(envelope)
+            self.assertEqual(markers, [])
+            self.assertIn("could not be added", rejected["content"][0]["text"])
+            self.assertNotIn(blob, str(rejected))
 
     async def test_private_ingress_upload_model_content_and_publication_recheck(self):
         from openagent_core.artifacts import ModelAttachmentReader

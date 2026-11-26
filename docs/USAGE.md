@@ -54,6 +54,15 @@ The shared text stream applies the same continuation behavior when
 consecutive inputs come from the same authenticated conversation and
 execution origin. An explicit stop discards the pending continuation.
 
+## Model stream inactivity
+
+Asynchronous model calls bound each wait for provider output to 480 seconds.
+The timer restarts for each provider frame and does not run while a tool is
+executing or a client is consuming a frame. Set
+`OPENAGENT_PROVIDER_STREAM_IDLE_TIMEOUT_S` to tune the window for a host
+or to zero to defer to the provider's timeout. A timeout cannot replay
+already-streamed output or completed tools.
+
 ## Account-state evidence for lean event replies
 
 Set `OPENAGENT_REPLY_GUARD_ACCOUNT_STATE_TOOLS` in `RuntimeSettings.environment`
@@ -177,6 +186,21 @@ providers and MCP processes. Configure its paths, providers and consent; it does
 not install the tools or authenticate the application's users. Tools may also
 be called directly without this host. See its [README](../packages/capability-host/README.md)
 and the [Tools usage guide](https://github.com/openagent-uno/openagent-tools/blob/main/docs/USAGE.md).
+
+### Binary files returned by tools
+
+A tool can offer a bounded embedded MCP resource with a base64 `blob` and
+`_meta["openagent/file-delivery"] = {"filename": "..."}` on the content block.
+The model-facing capability catalog publishes those bytes through the host's
+`attachments.publisher` service under the current run and session authority.
+The model and the durable tool result receive a session artifact reference
+instead of binary data. The attachment service verifies the reference against
+the stored byte count, digest and authorized session. The existing completion
+check prompts for a missing delivery marker without repeating the file tool.
+Publication requires current tool and session authorization, honors
+protected-content rules, and is limited to 32 MiB per result. Hosts without
+the local CAS can verify delivery through the run-scoped
+`resolve_session_output` publisher contract.
 
 ## Engine-free SQLite import
 

@@ -118,15 +118,91 @@ class ToolSearchMediaTests(unittest.IsolatedAsyncioTestCase):
         context = ExecutionContext(user, user, user, "session", "agent", (user,))
         envelope = {"content": [{"type": "image", "data": base64.b64encode(b"pixels").decode()}]}
         with execution_scope(runtime, context, "run"):
-            with self.assertLogs("openagent_core.mcp.servers.tool_search.adapters", level="WARNING") as logs:
+            with self.assertLogs("openagent_core.artifacts", level="WARNING") as logs:
                 result = await _model_visible_result(envelope)
             self.assertNotIn("PRIVATE", str(logs.output))
             self.assertEqual(b"pixels", result.images[0].content)
             self.assertNotIn("[FILE:", result.content)
             allowed = False
-            with self.assertLogs("openagent_core.mcp.servers.tool_search.adapters", level="WARNING"):
+            with self.assertLogs("openagent_core.artifacts", level="WARNING"):
                 with self.assertRaises(PermissionError):
                     await _model_visible_result(envelope)
+
+    async def test_tool_file_is_copied_to_session_without_binary_in_results_or_history(self):
+        from openagent_core.artifacts import ArtifactRepository, is_native_output
+        from openagent_core.contracts import RunRequest
+        from openagent_core.engine import AgentExecutor, MemoryDB
+        from openagent_storage_sqlite import SqliteRuntimeStore
+
+        class Policy:
+            async def authorize(self, _context, _action, _resource, *, audience=()):
+                return True
+
+        policy = Policy()
+        content = bytes(range(256)) * (4096 * 3)
+        blob = base64.b64encode(content).decode()
+        envelope = {"content": [{"type": "resource",
+            "resource": {"uri": "urn:fixture:download", "blob": blob},
+            "_meta": {"openagent/file-delivery": {"filename": "fixture.zip"}}}]}
+        principal = PrincipalRef("fixture", "tenant", "alice")
+        context = ExecutionContext(principal, principal, principal, "session", "agent", (principal,))
+        async def read(_args, _context):
+            return envelope
+        catalog = CapabilityCatalog(policy)
+        source = FunctionSource((ToolDefinition("read_file", "Read fixture.", {"type": "object"}),),
+            {"read_file": read})
+        catalog.register("files", source, source, target_label="Fixture")
+        descriptor, = await catalog.discover(context)
+        with TemporaryDirectory() as root:
+            location = Path(root) / "state.sqlite"
+            db = MemoryDB(str(location))
+            await db.connect()
+            store = SqliteRuntimeStore(location)
+            await store.start()
+            try:
+                run = "file-run"
+                await store.accept(RunRequest(run, "session", "key", "send file"), context)
+                await store.transition(run, "running")
+                repository = ArtifactRepository(db, policy)
+                refs = []
+                async def publish(actor, data, **kwargs):
+                    self.assertEqual(data, content)
+                    ref = await repository.upload(actor, data, session_id="session", **kwargs)
+                    refs.append(ref)
+                    return ref
+                class Agent:
+                    memory_db = db
+
+                    async def run_stream(self, *_args, **_kwargs):
+                        result = await catalog.call_tool(descriptor.tool_ref, {}, context)
+                        ref, = refs
+                        self_test.assertTrue(is_native_output(run, ref["artifact_id"]))
+                        marker = f"[FILE:artifact:{ref['artifact_id']}]"
+                        self_test.assertIn(marker, result["content"][0]["text"])
+                        self_test.assertNotIn(blob, json.dumps(result))
+                        yield {"kind": "done", "text": "Requested file " + marker}
+
+                self_test = self
+                agent = Agent()
+                executor = AgentExecutor(agent)
+                runtime = SimpleNamespace(capabilities=catalog, authorize=policy.authorize,
+                    services=SimpleNamespace(authorizer=policy, store=store, executor=executor),
+                    service={"attachments.publisher": SimpleNamespace(publish_content=publish)}.get)
+                with execution_scope(runtime, context, run):
+                    await executor.execute(RunRequest(run, "session", "key", "send file"), context, runtime)
+                ref, = refs
+                events = await store.events(run, 0)
+                completed, = (event for event in events if event.kind == "tool.completed")
+                self.assertIn(ref["artifact_id"], json.dumps(completed.payload["result"]))
+                self.assertNotIn(blob, json.dumps(completed.payload))
+                final, = (event.payload for event in events if event.payload.get("kind") == "done")
+                self.assertEqual(final["attachments"][0]["artifact_id"], ref["artifact_id"])
+                fetched = await repository.read(context, artifact_id=ref["artifact_id"])
+                self.assertEqual(fetched.content, content)
+                self.assertEqual(fetched.filename, "fixture.zip")
+            finally:
+                await store.close()
+                await db.close()
 
     async def test_text_only_result_keeps_existing_contract(self):
         envelope = {"content": [{"type": "text", "text": "ok"}], "isError": False}

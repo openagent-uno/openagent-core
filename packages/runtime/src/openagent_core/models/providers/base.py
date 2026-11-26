@@ -1,6 +1,7 @@
 import asyncio
 import collections.abc
 import json
+from math import isfinite
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from hashlib import md5
@@ -29,6 +30,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
+from openagent_core.configuration import runtime_environment
 from openagent_core.core.runtime_errors import (
     AgentRunException,
     ContextWindowExceededError,
@@ -56,6 +58,17 @@ from openagent_core.mcp._runtime.function import (
 from openagent_core.core._runner.utils.log import log_debug, log_error, log_info, log_warning
 from openagent_core.core._runner.utils.timer import Timer
 from openagent_core.core._runner.utils.tools import get_function_call_for_tool_call, get_function_call_for_tool_execution
+
+
+def _provider_stream_idle_timeout() -> float | None:
+    default = 480.0
+    try:
+        seconds = float(runtime_environment().get("OPENAGENT_PROVIDER_STREAM_IDLE_TIMEOUT_S", default))
+    except (TypeError, ValueError):
+        return default
+    if not isfinite(seconds) or seconds < 0:
+        return default
+    return seconds or None
 
 
 def _tool_iterator_items(result, call_id):
@@ -411,9 +424,11 @@ class Model(ABC):
         with optional exponential backoff. Note that retries restart the entire stream.
         """
         last_exception: Optional[ModelProviderError] = None
+        idle_timeout = _provider_stream_idle_timeout()
 
         for attempt in range(self.retries + 1):
             emitted = False
+            timed_out = False
             try:
                 retries_with_guidance_count = kwargs.pop("retries_with_guidance_count", 0)
                 from openagent_core.provider_admission import provider_attempt, current_admission
@@ -421,9 +436,24 @@ class Model(ABC):
                     from openagent_core.read_convergence import decision_after_reads, require_final_text
                     request, final = await decision_after_reads(
                         kwargs, schema_transport=getattr(admitted, "_structured_tool_decisions", False))
-                    frames = admitted.ainvoke_stream(**request)
+                    frames = aiter(admitted.ainvoke_stream(**request))
                     try:
-                        async for response in frames:
+                        while True:
+                            # Bound only reads from the provider. Tool execution
+                            # and time spent consuming a yielded frame are outside.
+                            try:
+                                async with asyncio.timeout(idle_timeout) as idle:
+                                    response = await anext(frames)
+                            except StopAsyncIteration:
+                                break
+                            except TimeoutError:
+                                if not idle.expired():
+                                    raise
+                                timed_out = True
+                                raise ModelProviderError(
+                                    message="The model provider stream timed out waiting for output",
+                                    status_code=504, model_name=self.name, model_id=self.id,
+                                ) from None
                             require_final_text(response, final)
                             emitted = True
                             yield response
@@ -433,7 +463,7 @@ class Model(ABC):
                             await close()
                 return  # Success, exit the retry loop
             except ModelProviderError as e:
-                if emitted and current_admission() is not None:
+                if emitted and (timed_out or current_admission() is not None):
                     raise
                 last_exception = self.classify_error(e)
                 # Check if error is non-retryable

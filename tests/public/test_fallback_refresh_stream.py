@@ -1,6 +1,8 @@
 """A refreshed fallback list must not replace a provider error with a type error."""
+import asyncio
 from dataclasses import dataclass
 import unittest
+from unittest.mock import patch
 
 from openagent_core.core.runtime_errors import ModelProviderError
 from openagent_core.models.providers.openai.chat import OpenAIChat
@@ -30,6 +32,35 @@ class RefreshedFallbackStream(unittest.IsolatedAsyncioTestCase):
         from openagent_core.models.providers.fallback import reset_breaker
         reset_breaker()
         self.addCleanup(reset_breaker)
+
+    async def test_silent_provider_round_times_out_without_replaying_output(self):
+        model = OpenAIChat(id="fixture-idle", retries=2)
+        calls = 0
+        closed = False
+
+        async def provider(**kwargs):
+            nonlocal calls, closed
+            calls += 1
+            try:
+                yield ModelResponse(content="Initial output")
+                await asyncio.Event().wait()
+            finally:
+                closed = True
+
+        with patch.object(model, "ainvoke_stream", provider), patch(
+            "openagent_core.models.providers.base._provider_stream_idle_timeout", return_value=0.03,
+        ):
+            async with asyncio.timeout(1):
+                stream = model._ainvoke_stream_with_retry(messages=[])
+                first = await anext(stream)
+                await asyncio.sleep(0.06)
+                self.assertFalse(closed)
+                with self.assertRaises(ModelProviderError) as raised:
+                    await anext(stream)
+        self.assertEqual(first.content, "Initial output")
+        self.assertEqual(raised.exception.status_code, 504)
+        self.assertTrue(closed)
+        self.assertEqual(calls, 1)
 
     async def test_automatic_chain_skips_ineligible_and_recovers_unsupported_model(self):
         primary = ScriptedModel(failure=ModelProviderError(
