@@ -1,14 +1,39 @@
 """Explicit OpenAI STT route: real HTTP, no vendor import or external API."""
-import builtins
+import asyncio
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
 
 from openagent_core import audio_worker
+
+
+GUARDED_TRANSCRIPTION = """
+import asyncio, json, sys
+
+sys.path.insert(0, sys.argv[1])
+blocked = []
+
+def is_vendor(name):
+    return name == "litellm" or name.startswith("litellm.") or name.endswith("voice.voice")
+
+class ImportGuard:
+    def find_spec(self, fullname, path=None, target=None):
+        if is_vendor(fullname):
+            blocked.append(fullname)
+            raise AssertionError(f"Transcription attempted to import {fullname}")
+
+sys.meta_path.insert(0, ImportGuard())
+from openagent_core import audio_worker
+
+result = asyncio.run(audio_worker.execute(json.load(sys.stdin)))
+assert not blocked and not any(map(is_vendor, sys.modules)), blocked
+print(json.dumps(result))
+"""
 
 
 class OpenAITranscriptionRoute(unittest.IsolatedAsyncioTestCase):
@@ -16,6 +41,7 @@ class OpenAITranscriptionRoute(unittest.IsolatedAsyncioTestCase):
         self.requests = []
         self.status, self.body = 200, json.dumps({"text": " the current question "}).encode()
         self.encoding = None
+        self.during_request = None
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -25,6 +51,8 @@ class OpenAITranscriptionRoute(unittest.IsolatedAsyncioTestCase):
             def do_POST(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 owner.requests.append((self.path, self.headers.get("Authorization"), body))
+                if owner.during_request:
+                    owner.during_request()
                 self.send_response(owner.status)
                 self.send_header("Content-Length", str(len(owner.body)))
                 if owner.encoding:
@@ -54,15 +82,26 @@ class OpenAITranscriptionRoute(unittest.IsolatedAsyncioTestCase):
                                            "path": str(self.path), **kwargs})
 
     async def test_explicit_route_does_not_import_vendor_aggregator_and_preserves_fields(self):
-        original = builtins.__import__
+        # This import runs in the fixture's HTTP thread while the worker is
+        # transcribing. Its missing module must keep the runner's usual error.
+        diagnostic_errors = []
 
-        def guarded(name, *args, **kwargs):
-            if name == "litellm" or name.startswith("litellm.") or name.endswith("voice.voice"):
-                raise AssertionError("The OpenAI route must not load the vendor aggregator")
-            return original(name, *args, **kwargs)
+        def concurrent_diagnostic():
+            try:
+                __import__("qualification_fixture.voice.voice")
+            except Exception as error:
+                diagnostic_errors.append(type(error))
 
-        with patch("builtins.__import__", guarded):
-            self.assertEqual({"text": "the current question"}, await self.invoke(language="en"))
+        self.during_request = concurrent_diagnostic
+        request = {"operation": "transcribe", "row": self.row, "path": str(self.path), "language": "en"}
+        worker = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, "-I", "-c", GUARDED_TRANSCRIPTION, str(Path(audio_worker.__file__).resolve().parents[1])],
+            input=json.dumps(request), capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(0, worker.returncode, worker.stderr)
+        self.assertEqual({"text": "the current question"}, json.loads(worker.stdout))
+        self.assertEqual([ModuleNotFoundError], diagnostic_errors)
         self.assertEqual(1, len(self.requests))
         path, auth, body = self.requests[0]
         self.assertEqual("/v1/audio/transcriptions", path)
