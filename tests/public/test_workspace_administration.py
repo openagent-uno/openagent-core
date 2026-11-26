@@ -29,6 +29,32 @@ class WorkspaceAdministration(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.store.close();await self.db.close();self.tmp.cleanup()
 
+    async def test_session_inspection_forwards_current_recipients_to_the_host(self):
+        recipient = self.alice
+
+        class RecipientPolicy:
+            async def authorize(self, context, action, resource, *, audience=()):
+                expected = (recipient,) if isinstance(context, ExecutionContext) else ()
+                return context.authority == recipient and audience == expected
+
+        policy = RecipientPolicy()
+        inspection = SessionInspection(self.db, policy)
+        await self.store.accept(RunRequest("visible-run", "parent", "inspect-1", "Hello"), self.ctx)
+
+        for context in (self.ctx, self.management):
+            with self.subTest(context=type(context).__name__):
+                row = await inspection.authorize(context, "parent")
+                self.assertEqual(row["id"], "parent")
+                sessions = await inspection.list(context)
+                self.assertEqual(len(sessions["sessions"]), 1)
+
+        peer = PrincipalRef("host", "tenant", "another-member", "user")
+        widened = replace(self.ctx, audience=(recipient, peer))
+        with self.assertRaises(PermissionError):
+            await inspection.authorize(widened, "parent")
+        with self.assertRaises(PermissionError):
+            await inspection.list(widened)
+
     async def test_participants_cover_history_outside_loaded_transcript_and_exact_session(self):
         for number in range(105):
             author = self.alice if number else PrincipalRef("host", "tenant", "early-participant", "user")
