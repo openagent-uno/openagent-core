@@ -1,5 +1,7 @@
 # OpenAgent core documentation
 
+[Embedding beta 178](releases/v1.1.0-beta.178.md) covers delegated replies with inherited document history and cancellation of starting automations.
+
 [Embedding beta 177](releases/v1.1.0-beta.177.md) covers file names and attachments in saved runtime conversations.
 
 [Embedding beta 176](releases/v1.1.0-beta.176.md) covers the return of original attachments in document-aware conversations.
