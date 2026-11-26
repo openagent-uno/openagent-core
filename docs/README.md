@@ -1,5 +1,7 @@
 # OpenAgent core documentation
 
+[Embedding beta 182](releases/v1.1.0-beta.182.md) covers recovery of slow local MCP sources.
+
 [Embedding beta 181](releases/v1.1.0-beta.181.md) clarifies structured tool decisions and literal final answers.
 
 [Embedding beta 180](releases/v1.1.0-beta.180.md) covers on-demand loading of the LiteLLM speech SDK and streaming speech synthesis.

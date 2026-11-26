@@ -15,6 +15,8 @@ for line in sys.stdin:
         continue
     method = request["method"]
     if method == "initialize":
+        if len(sys.argv) > 2:
+            time.sleep(float(sys.argv[2]))
         while not (directory / "ready").exists():
             time.sleep(0.01)
         result = {
