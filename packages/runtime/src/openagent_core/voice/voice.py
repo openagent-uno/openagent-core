@@ -32,11 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from openagent_core.core.logging import elog
-
-try:
-    import litellm as _litellm
-except ImportError:  # pragma: no cover — optional at install time
-    _litellm = None
+from openagent_core.voice import _load_litellm
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +263,8 @@ async def _transcribe_via_litellm(
     user-supplied override (Settings → Voice or env) takes effect even
     when the row carries a default.
     """
-    if _litellm is None:
+    litellm = await _load_litellm()
+    if litellm is None:
         logger.warning("litellm not installed — DB-configured STT unavailable")
         return None
     vendor = str(row.get("provider_name") or "").strip().lower()
@@ -279,7 +276,7 @@ async def _transcribe_via_litellm(
     try:
         with open(file_path, "rb") as f:
             options = {"max_retries": max_retries} if max_retries is not None else {}
-            resp = await _litellm.atranscription(
+            resp = await litellm.atranscription(
                 model=f"{vendor}/{model_id}",
                 file=f,
                 api_key=row.get("api_key") or None,

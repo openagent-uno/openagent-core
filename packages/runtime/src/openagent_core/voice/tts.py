@@ -27,13 +27,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
-from openagent_core.voice import tts_local
+from openagent_core.voice import _load_litellm, tts_local
 from openagent_core.core.logging import elog
-
-try:
-    import litellm as _litellm
-except ImportError:  # pragma: no cover — optional at install time
-    _litellm = None
 
 logger = logging.getLogger(__name__)
 
@@ -330,10 +325,11 @@ async def synthesize_stream(
             yield wav_bytes
         return
 
-    if _litellm is None:
+    litellm = await _load_litellm()
+    if litellm is None:
         return
     elog("tts.stream.start", vendor=cfg.vendor, model=cfg.model_id, chars=len(text))
-    response = await _safe_aspeech(text, cfg, timeout)
+    response = await _safe_aspeech(litellm, text, cfg, timeout)
     if response is None:
         return
     try:
@@ -386,9 +382,10 @@ async def synthesize_full(
         return await tts_local.synthesize(
             text, voice=voice_arg, language=language,
         )
-    if _litellm is None:
+    litellm = await _load_litellm()
+    if litellm is None:
         return None
-    response = await _safe_aspeech(text, cfg, timeout, strict=strict, max_retries=max_retries)
+    response = await _safe_aspeech(litellm, text, cfg, timeout, strict=strict, max_retries=max_retries)
     if response is None:
         return None
     try:
@@ -405,10 +402,10 @@ async def synthesize_full(
             pass
 
 
-async def _safe_aspeech(text: str, cfg: TTSConfig, timeout: float, *, strict=False, max_retries=None):
+async def _safe_aspeech(litellm, text: str, cfg: TTSConfig, timeout: float, *, strict=False, max_retries=None):
     try:
         options = {"max_retries": max_retries} if max_retries is not None else {}
-        return await _litellm.aspeech(timeout=timeout, **options, **_build_kwargs(text, cfg))
+        return await litellm.aspeech(timeout=timeout, **options, **_build_kwargs(text, cfg))
     except Exception as e:  # noqa: BLE001 — soft fail, caller falls through
         if strict:
             raise

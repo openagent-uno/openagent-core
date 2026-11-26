@@ -1,6 +1,8 @@
 <!-- Concrete host labels in this historical record are anonymized; original bytes and hashes are retained in the protected operator audit. -->
 # Explicit host audio
 
+Opening a text stream leaves the optional LiteLLM speech SDK unloaded. The cloud speech adapters import it on a worker thread when they first transcribe or synthesize audio.
+
 `openagent_core.audio.VoiceService(db, fallback=None, worker_command=None, timeout_seconds=120)` resolves the latest enabled audio model using the existing provider/model IDs and metadata. `transcribe(path, language=None)` returns text or `None`; `synthesize(text, language=None)` returns `SynthesizedAudio(data, media_type)` or `None`.
 
 Cloud audio uses the optional `audio` extra. Each invocation starts `python -I -m openagent_core.audio_worker`, passing only the operation, configured provider row and input over stdin. The worker gets an explicit minimum environment and temporary HOME, so LiteLLM's SDK globals, credential fallbacks and proxy environment cannot cross host instances. Keys never appear in arguments. The worker reserves a non-inheritable protocol descriptor, permanently routes ordinary stdout/stderr to the null device, and emits one bounded JSON result through that private descriptor. This isolation remains active through vendor background threads, cached logging handlers and interpreter/atexit shutdown; it does not end when the awaited provider call returns. The parent discards stderr. Cancellation and timeout terminate, then kill if necessary, and await the owned worker. No worker starts at import or on runtime startup.
