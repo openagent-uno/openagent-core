@@ -2,7 +2,7 @@
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from ..contracts import ResourceRef, require_authorized
 
@@ -51,7 +51,24 @@ def note_sources(scope):
     return tuple((path, revision) for _, _, _, path, revision in turn.seen)
 
 
-async def _verify(vault, runtime, context, tokens):
+def _inherited_run_id(runtime, context, source_run_id):
+    turn = _active.get()
+    if (turn is None or turn.runtime is not runtime or not context.parent_run_id
+            or context.author.kind != "agent" or context.deferred or context.delegation_id):
+        return None
+    if turn.context == context:
+        return turn.run_id
+    # spawn() waits in its parent's task, using the exact admitted child
+    # identity. Only that direct parent may consume this child's result.
+    if source_run_id and turn.run_id == context.parent_run_id:
+        expected = turn.context.child(session_id=context.session_id, run_id=turn.run_id,
+                                      agent=context.author)
+        if expected == context:
+            return source_run_id
+    return None
+
+
+async def _verify(vault, runtime, context, tokens, *, source_run_id=None):
     if not tokens:
         return ()
     from .vault.documents import SqlDocumentVault
@@ -63,19 +80,39 @@ async def _verify(vault, runtime, context, tokens):
     ):
         raise PermissionError("Document history authorization is unavailable")
     space = await vault.resolve_space(context)
+    viewer = context
+    inherited_run = _inherited_run_id(runtime, context, source_run_id)
+    if inherited_run is not None:
+        from ..memory_access import InheritedDocumentHistory
+
+        history = runtime.service(InheritedDocumentHistory)
+        if history is not None:
+            session = await history.approved_session(context, inherited_run, frozenset(tokens))
+            if session is not None:
+                if not isinstance(session, str) or not session or session == context.session_id:
+                    raise PermissionError("Inherited revisions require an originating session")
+                # Rebuild the originating reader with this turn's identity and
+                # audience. Checking receipts does not require any tool lease.
+                viewer = replace(context, session_id=session, author=context.initiator,
+                                 parent_run_id=None, capabilities=())
+                if await vault.resolve_space(viewer) != space:
+                    raise PermissionError("Inherited revisions belong to a different vault")
     scope = {"tenant": context.tenant_id, "agent": context.agent_id, "space": space}
     target = ResourceRef("vault-space", context.tenant_id, space)
     for action, audience in (
         ("memory.read", (context.initiator,)),
         ("memory.publish", context.audience),
     ):
-        await runtime.authorize(context, action, target, audience=audience)
+        await runtime.authorize(viewer, action, target, audience=audience)
         await require_authorized(
-            vault.authorizer, context, action, target, audience=audience
+            vault.authorizer, viewer, action, target, audience=audience
         )
     rows = await vault.resolve_note_receipts(scope, tokens)
-    if len(rows) != len(tokens) or await vault.resolve_space(context) != space:
+    if (len(rows) != len(tokens) or await vault.resolve_space(context) != space
+            or (viewer is not context and await vault.resolve_space(viewer) != space)):
         raise PermissionError("A source note revision is no longer available")
+    if viewer is not context and await history.approved_session(context, inherited_run, frozenset(tokens)) != session:
+        raise PermissionError("The originating session is no longer authorized")
     return tuple(
         (context.tenant_id, context.agent_id, space, path, revision)
         for path, revision in rows
@@ -163,7 +200,7 @@ async def authorize_document_history(runtime, viewer, *, run_id=None, session_id
     for ident in protected:
         accepted = await runtime.services.store.accepted_request(ident)
         await authorize_source_audience(runtime, accepted, viewer)
-    await _verify(vault, runtime, viewer, tokens)
+    await _verify(vault, runtime, viewer, tokens, source_run_id=run_id)
     turn = _active.get()
     if turn is not None and turn.runtime is runtime:
         await _inherit(vault, turn, tokens)

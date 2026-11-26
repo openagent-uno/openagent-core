@@ -330,6 +330,64 @@ class DocumentRunLineageTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PermissionError):
             await self.rt.accepted_request(self.reader.child_id, self.user)
 
+    async def test_child_rechecks_only_admitted_revisions_through_its_parent(self):
+        from types import SimpleNamespace
+        from openagent_core import PrincipalRef
+        from openagent_core.memory_access import InheritedDocumentHistory
+        from openagent_core.memory.document_exposure import authorize_document_history
+        from openagent_core.runtime import check_current_publication, execution_scope
+
+        source = await self.turn(self.user, "read")
+        store = self.rt.services.store
+        parent = RunRequest(uuid4().hex, self.user.session_id, "parent-key", "Delegate")
+        await store.accept(parent, self.user)
+        await store.transition(parent.run_id, "running")
+        await store.bind_document_sources(
+            self.user, parent.run_id, await store.document_sources(self.user, run_id=source.run_id)
+        )
+        actor = PrincipalRef(self.user.authority.authority, self.user.tenant_id, "worker", "agent")
+        child = self.user.child(session_id="worker-chat", run_id=parent.run_id, agent=actor)
+        request = RunRequest(uuid4().hex, child.session_id, "child-key", "Continue")
+        await store.accept(request, child)
+        await store.transition(request.run_id, "running")
+        receipts = frozenset(await store.document_sources(child, run_id=request.run_id))
+        self.assertTrue(receipts)
+        original_policy = self.policy.authorize
+        active = True
+
+        async def policy(ctx, action, resource, *, audience=()):
+            if action == "memory.read" and ctx.session_id == child.session_id:
+                return False
+            return await original_policy(ctx, action, resource, audience=audience)
+
+        async def approved(ctx, run_id, revisions):
+            self.assertEqual((ctx, run_id, revisions), (child, request.run_id, receipts))
+            return self.user.session_id if active else None
+
+        with patch.object(self.policy, "authorize", policy):
+            with execution_scope(self.rt, child, request.run_id), self.assertRaises(PermissionError):
+                await authorize_document_history(self.rt, child, run_id=request.run_id)
+            self.rt.services.registry.bind(InheritedDocumentHistory, SimpleNamespace(approved_session=approved))
+            with execution_scope(self.rt, child, request.run_id):
+                await authorize_document_history(self.rt, child, run_id=request.run_id)
+                with self.assertRaises(PermissionError):
+                    await self.vault.read(child, "source.md")
+                await check_current_publication()
+                active = False
+                with self.assertRaises(PermissionError):
+                    await check_current_publication()
+            active = True
+            with execution_scope(self.rt, self.user, parent.run_id):
+                await authorize_document_history(self.rt, child, run_id=request.run_id)
+                await check_current_publication()
+            with execution_scope(self.rt, self.user, source.run_id), self.assertRaises(PermissionError):
+                await authorize_document_history(self.rt, child, run_id=request.run_id)
+            with self.assertRaises(PermissionError):
+                await authorize_document_history(self.rt, child, run_id=request.run_id)
+            await self.vault.forget(self.user, "source.md", expected_revision=1)
+            with execution_scope(self.rt, child, request.run_id), self.assertRaises(PermissionError):
+                await authorize_document_history(self.rt, child, run_id=request.run_id)
+
 
 @unittest.skipUnless(
     os.environ.get("OPENAGENT_TEST_POSTGRES_DSN"), "requires PostgreSQL"

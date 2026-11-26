@@ -12,6 +12,19 @@ class DocumentRecallQuery(Protocol):
         ...
 
 
+class InheritedDocumentHistory(Protocol):
+    async def approved_session(self, context: ExecutionContext, run_id: str,
+                               revisions: frozenset[str]) -> str | None:
+        """Return the live originating session for these exact inherited receipts.
+
+        The host must verify the admitted child, its ancestry and its current
+        route. This port revalidates immutable revisions during execution
+        and when the waiting parent receives the child's result. It cannot
+        authorize opening the vault.
+        """
+        ...
+
+
 class MemoryAccess(Protocol):
     async def search_history(self, context: ExecutionContext, *, query: str, scopes,
                              limit: int, offset: int, session_id: str | None) -> Mapping[str, Any]: ...

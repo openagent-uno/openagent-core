@@ -56,6 +56,15 @@ For a separate management identity, pass an async context manager as
 yields an execution context for that actor, agent and session with its authorized
 audience. The inspection revalidates the underlying protected revisions.
 
+An embedding that delegates work from a private conversation can register
+`InheritedDocumentHistory` from `openagent_core.memory_access`. Its
+`approved_session(context, run_id, revisions)` method checks the child's
+admission, the original recipients, the live route and the exact immutable
+revisions inherited from the parent. It returns the verified originating
+session ID, or `None` for the child's usual policy. Core rechecks access to
+those revisions during execution, when the waiting parent receives the result,
+and at publication. Opening a note still uses the child's own permissions.
+
 The editor can request `notes` with `limit` and the returned `next_cursor` as
 `after`. Each page contains path, revision, title, tags, type, UTF-8 byte size
 and the recorded edit timestamp in seconds. An unknown source date is null.
