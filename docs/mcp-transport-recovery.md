@@ -31,6 +31,8 @@ connection-establishment timeout beyond 30 seconds.
 - `mcp.session_reconnect_failed`: the replacement handshake failed.
 - `mcp.session_reconnect_skipped`: a reconnect was refused or already completed,
   with a `why` field; an unexpectedly exited registered supervisor is replaced.
+- `mcp.startup_retry` records the source name, attempt number (1 to 3) and
+  requested handshake timeout in `seconds`.
 
 `tests/public/test_mcp_transport_crash_reconnect.py` exercises a real local
 FastMCP HTTP server with injected 502s, outages, handshake failure and slow
@@ -50,13 +52,14 @@ entirely green suite and does not certify installed packages.
 A configured stdio or streamable HTTP source can fail before it has a
 toolkit or a supervisor. After a timeout, connection loss, or transient
 HTTP response (408, 500, 502, 503 or 504), the pool keeps that source and
-starts up to three fresh handshakes in the background. Each uses the normal
-30-second deadline except when a stdio subprocess timed out during its
-handshake. Relaunching starts that subprocess from scratch, so those
-three background attempts allow 60, 120 and 240 seconds respectively.
-An established session first reconnects within the ordinary deadline. If it
-times out, the same supervisor can finish a longer background handshake.
-Other callers share that attempt and keep their ordinary wait limit.
+starts up to three fresh handshakes in the background. The initial connection
+and the first reconnect have a 30-second handshake deadline. HTTP keeps this
+deadline on every retry. A stdio subprocess must initialize from scratch on
+each relaunch. When a background retry starts a new handshake after a stdio
+timeout, its deadline is 60, 120 or 240 seconds on the first, second or third
+retry respectively. Other retryable stdio failures use the ordinary deadline.
+Callers joining a supervised reconnect can reach their own wait limit while
+the shared handshake continues.
 Tool calls retain their own read timeouts. The first retry waits five
 seconds by default and the next two wait twice and four times that interval. Set
 `OPENAGENT_MCP_STARTUP_RETRY_SECONDS` in the runtime environment to change
@@ -78,14 +81,15 @@ publish status. The predicate returns a boolean and is called after both
 decisions. Hosts using tool-level grants can withhold status when no eligible
 descriptor or source-wide grant proves that the audience may know the name.
 
-Authorized source listing and exact tool searches then report
-`status: "temporarily_unavailable"` and zero tools. The model's capability
-map shows the same state. The pending registration issues no callable
-reference or schema. To a caller without status visibility, exact discovery
-has the same result as an unknown source. Startup configuration failures
-such as missing executables, TLS or authorization errors retain their
-operator diagnostics. An established session whose reconnect fails can
-enter the same bounded cycle. Reconnection performs a handshake and reads
+The model broker's source listing and tool searches for that exact source
+then report `status: "temporarily_unavailable"` and zero tools. The model's
+capability map shows the same state. `CapabilityCatalog.discover()` returns
+only tool descriptors, so a pending source has no entry in inventories built
+from it. The pending registration issues no callable reference or schema. To a
+caller without status visibility, exact discovery has the same result as an
+unknown source. Missing executables, TLS failures and authorization errors
+retain their operator diagnostics. An established session whose reconnect fails
+can enter the same bounded cycle. Reconnection performs a handshake and reads
 the new catalog. The caller must select a current reference before acting.
 
 ## Previously discovered references
