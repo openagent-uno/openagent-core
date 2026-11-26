@@ -119,22 +119,23 @@ These are deterministic storage/tool tests, not real-model or live-channel QA.
 The async SQLite helper
 `openagent_core.memory.transcript_layout.transcript_segments` accepts a database
 connection, the viewer's `AccessContext`, a session ID and the already-authorized
-public rows of one page. It returns optional display segments keyed by those
-message IDs. A tool row's segment precedes its card. The terminal assistant row
+public rows of one page, up to 256 rows. It returns optional display segments
+keyed by those message IDs. A tool row's segment precedes its card. The terminal assistant row
 gets the remaining suffix, which can be empty. A missing key uses the ordinary
 message presentation. Keep the original row IDs and content for navigation,
 pagination and actions that operate on the complete message.
 
-The helper verifies the order of the visible tools and the complete successful
-run journal against the current canonical public text. It can compute a segment
-for a tool on an earlier page without returning the rest of the reply. Display
+The helper verifies the visible tool order, text deltas and final frame of a
+successful run against the current canonical public text. It can compute a
+segment for a tool on an earlier page without returning the rest of the reply. Display
 segments are slices of the canonical answer. Attachments and inline Views come
 from the canonical parts reader with its current access checks. A rich part at
 a text boundary belongs to the following segment. Text-only native rows
 without ordered parts are eligible when their public projection is identical
 and there are no rich links. Legacy, revised, incomplete, inaccessible and
-oversized turns keep their usual presentation. Lookups are bounded by page and
-run, and never load tool inputs or results into the response.
+oversized turns keep their usual presentation. The same run has the same layout
+on every page. Bounds apply to each run independently and diagnostics do not
+count toward its journal limit. Tool inputs and results stay out of the segments.
 
 
 ## Optional summary latency

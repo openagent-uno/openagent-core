@@ -33,28 +33,40 @@ class TranscriptLayout(unittest.IsolatedAsyncioTestCase):
             frozenset({principal}), frozenset({("user", principal)}),
         )
 
-    async def turn(self, *, suffix="", done=True, finish_tools=True, extra_delta="", final_text=None):
+    async def turn(self, *, run_id="run", suffix="", done=True, extra_delta="", final_text=None,
+                   small_deltas=0):
         context = ExecutionContext(self.principal, self.principal, self.principal,
                                    "session", "agent", (self.principal,))
-        await self.store.accept(RunRequest("run", "session", "key", "Prompt"), context)
-        await self.store.transition("run", "running")
+        await self.store.accept(RunRequest(run_id, "session", run_id, "Prompt"), context)
+        await self.store.transition(run_id, "running")
         for call, chunk in (("first", "Prima 🧑🏽‍💻\n"), ("second", "Dopo à")):
-            await self.store.append_event("run", "run.stream", {"kind": "delta", "text": chunk})
+            await self.store.append_event(run_id, "run.stream", {"kind": "delta", "text": chunk})
             await self.store.begin_tool(
-                "run", call, {"source_id": "example", "name": "read"}, {"private_input": "hidden"},
+                run_id, call, {"source_id": "example", "name": "read"}, {"private_input": "hidden"},
             )
         for call in ("second", "first"):
-            if finish_tools:
-                await self.store.finish_tool("run", call, result={"private_result": "hidden"})
+            await self.store.finish_tool(run_id, call, result={"private_result": "hidden"})
+        if small_deltas:
+            db = self.store.connection
+            db.execute("BEGIN IMMEDIATE")
+            db.executemany(
+                "INSERT INTO domain_events(event_id,tenant_id,resource_type,resource_id,session_id,run_id,"
+                "event_type,occurred_at_ms,schema_version,metadata_json,sensitivity) "
+                "VALUES(?, 'tenant', 'run', ?, 'session', ?, 'run.stream', 1, 1, ?, ?)",
+                [(f"{run_id}-test-delta-{index}", run_id, run_id, '{"kind":"delta","text":"x"}', "normal")
+                 for index in range(small_deltas)]
+                + [(f"{run_id}-status", run_id, run_id, '{"kind":"status","text":"hidden"}', "secret")],
+            )
+            db.commit()
         if suffix or extra_delta:
-            await self.store.append_event("run", "run.stream", {"kind": "delta", "text": suffix + extra_delta})
-        full_text = "Prima 🧑🏽‍💻\nDopo à" + suffix
+            await self.store.append_event(run_id, "run.stream", {"kind": "delta", "text": suffix + extra_delta})
+        full_text = "Prima 🧑🏽‍💻\nDopo à" + "x" * small_deltas + suffix
         if done:
-            await self.store.append_event("run", "run.stream", {"kind": "done", "text": full_text})
-        await self.store.transition("run", "success", output=final_text if final_text is not None else full_text)
+            await self.store.append_event(run_id, "run.stream", {"kind": "done", "text": full_text})
+        await self.store.transition(run_id, "success", output=final_text if final_text is not None else full_text)
         return [
             dict(row) for row in self.store.connection.execute(
-                "SELECT id, run_id, role FROM session_messages ORDER BY sequence"
+                "SELECT id, run_id, role FROM session_messages WHERE run_id=? ORDER BY sequence", (run_id,),
             )
         ]
 
@@ -109,10 +121,19 @@ class TranscriptLayout(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(await self.layout([second]), {})
 
-    async def test_rejects_removed_terminal_tool_event(self):
-        page = await self.turn(finish_tools=False)
-        self.store.connection.execute("UPDATE session_messages SET status='complete' WHERE role='tool'")
-        self.assertEqual(await self.layout(page), {})
+    async def test_long_delta_stream_ignores_sensitive_diagnostics(self):
+        page = await self.turn(small_deltas=4250)
+        layout = await self.layout(page)
+        self.assertEqual(len(layout), 3)
+        self.assertEqual(layout[page[-1]["id"]]["text"], "x" * 4250)
+        self.assertNotIn("hidden", json.dumps(layout))
+
+    async def test_large_neighbor_turns_do_not_change_an_eligible_turn(self):
+        pages = [await self.turn(run_id=f"run-{index}", suffix="x" * 500_000) for index in range(5)]
+        solo = await self.layout(pages[-1])
+        joined = await self.layout([row for page in pages for row in page])
+        self.assertEqual(len(joined), 15)
+        self.assertEqual({key: joined[key] for key in solo}, solo)
 
     async def test_rejects_foreign_or_revoked_session_access_even_for_tool_only_page(self):
         _, first, _, _ = await self.turn()

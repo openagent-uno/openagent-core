@@ -15,12 +15,8 @@ from openagent_core.stream.content_parts import parse_response_content
 
 _MAX_PAGE_MESSAGES = 256
 _MAX_TURN_MESSAGES = 512
-_MAX_PAGE_TURN_ROWS = 4096
-_MAX_PAGE_PARTS = 2048
-_MAX_TURN_EVENTS = 4096
-_MAX_PAGE_EVENTS = 12288
+_MAX_TURN_EVENTS = 16384
 _MAX_TURN_TEXT_BYTES = 512 * 1024
-_MAX_PAGE_TEXT_BYTES = 2 * 1024 * 1024
 
 
 class TranscriptSegment(TypedDict):
@@ -84,64 +80,33 @@ async def transcript_segments(
             )
         ).fetchall()
     }
-    turns: dict[str, Sequence[Any]] = {}
-    remaining_text = _MAX_PAGE_TEXT_BYTES
-    remaining_rows = _MAX_PAGE_TURN_ROWS
-    remaining_parts = _MAX_PAGE_PARTS
-    for run in runs:
-        if remaining_rows < 2:
-            break
-        limit = min(remaining_rows, _MAX_TURN_MESSAGES)
-        rows = await _turn_messages(
-            conn, access.tenant_id, session_id, run["id"], tables, limit,
-        )
-        remaining_rows -= len(rows)
-        if len(rows) > limit or not _can_layout(rows):
-            continue
-        answer = rows[-1]
-        size = max(answer["text_bytes"], answer["part_bytes"])
-        if size > remaining_text or answer["part_count"] > remaining_parts:
-            continue
-        remaining_text -= size
-        remaining_parts -= answer["part_count"]
-        turns[run["id"]] = rows
-
-    parts_by_id = await canonical_parts_for_messages_on_connection(
-        conn,
-        [rows[-1]["id"] for rows in turns.values() if rows[-1]["part_count"]],
-        access=access if "ui_views" in tables else None,
-    )
     result: dict[str, TranscriptSegment] = {}
-    remaining_events = _MAX_PAGE_EVENTS
-    for run_id, rows in turns.items():
-        if remaining_events <= 0:
-            break
+    for run in runs:
+        run_id = run["id"]
+        rows = await _turn_messages(conn, access.tenant_id, session_id, run_id, tables)
+        if not _can_layout(rows):
+            continue
         answer = rows[-1]
-        parts = parts_by_id.get(answer["id"], [])
-        canonical_text = _attestable_text(answer, parts)
-        if canonical_text is None:
+        public_text = parse_response_content(answer["text"], allow_inline_ui=True).text
+        if not answer["part_count"] and (public_text != answer["text"] or answer["has_rich_links"]):
             continue
-        if not answer["part_count"] and canonical_text:
-            parts = [{"kind": "text", "text": canonical_text}]
-        anchors = {row["id"]: row["role"] for row in rows}
-        if not any(anchors.get(key) == role for key, role in page[run_id].items()):
-            continue
-        cuts, spent = await _attest_journal(
-            conn, access.tenant_id, session_id, run_id, rows, canonical_text,
-            min(remaining_events, _MAX_TURN_EVENTS),
+        cuts = await _attest_journal(
+            conn, access.tenant_id, session_id, run_id,
+            [row["tool_call_id"] for row in rows[:-1]], public_text,
         )
-        remaining_events -= spent
         if cuts is None:
             continue
-        segments = _split_parts(parts, [*cuts, len(canonical_text)])
-        for row, segment in zip(rows, segments, strict=True):
+        parts = await _visible_parts(conn, access, answer, public_text, has_views="ui_views" in tables)
+        if parts is None:
+            continue
+        for row, segment in zip(rows, _split_parts(parts, [*cuts, len(public_text)]), strict=True):
             if page[run_id].get(row["id"]) == row["role"]:
                 result[row["id"]] = segment
     return result
 
 
 async def _turn_messages(
-    conn: Any, tenant_id: str, session_id: str, run_id: str, tables: set[str], limit: int
+    conn: Any, tenant_id: str, session_id: str, run_id: str, tables: set[str],
 ) -> Sequence[Any]:
     # The tool result lives in m.text too. Select text only from the assistant
     # row and do not load invocation arguments, results or provider envelopes.
@@ -163,7 +128,6 @@ async def _turn_messages(
             "SELECT m.id, m.role, m.sequence, m.status, m.visibility, m.tool_call_id, "
             "m.legacy_inferred, m.source_version, "
             "CASE WHEN m.role='assistant' AND length(CAST(m.text AS BLOB))<=? THEN m.text END AS text, "
-            "CASE WHEN m.role='assistant' THEN length(CAST(m.text AS BLOB)) END AS text_bytes, "
             "CASE WHEN m.role='assistant' THEN json_extract(m.raw_envelope_json,'$.privacy_redacted') END AS redacted, "
             f"CASE WHEN m.role='assistant' THEN {part_count} END AS part_count, "
             f"CASE WHEN m.role='assistant' THEN {part_bytes} END AS part_bytes, "
@@ -173,7 +137,7 @@ async def _turn_messages(
             "FROM session_messages m "
             "WHERE m.run_id=? AND m.tenant_id=? AND m.session_id=? AND m.role IN ('assistant','tool') "
             "ORDER BY m.ordinal LIMIT ?",
-            (_MAX_TURN_TEXT_BYTES, run_id, tenant_id, session_id, limit + 1),
+            (_MAX_TURN_TEXT_BYTES, run_id, tenant_id, session_id, _MAX_TURN_MESSAGES + 1),
         )
     ).fetchall()
 
@@ -201,17 +165,19 @@ def _can_layout(rows: Sequence[Any]) -> bool:
     )
 
 
-def _attestable_text(answer: Any, parts: Sequence[Mapping[str, Any]]) -> str | None:
-    raw = answer["text"]
-    public_text = parse_response_content(raw, allow_inline_ui=True).text
-    if answer["part_count"]:
-        # Missing rich parts were filtered by their current ACL. Do not move
-        # any surviving parts from this assistant row in that case.
-        if len(parts) != answer["part_count"]:
-            return None
-        text = "".join(part["text"] for part in parts if part["kind"] == "text")
-        return text if text == public_text else None
-    return public_text if raw == public_text and not answer["has_rich_links"] else None
+async def _visible_parts(
+    conn: Any, access: AccessContext, answer: Any, text: str, *, has_views: bool,
+) -> list[dict[str, Any]] | None:
+    if not answer["part_count"]:
+        return [{"kind": "text", "text": text}] if text else []
+    hydrated = await canonical_parts_for_messages_on_connection(
+        conn, [answer["id"]], access=access if has_views else None,
+    )
+    parts = hydrated.get(answer["id"], [])
+    # A rich part omitted by current access checks makes the layout ambiguous.
+    if len(parts) != answer["part_count"]:
+        return None
+    return parts if "".join(part["text"] for part in parts if part["kind"] == "text") == text else None
 
 
 async def _attest_journal(
@@ -219,12 +185,11 @@ async def _attest_journal(
     tenant_id: str,
     session_id: str,
     run_id: str,
-    rows: Sequence[Any],
+    tool_ids: Sequence[str],
     text: str,
-    limit: int,
-) -> tuple[list[int] | None, int]:
-    # The ordered, bounded run index supplies all events, including unknown
-    # markers. A SQL projection keeps unrelated journal data out of Python.
+) -> list[int] | None:
+    # Only public deltas, the terminal frame and durable tool intent can
+    # establish a boundary. Ignore diagnostics and unrelated lifecycle events.
     query = """
         SELECT event_type, sensitivity, json_extract(metadata_json,'$.privacy_redacted') AS redacted,
                CASE WHEN event_type='run.stream' THEN json_extract(metadata_json,'$.kind') END AS stream_kind,
@@ -232,58 +197,41 @@ async def _attest_journal(
                     AND json_type(metadata_json,'$.text')='text'
                     AND length(CAST(json_extract(metadata_json,'$.text') AS BLOB))<=?
                     THEN json_extract(metadata_json,'$.text') END AS text,
-               CASE WHEN event_type IN ('tool.invoking','tool.completed') AND sensitivity='normal'
+               CASE WHEN event_type='tool.invoking' AND sensitivity='normal'
                     THEN json_extract(metadata_json,'$.call_id') END AS call_id
         FROM domain_events
         WHERE run_id=? AND tenant_id=? AND session_id=? AND resource_type='run' AND resource_id=?
+          AND (event_type='tool.invoking' OR (event_type='run.stream' AND (
+               json_extract(metadata_json,'$.kind') IN ('delta', 'done', 'error')
+               OR json_extract(metadata_json,'$.privacy_redacted')=1)))
         ORDER BY sequence LIMIT ?
     """
-    tool_ids = [row["tool_call_id"] for row in rows[:-1]]
     cuts: list[int] = []
-    outstanding: set[str] = set()
-    offset = spent = 0
-    state = "new"
-    parameters = (_MAX_TURN_TEXT_BYTES, run_id, tenant_id, session_id, run_id, limit + 1)
+    offset = 0
+    verified_final = False
+    parameters = (len(text.encode()), run_id, tenant_id, session_id, run_id, _MAX_TURN_EVENTS + 1)
     async with conn.execute(query, parameters) as cursor:
+        count = 0
         async for event in cursor:
-            spent += 1
-            if spent > limit or event["redacted"] or event["sensitivity"] != "normal":
-                return None, spent
-            kind = event["event_type"]
-            if kind == "run.accepted" and state == "new":
-                state = "accepted"
-            elif kind == "run.running" and state == "accepted":
-                state = "running"
-            elif kind == "run.success" and state == "done":
-                state = "success"
-            elif kind == "run.stream" and event["stream_kind"] == "done":
-                if (
-                    state != "running" or event["text"] != text or offset != len(text)
-                    or len(cuts) != len(tool_ids) or outstanding
-                ):
-                    return None, spent
-                state = "done"
-            elif kind == "run.stream" and event["stream_kind"] == "delta":
-                chunk = event["text"]
-                if state != "running" or chunk is None or not text.startswith(chunk, offset):
-                    return None, spent
-                offset += len(chunk)
-            elif kind == "run.stream" and event["stream_kind"] in (None, "error"):
-                return None, spent
-            elif kind == "tool.invoking":
-                call = event["call_id"]
-                if state != "running" or len(cuts) >= len(tool_ids) or call != tool_ids[len(cuts)]:
-                    return None, spent
+            count += 1
+            if verified_final or count > _MAX_TURN_EVENTS or event["redacted"] or event["sensitivity"] != "normal":
+                return None
+            if event["event_type"] == "tool.invoking":
+                if len(cuts) >= len(tool_ids) or event["call_id"] != tool_ids[len(cuts)]:
+                    return None
                 cuts.append(offset)
-                outstanding.add(call)
-            elif kind == "tool.completed":
-                call = event["call_id"]
-                if state != "running" or not isinstance(call, str) or call not in outstanding:
-                    return None, spent
-                outstanding.remove(call)
-            elif kind in {"run.accepted", "run.running", "run.success"}:
-                return None, spent
-    return (cuts if state == "success" else None), spent
+            elif event["stream_kind"] == "delta":
+                chunk = event["text"]
+                if chunk is None or not text.startswith(chunk, offset):
+                    return None
+                offset += len(chunk)
+            elif event["stream_kind"] == "done":
+                if event["text"] != text or offset != len(text) or len(cuts) != len(tool_ids):
+                    return None
+                verified_final = True
+            else:
+                return None
+    return cuts if verified_final else None
 
 
 def _split_parts(parts: Sequence[dict[str, Any]], ends: Sequence[int]) -> list[TranscriptSegment]:
