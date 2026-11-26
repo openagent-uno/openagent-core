@@ -5,6 +5,11 @@ whose `models.is_classifier` flag is set (the column name predates this
 meaning; no classifier call exists). Without one, the first enabled language
 model in catalog order (provider name, framework, model) is used.
 
+The engine passes the execution's full audience to the host for `model.list`
+before reading the catalog and for `model.use` when resolving a pin or
+checking an automatic route. A delegated run uses its own session and
+inherits the parent's audience. The host can deny a model before inference.
+
 ## Invariant
 
 - At most one model carries the flag. Setting it on one model clears it on

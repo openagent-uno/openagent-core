@@ -362,13 +362,15 @@ class AgentModelCatalog:
         self.authorizer=authorizer
 
     async def list_models(self, context: ExecutionContext):
-        await require_authorized(self.authorizer,context,"model.list",ResourceRef("agent",context.tenant_id,context.agent_id))
+        await require_authorized(self.authorizer, context, "model.list",
+                                 ResourceRef("agent", context.tenant_id, context.agent_id), audience=context.audience)
         if self.agent.memory_db is None:
             return ()
         return tuple(await self.agent.memory_db.list_models())
 
     async def resolve(self, model_ref: str, context: ExecutionContext):
-        await require_authorized(self.authorizer,context,"model.use",ResourceRef("model",context.tenant_id,model_ref))
+        await require_authorized(self.authorizer, context, "model.use",
+                                 ResourceRef("model", context.tenant_id, model_ref), audience=context.audience)
         dispatcher=self.agent.model
         resolve=getattr(dispatcher,"build_override_model",None)
         if not callable(resolve):

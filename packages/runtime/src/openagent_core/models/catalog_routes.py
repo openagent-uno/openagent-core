@@ -26,7 +26,7 @@ async def authorized_model_use(runtime_id):
     runtime, context = current_runtime(), current_execution_context()
     if runtime is not None and context is not None:
         await require_authorized(runtime.services.authorizer, context, "model.use",
-                                 ResourceRef("model", context.tenant_id, runtime_id))
+                                 ResourceRef("model", context.tenant_id, runtime_id), audience=context.audience)
 
 
 async def catalog_routes(db, kind, *, preferred_id=None, guard=None):

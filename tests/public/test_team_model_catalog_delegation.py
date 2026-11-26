@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -40,12 +41,15 @@ ANSWER = "Specialist fixture answer."
 
 
 class HostPolicy:
-    def __init__(self):
+    def __init__(self, model_audience):
         self.calls = []
         self.denied_model_refs = set()
+        self.model_audience = model_audience
 
     async def authorize(self, context, action, resource, *, audience=()):
         self.calls.append((context, action, resource, audience))
+        if action in {"model.list", "model.use"} and not (audience == context.audience == self.model_audience):
+            return False
         return (resource.tenant_id == context.tenant_id
                 and not (action == "model.use" and resource.resource_id in self.denied_model_refs))
 
@@ -153,7 +157,6 @@ class TeamModelCatalogDelegation(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.path = self.root / "state.sqlite"
-        self.policy = HostPolicy()
         self.io = ScriptedProviderIO(self)
         self.enterContext(patch.object(
             NativeProvider, "build_runtime_model", autospec=True, side_effect=self.io.construct,
@@ -164,6 +167,7 @@ class TeamModelCatalogDelegation(unittest.IsolatedAsyncioTestCase):
         actor = PrincipalRef("test-host", "host-tenant", "fixture-owner")
         self.context = ExecutionContext(actor, actor, actor, "host-parent", "host-agent", (actor,),
                                         scopes=("fixture:read", "fixture:delegate"))
+        self.policy = HostPolicy(self.context.audience)
         self.management = ManagementContext(actor, "host-agent")
         self.active = await self.open_runtime(register=True)
 
@@ -360,6 +364,31 @@ class TeamModelCatalogDelegation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(accepted.request.model_ref, MEMBER_REF)
         self.assertNotIn(ANSWER, str(children[0].output))
         await self.assert_host_only_namespace(self.active, session_count=2)
+
+    async def test_catalog_and_automatic_routes_authorize_the_complete_execution_audience(self):
+        from openagent_core.contracts import AuthorizationDenied
+        from openagent_core.models.catalog_routes import authorized_model_use
+        from openagent_core.runtime import execution_scope
+
+        recipient = PrincipalRef("test-host", "host-tenant", "second-member")
+        shared = replace(self.context, audience=(*self.context.audience, recipient))
+        self.policy.model_audience = shared.audience
+        self.assertTrue(await self.active.models.list_models(shared))
+        self.assertIsNotNone(await self.active.models.resolve(MEMBER_REF, shared))
+        with execution_scope(self.active.runtime, shared, "shared-run"):
+            await authorized_model_use(MEMBER_REF)
+        self.assertEqual([(action, audience) for _, action, _, audience in self.policy.calls
+                          if action in {"model.list", "model.use"}], [
+            ("model.list", shared.audience), ("model.use", shared.audience), ("model.use", shared.audience),
+        ])
+
+        with patch.object(self.active.db, "list_models", wraps=self.active.db.list_models) as list_rows:
+            with self.assertRaises(AuthorizationDenied):
+                await self.active.models.list_models(self.context)
+            list_rows.assert_not_called()
+        with execution_scope(self.active.runtime, self.context, "private-run"):
+            with self.assertRaises(AuthorizationDenied):
+                await authorized_model_use(MEMBER_REF)
 
     async def test_unregistered_exact_pin_fails_before_provider_construction_or_inference(self):
         missing = MEMBER_REF + ":unregistered"
