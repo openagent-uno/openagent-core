@@ -1,5 +1,7 @@
 # OpenAgent core documentation
 
+[Embedding beta 176](releases/v1.1.0-beta.176.md) covers the return of original attachments in document-aware conversations.
+
 [Embedding beta 175](releases/v1.1.0-beta.175.md) covers model selection in conversations with an authorized audience.
 
 [Embedding beta 174](releases/v1.1.0-beta.174.md) covers transcript layout across pages, verified tool files, and idle provider streams.
