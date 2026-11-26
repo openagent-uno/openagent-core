@@ -1092,7 +1092,7 @@ class MCPPool:
                         if self._startup_pending.get(name) is not spec:
                             return
                         timeout = _MCP_CONNECT_TIMEOUT
-                        if spec.is_stdio and self._connection_failures.get(name, {}).get("code") == "timeout":
+                        if self._pending_stdio_timeout(name):
                             # Each new subprocess must finish its own cold start.
                             timeout *= 2 ** (attempt + 1)
                         elog("mcp.startup_retry", name=name, attempt=attempt + 1, seconds=timeout)
@@ -1723,8 +1723,12 @@ class MCPPool:
         if self._capability_binding is not None:
             self._capability_binding.sync()
 
+    def _pending_stdio_timeout(self, name: str) -> bool:
+        spec = self._startup_pending.get(name)
+        return bool(spec and spec.is_stdio and self._connection_failures.get(name, {}).get("code") == "timeout")
+
     async def _await_startup_recovery(self, sup: _ToolkitSupervisor) -> bool:
-        """Only the pool starts handshakes during a retry burst or its cooldown."""
+        """Reserve a slow stdio restart for the pool throughout backoff and cooldown."""
         recovery = self._startup_retries.get(sup.name)
         if recovery is None:
             return False
@@ -1748,7 +1752,7 @@ class MCPPool:
         sup = next((s for s in self._toolkit_supervisors if s.toolkit is toolkit), None)
         if sup is None or sup.control is None:
             return True
-        if sup.name in self._startup_pending:
+        if self._pending_stdio_timeout(sup.name):
             return await self._await_startup_recovery(sup)
         waiter = sup.control.get("pending")
         if waiter is None:
@@ -1803,7 +1807,7 @@ class MCPPool:
             return False
         control = sup.control
         if handshake_timeout is None:
-            if name in self._startup_pending:
+            if self._pending_stdio_timeout(name):
                 return await self._await_startup_recovery(sup)
             handshake_timeout = _MCP_CONNECT_TIMEOUT
         if control.get("closing") or sup.task.done():

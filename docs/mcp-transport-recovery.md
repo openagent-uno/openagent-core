@@ -64,9 +64,9 @@ Tool calls retain their own read timeouts. The first retry waits five
 seconds by default and the next two wait twice and four times that interval. Set
 `OPENAGENT_MCP_STARTUP_RETRY_SECONDS` in the runtime environment to change
 the base interval (0.05 to 300 seconds). One initial recovery handshake runs
-at a time per pool. A foreground caller that arrives during backoff joins the
-scheduled recovery within its usual wait limit. Other callers can join the
-same recovery. A caller that times out or cancels leaves the retry running.
+at a time per pool. During backoff for a stdio timeout, a foreground caller
+joins the scheduled recovery within its usual wait limit. Other callers can
+join the same recovery. A caller that times out or cancels leaves the retry running.
 
 If all three attempts fail transiently, the pool waits for authorized discovery
 before opening a new burst. The cooldown is the greater of 60 seconds and
