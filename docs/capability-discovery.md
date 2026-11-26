@@ -46,6 +46,10 @@ The schema protocol preserves standing system instructions when choosing the
 next action. For example, a writable memory module may instruct the agent to
 save a lasting preference volunteered during conversation. The decision still
 passes through the host's live authorization and normal tool receipt.
+For a function call, the model puts the exact advertised name in `next.action`
+and its inputs in `next.arguments`. For a final reply, `next.answer` holds the
+user-facing content, including JSON when requested. The runtime treats this
+field as output even when it contains an example of a tool decision.
 
 The asynchronous gateway offers the current principal's unambiguous
 `DiscoveryPresentation.hot_tools` with their actual parameter schemas.

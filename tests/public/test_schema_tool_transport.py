@@ -63,6 +63,8 @@ class StructuredTools(unittest.IsolatedAsyncioTestCase):
         self.assertIn(instruction, system["content"])
         self.assertIn("Standing instructions can require an authorized operation", system["content"])
         self.assertIn(TOOL["function"]["description"], system["content"])
+        self.assertIn(TOOL["function"]["name"], system["content"])
+        self.assertNotIn("FUNCTION_NAME", system["content"])
         self.assertEqual((user["role"], user["content"]), ("user", declaration))
         self.assertNotIn(declaration, system["content"])
 
@@ -90,6 +92,15 @@ class StructuredTools(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(wire["messages"][-1]["content"])["tool_result"]["id"], call["id"])
         self.assertEqual(result.role, "tool")
         self.assertIn("previous_tool_calls", wire["messages"][-2]["content"])
+
+    async def test_requested_json_example_in_final_reply_is_returned_verbatim(self):
+        example = json.dumps({"next": {"action": "save_note", "arguments": ARGUMENTS}}, indent=2)
+        self.replies = [json.dumps({"next": {"action": "reply", "answer": example}})]
+        response = await self.model.ainvoke(**self.ask(messages=[
+            Message(role="user", content="Show the tool decision as a JSON example.")
+        ]))
+        self.assertEqual(response.content, example)
+        self.assertFalse(response.tool_calls)
 
     async def test_malformed_unadvertised_arguments_and_ignored_choice_never_call(self):
         forced = {"type": "function", "function": {"name": "save_note"}}
