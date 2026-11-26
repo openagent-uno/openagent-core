@@ -238,6 +238,21 @@ same tenant and session. The existing authorized content resolver serves and
 validates the original bytes. Search and preparation expose no filesystem
 paths and require no sandbox access, duplicate artifact or client upload.
 
+In a turn that has read protected document revisions, SQLite lookup and resend
+are limited to original user inputs. The current admitted request supplies its
+attachment references immediately. An earlier visible user message can supply
+its normalized input link, or the references from its own admission when the
+author matches. Both paths require an available object and an input link in the
+same tenant and conversation. The original audience, delegations and current
+source grants are checked again when the engine selects the attachment for the
+final answer. Delivery reuses the original object and link. Search stops after
+twenty-one authorized matches and returns twenty with a truncation flag.
+
+This verification requires the runtime's own canonical SQLite database.
+Embedded hosts without verifiable input provenance get no matches or delivery
+marker through this path. Publishing a new path still uses the host's selected
+file publisher and its existing document and connector privacy checks.
+
 Deterministic regressions in `test_workspace_administration.py` and
 `test_engine_executor.py` exercise a real Stream turn with prepared provider
 text, and AgentExecutor through the standard delivery tool, an explicitly

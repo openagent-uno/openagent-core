@@ -123,10 +123,10 @@ def build_runtime_toolkit() -> Any:
 
     async def session_store():
         from openagent_core.contracts import ResourceRef
-        from openagent_core.memory.vault.privacy import require_unprotected_execution
+        from openagent_core.memory.vault.privacy import require_unprotected_connector_execution
         from openagent_core.runtime import current_execution_context, current_runtime
 
-        await require_unprotected_execution("Session attachments")
+        await require_unprotected_connector_execution("Session attachments")
         runtime, context = current_runtime(), current_execution_context()
         if runtime is None or context is None:
             raise PermissionError("Session attachments require an authenticated execution")
@@ -142,15 +142,21 @@ def build_runtime_toolkit() -> Any:
         see recent attachments. Use the returned artifact_id with
         resend_session_attachment to send an existing file in this chat.
         """
-        from openagent_core.artifacts import find_session_attachments as list_attachments
+        from openagent_core.artifacts import document_turn_originals, find_session_attachments as list_attachments
+        from openagent_core.memory.document_exposure import has_document_exposure
 
         if len(query) > 200:
             raise ValueError("Search with up to 200 characters of the filename")
         runtime, context, resource, db = await session_store()
         if db is None:
             return {"ok": False, "error": "This host has no session attachment store."}
-        result = await list_attachments(db, tenant_id=context.tenant_id,
-            session_id=context.session_id, query=query.strip())
+        if has_document_exposure():
+            refs = await document_turn_originals(db, runtime, context, query=query.strip())
+            result = {"attachments": [{key: ref[key] for key in ("artifact_id", "filename", "mime_type", "size_bytes")}
+                                      for ref in refs[:20]], "truncated": len(refs) > 20}
+        else:
+            result = await list_attachments(db, tenant_id=context.tenant_id,
+                session_id=context.session_id, query=query.strip())
         await runtime.authorize(context, "session.read", resource, audience=context.audience)
         return {"ok": True, **result}
 
@@ -160,13 +166,22 @@ def build_runtime_toolkit() -> Any:
         Pass the artifact_id from find_session_attachments. Include the
         returned marker verbatim in the final reply to deliver the file.
         """
-        from openagent_core.artifacts import SESSION_ARTIFACT_PREFIX, session_output_reference
+        from openagent_core.artifacts import (
+            SESSION_ARTIFACT_PREFIX, canonical_artifact_id, document_turn_originals, session_output_reference,
+        )
         from openagent_core.core.output_delivery import record_delivery
+        from openagent_core.memory.document_exposure import has_document_exposure
 
         runtime, context, resource, db = await session_store()
         await runtime.authorize(context, "run.publish", resource, audience=context.audience)
-        ref = await session_output_reference(db, tenant_id=context.tenant_id,
-            session_id=context.session_id, value={"artifact_id": artifact_id}) if db is not None else None
+        ref = None
+        if db is not None and canonical_artifact_id(artifact_id):
+            if has_document_exposure():
+                refs = await document_turn_originals(db, runtime, context, artifact_id=artifact_id)
+                ref = refs[0] if refs else None
+            else:
+                ref = await session_output_reference(db, tenant_id=context.tenant_id,
+                    session_id=context.session_id, value={"artifact_id": artifact_id})
         await runtime.authorize(context, "session.read", resource, audience=context.audience)
         await runtime.authorize(context, "run.publish", resource, audience=context.audience)
         if ref is None:

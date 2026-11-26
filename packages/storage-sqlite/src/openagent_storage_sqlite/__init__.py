@@ -129,6 +129,8 @@ class SqliteRuntimeStore:
                     WHERE json_extract(metadata_json,'$.operation_continuation.origin_run_id') IS NOT NULL""")
                 db.execute("""CREATE INDEX IF NOT EXISTS idx_runtime_unfinished_runs ON session_runs(id)
                     WHERE finished_at_ms IS NULL AND json_extract(metadata_json,'$.runtime_contract')=1""")
+                db.execute("""CREATE INDEX IF NOT EXISTS idx_runtime_attachment_inputs ON session_runs(session_id,ordinal)
+                    WHERE json_type(metadata_json,'$.attachments[0]')='object'""")
                 db.execute("""CREATE INDEX IF NOT EXISTS idx_runtime_unfinished_tools ON tool_invocations(session_run_id,tool_call_id)
                     WHERE finished_at_ms IS NULL AND session_run_id IS NOT NULL""")
                 db.execute("""CREATE TABLE IF NOT EXISTS oa_document_run_sources(

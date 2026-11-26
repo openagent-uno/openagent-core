@@ -126,6 +126,22 @@ def require_admitted_audience(accepted, viewer):
         raise PermissionError("The admitted document audience changed")
 
 
+async def authorize_source_audience(runtime, accepted, viewer):
+    require_admitted_audience(accepted, viewer)
+    if accepted.delegation_id:
+        from ..contracts import DelegationService, ExecutionContext
+
+        delegated = ExecutionContext(
+            accepted.author, accepted.initiator, accepted.authority,
+            accepted.request.session_id, viewer.agent_id, accepted.audience,
+            accepted.scopes, accepted.delegation_id, (), accepted.ingress_id,
+            accepted.parent_run_id, accepted.deferred,
+        )
+        service = runtime.service(DelegationService)
+        if service is None or not await service.validate(delegated):
+            raise PermissionError("The document source delegation is no longer active")
+
+
 async def authorize_document_history(runtime, viewer, *, run_id=None, session_id=None):
     """Revalidate exact revision tokens on a cold reader, and propagate into a consuming turn."""
     lookup = getattr(runtime.services.store, "document_sources", None)
@@ -146,36 +162,18 @@ async def authorize_document_history(runtime, viewer, *, run_id=None, session_id
         raise PermissionError("Document history exceeds its authorization budget")
     for ident in protected:
         accepted = await runtime.services.store.accepted_request(ident)
-        require_admitted_audience(accepted, viewer)
-        if accepted.delegation_id:
-            from ..contracts import DelegationService, ExecutionContext
-
-            delegated = ExecutionContext(
-                accepted.author,
-                accepted.initiator,
-                accepted.authority,
-                accepted.request.session_id,
-                viewer.agent_id,
-                accepted.audience,
-                accepted.scopes,
-                accepted.delegation_id,
-                (),
-                accepted.ingress_id,
-                accepted.parent_run_id,
-                accepted.deferred,
-            )
-            service = runtime.service(DelegationService)
-            if service is None or not await service.validate(delegated):
-                raise PermissionError(
-                    "The document source delegation is no longer active"
-                )
+        await authorize_source_audience(runtime, accepted, viewer)
     await _verify(vault, runtime, viewer, tokens)
     turn = _active.get()
     if turn is not None and turn.runtime is runtime:
         await _inherit(vault, turn, tokens)
 
 
-def require_unexposed_turn(surface):
+def has_document_exposure():
     turn = _active.get()
-    if turn is not None and turn.tokens:
+    return bool(turn and turn.tokens)
+
+
+def require_unexposed_turn(surface):
+    if has_document_exposure():
         raise PermissionError(f"{surface} cannot retain document-derived content")

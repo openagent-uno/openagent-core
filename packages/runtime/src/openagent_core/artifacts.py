@@ -417,6 +417,136 @@ def canonical_artifact_id(value):
     return isinstance(value, str) and _ARTIFACT_ID.fullmatch(value) is not None
 
 
+async def document_turn_originals(db, runtime, context, *, query="", artifact_id=None):
+    """Resolve immutable user inputs with their original audience and live source grants."""
+    from .memory.artifact_document_history import visible
+    from .memory.artifacts import (_connection, _attachment_ref, attachment_kind,
+                                  public_attachment_ref, safe_attachment_filename)
+    from .memory.document_exposure import authorize_source_audience
+    from .memory.legacy_document_history import SessionProjectionGuard
+    from .memory.vault.privacy import require_unprotected_connector_execution
+    from .runtime import current_run_id
+    from .workspace_administration import SessionInspection
+
+    store = runtime.services.store
+    run_id = current_run_id()
+    if (not run_id or (artifact_id is not None and not canonical_artifact_id(artifact_id))
+            or db is None or not getattr(store, "path", None) or not getattr(db, "db_path", None)
+            or Path(store.path).resolve() != Path(db.db_path).resolve()):
+        return []
+    session = ResourceRef("session", context.tenant_id, context.session_id)
+    await runtime.authorize(context, "run.publish", session, audience=context.audience)
+
+    inspector = SessionInspection(db, runtime.services.authorizer, runtime=runtime)
+    authorized_sources = set()
+
+    async def check_source_once(sid):
+        if sid not in authorized_sources:
+            await inspector.authorize(context, sid, connection=conn)
+            authorized_sources.add(sid)
+
+    # HTTP admission persists the user message and attachment references together.
+    # Some transports also materialize individual message links after the turn.
+    current_filter = "AND item.value ->> '$.artifact_id'=:aid" if artifact_id else ""
+    history_filter = "AND ml.artifact_id=:aid" if artifact_id else ""
+    sql = f"""
+        WITH turn AS (
+            SELECT ordinal, created_at_ms FROM session_runs
+             WHERE id=:run AND tenant_id=:tenant AND session_id=:session AND agent_id=:agent
+        ), inputs AS (
+            SELECT r.id AS run_id, m.author_principal_id AS message_author, r.created_at_ms AS stamp,
+                   item.value ->> '$.artifact_id' AS aid, item.value ->> '$.filename' AS filename,
+                   item.value ->> '$.artifact_link_id' AS input_link
+              FROM turn JOIN session_runs r ON r.session_id=:session AND r.ordinal<=turn.ordinal
+              JOIN json_each(r.metadata_json, '$.attachments') item
+              LEFT JOIN session_messages m ON m.run_id=r.id AND m.tenant_id=r.tenant_id
+               AND m.session_id=r.session_id AND m.ordinal=0 AND m.role='user' AND m.author_kind='user'
+               AND m.visibility='user_visible' AND m.status='complete'
+             WHERE r.tenant_id=:tenant AND r.agent_id=:agent AND (r.id=:run OR m.author_principal_id IS NOT NULL)
+               AND json_type(r.metadata_json, '$.attachments[0]')='object'
+               AND item.type='object'
+               AND r.metadata_json ->> '$.runtime_contract'=1
+               AND r.metadata_json ->> '$.execution_context.author.kind'='user'
+               {current_filter}
+            UNION ALL
+            SELECT CASE WHEN r.metadata_json ->> '$.runtime_contract'=1 THEN r.id END,
+                   m.author_principal_id, m.created_at_ms, ml.artifact_id, ml.display_name, NULL
+              FROM session_messages m JOIN artifact_links ml
+                ON ml.tenant_id=m.tenant_id AND ml.resource_type='message'
+               AND ml.resource_id=m.id AND ml.relation='input_attachment'
+              LEFT JOIN session_runs r ON r.id=m.run_id AND r.session_id=m.session_id
+               AND r.tenant_id=m.tenant_id
+              CROSS JOIN turn
+             WHERE m.tenant_id=:tenant AND m.session_id=:session AND m.role='user'
+               AND (r.ordinal<=turn.ordinal OR (r.id IS NULL AND m.created_at_ms<=turn.created_at_ms))
+               AND (r.agent_id=:agent OR r.metadata_json ->> '$.runtime_contract' IS NOT 1)
+               AND m.author_kind='user' AND m.visibility='user_visible' AND m.status='complete'
+               {history_filter}
+        )
+        SELECT a.*, i.run_id, i.message_author, i.filename, l.id AS link_id
+          FROM inputs i JOIN artifacts a ON a.id=i.aid AND a.tenant_id=:tenant
+          JOIN artifact_links l ON l.tenant_id=a.tenant_id AND l.artifact_id=a.id
+           AND l.resource_type='session' AND l.resource_id=:session AND l.relation='input_attachment'
+           AND (i.input_link IS NULL OR l.id=i.input_link)
+          JOIN sessions_v2 s ON s.tenant_id=l.tenant_id AND s.id=l.resource_id
+         WHERE s.deleted_at_ms IS NULL AND a.deleted_at_ms IS NULL AND a.storage_state='available'
+           AND instr(lower(coalesce(i.filename,a.id)), lower(:query))>0
+         ORDER BY i.stamp DESC, a.id, l.id
+    """
+    guard = SessionProjectionGuard(check_source_once)
+    refs = {}
+    admitted = {}
+    delegated = {}
+    async with _connection(db) as conn:
+        # A foreign or unavailable ID never needs a transcript lookup.
+        if artifact_id is not None and not await (await conn.execute(
+                """SELECT 1 FROM artifact_links l JOIN artifacts a ON a.id=l.artifact_id AND a.tenant_id=l.tenant_id
+                    WHERE l.tenant_id=? AND l.artifact_id=? AND l.resource_type='session' AND l.resource_id=?
+                      AND l.relation='input_attachment' AND a.deleted_at_ms IS NULL AND a.storage_state='available'
+                    LIMIT 1""", (context.tenant_id, artifact_id, context.session_id))).fetchone():
+            return []
+        async with conn.execute(sql, dict(tenant=context.tenant_id, session=context.session_id,
+                                          agent=context.agent_id, run=run_id, aid=artifact_id, query=query)) as rows:
+            async for row in rows:
+                ident, run = row["id"], row["run_id"]
+                if ident in refs:
+                    continue
+                if run is None:
+                    # Legacy transcripts lack a durable audience. Only an input
+                    # authored by this exact private viewer can establish scope.
+                    allowed = (
+                        context.initiator.kind == "user" and context.authority == context.initiator
+                        and context.audience == (context.initiator,) and row["message_author"] == context.initiator.key
+                    )
+                else:
+                    if run not in admitted:
+                        try:
+                            accepted = await store.accepted_request(run)
+                            await authorize_source_audience(runtime, accepted, context)
+                            admitted[run] = (accepted.author.key if accepted.author.kind == "user"
+                                             and accepted.request.session_id == context.session_id else None)
+                            if admitted[run] and accepted.delegation_id:
+                                delegated[run] = accepted
+                        except (LookupError, PermissionError):
+                            admitted[run] = None
+                    allowed = admitted[run] and (row["message_author"] is None or row["message_author"] == admitted[run])
+                if not allowed or not await visible(conn, row, guard):
+                    continue
+                filename = safe_attachment_filename(row["filename"] or ident)
+                refs[ident] = public_attachment_ref(_attachment_ref(
+                    row, path=Path(), filename=filename, kind=attachment_kind(row["mime"]), link_id=row["link_id"]))
+                if len(refs) == 21 or artifact_id is not None:
+                    break
+        authorized_sources.clear()
+        await guard.recheck()
+        await check_source_once(context.session_id)
+    for source in delegated.values():
+        await authorize_source_audience(runtime, source, context)
+    await require_unprotected_connector_execution("Session attachment delivery")
+    await runtime.authorize(context, "run.publish", session, audience=context.audience)
+    return list(refs.values())
+
+
 async def find_session_attachments(db, *, tenant_id, session_id, query):
     """List available files linked to the authorized session, with no local paths."""
     from .memory.artifacts import _connection, safe_attachment_filename

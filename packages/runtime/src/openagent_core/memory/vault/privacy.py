@@ -11,15 +11,21 @@ from openagent_core.content_privacy import PrivacyConflict, PrivacyFence, ToolRe
 
 
 async def require_unprotected_execution(surface: str) -> None:
+    from openagent_core.runtime import current_run_id
+    if current_run_id() is not None and surface != "Document vault":
+        from ..document_exposure import require_unexposed_turn
+        require_unexposed_turn(surface)
+    await require_unprotected_connector_execution(surface)
+
+
+async def require_unprotected_connector_execution(surface: str) -> None:
+    """Require an ordinary execution for sinks outside managed connector privacy."""
     from openagent_core.runtime import current_execution_context, current_run_id, current_runtime
     runtime, context, run_id = current_runtime(), current_execution_context(), current_run_id()
     if run_id is None:
         return
     if runtime is None or context is None:
         raise PrivacyConflict("A canonical writer requires the exact execution context")
-    if surface != "Document vault":
-        from ..document_exposure import require_unexposed_turn
-        require_unexposed_turn(surface)
     publisher = runtime.service(ToolResultPrivacyPublisher)
     if publisher is None:
         # A runtime without a provenance publisher cannot admit protected

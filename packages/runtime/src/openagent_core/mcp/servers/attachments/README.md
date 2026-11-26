@@ -5,6 +5,14 @@ one server writer. It does not make `send_file_to_user` or arbitrary filesystem
 paths privacy qualified. The ordinary marker tool refuses a protected-origin
 execution before inspecting a path or returning a delivery marker.
 
+`find_session_attachments` and `resend_session_attachment` can reuse an
+immutable user input in a document-exposed turn. The SQLite reader verifies
+the current admitted upload or an earlier visible user message with its
+admitted references or normalized links. It checks the original audience,
+the session link and live source access. An embedded runtime without that
+SQLite evidence cannot return an original in this mode. The connector-origin
+fence still applies to all three tools.
+
 The host creates an exclusive snapshot directory and supplies the canonical
 `ContentPrivacyStore` and an authorized export callback. It supplies a verified
 `ContentRevision`, exact bytes, trusted origins or immutable parent revision

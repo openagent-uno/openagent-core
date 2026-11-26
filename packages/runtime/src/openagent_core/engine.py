@@ -212,7 +212,14 @@ class AgentExecutor:
                         })
                         continue
                     if parsed.attachments:
-                        from .artifacts import SESSION_ARTIFACT_PREFIX, session_output_reference, is_native_output, canonical_artifact_id
+                        from .artifacts import (
+                            SESSION_ARTIFACT_PREFIX, canonical_artifact_id, document_turn_originals,
+                            is_native_output, session_output_reference,
+                        )
+                        from .memory.document_exposure import has_document_exposure
+                        from .memory.vault.privacy import (
+                            require_unprotected_connector_execution, require_unprotected_execution,
+                        )
                         db = getattr(self.agent, "memory_db", None)
                         parts, attachments = [], []
                         unavailable = False
@@ -222,11 +229,11 @@ class AgentExecutor:
                                 continue
                             value = part["attachment"]
                             artifact_marker = value["path"].startswith(SESSION_ARTIFACT_PREFIX)
-                            if artifact_marker:
-                                from .memory.vault.privacy import require_unprotected_execution
-                                artifact_id = value["path"].removeprefix(SESSION_ARTIFACT_PREFIX)
-                                try:
-                                    await require_unprotected_execution("Session attachment delivery")
+                            original = None
+                            try:
+                                if artifact_marker:
+                                    artifact_id = value["path"].removeprefix(SESSION_ARTIFACT_PREFIX)
+                                    await require_unprotected_connector_execution("Session attachment delivery")
                                     if not is_native_output(request.run_id,artifact_id):
                                         await runtime.authorize(context, "tool.call",
                                             ResourceRef("tool", context.tenant_id, "attachments/resend_session_attachment"),
@@ -234,12 +241,24 @@ class AgentExecutor:
                                     await runtime.authorize(context, "session.read",
                                         ResourceRef("session", context.tenant_id, context.session_id),
                                         audience=context.audience)
-                                except PermissionError:
-                                    unavailable = True
-                                    continue
-                                value = {"artifact_id": artifact_id}
-                            ref = await session_output_reference(db, tenant_id=context.tenant_id,
-                                session_id=context.session_id, value=value, link=True) if db is not None else None
+                                    if has_document_exposure():
+                                        matches = await document_turn_originals(db, runtime, context, artifact_id=artifact_id)
+                                        if not matches:
+                                            unavailable = True
+                                            continue
+                                        original = matches[0]
+                                    value = {"artifact_id": artifact_id}
+                                else:
+                                    # Direct filesystem markers use the same pre-I/O
+                                    # publication fence as send_file_to_user.
+                                    await require_unprotected_execution("Attachment delivery")
+                            except PermissionError:
+                                unavailable = True
+                                continue
+                            ref = original
+                            if ref is None and db is not None:
+                                ref = await session_output_reference(db, tenant_id=context.tenant_id,
+                                    session_id=context.session_id, value=value, link=True)
                             publisher = runtime.service("attachments.publisher") if hasattr(runtime, "service") else None
                             if (
                                 ref is None
