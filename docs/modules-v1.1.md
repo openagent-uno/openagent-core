@@ -16,11 +16,13 @@ blocks, routes, health checks, search providers, workers, event ingress and
 rebuildable indices. The host remains the only authority that can change a graph.
 
 A selected module publishes its services and capabilities only after its required
-native sources complete startup and discovery. If the initial handshake times
-out, module startup waits for the pool's existing bounded recovery. Permanent
-failures and exhausted recovery fail graph preparation. During reconfiguration
-the previous graph continues to serve while the replacement is being prepared.
-Handshake recovery never invokes or replays a tool.
+native sources complete startup and discovery. If the pool schedules recovery,
+module startup waits for its [bounded retry series](mcp-transport-recovery.md#bounded-reconnect-for-configured-sources).
+Vault assigns trusted effects to the tools it discovers, and each call requires
+current authorization. Graph preparation fails on a permanent error or when
+the retries are exhausted. During reconfiguration the previous graph continues
+to serve while the replacement is being prepared. Handshake recovery never
+invokes or replays a tool.
 
 The independently built wheels are `openagent-module-sessions`, `-search`,
 `-vault`, `-mcp`, `-workflows`, `-scheduler`, `-events`, `-delegation`, `-skills`,

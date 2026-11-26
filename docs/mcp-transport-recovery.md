@@ -53,11 +53,11 @@ A configured stdio or streamable HTTP source can fail before it has a
 toolkit or a supervisor. After a timeout, connection loss, or transient
 HTTP response (408, 500, 502, 503 or 504), the pool keeps that source and
 starts up to three fresh handshakes in the background. The initial connection
-and the first reconnect have a 30-second handshake deadline. HTTP keeps this
-deadline on every retry. A stdio subprocess must initialize from scratch on
-each relaunch. When a background retry starts a new handshake after a stdio
-timeout, its deadline is 60, 120 or 240 seconds on the first, second or third
-retry respectively. Other retryable stdio failures use the ordinary deadline.
+and an ordinary foreground reconnect have a 30-second handshake deadline. HTTP
+keeps this deadline on every retry. A stdio subprocess must initialize from
+scratch on each relaunch. A background retry after a stdio timeout gets 60,
+120 or 240 seconds depending on whether it is the first, second or third retry.
+Other retryable stdio failures use the ordinary deadline.
 Callers joining a supervised reconnect can reach their own wait limit while
 the shared handshake continues.
 Tool calls retain their own read timeouts. The first retry waits five
@@ -68,11 +68,19 @@ at a time per pool. During backoff for a stdio timeout, a foreground caller
 joins the scheduled recovery within its usual wait limit. Other callers can
 join the same recovery. A caller that times out or cancels leaves the retry running.
 
-If all three attempts fail transiently, the pool waits for authorized discovery
-before opening a new burst. The cooldown is the greater of 60 seconds and
-eight times the base interval. Closing the pool or reloading its configuration
-cancels pending retries. Once the handshake succeeds, a newly admitted turn
-can discover and call the tools. Recovery itself sends no tool call.
+When a [module](modules-v1.1.md) requires a native source, it calls
+`await pool.startup_toolkit(name)` after `connect_all()`. This waits for the
+whole retry series already scheduled for that source and returns its ready
+toolkit. If the executable is missing, the method returns `None` without a
+retry. It also returns `None` if recovery ends without a ready catalog. In
+both cases graph preparation fails. Cancelling module startup closes its pool
+and stops pending retries.
+
+If all three attempts in a running pool fail transiently, authorized discovery
+can start a new burst after a cooldown. The cooldown is the greater of 60
+seconds and eight times the base interval. Closing the pool or reloading its
+configuration cancels pending retries. Once the handshake succeeds, a newly
+admitted turn can discover and call the tools. Recovery itself sends no tool call.
 
 A host may grant `tool.discover_source_status` for the exact
 `ResourceRef("capability", tenant_id, source_id)` and the entire run audience.
