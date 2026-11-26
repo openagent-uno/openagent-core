@@ -448,7 +448,7 @@ async def document_turn_originals(db, runtime, context, *, query="", artifact_id
     # HTTP admission persists the user message and attachment references together.
     # Some transports also materialize individual message links after the turn.
     current_filter = "AND item.value ->> '$.artifact_id'=:aid" if artifact_id else ""
-    history_filter = "AND ml.artifact_id=:aid" if artifact_id else ""
+    history_filter = "AND sl.artifact_id=:aid" if artifact_id else ""
     sql = f"""
         WITH turn AS (
             SELECT ordinal, created_at_ms FROM session_runs
@@ -470,14 +470,19 @@ async def document_turn_originals(db, runtime, context, *, query="", artifact_id
                {current_filter}
             UNION ALL
             SELECT CASE WHEN r.metadata_json ->> '$.runtime_contract'=1 THEN r.id END,
-                   m.author_principal_id, m.created_at_ms, ml.artifact_id, ml.display_name, NULL
-              FROM session_messages m JOIN artifact_links ml
-                ON ml.tenant_id=m.tenant_id AND ml.resource_type='message'
-               AND ml.resource_id=m.id AND ml.relation='input_attachment'
+                   m.author_principal_id, m.created_at_ms, ml.artifact_id, ml.display_name, sl.id
+              -- Start from this chat even when SQLite has no planner statistics.
+              FROM artifact_links sl
+              CROSS JOIN artifact_links ml INDEXED BY idx_artifact_links_artifact
+                ON ml.tenant_id=sl.tenant_id AND ml.artifact_id=sl.artifact_id
+               AND ml.resource_type='message' AND ml.relation='input_attachment'
+              CROSS JOIN session_messages m ON m.id=ml.resource_id AND m.tenant_id=ml.tenant_id
               LEFT JOIN session_runs r ON r.id=m.run_id AND r.session_id=m.session_id
                AND r.tenant_id=m.tenant_id
               CROSS JOIN turn
-             WHERE m.tenant_id=:tenant AND m.session_id=:session AND m.role='user'
+             WHERE sl.tenant_id=:tenant AND sl.resource_type='session'
+               AND sl.resource_id=:session AND sl.relation='input_attachment'
+               AND m.session_id=:session AND m.role='user'
                AND (r.ordinal<=turn.ordinal OR (r.id IS NULL AND m.created_at_ms<=turn.created_at_ms))
                AND (r.agent_id=:agent OR r.metadata_json ->> '$.runtime_contract' IS NOT 1)
                AND m.author_kind='user' AND m.visibility='user_visible' AND m.status='complete'
