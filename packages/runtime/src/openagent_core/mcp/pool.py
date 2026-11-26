@@ -849,40 +849,14 @@ class MCPPool:
             # its registration: runs already in progress do not lose tools
             # because some other source was added or edited.
             old_specs = {spec.name: spec for spec in self.specs}
-            # A dormant source (connected, zero tools) is not kept: reload is
-            # also how it gets another connection attempt.
+            # Dormant sources get a fresh handshake on reload.
             kept = {
                 spec.name for spec in new_specs
-                if old_specs.get(spec.name) == spec and spec.name in self._toolkit_by_name
-                and self._tool_counts.get(spec.name, 0) > 0
+                if old_specs.get(spec.name) == spec and spec.name not in self._connection_failures
+                and _discovery_complete(self._toolkit_by_name.get(spec.name), self._tool_counts.get(spec.name, 0))
             }
-            old_supervisors = [sup for sup in self._toolkit_supervisors if sup.name not in kept]
-            kept_toolkits = {self._toolkit_by_name[name] for name in kept}
-            old_toolkits = [tk for tk in self._runtime_toolkits if tk not in kept_toolkits]
-            old_in_proc_agno = [tk for tk in self._in_process_runtime_toolkits if tk not in kept_toolkits]
-            self._toolkit_supervisors[:] = [sup for sup in self._toolkit_supervisors if sup.name in kept]
-            self._runtime_toolkits[:] = [tk for tk in self._runtime_toolkits if tk in kept_toolkits]
-            self._in_process_runtime_toolkits[:] = [
-                tk for tk in self._in_process_runtime_toolkits if tk in kept_toolkits
-            ]
-            for name in [name for name in self._toolkit_by_name if name not in kept]:
-                del self._toolkit_by_name[name]
-            previous_counts = self._tool_counts
             self.specs = new_specs
-            self._tool_counts = {
-                s.name: previous_counts.get(s.name, 0) if s.name in kept else 0 for s in new_specs
-            }
-            for state in (self._last_recovery_error_type, self._connection_failures,
-                          self._last_connect_error):
-                for name in [name for name in state if name not in kept]:
-                    del state[name]
-            for name in [name for name in self._dead_recovery_sessions if name not in kept]:
-                self._dead_recovery_sessions.discard(name)
-            self._connected = False
-            # Server set + tool counts changed → drop the cached catalog
-            # summary; the next prompt render will rebuild it from the
-            # fresh self._tool_counts / self.specs.
-            self._catalog_summary_cache = None
+            old_supervisors, old_in_process, removed = self._detach_sources_except(kept)
 
         # connect_all has its own lock; it connects only what is not kept.
         try:
@@ -890,15 +864,50 @@ class MCPPool:
         finally:
             # The replaced set is no longer reachable, even if replacement
             # failed or was cancelled. Its owned DB connections must not leak.
-            for sup in reversed(old_supervisors):
-                await self._shutdown_supervisor(sup)
-            await self._close_in_process(old_in_proc_agno)
+            await self._close_toolkits(old_supervisors, old_in_process)
         elog(
             "mcp.pool.reload",
             new_servers=len(new_specs),
             kept=len(kept),
-            old_toolkits=len(old_toolkits) + len(old_in_proc_agno),
+            old_toolkits=removed,
         )
+
+    def _detach_sources_except(self, kept: set[str]) -> tuple[list[_ToolkitSupervisor], list[Any], int]:
+        """Remove retired registrations under the lifecycle lock and return their owners."""
+        old_supervisors = [sup for sup in self._toolkit_supervisors if sup.name not in kept]
+        kept_toolkits = {id(self._toolkit_by_name[name]) for name in kept}
+        old_toolkits = [tk for tk in self._runtime_toolkits if id(tk) not in kept_toolkits]
+        old_in_process = [tk for tk in self._in_process_runtime_toolkits if id(tk) not in kept_toolkits]
+        self._toolkit_supervisors[:] = [sup for sup in self._toolkit_supervisors if sup.name in kept]
+        self._runtime_toolkits[:] = [tk for tk in self._runtime_toolkits if id(tk) in kept_toolkits]
+        self._in_process_runtime_toolkits[:] = [
+            tk for tk in self._in_process_runtime_toolkits if id(tk) in kept_toolkits
+        ]
+        for name in [name for name in self._toolkit_by_name if name not in kept]:
+            del self._toolkit_by_name[name]
+        previous_counts = self._tool_counts
+        self._tool_counts = {
+            s.name: previous_counts.get(s.name, 0) if s.name in kept else 0 for s in self.specs
+        }
+        for state in (self._last_recovery_error_type, self._connection_failures,
+                      self._last_connect_error):
+            for name in [name for name in state if name not in kept]:
+                del state[name]
+        for name in [name for name in self._dead_recovery_sessions if name not in kept]:
+            self._dead_recovery_sessions.discard(name)
+        self._connected = False
+        # Server set + tool counts changed → drop the cached catalog
+        # summary; the next prompt render will rebuild it from the
+        # fresh self._tool_counts / self.specs.
+        self._catalog_summary_cache = None
+        return old_supervisors, old_in_process, len(old_toolkits) + len(old_in_process)
+
+    async def _rollback_startup(self, kept: set[str]) -> None:
+        await self._stop_startup_retries()
+        supervisors, in_process, _ = self._detach_sources_except(kept)
+        await self._close_toolkits(supervisors, in_process)
+        if self._capability_binding is not None:
+            self._capability_binding.sync()
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -913,9 +922,11 @@ class MCPPool:
         ``scripts/tests/test_mcp_pool_resilience.py`` for the failure
         modes this guards against.
         """
-        async with self._lock:
+        async with self._lock, AsyncExitStack() as rollback:
             if self._connected:
                 return
+            # A reload may retain live sources. Cancel only what this attempt acquires.
+            rollback.push_async_callback(self._rollback_startup, set(self._toolkit_by_name))
             # 1. Subprocess-based MCPs (stdio / HTTP).
             # Stagger spawns to avoid the cold-start clustering that produces
             # the dormant-recovery TimeoutError — see _STARTUP_STAGGER_SECONDS.
@@ -1049,6 +1060,7 @@ class MCPPool:
             self._catalog_summary_cache = None
             if self._capability_binding is not None:
                 self._capability_binding.sync()
+            rollback.pop_all()
 
     def _handshake_retryable(self, spec: _ServerSpec) -> bool:
         failure = self._connection_failures.get(spec.name, {})
@@ -1162,6 +1174,11 @@ class MCPPool:
                 except Exception:
                     logger.exception("Failed to close owned in-process toolkit")
 
+    async def _close_toolkits(self, supervisors: list[_ToolkitSupervisor], in_process: list[Any]) -> None:
+        for supervisor in reversed(supervisors):
+            await self._shutdown_supervisor(supervisor)
+        await self._close_in_process(in_process)
+
     async def close_all(self) -> None:
         """Close every connected toolkit. Per-toolkit supervisors are closed
         independently so one failing teardown doesn't skip the rest.
@@ -1175,7 +1192,7 @@ class MCPPool:
         client relies on (see the v0.6.x fix commit message).
         """
         async with self._lock:
-            if not self._connected:
+            if not self._connected and not self._toolkit_supervisors and not self._in_process_runtime_toolkits:
                 return
             await self._stop_startup_retries()
             self._lifecycle_generation = getattr(self, "_lifecycle_generation", 0) + 1
@@ -1190,9 +1207,7 @@ class MCPPool:
             self._connected = False
         # Close in reverse registration order so toolkits that share
         # resources tear down the way AsyncExitStack would have.
-        for sup in reversed(supervisors):
-            await self._shutdown_supervisor(sup)
-        await self._close_in_process(in_process)
+        await self._close_toolkits(supervisors, in_process)
 
     async def _respawn_after_dead_session(
         self, spec: _ServerSpec, dead_toolkit: Any,

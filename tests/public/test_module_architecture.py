@@ -9,7 +9,7 @@ import unittest
 import sqlite3
 import json
 import sys
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from openagent_core import (
     CapabilityCatalog,
@@ -124,15 +124,15 @@ class FederatedSearch(unittest.IsolatedAsyncioTestCase):
 class RequiredNativeSource(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.directory = Path(self.enterContext(TemporaryDirectory()))
-        self.command = [sys.executable, str(Path(__file__).parent / "fixtures" / "mcp_startup_stdio.py"),
-                        str(self.directory), "0", "read_note"]
+        self.fixture = str(Path(__file__).parent / "fixtures" / "mcp_startup_stdio.py")
+        self.commands = {"vault": [sys.executable, self.fixture, str(self.directory), "0", "read_note"]}
         from openagent_core.mcp import pool
 
         resolve = pool.resolve_builtin_entry
 
         def resolve_entry(name, *args, **kwargs):
-            if name == "vault":
-                return {"name": name, "command": self.command, "_trusted_module": name}
+            if name in self.commands:
+                return {"name": name, "command": self.commands[name], "_trusted_module": "vault"}
             return resolve(name, *args, **kwargs)
 
         self.enterContext(patch.object(pool, "resolve_builtin_entry", resolve_entry))
@@ -180,7 +180,7 @@ class RequiredNativeSource(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls.read_text(), "call\n")
 
     def configure_empty_catalog(self, failed_lists):
-        self.command[-1:] = ["", str(failed_lists)]
+        self.commands["vault"][-1:] = ["", str(failed_lists)]
         (self.directory / "ready").touch()
 
     async def assert_empty_catalog_published(self, failed_lists):
@@ -205,7 +205,7 @@ class RequiredNativeSource(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_discovery_retains_its_diagnostic(self):
         self.configure_empty_catalog(100)
-        pool = MCPPool.from_config([{"name": "sample", "command": self.command}], include_defaults=False)
+        pool = MCPPool.from_config([{"name": "sample", "command": self.commands["vault"]}], include_defaults=False)
         self.addAsyncCleanup(pool.close_all)
         await pool.connect_all()
         self.assertIsNone(await pool.startup_toolkit("sample"))
@@ -216,7 +216,7 @@ class RequiredNativeSource(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((self.directory / "calls").exists())
 
     async def test_permanent_error_and_exhausted_recovery_leave_service_unpublished(self):
-        with patch.object(self, "command", [str(self.directory / "absent")]), \
+        with patch.dict(self.commands, vault=[str(self.directory / "absent")]), \
              patch.object(MCPPool, "schedule_startup_retry") as retry:
             with self.assertRaisesRegex(RuntimeError, "Module vault failed to start capability source vault"):
                 await self.runtime.start()
@@ -237,6 +237,74 @@ class RequiredNativeSource(unittest.IsolatedAsyncioTestCase):
         self.assertFalse({"mcp-startup-retry:vault", "mcp-supervisor:vault"}
                          & {task.get_name() for task in asyncio.all_tasks()})
         self.assertIsNone(self.runtime.service("vault.service"))
+
+    async def test_cancelled_second_initial_handshake_reaps_both_processes(self):
+        from mcp.client import stdio
+
+        second = self.directory / "second"
+        second.mkdir()
+        (self.directory / "ready").touch()
+        self.commands["vault-gate"] = [sys.executable, self.fixture, str(second)]
+        children = []
+        spawn = stdio._create_platform_compatible_process
+
+        async def track_child(*args, **kwargs):
+            child = await spawn(*args, **kwargs)
+            children.append(child)
+            return child
+
+        with patch.object(stdio, "_create_platform_compatible_process", track_child), \
+             patch("openagent_core.mcp.pool._MCP_CONNECT_TIMEOUT", 5), \
+             patch("openagent_core.mcp.pool._MCP_CLOSE_TIMEOUT", .15):
+            startup = asyncio.create_task(self.runtime.start())
+            async with asyncio.timeout(4):
+                while not (second / "discovery").exists():
+                    await asyncio.sleep(.01)
+            self.assertEqual((self.directory / "discovery").read_text().splitlines(), ["initialize", "tools/list"])
+            startup.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await startup
+        self.assertIsNone(self.runtime.service("vault.service"))
+        self.assertEqual(len(children), 2)
+        self.assertTrue(all(child.returncode is not None for child in children))
+        self.assertFalse({"mcp-supervisor:vault", "mcp-supervisor:vault-gate"}
+                         & {task.get_name() for task in asyncio.all_tasks()})
+        self.assertFalse(any((path / "calls").exists() for path in (self.directory, second)))
+
+    async def test_cancelled_reload_retains_complete_empty_source_until_close(self):
+        self.configure_empty_catalog(0)
+        first = {"name": "first", "command": self.commands["vault"]}
+        pool = MCPPool.from_config([first], include_defaults=False)
+        self.addAsyncCleanup(pool.close_all)
+        await pool.connect_all()
+        original = await pool.startup_toolkit("first")
+        self.assertIsNotNone(original)
+        second = self.directory / "second"
+        second.mkdir()
+        expanded = MCPPool.from_config([first, {"name": "second", "command": [
+            sys.executable, self.fixture, str(second),
+        ]}], include_defaults=False)
+        pool._db = object()
+        with patch.object(pool, "rebuild_specs", AsyncMock(side_effect=[list(pool.specs), expanded.specs])), \
+             patch("openagent_core.mcp.pool._MCP_CONNECT_TIMEOUT", 5), \
+             patch("openagent_core.mcp.pool._MCP_CLOSE_TIMEOUT", .15):
+            await pool.reload()
+            self.assertIs(await pool.startup_toolkit("first"), original)
+            reload_task = asyncio.create_task(pool.reload())
+            async with asyncio.timeout(4):
+                while not (second / "discovery").exists():
+                    await asyncio.sleep(.01)
+            reload_task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await reload_task
+        self.assertIs(await pool.startup_toolkit("first"), original)
+        self.assertIsNone(pool.toolkit_by_name("second"))
+        self.assertEqual((self.directory / "discovery").read_text().splitlines(), ["initialize", "tools/list"])
+        await pool.close_all()
+        self.assertIsNone(original.session)
+        self.assertFalse({"mcp-supervisor:first", "mcp-supervisor:second"}
+                         & {task.get_name() for task in asyncio.all_tasks()})
+        self.assertFalse(any((path / "calls").exists() for path in (self.directory, second)))
 
 
 class ModularRuntime(unittest.IsolatedAsyncioTestCase):
