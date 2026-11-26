@@ -1266,6 +1266,11 @@ class Scheduler:
             self._register_run(self._scheduled_run_tasks, run_id)
             self._broadcast("scheduled_task", "updated", task["id"])
         try:
+            if preclaimed_run_id and self.db is not None:
+                projection = await self.db.get_task_run(preclaimed_run_id)
+                if projection and projection["status"] in {"cancelling", "cancelled"}:
+                    # A stop may have reached storage during host admission.
+                    raise asyncio.CancelledError
             # Pick up any providers/models the REST or MCP layer wrote
             # since the last tick. The gateway fires refresh_registries on
             # every user message; the scheduler path bypasses that, so

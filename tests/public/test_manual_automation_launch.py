@@ -1,6 +1,7 @@
 """Manual host requests retain their grants and fire at most once across workers."""
 import asyncio
 import os
+import sqlite3
 from contextlib import asynccontextmanager
 from functools import partial
 from types import SimpleNamespace
@@ -231,3 +232,73 @@ async def test_exact_cancellation_uses_the_scheduling_store(tmp_path, kind, doma
     finally:
         await observer.close()
         await writer.close()
+
+
+@pytest.mark.parametrize("drain_before_executor", [False, True])
+async def test_cancelled_workflow_reservation_reaches_the_canonical_run(tmp_path, drain_before_executor):
+    from openagent_core.workflow.executor import WorkflowExecutor
+
+    db = MemoryDB(str(tmp_path / "definitions.db"))
+    runtime = Runtime(RuntimeSettings("agent", tmp_path), RuntimeServices(
+        SqliteRuntimeStore(tmp_path / "runtime.db"), object(), Policy(), delegations=Delegations()))
+    automations = AutomationRuntime(db, object(), object())
+    await runtime.start()
+    await db.connect()
+    try:
+        definition = await db.add_workflow(name="Manual workflow")
+        workflow = await db.get_workflow(definition)
+        run_id = await db.enqueue_manual_automation("workflow", definition, "manual-request", {})
+        claim, = await db.claim_pending_workflow_requests(only_id=run_id, reserve_runs=True)
+        assert await db.begin_requested_workflow_run(claim)
+        assert await automations.cancel_runs("workflow", definition, [run_id]) == [run_id]
+        await automations.scheduler.set_enabled_domains({"workflows"})
+        if drain_before_executor:
+            await automations.scheduler._drain_cancellations()
+
+        user = PrincipalRef("issuer", "tenant", "caller")
+        context = ExecutionContext(user, user, user, "session", "agent", (user,),
+                                   deferred=True, delegation_id="request")
+        executor = WorkflowExecutor(object(), db)
+        async def execute(request, verified, owner):
+            return await executor.run(workflow, trigger="manual", run_id=run_id, request_id=run_id)
+
+        await runtime.execute_operation(RunRequest(run_id, "session", "manual-request", "test"),
+                                        context, SimpleNamespace(execute=execute))
+        assert (await runtime.wait(run_id, context)).status == "cancelled"
+        await automations.scheduler._drain_cancellations()
+        assert (await db.get_workflow_run(run_id))["status"] == "cancelled"
+
+        unrelated = await db.add_workflow(name="Another workflow")
+        with pytest.raises(sqlite3.IntegrityError):
+            await db.add_workflow_run(workflow_id=unrelated, run_id=run_id, request_id=run_id, trigger="manual")
+    finally:
+        await db.close()
+        await runtime.close()
+
+
+@pytest.mark.parametrize("drain_before_executor", [False, True])
+async def test_preclaimed_task_stopped_during_admission_skips_effects(tmp_path, drain_before_executor):
+    from unittest.mock import AsyncMock
+
+    db = MemoryDB(str(tmp_path / "definitions.db"))
+    handler = AsyncMock(return_value="done")
+    agent = SimpleNamespace(refresh_registries=AsyncMock(), extensions=SimpleNamespace(scheduled_handler=handler))
+    automations = AutomationRuntime(db, agent, object())
+    await db.connect()
+    try:
+        task_id = await db.add_task("Manual task", "0 9 * * *", "test")
+        run_id = await db.enqueue_manual_automation("scheduled_task", task_id, "manual-request", {})
+        claim, = await db.claim_pending_task_requests(only_id=run_id, reserve_runs=True)
+        assert await db.begin_requested_task_run(claim, session_id="session")
+        assert await automations.cancel_runs("scheduled_task", task_id, [run_id]) == [run_id]
+        await automations.scheduler.set_enabled_domains({"scheduler"})
+        if drain_before_executor:
+            await automations.scheduler._drain_cancellations()
+
+        task = {**await db.get_task(task_id), "_preclaimed_run_id": run_id, "_preclaimed_session_id": "session"}
+        with pytest.raises(asyncio.CancelledError):
+            await automations.scheduler._execute_task(task, trigger="manual", request_id="manual-request")
+        handler.assert_not_awaited()
+        assert (await db.get_task_run(run_id))["status"] == "cancelled"
+    finally:
+        await db.close()

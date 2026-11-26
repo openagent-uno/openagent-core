@@ -4996,6 +4996,15 @@ class MemoryDB:
                 )
                 if reserved.rowcount == 1:
                     return rid
+                stopped = await conn.execute_fetchall(
+                    "SELECT 1 FROM workflow_runs AS run JOIN workflow_run_requests AS request "
+                    "ON request.id=run.id AND request.run_id=run.id AND request.workflow_id=run.workflow_id "
+                    "WHERE run.id=? AND run.workflow_id=? AND run.status IN ('cancelling','cancelled')",
+                    (rid, workflow_id),
+                )
+                if stopped:
+                    # Admission can outlast a stop of the reserved occurrence.
+                    raise asyncio.CancelledError
             await conn.execute(
                 "INSERT INTO workflow_runs "
                 "(id, workflow_id, trigger, status, started_at, inputs_json) "

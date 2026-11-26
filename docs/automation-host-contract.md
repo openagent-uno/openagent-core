@@ -57,7 +57,11 @@ projection becomes `cancelled` and receives its finish time. A starting
 or running projection becomes `cancelling`, which the owning scheduler
 observes and acts on. The returned IDs are the rows changed by this
 request, in input order. Repeated requests and unrelated IDs change
-nothing. The host authorizes the request before recording the intent.
+nothing. A reserved workflow that reaches its executor after a stop
+propagates cancellation to the canonical run before entering its graph.
+The scheduler also checks a preclaimed task for cancellation when its
+executor takes ownership, before invoking its handler or agent.
+The host authorizes the request before recording the intent.
 Callers read canonical run status to confirm when execution stops. See the
 [source qualification](qualification/durable-automation-cancellation-2026-11-24.json).
 
