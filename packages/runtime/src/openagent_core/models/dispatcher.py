@@ -1354,6 +1354,15 @@ class TeamRouterProvider(ProviderResources, BaseModel):
             return None
         return self._last_delegation_by_session.get(session_id)
 
+    def _finish_team_answer(self, session_id: str, runtime: Any, answer: dict | None) -> None:
+        # A coordinating Team can speak again after its last delegation. Only
+        # its own terminal assistant message establishes a new answer author.
+        if not isinstance(answer, dict) or getattr(runtime, "respond_directly", False):
+            return
+        text = answer.get("text")
+        if (isinstance(text, str) and text and not text.isspace()) or answer.get("native_audio_sha256"):
+            self._last_delegation_by_session.pop(session_id, None)
+
     def _record_delegation(self, session_id: str, member_id: str) -> None:
         """Look up the runtime_id for ``member_id`` (runtime-derived dash form)
         in the per-session map built at team-build time, and stash it as
@@ -1635,6 +1644,8 @@ class TeamRouterProvider(ProviderResources, BaseModel):
                     model_override=model_override,
                     files=files, images=images, audio=audio, videos=videos,
                 )
+                if account_sink["selected"]:
+                    resp.model = self.effective_model_id(sid)
             else:
                 # Runtime Team path. Translate to the Team's run signature.
                 # Clear the previous turn's delegation memo so this turn's badge
@@ -1657,10 +1668,10 @@ class TeamRouterProvider(ProviderResources, BaseModel):
                     on_delegate=lambda mid: self._record_delegation(sid, mid),
                     files=files, images=images, audio=audio, videos=videos,
                 )
+                self._finish_team_answer(sid, runtime, resp.final_answer)
+                resp.model = self.effective_model_id(sid)
             in_tokens, out_tokens = resp.input_tokens, resp.output_tokens
             cache_tokens = resp.cache_read_tokens
-            if account_sink['selected']:
-                resp.model = self.effective_model_id(sid)
             return resp
         except BaseException as exc:
             outcome = vault_recall.outcome_for_exception(exc)
@@ -1778,6 +1789,12 @@ class TeamRouterProvider(ProviderResources, BaseModel):
             # runtime can always read/write the row regardless of which
             # handle (if any) the gateway bound to the session.
             user_id = RUNTIME_SESSION_USER_ID
+
+            async def finish_team_answer(answer: dict | None) -> None:
+                self._finish_team_answer(sid, runtime, answer)
+                if on_final_answer is not None:
+                    await on_final_answer(answer)
+
             try:
                 async for delta in _arun_runtime_stream(
                     runtime,
@@ -1786,7 +1803,7 @@ class TeamRouterProvider(ProviderResources, BaseModel):
                     user_id=user_id,
                     on_status=on_status,
                     error_event="team_router.stream_error",
-                    on_final_answer=on_final_answer,
+                    on_final_answer=finish_team_answer,
                     on_delegate=lambda mid: self._record_delegation(sid, mid),
                     on_run_id=lambda rid: self._track_run_id(sid, rid),
                     files=files, images=images, audio=audio, videos=videos,

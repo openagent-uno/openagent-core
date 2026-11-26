@@ -3,7 +3,7 @@ import collections.abc
 import json
 from math import isfinite
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from hashlib import md5
 from pathlib import Path
 from time import sleep, time
@@ -85,6 +85,13 @@ def _tool_iterator_items(result, call_id):
         yield item
 
 
+def _message_separator(previous: str, current: str) -> str:
+    """Keep independently authored tool-loop messages readable in the transcript."""
+    if previous and current and not previous[-1].isspace() and not current[0].isspace():
+        return "\n\n"
+    return ""
+
+
 @dataclass
 class MessageData:
     response_role: Optional[Literal["system", "user", "assistant", "tool"]] = None
@@ -105,6 +112,7 @@ class MessageData:
     response_provider_data: Optional[Dict[str, Any]] = None
 
     extra: Optional[Dict[str, Any]] = None
+    previous_message_end: str = ""
 
 
 def _log_messages(messages: List[Message]) -> None:
@@ -1210,10 +1218,9 @@ class Model(ABC):
 
         # Update model response with assistant message content and audio
         if assistant_message.content is not None:
-            if model_response.content is None:
-                model_response.content = assistant_message.get_content_string()
-            else:
-                model_response.content += assistant_message.get_content_string()
+            previous = model_response.content or ""
+            current = assistant_message.get_content_string()
+            model_response.content = previous + _message_separator(previous, current) + current
         if assistant_message.reasoning_content is not None:
             model_response.reasoning_content = assistant_message.reasoning_content
         if assistant_message.redacted_reasoning_content is not None:
@@ -1280,10 +1287,9 @@ class Model(ABC):
 
         # Update model response with assistant message content and audio
         if assistant_message.content is not None:
-            if model_response.content is None:
-                model_response.content = assistant_message.get_content_string()
-            else:
-                model_response.content += assistant_message.get_content_string()
+            previous = model_response.content or ""
+            current = assistant_message.get_content_string()
+            model_response.content = previous + _message_separator(previous, current) + current
         if assistant_message.reasoning_content is not None:
             model_response.reasoning_content = assistant_message.reasoning_content
         if assistant_message.redacted_reasoning_content is not None:
@@ -1480,6 +1486,7 @@ class Model(ABC):
             _compression_manager = compression_manager if _compress_tool_results else None
 
             function_call_count = 0
+            previous_message_end = ""
 
             while True:
                 # Compress existing tool results BEFORE invoke
@@ -1499,7 +1506,7 @@ class Model(ABC):
 
                 assistant_message = Message(role=self.assistant_message_role)
                 # Create assistant message and stream data
-                stream_data = MessageData()
+                stream_data = MessageData(previous_message_end=previous_message_end)
                 model_response = ModelResponse()
 
                 # Emit LLM request started event
@@ -1552,10 +1559,15 @@ class Model(ABC):
                         from openagent_core.core.metrics import accumulate_model_metrics
 
                         accumulate_model_metrics(model_response, self, self.model_type, run_response.metrics)
+                    if isinstance(model_response.content, str):
+                        separator = _message_separator(previous_message_end, model_response.content)
+                        model_response.content = separator + model_response.content
                     if self.cache_response:
                         streaming_responses.append(model_response)
                     yield model_response
 
+                if isinstance(assistant_message.content, str) and assistant_message.content:
+                    previous_message_end = assistant_message.content[-1]
                 # Add assistant message to messages
                 messages.append(assistant_message)
                 assistant_message.log(metrics=True)
@@ -1756,6 +1768,7 @@ class Model(ABC):
             _compression_manager = compression_manager if _compress_tool_results else None
 
             function_call_count = 0
+            previous_message_end = ""
 
             while True:
                 # Compress existing tool results BEFORE making API call to avoid context overflow
@@ -1775,7 +1788,7 @@ class Model(ABC):
 
                 # Create assistant message and stream data
                 assistant_message = Message(role=self.assistant_message_role)
-                stream_data = MessageData()
+                stream_data = MessageData(previous_message_end=previous_message_end)
                 model_response = ModelResponse()
 
                 # Emit LLM request started event
@@ -1828,10 +1841,15 @@ class Model(ABC):
                         from openagent_core.core.metrics import accumulate_model_metrics
 
                         accumulate_model_metrics(model_response, self, self.model_type, run_response.metrics)
+                    if isinstance(model_response.content, str):
+                        separator = _message_separator(previous_message_end, model_response.content)
+                        model_response.content = separator + model_response.content
                     if self.cache_response:
                         streaming_responses.append(model_response)
                     yield model_response
 
+                if isinstance(assistant_message.content, str) and assistant_message.content:
+                    previous_message_end = assistant_message.content[-1]
                 # Add assistant message to messages
                 messages.append(assistant_message)
                 assistant_message.log(metrics=True)
@@ -2008,7 +2026,12 @@ class Model(ABC):
 
         # Update stream_data content
         if model_response_delta.content is not None:
-            stream_data.response_content += model_response_delta.content
+            content = model_response_delta.content
+            if not stream_data.response_content and isinstance(content, str):
+                separator = _message_separator(stream_data.previous_message_end, content)
+                if separator:
+                    model_response_delta = replace(model_response_delta, content=separator + content)
+            stream_data.response_content += content
             # Set time_to_first_token on first content chunk if not already set
             if stream_data.response_metrics is not None and stream_data.response_metrics.time_to_first_token is None:
                 stream_data.response_metrics.set_time_to_first_token()

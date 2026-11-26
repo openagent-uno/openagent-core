@@ -260,24 +260,43 @@ class ActualProviderToolLoop(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import patch
         from openagent_core.models.native_provider import NativeProvider
         from openagent_core.models.providers.base import Model
-        from openagent_core.models.providers.response import ModelResponse
+        from openagent_core.models.providers.response import ModelResponse, ModelResponseEvent
         from openagent_core.core._runner.agent.agent import Agent as RuntimeAgent
         calls=[]
         def read_value() -> str:
             """Read the deterministic fixture value."""
             calls.append("tool")
             return "41"
+        before, after = "I will check.", "The answer is 41."
+
         class ProviderIO(Model):
-            def __init__(self):super().__init__(id="fixture",provider="fixture")
-            def invoke(self,*a,**k):raise AssertionError("no network")
-            def invoke_stream(self,*a,**k):raise AssertionError("no network")
-            async def ainvoke(self,*a,**k):raise AssertionError("stream only")
-            async def ainvoke_stream(self,*a,**k):
-                if not calls:
-                    yield ModelResponse(role="assistant",content="I will check.",tool_calls=[{"id":"call-1","type":"function","function":{"name":"read_value","arguments":"{}"}}])
-                else:yield ModelResponse(role="assistant",content="The answer is 41.")
-            def _parse_provider_response(self,response,**k):return response
-            def _parse_provider_response_delta(self,response):return response
+            def __init__(self):
+                super().__init__(id="fixture", provider="fixture")
+
+            def invoke_stream(self, **kwargs):
+                text = after if calls else before
+                tools = [] if calls else [{"id": "call-1", "type": "function",
+                    "function": {"name": "read_value", "arguments": "{}"}}]
+                yield ModelResponse(role="assistant", content=text[:2])
+                yield ModelResponse(role="assistant", content=text[2:], tool_calls=tools)
+
+            def invoke(self, **kwargs):
+                first, last = self.invoke_stream(**kwargs)
+                return ModelResponse(role="assistant", content=first.content + last.content, tool_calls=last.tool_calls)
+
+            async def ainvoke(self, **kwargs):
+                return self.invoke(**kwargs)
+
+            async def ainvoke_stream(self, **kwargs):
+                for chunk in self.invoke_stream(**kwargs):
+                    yield chunk
+
+            def _parse_provider_response(self, response, **kwargs):
+                return response
+
+            def _parse_provider_response_delta(self, response):
+                return response
+
         native=NativeProvider('openai:fixture',api_key='fixture-only')
         runner=RuntimeAgent(name="fixture",model=ProviderIO(),tools=[read_value],markdown=False)
         answers=[]
@@ -285,8 +304,39 @@ class ActualProviderToolLoop(unittest.IsolatedAsyncioTestCase):
         with patch.object(native,'_ensure_team',return_value=None),patch.object(native,'_ensure_agent',return_value=runner):
             chunks=[c async for c in native.stream([{"role":"user","content":"question"}],session_id="actual-runner",on_final_answer=capture)]
         self.assertEqual(["tool"],calls)
-        self.assertEqual("I will check.The answer is 41.","".join(chunks))
+        self.assertEqual("I will check.\n\nThe answer is 41.","".join(chunks))
         self.assertEqual([{"text":"The answer is 41."}],answers)
+
+        from openagent_core.mcp._runtime.function import Function
+        tools = [Function.from_callable(read_value)]
+        for before, after, expected in [
+            ("Checking.", "Result.", "Checking.\n\nResult."),
+            ("Checking. ", "Result.", "Checking. Result."),
+            ("Checking.", "\nResult.", "Checking.\nResult."),
+            ("", "Result.", "Result."),
+            ("Checking.", "", "Checking."),
+        ]:
+            for method, stream_io in (
+                ("response", None), ("aresponse", None),
+                ("response_stream", True), ("response_stream", False),
+                ("aresponse_stream", True), ("aresponse_stream", False),
+            ):
+                with self.subTest(before=before, after=after, method=method, stream_io=stream_io):
+                    calls.clear()
+                    messages = [Message(role="user", content="Question.")]
+                    call = getattr(ProviderIO(), method)
+                    if stream_io is None:
+                        result = call(messages, tools=tools)
+                        text = (await result if method == "aresponse" else result).content
+                    else:
+                        stream = call(messages, tools=tools, stream_model_response=stream_io)
+                        events = [event async for event in stream] if method == "aresponse_stream" else list(stream)
+                        text = "".join(event.content or "" for event in events
+                                       if event.event == ModelResponseEvent.assistant_response)
+                    authored = [message.content or "" for message in messages if message.role == "assistant"]
+                    self.assertEqual([before, after], authored)
+                    self.assertEqual(expected, text)
+                    self.assertEqual(["tool"], calls)
 
 
 class AgentBoundary(unittest.IsolatedAsyncioTestCase):

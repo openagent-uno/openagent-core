@@ -28,7 +28,7 @@ from openagent_core.models.dispatcher import ModelDispatcher
 from openagent_core.models.native_provider import NativeProvider
 from openagent_core.models.providers.base import Model
 from openagent_core.models.providers.response import ModelResponse
-from openagent_core.runtime import current_execution_context, current_run_id, current_runtime
+from openagent_core.runtime import current_execution_context, current_run_id, current_runtime, execution_scope
 from openagent_core.workspace_administration import SessionInspection
 from openagent_storage_sqlite import SqliteRuntimeStore
 
@@ -107,7 +107,7 @@ class ScriptedProviderIO:
         self.case.assertIn("delegate_task_to_member", names)
         self.member_ids.append(member_id)
         self.delegated.add(run_id)
-        return ModelResponse(role="assistant", tool_calls=[{
+        return ModelResponse(role="assistant", content="I will consult the specialist.", tool_calls=[{
             "id": "delegate-" + run_id,
             "type": "function",
             "function": {"name": "delegate_task_to_member", "arguments": json.dumps({
@@ -309,6 +309,12 @@ class TeamModelCatalogDelegation(unittest.IsolatedAsyncioTestCase):
         parent_done = [event.payload for event in await active.runtime.events(parent_id, 0, self.context)
                        if event.kind == "run.stream" and event.payload.get("kind") == "done"]
         self.assertEqual("The delegated fixture task is complete.", parent_done[-1]["final_answer"]["text"])
+        with execution_scope(active.runtime, self.context, parent_id):
+            self.assertEqual(LEADER_REF, active.agent.last_response_meta(self.context.session_id)["model"])
+        self.assertEqual("I will consult the specialist.\n\nThe delegated fixture task is complete.",
+                         parent_done[-1]["text"])
+        with execution_scope(active.runtime, child_io[0][2], child.run_id):
+            self.assertEqual(MEMBER_REF, active.agent.last_response_meta(child.session_id)["model"])
         child_done = [event.payload for event in await active.runtime.events(child.run_id, 0, self.context)
                       if event.kind == "run.stream" and event.payload.get("kind") == "done"]
         self.assertEqual(ANSWER, child_done[-1]["final_answer"]["text"])

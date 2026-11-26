@@ -199,6 +199,59 @@ async def test_router_records_actual_account_once_and_preserves_badge(stream):
     assert dispatcher.effective_model_id('one') == 'second:fixture'
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("answer_mode,expected", [
+    ("synthesis", "second:fixture"),
+    ("direct", "member:fixture"),
+    ("silent", "member:fixture"),
+])
+async def test_team_footer_follows_the_author_of_the_delivered_answer(stream, answer_mode, expected):
+    from openagent_core.core._run_state.team import RunCompletedEvent, ToolCallStartedEvent, TeamRunOutput
+    from openagent_core.core._runner.utils.events import create_team_run_completed_event
+    from openagent_core.models.dispatcher import TeamRouterProvider
+    from openagent_core.models.providers.response import ToolExecution
+
+    first, backup = Script(ModelProviderError(message="quota", status_code=429)), Script()
+    first._openagent_account_routes = policy(first, backup)
+    delegate = ToolExecution(tool_name="delegate_task_to_member", tool_args={"member_id": "member"})
+    messages = [Message(role="user", content="Question."), Message(role="tool", content="Member reply.")]
+    if answer_mode != "silent":
+        messages.append(Message(role="assistant", content="Published answer."))
+    output = TeamRunOutput(session_id="session", run_id="root", team_id="team", content="Published answer.",
+                           messages=messages, tools=[delegate])
+
+    class Team:
+        id = "team"
+        respond_directly = answer_mode == "direct"
+
+        def arun(self, prompt, *, stream, **kwargs):
+            async def collect():
+                await first.ainvoke()
+                return output
+
+            async def events():
+                yield ToolCallStartedEvent(session_id="session", run_id="root", team_id=self.id, tool=delegate)
+                yield RunCompletedEvent(session_id="child", run_id="child", team_id="member",
+                                        final_answer={"text": "Child completed."})
+                yield create_team_run_completed_event(await collect())
+
+            return events() if stream else collect()
+
+    router = TeamRouterProvider("first:fixture")
+    router._ensure_runtime = lambda *args, **kwargs: Team()
+    router._session_member_map["session"] = {"member": "member:fixture"}
+    query = [{"role": "user", "content": "Question."}]
+    if stream:
+        assert [part async for part in router.stream(query, session_id="session")] == ["Published answer."]
+    else:
+        result = await router.generate(query, session_id="session")
+        assert result.model == expected
+    assert router.effective_model_id("session") == expected
+    assert router.effective_model_id("another-session") == "first:fixture"
+    assert (first.calls, backup.calls) == (1, 1)
+
+
 def test_dispatcher_badge_uses_only_the_latest_provider_for_each_session():
     from openagent_core.models.dispatcher import ModelDispatcher, TeamRouterProvider
     old = TeamRouterProvider('old:leader')

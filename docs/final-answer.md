@@ -56,6 +56,16 @@ messages, a terminal tool/user message, history-only data or unsupported output
 content produce no attestation. Typed text/output-text blocks are supported.
 An empty attested message is distinct from an unknown answer.
 
+In a tool loop, the complete transcript retains each assistant message. When
+consecutive messages have no whitespace at their boundary, Core inserts a
+paragraph break in the combined text. Token chunks within an individual
+message and the stored provider messages retain their original text.
+
+The completed response identifies the model that authored the answer. A
+coordinating team reports its leader when the leader synthesizes a final
+answer. A directly relayed member answer retains the specialist's model.
+Account or model recovery resolves the author's actual route.
+
 Native and routed providers forward this boundary through a per-call callback.
 There is no provider-global “last answer”. Parent session and run identities
 exclude delegated children and unrelated completions. Autoloop iterations clear
