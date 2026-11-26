@@ -211,8 +211,9 @@ a legacy local path does not become a downloadable public attachment.
 SQLite message pages also recover files from previously saved native Runtime
 turns. The original admission identifies user uploads. The successful terminal
 frame identifies files the assistant delivered. Recovery checks the current
-session link, availability and source permissions on each read. It preserves
-the existing message order and requires no history migration. A client requesting
+session link, availability and source permissions on each read. It skips a
+malformed source or a message, admission envelope or terminal frame over 2 MiB.
+Other messages on the same page retain their order. A client requesting
 an interleaved timeline receives the canonical message when a text-only segment
 would hide a file.
 

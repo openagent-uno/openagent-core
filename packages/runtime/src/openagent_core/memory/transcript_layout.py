@@ -7,6 +7,7 @@ from typing import Any, TypedDict
 
 from openagent_core.memory.message_parts import (
     MAX_MESSAGE_PARTS,
+    MAX_TEXT_PART_BYTES,
     canonical_parts_for_messages_on_connection,
 )
 from openagent_core.memory.operational.access import AccessContext, resource_is_visible
@@ -195,10 +196,12 @@ async def _attest_journal(
         SELECT event_type, sensitivity, json_extract(metadata_json,'$.privacy_redacted') AS redacted,
                CASE WHEN event_type='run.stream' THEN json_extract(metadata_json,'$.kind') END AS stream_kind,
                CASE WHEN ?=0 AND event_type='run.stream' AND json_extract(metadata_json,'$.kind')='done'
-                    THEN json_type(metadata_json,'$.attachments[0]') IS NOT NULL
-                         OR json_type(metadata_json,'$.final_answer.attachments[0]') IS NOT NULL
-                         OR EXISTS (SELECT 1 FROM json_each(metadata_json,'$.parts') p
-                                    WHERE p.type='object' AND json_extract(p.value,'$.kind')='attachment') END AS unmaterialized_file,
+                    THEN CASE WHEN length(CAST(metadata_json AS BLOB))>? THEN 1
+                         ELSE json_type(metadata_json,'$.attachments[0]') IS NOT NULL
+                              OR json_type(metadata_json,'$.final_answer.attachments[0]') IS NOT NULL
+                              OR EXISTS (SELECT 1 FROM json_each(metadata_json,'$.parts') p
+                                         WHERE p.type='object' AND json_extract(p.value,'$.kind')='attachment')
+                         END END AS unmaterialized_file,
                CASE WHEN event_type='run.stream' AND sensitivity='normal'
                     AND json_type(metadata_json,'$.text')='text'
                     AND length(CAST(json_extract(metadata_json,'$.text') AS BLOB))<=?
@@ -215,7 +218,7 @@ async def _attest_journal(
     cuts: list[int] = []
     offset = 0
     verified_final = False
-    parameters = (has_parts, len(text.encode()), run_id, tenant_id, session_id, run_id, _MAX_TURN_EVENTS + 1)
+    parameters = (has_parts, MAX_TEXT_PART_BYTES, len(text.encode()), run_id, tenant_id, session_id, run_id, _MAX_TURN_EVENTS + 1)
     async with conn.execute(query, parameters) as cursor:
         count = 0
         async for event in cursor:

@@ -186,6 +186,34 @@ class DocumentSessionAttachments(unittest.IsolatedAsyncioTestCase):
         for aid in expected[:3]:
             self.assertNotIn(aid, json.dumps(remaining))
 
+    async def test_bad_or_oversized_historical_source_does_not_hide_its_neighbor(self):
+        from openagent_core.memory.message_parts import MAX_TEXT_PART_BYTES, canonical_parts_for_messages_on_connection
+
+        conn, access = await self.page_access()
+        ref = {"artifact_id": self.original["artifact_id"]}
+        large = "x" * (MAX_TEXT_PART_BYTES + 1)
+        for rid in ("healthy", "string", "large-input", "bad-text", "large-frame"):
+            await self.admit(rid, attachments=(ref,))
+            frame = {"kind": "done", "text": "Delivered", "attachments": [ref]}
+            if rid == "bad-text":
+                frame["parts"] = [{"kind": "text"}, {"kind": "attachment", "attachment": ref}]
+            if rid == "large-frame":
+                frame["unused"] = large
+            await self.store.append_event(rid, "run.stream", frame)
+            await self.store.transition(rid, "success", output="Delivered")
+        await conn.execute("UPDATE session_runs SET metadata_json=json_set(metadata_json,'$.attachments',?) WHERE id='string'",
+                           ("malformed historical list",))
+        await conn.execute("UPDATE session_runs SET metadata_json=json_set(metadata_json,'$.attachments[0].unused',?) "
+                           "WHERE id='large-input'", (large,))
+        rows = await (await conn.execute(
+            "SELECT id,run_id,role FROM session_messages WHERE run_id!='seed' ORDER BY sequence")).fetchall()
+        page = await canonical_parts_for_messages_on_connection(conn, [r["id"] for r in rows], access=access)
+        denied = {("string", "user"), ("large-input", "user"), ("bad-text", "assistant"), ("large-frame", "assistant")}
+        for row in rows:
+            with self.subTest(run=row["run_id"], role=row["role"]):
+                files = [part["attachment"]["artifact_id"] for part in page.get(row["id"], []) if part["kind"] == "attachment"]
+                self.assertEqual(files, [] if (row["run_id"], row["role"]) in denied else [ref["artifact_id"]])
+
     async def test_first_turn_returns_original_bytes_and_historical_turn_rediscovers_them(self):
         ctx = self.context
         original = self.original
