@@ -1,5 +1,7 @@
 # OpenAgent core documentation
 
+[Embedding beta 174](releases/v1.1.0-beta.174.md) covers transcript layout across pages, verified tool files, and idle provider streams.
+
 [Embedding beta 172](releases/v1.1.0-beta.172.md) covers live desktop authorization and durable automation cancellation.
 
 [Embedding beta 171](releases/v1.1.0-beta.171.md) adds transactional observers for SQL vault mutations.
