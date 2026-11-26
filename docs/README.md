@@ -1,5 +1,7 @@
 # OpenAgent core documentation
 
+[Embedding beta 184](releases/v1.1.0-beta.184.md) describes subscription account selection after a streamed provider error.
+
 [Embedding beta 183](releases/v1.1.0-beta.183.md) covers startup recovery for module-owned capabilities.
 
 [Embedding beta 182](releases/v1.1.0-beta.182.md) covers recovery of slow local MCP sources.
