@@ -80,7 +80,17 @@ permissions. Returned credentials belong only in the host's private custody API.
 No browser, listener, token file or environment discovery is involved.
 
 `openagent_core.subscriptions.errors.SubscriptionError` provides sanitized
-`public()` and `headers()` projections. Quota windows retain their reset and
+`public()` and `headers()` projections. The public error object includes a
+numeric `status` alongside `code`, `type` and `message`. When a relay has
+already sent HTTP 200, Core reads an integer `error.status` first, then an
+integer `error.code` (both in the 400–599 range), then a known subscription
+code. Beta 182 could send `subscription_refused` alone for 403, 409 or 422.
+That ambiguous event now decodes to 400 and does not trigger account failover.
+The distinct legacy codes `subscription_reconnect_required` and
+`subscription_account_not_connected` retain 401 and 409, respectively. The
+new relay carries the explicit status, such as 422 for a refused request.
+For a public subscription error returned with HTTP 4xx or 5xx, the HTTP
+status takes precedence. Quota windows retain their reset and
 Retry-After without forwarding vendor messages or credential exchange bodies.
 Grant inference requires a completed upstream terminal event. A truncated or
 failed stream emits an error, never a fabricated finish or `[DONE]`. Native

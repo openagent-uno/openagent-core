@@ -44,11 +44,14 @@ Streams rotate only before provider output; local request markers are excluded.
 After provider output starts, a failure is surfaced without replay, so nothing
 is duplicated.
 
-OpenAI-compatible streams can report an error in an SSE frame after sending
-HTTP 200 headers. The driver preserves numeric error codes and the subscription
-relay's typed codes. An initial authentication error can therefore select the
-next eligible account in the same request. An error after the first provider
-frame ends the stream with its original status.
+An OpenAI-compatible endpoint can send HTTP 200 and then report an error in a
+server-sent event. The synchronous and asynchronous drivers read its structured
+status. A 401 before the first provider output frame lets a [declared subscription
+account group](subscriptions.md#declared-account-failover) try the next eligible
+account for the same model. A refusal with status 400 or 422 does not by itself
+trigger account failover. The driver reports 502 for an unrecognized stream
+error without a usable status. Once the provider has yielded a frame, even one
+without text, the error ends the stream and the account router does not replay it.
 
 `metadata.accounts[*].api_key` is write-only: provider rows returned by the
 management API show `api_key_display` instead, like the provider's own key.
