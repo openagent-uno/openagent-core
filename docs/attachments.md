@@ -248,6 +248,10 @@ source grants are checked again when the engine selects the attachment for the
 final answer. Delivery reuses the original object and link. Search stops after
 twenty-one authorized matches and returns twenty with a truncation flag.
 
+When an admitted input contains only its artifact ID, search and resend use
+the name recorded on the conversation's input links at admission. Conflicting
+names for identical bytes leave the artifact ID as its display name.
+
 This verification requires the runtime's own canonical SQLite database.
 Embedded hosts without verifiable input provenance get no matches or delivery
 marker through this path. Publishing a new path still uses the host's selected

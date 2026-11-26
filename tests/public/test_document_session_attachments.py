@@ -174,6 +174,44 @@ class DocumentSessionAttachments(unittest.IsolatedAsyncioTestCase):
             await conn.commit()
             self.assertFalse((await self.call("resend_session_attachment", artifact_id=self.original["artifact_id"]))["ok"])
 
+    async def test_id_only_admission_uses_the_existing_session_input_name(self):
+        ctx = self.context
+        ident = self.original["artifact_id"]
+        minimal = {"artifact_id": ident}
+        current = await self.admit("id-only", attachments=(minimal,))
+        # A later upload of identical bytes cannot name the earlier input.
+        duplicate = await self.repository.upload(ctx, self.content, filename="later.txt", session_id=ctx.session_id)
+        # Exercise this ordering even on a filesystem with coarse timestamps.
+        conn = await self.db._ensure_connected()
+        await conn.execute("UPDATE artifact_links SET created_at_ms=(SELECT created_at_ms+1 FROM session_runs WHERE id=?) WHERE id=?",
+                           (current.run_id, duplicate["artifact_link_id"]))
+        await conn.commit()
+        with execution_scope(self.runtime, ctx, current.run_id):
+            await self.vault.read(ctx, "note.md")
+            listing = await self.call("find_session_attachments", query="original.txt")
+            self.assertEqual([file["artifact_id"] for file in listing["attachments"]], [ident])
+            resend = await self.call("resend_session_attachment", artifact_id=ident)
+            self.assertEqual(resend["attachment"]["filename"], "original.txt")
+            self.assertEqual(resend["attachment"]["artifact_link_id"], self.original["artifact_link_id"])
+            self.assertEqual((await self.call("find_session_attachments", query="later.txt"))["attachments"], [])
+        following = await self.admit("later")
+        with execution_scope(self.runtime, ctx, following.run_id):
+            await self.vault.read(ctx, "note.md")
+            previous = await self.call("find_session_attachments", query="original.txt")
+            self.assertEqual([file["artifact_id"] for file in previous["attachments"]], [ident])
+        # Two earlier spellings for a new id-only input are ambiguous. The
+        # accepted identifier can still be delivered without guessing a name.
+        ambiguous = await self.repository.upload(ctx, b"duplicate", filename="left.txt", session_id=ctx.session_id)
+        await self.repository.upload(ctx, b"duplicate", filename="right.txt", session_id=ctx.session_id)
+        duplicate_id = ambiguous["artifact_id"]
+        later = await self.admit("ambiguous", attachments=({"artifact_id": duplicate_id},))
+        with execution_scope(self.runtime, ctx, later.run_id):
+            await self.vault.read(ctx, "note.md")
+            returned = await self.call("resend_session_attachment", artifact_id=duplicate_id)
+            self.assertEqual(returned["attachment"]["filename"], duplicate_id)
+            for name in ("left.txt", "right.txt"):
+                self.assertEqual((await self.call("find_session_attachments", query=name))["attachments"], [])
+
     async def test_changed_audience_revoked_note_and_other_session(self):
         ctx = self.context
         original = self.original

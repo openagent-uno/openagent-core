@@ -488,14 +488,22 @@ async def document_turn_originals(db, runtime, context, *, query="", artifact_id
                AND m.author_kind='user' AND m.visibility='user_visible' AND m.status='complete'
                {history_filter}
         )
-        SELECT a.*, i.run_id, i.message_author, i.filename, l.id AS link_id
+        SELECT a.*, i.run_id, i.message_author, l.id AS link_id,
+               coalesce(i.filename, CASE WHEN NOT EXISTS (
+                   SELECT 1 FROM artifact_links other
+                    WHERE other.tenant_id=l.tenant_id AND other.artifact_id=l.artifact_id
+                      AND other.resource_type='session' AND other.resource_id=l.resource_id
+                      AND other.relation='input_attachment' AND other.created_at_ms<=i.stamp
+                      AND other.display_name IS NOT l.display_name
+               ) THEN l.display_name END, a.id) AS input_filename
           FROM inputs i JOIN artifacts a ON a.id=i.aid AND a.tenant_id=:tenant
           JOIN artifact_links l ON l.tenant_id=a.tenant_id AND l.artifact_id=a.id
            AND l.resource_type='session' AND l.resource_id=:session AND l.relation='input_attachment'
            AND (i.input_link IS NULL OR l.id=i.input_link)
+           AND (i.filename IS NOT NULL OR l.created_at_ms<=i.stamp)
           JOIN sessions_v2 s ON s.tenant_id=l.tenant_id AND s.id=l.resource_id
          WHERE s.deleted_at_ms IS NULL AND a.deleted_at_ms IS NULL AND a.storage_state='available'
-           AND instr(lower(coalesce(i.filename,a.id)), lower(:query))>0
+           AND instr(lower(input_filename), lower(:query))>0
          ORDER BY i.stamp DESC, a.id, l.id
     """
     guard = SessionProjectionGuard(check_source_once)
@@ -537,7 +545,7 @@ async def document_turn_originals(db, runtime, context, *, query="", artifact_id
                     allowed = admitted[run] and (row["message_author"] is None or row["message_author"] == admitted[run])
                 if not allowed or not await visible(conn, row, guard):
                     continue
-                filename = safe_attachment_filename(row["filename"] or ident)
+                filename = safe_attachment_filename(row["input_filename"])
                 refs[ident] = public_attachment_ref(_attachment_ref(
                     row, path=Path(), filename=filename, kind=attachment_kind(row["mime"]), link_id=row["link_id"]))
                 if len(refs) == 21 or artifact_id is not None:
