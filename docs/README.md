@@ -1,5 +1,7 @@
 # OpenAgent core documentation
 
+[Embedding beta 177](releases/v1.1.0-beta.177.md) covers file names and attachments in saved runtime conversations.
+
 [Embedding beta 176](releases/v1.1.0-beta.176.md) covers the return of original attachments in document-aware conversations.
 
 [Embedding beta 175](releases/v1.1.0-beta.175.md) covers model selection in conversations with an authorized audience.
