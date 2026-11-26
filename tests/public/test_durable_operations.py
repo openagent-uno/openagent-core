@@ -429,12 +429,12 @@ class DurableOperationsTests(unittest.IsolatedAsyncioTestCase):
 
         async def read(args, context):
             if not ready:
-                await asyncio.Future()
+                raise TimeoutError('The submitted record is not ready')
             return {'ready': True}
 
         runtime, runner = await self.runtime(read)
-        await runtime.submit(replace(self.request(), deadline_seconds=.15), self.context)
-        await runtime.wait('run-a', self.context)
+        await runtime.submit(self.request(), self.context)
+        self.assertEqual((await runtime.wait('run-a', self.context)).status, 'timed_out')
         admitted = asyncio.Event()
 
         async def before_checkpoint(request, context, current_runtime):
@@ -453,6 +453,21 @@ class DurableOperationsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, 'failed')
         self.assertEqual(result.output['error_type'], 'IdempotencyConflict')
         self.assertEqual(len(self.submissions), 1)
+
+    async def test_unacknowledged_idempotent_submission_reuses_its_key(self):
+        async def lose_first_acknowledgement():
+            if len(self.submissions) == 1:
+                raise TimeoutError('The acknowledgement was lost')
+
+        async def read(args, context):
+            return {'ready': True}
+
+        _, runner = await self.runtime(read, submit_behavior=lose_first_acknowledgement)
+        await runner.submit(self.request(), self.context)
+        result = await self.finished(runner)
+        self.assertEqual(result.status, 'success')
+        self.assertEqual(len(self.submissions), 2)
+        self.assertEqual(self.submissions[0], self.submissions[1])
 
     async def test_readiness_pending_completion_continues_after_bounded_delay(self):
         calls = 0
