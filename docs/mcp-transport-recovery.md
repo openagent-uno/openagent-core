@@ -73,8 +73,15 @@ When a [module](modules-v1.1.md) requires a native source, it calls
 whole retry series already scheduled for that source and returns its ready
 toolkit. If the executable is missing, the method returns `None` without a
 retry. It also returns `None` if recovery ends without a ready catalog. In
-both cases graph preparation fails. Cancelling module startup closes its pool
-and stops pending retries.
+both cases graph preparation fails. Cancelling module startup stops pending
+retries and closes the processes and supervisors acquired by that attempt.
+
+An initialized source with a complete catalog for its current connection is
+`ready`, even when `tools/list` returns zero tools. A connected source with
+failed discovery reports `dormant` and keeps its failure diagnostic. Successful
+discovery clears that diagnostic. A legacy toolkit without a catalog
+generation needs at least one tool to report readiness. See how
+[reload handles retained connections](mcp-catalog-changes.md).
 
 If all three attempts in a running pool fail transiently, authorized discovery
 can start a new burst after a cooldown. The cooldown is the greater of 60

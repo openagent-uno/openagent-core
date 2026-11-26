@@ -3,11 +3,13 @@
 Adding, editing, enabling, disabling or removing a source (REST or the
 `mcp-manager` tools) updates the registry and the live pool at once:
 
-- **Only the changed source restarts.** `MCPPool.reload()` compares each
-  resolved spec with the running one. A source whose spec is identical keeps
-  its connection and toolkit, so its catalog registration and every tool
-  reference already issued stay valid. A dormant source (connected, zero
-  tools) is retried. A changed source is replaced; a removed one is closed.
+- **Reload keeps healthy connections.** `MCPPool.reload()` retains the same
+  toolkit and registration when the source specification is unchanged and
+  discovery is complete, including when the catalog is empty. Existing tool
+  references on that connection survive the reload. The pool retries dormant
+  sources, replaces changed sources and closes removed ones. If a reload is
+  cancelled while new sources are starting, it closes connections acquired by
+  that attempt and keeps the healthy connections it retained at the start.
 - **Discovery changes from the next turn.** Each run keeps the capability
   snapshot it was admitted with (`CapabilityCatalog.snapshot_revision()`).
   A new source is registered immediately but becomes discoverable when the

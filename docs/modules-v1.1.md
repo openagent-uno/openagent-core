@@ -24,12 +24,13 @@ the retries are exhausted. During reconfiguration the previous graph continues
 to serve while the replacement is being prepared. Handshake recovery never
 invokes or replays a tool.
 
-A complete catalog with zero tools satisfies the source requirement on the
-first handshake or after recovery. The module service can then start with an
-empty tool list, and `MCPPool.connection_status()` reports `ready` with a
-`tool_count` of zero.
-Cancelling startup closes every subprocess already acquired by that attempt.
-A cancelled pool reload preserves connections retained from the previous configuration.
+A complete catalog for the current connection satisfies the source requirement
+on the first handshake or after recovery. If it contains zero tools, the module
+can publish its service and `MCPPool.connection_status()` reports `ready` with
+`tool_count` set to `0`. If startup is cancelled while a later source connects,
+the module closes the subprocesses it has already started and leaves its service
+unpublished. On a [configuration reload](mcp-catalog-changes.md), cancellation
+preserves healthy connections retained from the previous configuration.
 
 The independently built wheels are `openagent-module-sessions`, `-search`,
 `-vault`, `-mcp`, `-workflows`, `-scheduler`, `-events`, `-delegation`, `-skills`,
