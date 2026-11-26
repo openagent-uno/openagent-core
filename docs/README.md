@@ -1,5 +1,7 @@
 # OpenAgent core documentation
 
+[Embedding beta 183](releases/v1.1.0-beta.183.md) covers startup recovery for module-owned capabilities.
+
 [Embedding beta 182](releases/v1.1.0-beta.182.md) covers recovery of slow local MCP sources.
 
 [Embedding beta 181](releases/v1.1.0-beta.181.md) clarifies structured tool decisions and literal final answers.
