@@ -189,6 +189,7 @@ async def durable_module_references(repository: AutomationRepository,
 
 
 def build_automation_toolkit(kind: str):
+    from .capabilities import CapabilityUnavailable
     from .mcp._runtime import Toolkit
     from .runtime import current_execution_context,current_runtime
     module=_module(kind)
@@ -234,12 +235,15 @@ def build_automation_toolkit(kind: str):
         service = getattr(getattr(runtime, "services", None), "automation_management", None)
         if service is None or context is None:
             raise PermissionError("This host does not expose automation management")
-        return await service.review_authorization(kind, definition_id, context)
+        review = getattr(service, "review_authorization", None)
+        if not callable(review):
+            raise CapabilityUnavailable("This host does not support automation authorization review")
+        return await review(kind, definition_id, context)
 
     review_automation_authorization.__name__ = f"review_{noun}_authorization"
 
     async def approve_automation_authorization(
-        definition_id: str, digest: str,
+        definition_id: str, digest: str, sources: list[str] | None = None,
     ) -> dict[str, Any]:
         """Approve exactly one previously reviewed automation revision.
 
@@ -247,14 +251,30 @@ def build_automation_toolkit(kind: str):
         call this after the current authenticated user explicitly asks to
         activate this definition; existence or enabled state is not consent.
         A changed definition is rejected instead of approving newer behavior.
+        Pass the exact approved durable source IDs in sources. An empty list
+        selects none. Omitting sources uses the host's default selection.
         """
         runtime, context = current_runtime(), current_execution_context()
         service = getattr(getattr(runtime, "services", None), "automation_management", None)
         if service is None or context is None:
             raise PermissionError("This host does not expose automation management")
-        return await service.approve_authorization(
-            kind, definition_id, digest, context,
-        )
+        approve = getattr(service, "approve_authorization", None)
+        if not callable(approve):
+            raise CapabilityUnavailable("This host does not support automation authorization approval")
+        if sources is None:
+            return await approve(kind, definition_id, digest, context)
+
+        # Older hosts can accept and ignore arbitrary keywords. Require an
+        # explicit parameter before asking a host to grant a narrower scope.
+        try:
+            selection = inspect.signature(approve).parameters.get("sources")
+        except (TypeError, ValueError):
+            selection = None
+        if selection is None or selection.kind not in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY,
+        ):
+            raise CapabilityUnavailable("This host does not support explicit automation source selection")
+        return await approve(kind, definition_id, digest, context, sources=sources)
 
     approve_automation_authorization.__name__ = f"approve_{noun}_authorization"
     wrappers.extend((review_automation_authorization, approve_automation_authorization))

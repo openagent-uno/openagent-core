@@ -21,6 +21,12 @@ class _Management:
         return {"digest": digest, "authorized": True}
 
 
+@pytest.fixture
+def context():
+    principal = PrincipalRef("openagent", "network", "member")
+    return ExecutionContext(principal, principal, principal, "session", "agent", (principal,), ingress_id="verified")
+
+
 @pytest.mark.parametrize(
     ("kind", "review_name", "approve_name"),
     (
@@ -30,16 +36,11 @@ class _Management:
     ),
 )
 def test_automation_toolkit_exposes_exact_revision_review(
-    kind, review_name, approve_name,
+    kind, review_name, approve_name, context,
 ):
     management = _Management()
     runtime = SimpleNamespace(
         services=SimpleNamespace(automation_management=management),
-    )
-    principal = PrincipalRef("openagent", "network", "alice")
-    context = ExecutionContext(
-        principal, principal, principal, "session", "agent", (principal,),
-        ingress_id="verified",
     )
     toolkit = build_automation_toolkit(kind)
 
@@ -61,3 +62,51 @@ def test_automation_toolkit_exposes_exact_revision_review(
         ("review", kind, "definition", context),
         ("approve", kind, "definition", "abc", context),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sources", (["source-b", "source-a"], []))
+async def test_approval_tool_forwards_the_exact_source_selection(sources, context):
+    calls = []
+
+    async def approve(kind, definition, digest, caller, *, sources):
+        calls.append((kind, definition, digest, caller, sources))
+        return {"authorized": True}
+
+    management = SimpleNamespace(approve_authorization=approve)
+    runtime = SimpleNamespace(services=SimpleNamespace(automation_management=management))
+    tool = build_automation_toolkit("scheduled_task").async_functions["approve_scheduled_task_authorization"]
+    tool.process_entrypoint()
+    assert {"type": "array", "items": {"type": "string"}} in tool.parameters["properties"]["sources"]["anyOf"]
+    assert "sources" not in tool.parameters["required"]
+
+    with execution_scope(runtime, context, "run"):
+        assert await tool.entrypoint("definition", "abc", sources=sources) == {"authorized": True}
+    assert calls == [("scheduled_task", "definition", "abc", context, sources)]
+
+
+@pytest.mark.asyncio
+async def test_unsupported_approval_cannot_widen_a_source_selection(context):
+    toolkit = build_automation_toolkit("scheduled_task")
+    review = toolkit.async_functions["review_scheduled_task_authorization"].entrypoint
+    approve = toolkit.async_functions["approve_scheduled_task_authorization"].entrypoint
+    services = SimpleNamespace(automation_management=SimpleNamespace())
+    with execution_scope(SimpleNamespace(services=services), context, "run"):
+        with pytest.raises(LookupError, match="authorization review"):
+            await review("definition")
+        with pytest.raises(LookupError, match="authorization approval"):
+            await approve("definition", "abc")
+        legacy = _Management()
+        services.automation_management = legacy
+        with pytest.raises(LookupError, match="source selection"):
+            await approve("definition", "abc", sources=[])
+        assert legacy.calls == []
+        assert await approve("definition", "abc", sources=None) == {"digest": "abc", "authorized": True}
+        assert legacy.calls == [("approve", "scheduled_task", "definition", "abc", context)]
+
+        async def ignores_keywords(*args, **kwargs):
+            pytest.fail("An explicit selection must never reach a host that can silently ignore it")
+
+        services.automation_management = SimpleNamespace(approve_authorization=ignores_keywords)
+        with pytest.raises(LookupError, match="source selection"):
+            await approve("definition", "abc", sources=["source-a"])

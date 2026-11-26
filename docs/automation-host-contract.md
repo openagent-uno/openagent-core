@@ -22,6 +22,22 @@ definition and status filters. Pages are ordered by start time with a stable
 ID tiebreaker. The shared character budget can shorten a page before its
 item limit, so the cursor determines whether more rows are available.
 
+## Approving a reviewed revision
+
+The approval tools for scheduled tasks, workflows and events pass the reviewed
+digest and the current execution identity to the host. An optional `sources`
+array names the exact durable capability sources the user approved. An empty
+array grants no durable sources. Omitting the field uses the host's usual
+selection and calls its existing four-argument approval method.
+
+To support a selection, declare `sources` as a keyword parameter on
+`approve_authorization(kind, definition_id, digest, context, *, sources=None)`.
+Validate every selected ID against the caller's current grantable catalog and
+the current definition digest before capturing the grant. A host without
+explicit selection support receives no approval call for a supplied array.
+
+## Running and cancelling an automation
+
 `AutomationRuntime.launch(kind, row, request_id=..., inputs=...)` starts a tracked manual firing without attaching its lifetime to HTTP. `cancel_runs(kind, definition_id, run_ids)` flags only the exact host-authorized projected IDs and preserves the scheduler's cancellation drain. Hosts check each execution's immutable access scope before exposing output or stopping it. Cancellation has been verified on both the workflow projection and canonical run.
 
 The host must authorize the original request and every observation. In the agent's
