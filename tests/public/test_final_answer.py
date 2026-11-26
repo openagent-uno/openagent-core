@@ -267,7 +267,7 @@ class ActualProviderToolLoop(unittest.IsolatedAsyncioTestCase):
             """Read the deterministic fixture value."""
             calls.append("tool")
             return "41"
-        before, after = "I will check.", "The answer is 41."
+        before, after, blocks = "I will check.", "The answer is 41.", False
 
         class ProviderIO(Model):
             def __init__(self):
@@ -282,7 +282,9 @@ class ActualProviderToolLoop(unittest.IsolatedAsyncioTestCase):
 
             def invoke(self, **kwargs):
                 first, last = self.invoke_stream(**kwargs)
-                return ModelResponse(role="assistant", content=first.content + last.content, tool_calls=last.tool_calls)
+                text = first.content + last.content
+                content = [{"type": "text", "text": text}] if blocks else text
+                return ModelResponse(role="assistant", content=content, tool_calls=last.tool_calls)
 
             async def ainvoke(self, **kwargs):
                 return self.invoke(**kwargs)
@@ -309,19 +311,20 @@ class ActualProviderToolLoop(unittest.IsolatedAsyncioTestCase):
 
         from openagent_core.mcp._runtime.function import Function
         tools = [Function.from_callable(read_value)]
-        for before, after, expected in [
-            ("Checking.", "Result.", "Checking.\n\nResult."),
-            ("Checking. ", "Result.", "Checking. Result."),
-            ("Checking.", "\nResult.", "Checking.\nResult."),
-            ("", "Result.", "Result."),
-            ("Checking.", "", "Checking."),
+        for before, after, expected, blocks in [
+            ("Checking.", "Result.", "Checking.\n\nResult.", False),
+            ("Checking.", "Result.", "Checking.\n\nResult.", True),
+            ("Checking. ", "Result.", "Checking. Result.", False),
+            ("Checking.", "\nResult.", "Checking.\nResult.", False),
+            ("", "Result.", "Result.", False),
+            ("Checking.", "", "Checking.", False),
         ]:
             for method, stream_io in (
                 ("response", None), ("aresponse", None),
                 ("response_stream", True), ("response_stream", False),
                 ("aresponse_stream", True), ("aresponse_stream", False),
             ):
-                with self.subTest(before=before, after=after, method=method, stream_io=stream_io):
+                with self.subTest(before=before, after=after, blocks=blocks, method=method, stream_io=stream_io):
                     calls.clear()
                     messages = [Message(role="user", content="Question.")]
                     call = getattr(ProviderIO(), method)
@@ -334,7 +337,8 @@ class ActualProviderToolLoop(unittest.IsolatedAsyncioTestCase):
                         text = "".join(event.content or "" for event in events
                                        if event.event == ModelResponseEvent.assistant_response)
                     authored = [message.content or "" for message in messages if message.role == "assistant"]
-                    self.assertEqual([before, after], authored)
+                    expected_messages = ([{"type": "text", "text": value}] for value in (before, after))
+                    self.assertEqual(list(expected_messages) if blocks and not stream_io else [before, after], authored)
                     self.assertEqual(expected, text)
                     self.assertEqual(["tool"], calls)
 

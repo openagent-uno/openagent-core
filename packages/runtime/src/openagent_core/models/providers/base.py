@@ -1566,8 +1566,9 @@ class Model(ABC):
                         streaming_responses.append(model_response)
                     yield model_response
 
-                if isinstance(assistant_message.content, str) and assistant_message.content:
-                    previous_message_end = assistant_message.content[-1]
+                visible_text = stream_data.response_content if stream_model_response else model_response.content
+                if isinstance(visible_text, str) and visible_text:
+                    previous_message_end = visible_text[-1]
                 # Add assistant message to messages
                 messages.append(assistant_message)
                 assistant_message.log(metrics=True)
@@ -1848,8 +1849,9 @@ class Model(ABC):
                         streaming_responses.append(model_response)
                     yield model_response
 
-                if isinstance(assistant_message.content, str) and assistant_message.content:
-                    previous_message_end = assistant_message.content[-1]
+                visible_text = stream_data.response_content if stream_model_response else model_response.content
+                if isinstance(visible_text, str) and visible_text:
+                    previous_message_end = visible_text[-1]
                 # Add assistant message to messages
                 messages.append(assistant_message)
                 assistant_message.log(metrics=True)
