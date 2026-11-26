@@ -1,5 +1,7 @@
 # OpenAgent core documentation
 
+[Embedding beta 179](releases/v1.1.0-beta.179.md) covers model attribution and paragraph boundaries in coordinated replies.
+
 [Embedding beta 178](releases/v1.1.0-beta.178.md) covers delegated replies with inherited document history and cancellation of starting automations.
 
 [Embedding beta 177](releases/v1.1.0-beta.177.md) covers file names and attachments in saved runtime conversations.
