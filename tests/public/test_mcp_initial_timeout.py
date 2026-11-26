@@ -205,6 +205,66 @@ class InitialHandshakeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("local-stdio-answer", await read("sample"))
             self.assertEqual(calls.read_text(), "call\ncall\n")
 
+    async def test_foreground_reconnects_during_backoff_leave_recovery_to_the_pool(self):
+        fixture = Path(__file__).parent / "fixtures" / "mcp_startup_stdio.py"
+        (self.directory / "ready").touch()
+        pool = MCPPool([_ServerSpec("sample", command=[sys.executable],
+                                    args=[str(fixture), str(self.directory), "0.65"])])
+        pool.bind_capability_catalog(self.catalog)
+        self.addAsyncCleanup(pool.close_all)
+        with patch("openagent_core.mcp.pool._MCP_CONNECT_TIMEOUT", 2):
+            await pool.connect_all()
+        toolkit = pool.toolkit_by_name("sample")
+        self.assertIsNotNone(toolkit)
+        old_session = toolkit.session
+        (original,) = await self.catalog.discover(self.ctx)
+        await self.catalog.call_tool(original.tool_ref, {}, self.ctx)
+        calls = self.directory / "calls"
+        starts = self.directory / "starts"
+
+        with (patch.dict("os.environ", {"OPENAGENT_MCP_STARTUP_RETRY_SECONDS": ".065"}),
+              patch("openagent_core.mcp.pool._MCP_RECONNECT_WAIT", 0.45),
+              patch("mcp.client.stdio.PROCESS_TERMINATION_TIMEOUT", 0.035)):
+            self.assertFalse(await pool.reconnect_toolkit(toolkit, old_session))
+            recovery = pool._startup_retries["sample"]
+
+            async def foreground(recovery, disconnected):
+                while not recovery.done():
+                    await asyncio.wait_for(pool.reconnect_toolkit(toolkit, disconnected), 0.8)
+                    await asyncio.sleep(0)
+
+            waiter = asyncio.create_task(pool.reconnect_toolkit(toolkit, old_session))
+            await asyncio.sleep(0)
+            waiter.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await waiter
+            await asyncio.wait_for(asyncio.gather(foreground(recovery, old_session),
+                                                  foreground(recovery, old_session)), 8)
+            await recovery
+            self.assertEqual(pool.connection_status()[0]["state"], "ready")
+            self.assertIs(pool.toolkit_by_name("sample"), toolkit)
+            self.assertEqual([owner.toolkit for owner in pool._toolkit_supervisors], [toolkit])
+            self.assertEqual(len(starts.read_text().splitlines()), 4)
+            self.assertEqual(calls.read_text(), "call\n")
+            (current,) = await self.catalog.discover(self.ctx)
+            self.assertNotEqual(original.tool_ref, current.tool_ref)
+            await self.catalog.call_tool(current.tool_ref, {}, self.ctx)
+            self.assertEqual(calls.read_text(), "call\ncall\n")
+
+            # A source that never handshakes uses its three attempts even under
+            # continuous demand. A foreground call during cooldown starts none.
+            (self.directory / "ready").unlink()
+            disconnected = toolkit.session
+            self.assertFalse(await pool.reconnect_toolkit(toolkit, disconnected))
+            exhausted = pool._startup_retries["sample"]
+            await asyncio.wait_for(foreground(exhausted, disconnected), 8)
+            await exhausted
+            self.assertIn("sample", pool._startup_retry_after)
+            self.assertFalse(await pool.await_toolkit_ready(toolkit))
+            self.assertFalse(await pool.reconnect_toolkit(toolkit, disconnected))
+            self.assertEqual(len(starts.read_text().splitlines()), 8)
+            self.assertEqual(calls.read_text(), "call\ncall\n")
+
     async def test_authorized_discovery_and_call_recover_in_subsequent_normal_turn(
         self,
     ):

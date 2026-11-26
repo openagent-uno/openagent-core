@@ -1723,6 +1723,20 @@ class MCPPool:
         if self._capability_binding is not None:
             self._capability_binding.sync()
 
+    async def _await_startup_recovery(self, sup: _ToolkitSupervisor) -> bool:
+        """Only the pool starts handshakes during a retry burst or its cooldown."""
+        recovery = self._startup_retries.get(sup.name)
+        if recovery is None:
+            return False
+        # Waiting for the job covers backoff as well as the handshake. A
+        # foreground timeout or cancellation must leave the pool-owned job alive.
+        done, _ = await asyncio.wait((recovery,), timeout=_MCP_RECONNECT_WAIT)
+        if not done or recovery.cancelled() or sup.name in self._startup_pending:
+            return False
+        control = sup.control
+        return bool(self._toolkit_by_name.get(sup.name) is sup.toolkit and control
+                    and control["ready"] and not control["closing"] and control["pending"] is None)
+
     async def await_toolkit_ready(self, toolkit: Any) -> bool:
         """Join an in-flight reconnect before a call resolves the session.
 
@@ -1734,6 +1748,8 @@ class MCPPool:
         sup = next((s for s in self._toolkit_supervisors if s.toolkit is toolkit), None)
         if sup is None or sup.control is None:
             return True
+        if sup.name in self._startup_pending:
+            return await self._await_startup_recovery(sup)
         waiter = sup.control.get("pending")
         if waiter is None:
             return True
@@ -1774,11 +1790,10 @@ class MCPPool:
         a caller whose ``dead_session`` was already replaced returns at once.
         Returns True when the toolkit has a live, re-initialized session.
         """
-        return await self._reconnect_toolkit(toolkit, dead_session, reason=reason,
-                                             handshake_timeout=_MCP_CONNECT_TIMEOUT)
+        return await self._reconnect_toolkit(toolkit, dead_session, reason=reason)
 
     async def _reconnect_toolkit(self, toolkit: Any, dead_session: Any, *,
-                                 reason: str, handshake_timeout: float) -> bool:
+                                 reason: str, handshake_timeout: float | None = None) -> bool:
         sup = next((s for s in self._toolkit_supervisors if s.toolkit is toolkit), None)
         name = sup.name if sup is not None else self._toolkit_name(toolkit)
         if sup is None or sup.control is None:
@@ -1787,6 +1802,10 @@ class MCPPool:
             self._reconnect_skipped(name, "no_supervisor" if sup is None else "no_control", reason)
             return False
         control = sup.control
+        if handshake_timeout is None:
+            if name in self._startup_pending:
+                return await self._await_startup_recovery(sup)
+            handshake_timeout = _MCP_CONNECT_TIMEOUT
         if control.get("closing") or sup.task.done():
             if (sup in self._toolkit_supervisors and self._connected
                     and sup.spec is not None and control.get("replacement") is None):
