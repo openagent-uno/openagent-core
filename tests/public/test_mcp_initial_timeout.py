@@ -62,13 +62,15 @@ class InitialHandshakeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_bounded_retry_collapses_demand_and_shutdown_cancels_its_owner(self):
         attempts = 0
+        deadlines = []
         entered, stopped = asyncio.Event(), asyncio.Event()
         pool = MCPPool([_ServerSpec("sample", command=["unused"])])
         pool.bind_capability_catalog(self.catalog)
 
-        async def build(spec):
+        async def build(spec, *, initial_timeout=None):
             nonlocal attempts
             attempts += 1
+            deadlines.append(initial_timeout)
             if attempts == 5:
                 entered.set()
                 try:
@@ -93,6 +95,7 @@ class InitialHandshakeTests(unittest.IsolatedAsyncioTestCase):
                 )
             await asyncio.wait_for(pool._startup_retries["sample"], 2)
             self.assertEqual(attempts, 4)
+            self.assertEqual(deadlines, [None, 0.5, 1, 2])
             await self.catalog.temporarily_unavailable_sources(self.ctx)
             self.assertFalse(pool._startup_retries)
             pool._startup_retry_after["sample"] = 0
@@ -112,6 +115,7 @@ class InitialHandshakeTests(unittest.IsolatedAsyncioTestCase):
             await pool.close_all()
             self.assertTrue(stopped.is_set())
             self.assertEqual(attempts, 5)
+            self.assertEqual(deadlines[-1], 0.5)
             self.assertFalse(pool._startup_retries)
             self.assertFalse(self.catalog.has_source("sample", self.ctx))
 
@@ -136,6 +140,70 @@ class InitialHandshakeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(pool._startup_retries)
         self.assertFalse(await self.catalog.temporarily_unavailable_sources(self.ctx))
         self.assertFalse(self.catalog.has_source("missing", self.ctx))
+
+    async def test_slow_stdio_can_finish_its_background_handshake(self):
+        fixture = Path(__file__).parent / "fixtures" / "mcp_startup_stdio.py"
+        specs = []
+        for name, delay in (("fast", 0), ("sample", 0.65)):
+            folder = self.directory / name
+            folder.mkdir()
+            (folder / "ready").touch()
+            specs.append(_ServerSpec(name, command=[sys.executable],
+                                     args=[str(fixture), str(folder), str(delay)]))
+        pool = MCPPool(specs)
+        pool.bind_capability_catalog(self.catalog)
+        self.addAsyncCleanup(pool.close_all)
+
+        async def read(source):
+            (tool,) = await self.catalog.discover(self.ctx, source_id=source)
+            return str(await self.catalog.call_tool(tool.tool_ref, {}, self.ctx))
+
+        # Scale the SDK's subprocess termination grace along with the pool's
+        # deadlines. A fixture deliberately blocked on initialize cannot read EOF.
+        with (patch.dict("os.environ", {"OPENAGENT_MCP_STARTUP_RETRY_SECONDS": ".05"}),
+              patch("mcp.client.stdio.PROCESS_TERMINATION_TIMEOUT", 0.05),
+              patch("openagent_core.mcp.pool._MCP_RECONNECT_WAIT", 0.45)):
+            await pool.connect_all()
+            self.assertEqual(pool.connection_status()[1]["failure"]["code"], "timeout")
+            self.assertFalse(await self.catalog.discover(self.ctx, source_id="sample"))
+            self.policy.allow_status = False
+            self.assertFalse(await self.catalog.temporarily_unavailable_sources(self.ctx))
+            self.policy.allow_status = True
+            self.assertEqual(await self.catalog.temporarily_unavailable_sources(self.ctx),
+                             (("sample", "Agent workspace"),))
+            self.assertIn("local-stdio-answer", await read("fast"))
+            await asyncio.wait_for(pool._startup_retries["sample"], 8)
+            self.assertEqual(pool.connection_status()[1]["state"], "ready")
+            self.assertFalse((self.directory / "sample" / "calls").exists())
+            self.assertIn("local-stdio-answer", await read("sample"))
+            self.assertEqual((self.directory / "sample" / "calls").read_text(), "call\n")
+            self.assertEqual((self.directory / "fast" / "starts").read_text(), "start\n")
+            # Reconnecting an established toolkit still uses the ordinary deadline.
+            toolkit = pool.toolkit_by_name("sample")
+            folder = self.directory / "sample"
+            starts = folder / "starts"
+            previous_spawns = len(starts.read_text().splitlines())
+            (folder / "ready").unlink()
+            self.assertFalse(await pool.reconnect_toolkit(toolkit))
+            self.assertIn("local-stdio-answer", await read("fast"))
+            # The foreground attempt and first retry expire. Hold the next live
+            # subprocess until concurrent callers have used their shorter budgets.
+            async with asyncio.timeout(6):
+                while len(starts.read_text().splitlines()) < previous_spawns + 3:
+                    await asyncio.sleep(0.01)
+            recovering = pool._startup_retries["sample"]
+            self.assertEqual(await asyncio.gather(pool.await_toolkit_ready(toolkit),
+                                                  pool.reconnect_toolkit(toolkit)), [False, False])
+            (folder / "ready").touch()
+            self.assertTrue(await pool.reconnect_toolkit(toolkit))
+            await asyncio.wait_for(recovering, 5)
+            self.assertEqual(len(starts.read_text().splitlines()), previous_spawns + 3)
+            self.assertIs(pool.toolkit_by_name("sample"), toolkit)
+            self.assertEqual(pool.connection_status()[1]["state"], "ready")
+            calls = self.directory / "sample" / "calls"
+            self.assertEqual(calls.read_text(), "call\n")
+            self.assertIn("local-stdio-answer", await read("sample"))
+            self.assertEqual(calls.read_text(), "call\ncall\n")
 
     async def test_authorized_discovery_and_call_recover_in_subsequent_normal_turn(
         self,

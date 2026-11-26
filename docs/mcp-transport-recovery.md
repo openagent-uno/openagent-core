@@ -51,8 +51,14 @@ A configured stdio or streamable HTTP source can fail before it has a
 toolkit or a supervisor. After a timeout, connection loss, or transient
 HTTP response (408, 500, 502, 503 or 504), the pool keeps that source and
 starts up to three fresh handshakes in the background. Each uses the normal
-connection deadline. The first retry waits five seconds by default and the
-next two wait twice and four times that interval. Set
+30-second deadline except when a stdio subprocess timed out during its
+handshake. Relaunching starts that subprocess from scratch, so those
+three background attempts allow 60, 120 and 240 seconds respectively.
+An established session first reconnects within the ordinary deadline. If it
+times out, the same supervisor can finish a longer background handshake.
+Other callers share that attempt and keep their ordinary wait limit.
+Tool calls retain their own read timeouts. The first retry waits five
+seconds by default and the next two wait twice and four times that interval. Set
 `OPENAGENT_MCP_STARTUP_RETRY_SECONDS` in the runtime environment to change
 the base interval (0.05 to 300 seconds). One initial recovery handshake runs
 at a time per pool. Parallel turns share the attempt.

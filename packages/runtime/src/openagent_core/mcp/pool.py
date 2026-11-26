@@ -1091,16 +1091,21 @@ class MCPPool:
                     async with self._startup_retry_slot:
                         if self._startup_pending.get(name) is not spec:
                             return
+                        timeout = _MCP_CONNECT_TIMEOUT
+                        if spec.is_stdio and self._connection_failures.get(name, {}).get("code") == "timeout":
+                            # Each new subprocess must finish its own cold start.
+                            timeout *= 2 ** (attempt + 1)
+                        elog("mcp.startup_retry", name=name, attempt=attempt + 1, seconds=timeout)
                         existing = self._toolkit_by_name.get(name)
                         if existing is not None:
                             # An established transport keeps its registration and
                             # supervisor. Reconnect only the handshake, never a call.
-                            await self.reconnect_toolkit(existing, reason="catalog_recovery")
+                            await self._reconnect_toolkit(existing, None, reason="catalog_recovery",
+                                                          handshake_timeout=timeout)
                             if name not in self._startup_pending:
                                 return
                             continue
-                        elog("mcp.startup_retry", name=name, attempt=attempt + 1)
-                        toolkit = await self._build_and_enter_toolkit(spec)
+                        toolkit = await self._build_and_enter_toolkit(spec, initial_timeout=timeout)
                         if toolkit is not None:
                             if not _toolkit_ready(toolkit):
                                 # Some SDKs swallow initialize errors on entry.
@@ -1284,9 +1289,9 @@ class MCPPool:
         except BaseException as e:  # noqa: BLE001 — best-effort cleanup
             logger.debug("Best-effort MCP supervisor close (%s): %s", sup.name, e)
 
-    async def _safe_enter(self, toolkit: Any, spec: _ServerSpec) -> Any | None:
+    async def _safe_enter(self, toolkit: Any, spec: _ServerSpec, *, initial_timeout: float | None = None) -> Any | None:
         """Spawn a supervisor task that owns this toolkit end-to-end, then
-        wait up to ``_MCP_CONNECT_TIMEOUT`` for it to finish the handshake.
+        wait for its first handshake within the caller's deadline.
 
         Success path: supervisor enters ``stack`` and ``stack.enter_async_context(
         toolkit)``, sets ``ready_event``, and blocks on ``stop_event`` until
@@ -1300,8 +1305,8 @@ class MCPPool:
 
         Three distinct failure modes are handled:
 
-        1. ``asyncio.TimeoutError`` — handshake exceeded
-           ``_MCP_CONNECT_TIMEOUT``. Signal the supervisor to stop, await
+        1. ``asyncio.TimeoutError`` — handshake exceeded its deadline.
+           Signal the supervisor to stop, await
            it, return ``None``.
         2. ``asyncio.CancelledError`` / ``BaseExceptionGroup`` from
            inside the runtime's init — observed after a host disk-resize on a
@@ -1324,6 +1329,8 @@ class MCPPool:
         )
         cancel_before = cancelling() if callable(cancelling) else 0
 
+        if initial_timeout is None:
+            initial_timeout = _MCP_CONNECT_TIMEOUT
         ready_event = asyncio.Event()
         stop_event = asyncio.Event()
         # Holds the exception raised during handshake, if any.
@@ -1365,7 +1372,8 @@ class MCPPool:
                     # join it instead of requesting (and tearing down) another.
                     loop = asyncio.get_running_loop()
                     control["pending"] = loop.create_future()
-                    control["pending_since"] = loop.time()
+                    control["pending_deadline"] = loop.time() + _MCP_RECONNECT_WAIT
+                    control["handshake_timeout"] = _MCP_CONNECT_TIMEOUT
                     control["auto_reconnect"] = True
                 elog("mcp.session_transport_lost", level="warning", name=spec.name,
                      error=str(exc.args[0]) if exc.args else "")
@@ -1375,10 +1383,10 @@ class MCPPool:
             stop_event.clear()
             return True
 
-        async def _enter() -> AsyncExitStack:
+        async def _enter(timeout: float) -> AsyncExitStack:
             stack = AsyncExitStack()
             try:
-                async with asyncio.timeout(_MCP_CONNECT_TIMEOUT):
+                async with asyncio.timeout(timeout):
                     await stack.enter_async_context(toolkit)
             except BaseException:
                 # MCPTools.__aenter__ owns rollback of a failed partial entry.
@@ -1447,7 +1455,7 @@ class MCPPool:
             stack: AsyncExitStack | None = None
             try:
                 try:
-                    stack = await _enter()
+                    stack = await _enter(initial_timeout)
                 except BaseException as e:
                     handshake_error["err"] = e
                     ready_event.set()
@@ -1466,7 +1474,7 @@ class MCPPool:
                     if control["closing"]:
                         return
                     try:
-                        stack = await _enter()
+                        stack = await _enter(control["handshake_timeout"])
                         if not _toolkit_ready(toolkit):
                             raise RuntimeError("MCP session did not initialize")
                     except asyncio.CancelledError as e:
@@ -1532,14 +1540,14 @@ class MCPPool:
             # wait_for tripping on the same boundary and synthesising a
             # TimeoutError of its own.
             await asyncio.wait_for(
-                _wait_handshake(), timeout=_MCP_CONNECT_TIMEOUT + 1
+                _wait_handshake(), timeout=initial_timeout + 1
             )
         except asyncio.TimeoutError:
             # Supervisor didn't report ready within our outer bound — stop
             # it, drain it, and report as a timeout. This path is defensive:
-            # the inner ``asyncio.timeout(_MCP_CONNECT_TIMEOUT)`` should
+            # the inner handshake deadline should
             # already have fired and set ready_event with an error.
-            elog("mcp.timeout", level="warning", name=spec.name, seconds=_MCP_CONNECT_TIMEOUT)
+            elog("mcp.timeout", level="warning", name=spec.name, seconds=initial_timeout)
             self._record_connection_failure(spec.name, TimeoutError(), "connect")
             control["closing"] = True
             stop_event.set()
@@ -1584,7 +1592,7 @@ class MCPPool:
                 pass
             self._record_connection_failure(spec.name, err, "connect")
             if isinstance(err, asyncio.TimeoutError):
-                elog("mcp.timeout", level="warning", name=spec.name, seconds=_MCP_CONNECT_TIMEOUT)
+                elog("mcp.timeout", level="warning", name=spec.name, seconds=initial_timeout)
             else:
                 # If the outer task was externally cancelled (not us —
                 # something above us asked for shutdown), propagate.
@@ -1730,11 +1738,11 @@ class MCPPool:
         if waiter is None:
             return True
         loop = asyncio.get_running_loop()
-        if (not waiter.done()
-                and loop.time() - sup.control.get("pending_since", loop.time()) > _MCP_RECONNECT_WAIT):
+        remaining = sup.control["pending_deadline"] - loop.time()
+        if not waiter.done() and remaining <= 0:
             return await self._replace_wedged_toolkit(sup, reason="reconnect_stuck")
         try:
-            return bool(await asyncio.wait_for(asyncio.shield(waiter), timeout=_MCP_RECONNECT_WAIT))
+            return bool(await asyncio.wait_for(asyncio.shield(waiter), timeout=min(_MCP_RECONNECT_WAIT, remaining)))
         except asyncio.TimeoutError:
             return False
 
@@ -1766,6 +1774,11 @@ class MCPPool:
         a caller whose ``dead_session`` was already replaced returns at once.
         Returns True when the toolkit has a live, re-initialized session.
         """
+        return await self._reconnect_toolkit(toolkit, dead_session, reason=reason,
+                                             handshake_timeout=_MCP_CONNECT_TIMEOUT)
+
+    async def _reconnect_toolkit(self, toolkit: Any, dead_session: Any, *,
+                                 reason: str, handshake_timeout: float) -> bool:
         sup = next((s for s in self._toolkit_supervisors if s.toolkit is toolkit), None)
         name = sup.name if sup is not None else self._toolkit_name(toolkit)
         if sup is None or sup.control is None:
@@ -1788,12 +1801,14 @@ class MCPPool:
             return False
         waiter = control.get("pending")
         loop = asyncio.get_running_loop()
-        if (waiter is not None and not waiter.done()
-                and loop.time() - control.get("pending_since", loop.time()) > _MCP_RECONNECT_WAIT):
+        if waiter is not None and not waiter.done() and loop.time() >= control["pending_deadline"]:
             # The supervisor is stuck closing the dead transport (e.g. an
             # anyio task group draining a shielded child ignores the bounded
             # close). It can never service another reconnect: replace it.
             return await self._replace_wedged_toolkit(sup, reason=reason)
+        # Allow the supervisor's normal teardown margin. A foreground caller
+        # can stop waiting before a longer background handshake finishes.
+        wait_budget = _MCP_RECONNECT_WAIT + (handshake_timeout - _MCP_CONNECT_TIMEOUT)
         initiator = waiter is None
         if initiator:
             current = getattr(toolkit, "session", None)
@@ -1806,14 +1821,16 @@ class MCPPool:
                 return True
             waiter = loop.create_future()
             control["pending"] = waiter
-            control["pending_since"] = loop.time()
+            control["pending_deadline"] = loop.time() + wait_budget
+            control["handshake_timeout"] = handshake_timeout
             elog("mcp.session_reconnect_attempt", level="warning", name=sup.name, reason=reason)
             # Only the caller that opens a reconnect wakes the supervisor;
             # later callers join it, so a fresh session is never torn down
             # by a request that arrived while it was being opened.
             sup.stop_event.set()
         try:
-            ok = bool(await asyncio.wait_for(asyncio.shield(waiter), timeout=_MCP_RECONNECT_WAIT))
+            remaining = control["pending_deadline"] - loop.time()
+            ok = bool(await asyncio.wait_for(asyncio.shield(waiter), timeout=min(wait_budget, remaining)))
         except asyncio.TimeoutError:
             ok = False
         if initiator:
@@ -2016,7 +2033,7 @@ class MCPPool:
 
         return 0
 
-    async def _build_and_enter_toolkit(self, spec: _ServerSpec) -> Any | None:
+    async def _build_and_enter_toolkit(self, spec: _ServerSpec, *, initial_timeout: float | None = None) -> Any | None:
         """Construct an ``MCPTools`` for one spec, enter it, return it.
 
         Returns ``None`` on any failure and logs a warning — one bad MCP
@@ -2103,7 +2120,9 @@ class MCPPool:
             elog("mcp.error", level="warning", name=spec.name, error=str(e), phase="construct")
             return None
 
-        return await self._safe_enter(toolkit, spec)
+        if initial_timeout is None:
+            return await self._safe_enter(toolkit, spec)
+        return await self._safe_enter(toolkit, spec, initial_timeout=initial_timeout)
 
     # ── Provider-facing accessors ───────────────────────────────────────
 
