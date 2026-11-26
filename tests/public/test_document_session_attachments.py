@@ -70,6 +70,122 @@ class DocumentSessionAttachments(unittest.IsolatedAsyncioTestCase):
         await self.store.transition(identifier, "running")
         return request
 
+    async def page_access(self):
+        from importlib.resources import files
+        from openagent_core.memory.legacy_document_history import SessionProjectionGuard
+        from openagent_core.memory.operational.access import AccessContext
+        from openagent_core.workspace_administration import SessionInspection
+
+        conn = await self.db._ensure_connected()
+        await conn.executescript(files("openagent_core.memory.operational.sql").joinpath("custom_views_v1.sql").read_text())
+        inspector = SessionInspection(self.db, self.runtime.services.authorizer, runtime=self.runtime)
+        guard = SessionProjectionGuard(lambda sid: inspector.authorize(self.context, sid, connection=conn))
+        key = self.actor.key
+        return conn, AccessContext("tenant", key, "user", "author", "", frozenset({key}), frozenset(), guard)
+
+    async def test_paginated_native_attachments_select_only_the_delivered_files(self):
+        from openagent_core.memory.message_parts import canonical_parts_for_messages_on_connection
+
+        conn, access = await self.page_access()
+        other = replace(self.context, session_id="elsewhere")
+        await self.admit("other", other)
+        unrelated = await self.repository.upload(other, b"elsewhere", filename="other.txt", session_id=other.session_id)
+        preview = await self.repository.upload(self.context, b"preview", filename="preview.txt", session_id="thread")
+        original = dict(self.original, filename="untrusted.txt", path="/untrusted", url="untrusted")
+        await self.admit("selected", attachments=(original, unrelated))
+        parts = [{"kind": "text", "text": "Before ", "private": "untrusted"},
+                 *[{"kind": "attachment", "attachment": item} for item in (preview, unrelated, original, original)],
+                 {"kind": "text", "text": "after."}]
+        answer = "Before after."
+        await self.store.append_event("selected", "run.stream", {"kind": "done", "text": answer, "parts": parts,
+            "final_answer": {"text": answer, "attachments": [original, unrelated]}})
+        await self.store.transition("selected", "success", output=answer)
+        user, assistant = [row[0] for row in await (await conn.execute(
+            "SELECT id FROM session_messages WHERE run_id='selected' ORDER BY ordinal")).fetchall()]
+
+        async def read(viewer=access):
+            return await canonical_parts_for_messages_on_connection(conn, [user, assistant], access=viewer)
+
+        page = await read()
+        attachment, = [p for p in page[user] if p["kind"] == "attachment"]
+        self.assertEqual(attachment["attachment"]["filename"], "original.txt")
+        self.assertEqual(attachment["attachment"]["artifact_id"], original["artifact_id"])
+        self.assertEqual(page[assistant], [{"kind": "text", "text": "Before "}, attachment,
+                                          {"kind": "text", "text": "after."}])
+        self.assertNotIn("untrusted", json.dumps(page))
+        self.assertEqual(await read(replace(access, principal_id="peer", principal_ids=frozenset({"peer"}))), {})
+        self.assertEqual(await read(replace(access, tenant_id="another-tenant")), {})
+
+        # The same content later acquires a protected source. Its independent
+        # authorized link cannot publish the name when that source is revoked.
+        source = await self.admit("source", other)
+        with execution_scope(self.runtime, other, source.run_id):
+            await self.vault.read(other, "note.md")
+            shared = await self.repository.upload(other, self.content, filename="shared.txt", session_id=other.session_id)
+        self.assertEqual(shared["artifact_id"], original["artifact_id"])
+        self.assertIn(attachment, (await read())[assistant])
+        self.denied.add(("session.read", other.session_id))
+        self.assertNotIn(original["artifact_id"], json.dumps(await read()))
+        with self.assertRaises(PermissionError):
+            await access.projection.recheck()
+        self.denied.clear()
+        await conn.execute("UPDATE session_messages SET source_version=source_version+1 WHERE id=?", (assistant,))
+        self.assertNotIn(assistant, await read())
+        await conn.execute("UPDATE session_messages SET author_principal_id='other' WHERE id=?", (user,))
+        self.assertNotIn(user, await read())
+
+    async def test_paged_legacy_terminal_frames_batch_files_without_changing_history(self):
+        from openagent_core.memory.message_parts import canonical_parts_for_messages_on_connection
+
+        conn, access = await self.page_access()
+        messages, expected = [], []
+        for i in range(6):
+            rid = f"old-{i}"
+            original = await self.repository.upload(self.context, bytes([i]), filename=f"{i}.txt", session_id="thread")
+            if i == 5:
+                await self.repository.upload(self.context, bytes([i]), filename="another-name.txt", session_id="thread")
+            await self.admit(rid)
+            id_only = {"artifact_id": original["artifact_id"]}
+            await self.store.append_event(rid, "run.stream", {"kind": "done", "text": "Delivered",
+                                          "attachments": [id_only, id_only]})
+            await self.store.transition(rid, "success", output="Delivered")
+            row = await (await conn.execute("SELECT id FROM session_messages WHERE run_id=? AND role='assistant'", (rid,))).fetchone()
+            messages.append(row[0])
+            expected.append(original["artifact_id"])
+
+        async def trace(ids):
+            statements = []
+            await conn.set_trace_callback(statements.append)
+            try:
+                hydrated = await canonical_parts_for_messages_on_connection(conn, ids, access=access)
+            finally:
+                await conn.set_trace_callback(None)
+            return hydrated, len(statements)
+
+        unchanged = conn.total_changes
+        one, single_count = await trace(messages[:1])
+        whole, page_count = await trace(messages)
+        self.assertGreater(single_count, 0)
+        self.assertEqual(page_count, single_count)
+        self.assertEqual(one[messages[0]], whole[messages[0]])
+        self.assertEqual([[p["attachment"]["artifact_id"] for p in whole[mid] if p["kind"] == "attachment"]
+                          for mid in messages], [[aid] for aid in expected])
+        self.assertEqual(whole[messages[0]][1]["attachment"]["filename"], "0.txt")
+        self.assertEqual(whole[messages[-1]][1]["attachment"]["filename"], expected[-1])
+        self.assertEqual(conn.total_changes, unchanged)
+
+        await conn.execute("DELETE FROM artifact_links WHERE resource_type='session' AND artifact_id=?", (expected[0],))
+        await conn.execute("UPDATE artifacts SET deleted_at_ms=created_at_ms WHERE id=?", (expected[1],))
+        await conn.execute(
+            "INSERT INTO domain_events(event_id,tenant_id,resource_type,resource_id,session_id,run_id,"
+            "event_type,occurred_at_ms,schema_version,metadata_json,sensitivity) "
+            "VALUES('withheld','tenant','run','old-2','thread','old-2','run.stream',1,1,?,'secret')",
+            (json.dumps({"kind": "done", "text": "Delivered", "attachments": [self.original]}),),
+        )
+        remaining, _ = await trace(messages)
+        for aid in expected[:3]:
+            self.assertNotIn(aid, json.dumps(remaining))
+
     async def test_first_turn_returns_original_bytes_and_historical_turn_rediscovers_them(self):
         ctx = self.context
         original = self.original

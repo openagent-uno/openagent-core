@@ -1,7 +1,7 @@
 """Source receipts for SQLite content-addressed attachment delivery."""
 import json
 
-from .legacy_document_history import HOST_TABLE, SessionProjectionGuard, has_ledger, projection_tables, protected_projection_sessions
+from .legacy_document_history import HOST_TABLE, SessionProjectionGuard, projection_tables, protected_projection_sessions
 
 
 _MAX_SOURCES = 2048
@@ -55,63 +55,77 @@ async def _add_origins(conn, artifact, key, receipts):
 
 
 async def visible(conn, artifact, projection):
-    """Require every original session's receipts even for an owner or a deduplicated object."""
-    metadata = json.loads(artifact["metadata_json"])
-    origins = metadata.get(_ORIGINS, [])
-    if not isinstance(origins, list) or len(origins) > _MAX_SOURCES:
-        return False
-    sessions = set()
-    scoped = metadata.get(_HOST_ORIGINS, [])
-    if (not isinstance(scoped, list) or len(scoped) > _MAX_SOURCES
-            or any(not isinstance(item, list) or len(item) != 2
-                   or not all(isinstance(part, str) and part for part in item) for item in scoped)):
-        return False
-    if scoped:
-        if HOST_TABLE not in await projection_tables(conn):
-            return False
-        missing = await (await conn.execute(
-            """SELECT 1 FROM json_each(?) AS receipt WHERE NOT EXISTS (
-                   SELECT 1 FROM oa_host_scoped_sessions AS marker
-                   JOIN session_runs AS run ON run.session_id=marker.session_id
-                   WHERE marker.session_id=json_extract(receipt.value, '$[0]')
-                     AND run.id=json_extract(receipt.value, '$[1]') AND run.tenant_id=?
-               ) LIMIT 1""", (json.dumps(scoped), artifact["tenant_id"]),
-        )).fetchone()
-        if missing:
-            return False
-        sessions.update(item[0] for item in scoped)
-    if origins:
-        if not await has_ledger(conn):
-            return False
-        if any(not isinstance(item, list) or len(item) != 3
-               or not all(isinstance(part, str) and part for part in item) for item in origins):
-            return False
-        missing = await (await conn.execute(
-            """SELECT 1 FROM json_each(?) AS receipt WHERE NOT EXISTS (
-                SELECT 1 FROM oa_document_run_sources d JOIN session_runs r ON r.id=d.run_id
-                WHERE d.session_id=json_extract(receipt.value,'$[0]')
-                  AND d.run_id=json_extract(receipt.value,'$[1]')
-                  AND d.source_id=json_extract(receipt.value,'$[2]') AND r.tenant_id=?
-            ) LIMIT 1""", (json.dumps(origins), artifact["tenant_id"]),
-        )).fetchone()
-        if missing:
-            return False
-        sessions.update(item[0] for item in origins)
-    # Historical bytes may have no origin marker. A new owner, independent
-    # link or matching digest cannot release an older protected link.
-    cursor = await conn.execute(
-        """SELECT DISTINCT CASE l.resource_type WHEN 'session' THEN l.resource_id
-             WHEN 'message' THEN m.session_id WHEN 'tool_invocation' THEN t.session_id
-             WHEN 'run' THEN r.session_id WHEN 'session_run' THEN r.session_id END AS sid
-           FROM artifact_links l
-           LEFT JOIN session_messages m ON l.resource_type='message' AND m.id=l.resource_id AND m.tenant_id=l.tenant_id
-           LEFT JOIN tool_invocations t ON l.resource_type='tool_invocation' AND t.id=l.resource_id AND t.tenant_id=l.tenant_id
-           LEFT JOIN session_runs r ON l.resource_type IN ('run','session_run') AND r.id=l.resource_id AND r.tenant_id=l.tenant_id
-           WHERE l.tenant_id=? AND l.artifact_id=? AND sid IS NOT NULL LIMIT ?""",
-        (artifact["tenant_id"], artifact["id"], _MAX_SOURCES + 1),
-    )
-    sessions.update(row[0] for row in await cursor.fetchall())
-    if len(sessions) > _MAX_SOURCES:
-        return False
+    """Require every original session's receipts even for a deduplicated object."""
+    return artifact["id"] in await visible_ids(conn, artifact["tenant_id"], [artifact], projection)
+
+
+async def visible_ids(conn, tenant, artifacts, projection):
+    """Check a page of CAS objects against the same source grants as a download."""
+    sessions = {}
+    receipts = {_HOST_ORIGINS: [], _ORIGINS: []}
+    for artifact in artifacts:
+        ident = artifact["id"]
+        if artifact["tenant_id"] != tenant or ident in sessions:
+            continue
+        try:
+            metadata = json.loads(artifact["metadata_json"])
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(metadata, dict):
+            continue
+        groups = [(key, size, metadata.get(key, [])) for key, size in ((_HOST_ORIGINS, 2), (_ORIGINS, 3))]
+        if any(not isinstance(items, list) or len(items) > _MAX_SOURCES or any(
+            not isinstance(item, list) or len(item) != size or
+            not all(isinstance(value, str) and value for value in item) for item in items
+        ) for _, size, items in groups):
+            continue
+        sessions[ident] = {item[0] for _, _, items in groups for item in items}
+        for key, _, items in groups:
+            receipts[key].extend([ident, *item] for item in items)
+    if not sessions:
+        return set()
+
+    host_check = """SELECT 1 FROM oa_host_scoped_sessions s JOIN session_runs r ON r.session_id=s.session_id
+                    WHERE s.session_id=j.value ->> '$[1]' AND r.id=j.value ->> '$[2]' AND r.tenant_id=?"""
+    document_check = """SELECT 1 FROM oa_document_run_sources d JOIN session_runs r ON r.id=d.run_id
+                        WHERE d.session_id=j.value ->> '$[1]' AND d.run_id=j.value ->> '$[2]'
+                        AND d.source_id=j.value ->> '$[3]' AND r.tenant_id=?"""
+    if any(receipts.values()):
+        tables = await projection_tables(conn)
+        for key, table, check in ((_HOST_ORIGINS, HOST_TABLE, host_check),
+                                  (_ORIGINS, "oa_document_run_sources", document_check)):
+            items = receipts[key]
+            if not items:
+                continue
+            if table not in tables:
+                missing = {entry[0] for entry in items}
+            else:
+                query = f"SELECT DISTINCT j.value ->> '$[0]' FROM json_each(?) j WHERE NOT EXISTS ({check})"
+                missing = {row[0] for row in await (await conn.execute(query, (json.dumps(items), tenant))).fetchall()}
+            for ident in missing:
+                sessions.pop(ident, None)
+
+    # Older objects may have no recorded provenance. An additional authorized
+    # link must never release a separate protected source of the same bytes.
+    rows = await (await conn.execute("""
+        SELECT requested.value, source.value FROM json_each(?) requested
+        CROSS JOIN json_each((SELECT json_group_array(sid) FROM (
+            SELECT DISTINCT CASE l.resource_type WHEN 'session' THEN l.resource_id
+                WHEN 'message' THEN m.session_id WHEN 'tool_invocation' THEN t.session_id
+                WHEN 'run' THEN r.session_id WHEN 'session_run' THEN r.session_id END AS sid
+              FROM artifact_links l
+              LEFT JOIN session_messages m ON l.resource_type='message' AND m.id=l.resource_id AND m.tenant_id=l.tenant_id
+              LEFT JOIN tool_invocations t ON l.resource_type='tool_invocation' AND t.id=l.resource_id AND t.tenant_id=l.tenant_id
+              LEFT JOIN session_runs r ON l.resource_type IN ('run','session_run') AND r.id=l.resource_id AND r.tenant_id=l.tenant_id
+             WHERE l.tenant_id=? AND l.artifact_id=requested.value AND sid IS NOT NULL LIMIT ?
+        ))) source
+        """, (json.dumps(list(sessions)), tenant, _MAX_SOURCES + 1))).fetchall()
+    for ident, sid in rows:
+        sessions[ident].add(sid)
+    candidates = {ident: sources for ident, sources in sessions.items() if len(sources) <= _MAX_SOURCES}
+    all_sources = sorted({sid for sources in candidates.values() for sid in sources})
+    allowed = set()
     guard = projection or SessionProjectionGuard()
-    return await guard.visible(conn, sessions) == sessions
+    for start in range(0, len(all_sources), 300):
+        allowed.update(await guard.visible(conn, all_sources[start:start + 300]))
+    return {ident for ident, sources in candidates.items() if sources <= allowed}

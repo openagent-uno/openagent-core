@@ -34,7 +34,7 @@ class TranscriptLayout(unittest.IsolatedAsyncioTestCase):
         )
 
     async def turn(self, *, run_id="run", suffix="", done=True, extra_delta="", final_text=None,
-                   small_deltas=0):
+                   small_deltas=0, done_fields=None):
         context = ExecutionContext(self.principal, self.principal, self.principal,
                                    "session", "agent", (self.principal,))
         await self.store.accept(RunRequest(run_id, "session", run_id, "Prompt"), context)
@@ -62,7 +62,7 @@ class TranscriptLayout(unittest.IsolatedAsyncioTestCase):
             await self.store.append_event(run_id, "run.stream", {"kind": "delta", "text": suffix + extra_delta})
         full_text = "Prima 🧑🏽‍💻\nDopo à" + "x" * small_deltas + suffix
         if done:
-            await self.store.append_event(run_id, "run.stream", {"kind": "done", "text": full_text})
+            await self.store.append_event(run_id, "run.stream", {"kind": "done", "text": full_text, **(done_fields or {})})
         await self.store.transition(run_id, "success", output=final_text if final_text is not None else full_text)
         return [
             dict(row) for row in self.store.connection.execute(
@@ -93,6 +93,16 @@ class TranscriptLayout(unittest.IsolatedAsyncioTestCase):
     async def test_rejects_missing_final_frame(self):
         page = await self.turn(done=False)
         self.assertEqual(await self.layout(page), {})
+
+    async def test_unmaterialized_file_keeps_canonical_presentation_across_page_boundaries(self):
+        _, first, _, _ = await self.turn()
+        self.assertIn(first["id"], await self.layout([first]))
+        ref = {"artifact_id": "art_" + "0" * 32}
+        for key, value in (("attachments", [ref]), ("parts", [{"kind": "attachment", "attachment": ref}])):
+            with self.subTest(key=key):
+                _, first, second, assistant = await self.turn(run_id=key, done_fields={key: value})
+                self.assertEqual(await self.layout([first]), {})
+                self.assertEqual(await self.layout([second, assistant]), {})
 
     async def test_rejects_text_missing_from_canonical_answer(self):
         page = await self.turn(extra_delta=" Former private draft")

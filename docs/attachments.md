@@ -208,6 +208,14 @@ Public responses never contain local paths, binary bodies or caller URLs.
 Canonical mixed text/file order is preserved. Without a canonical capability,
 a legacy local path does not become a downloadable public attachment.
 
+SQLite message pages also recover files from previously saved native Runtime
+turns. The original admission identifies user uploads. The successful terminal
+frame identifies files the assistant delivered. Recovery checks the current
+session link, availability and source permissions on each read. It preserves
+the existing message order and requires no history migration. A client requesting
+an interleaved timeline receives the canonical message when a text-only segment
+would hide a file.
+
 Hosts with sandbox readers may explicitly register an
 `openagent_core.artifacts.AttachmentPublisher` as the runtime service
 `attachments.publisher`. Its async `publish(context, path)` must authorize the

@@ -563,6 +563,12 @@ async def canonical_parts_for_messages_on_connection(
                         else None,
                     }
                 )
+        if access is not None:
+            missing = [message_id for message_id in chunk if message_id not in output]
+            if missing:
+                from .runtime_message_parts import runtime_parts_for_page
+
+                output.update(await runtime_parts_for_page(conn, missing, access, max_parts=MAX_MESSAGE_PARTS))
     return output
 
 

@@ -92,7 +92,7 @@ async def transcript_segments(
             continue
         cuts = await _attest_journal(
             conn, access.tenant_id, session_id, run_id,
-            [row["tool_call_id"] for row in rows[:-1]], public_text,
+            [row["tool_call_id"] for row in rows[:-1]], public_text, has_parts=bool(answer["part_count"]),
         )
         if cuts is None:
             continue
@@ -187,12 +187,18 @@ async def _attest_journal(
     run_id: str,
     tool_ids: Sequence[str],
     text: str,
+    *, has_parts: bool,
 ) -> list[int] | None:
     # Only public deltas, the terminal frame and durable tool intent can
     # establish a boundary. Ignore diagnostics and unrelated lifecycle events.
     query = """
         SELECT event_type, sensitivity, json_extract(metadata_json,'$.privacy_redacted') AS redacted,
                CASE WHEN event_type='run.stream' THEN json_extract(metadata_json,'$.kind') END AS stream_kind,
+               CASE WHEN ?=0 AND event_type='run.stream' AND json_extract(metadata_json,'$.kind')='done'
+                    THEN json_type(metadata_json,'$.attachments[0]') IS NOT NULL
+                         OR json_type(metadata_json,'$.final_answer.attachments[0]') IS NOT NULL
+                         OR EXISTS (SELECT 1 FROM json_each(metadata_json,'$.parts') p
+                                    WHERE p.type='object' AND json_extract(p.value,'$.kind')='attachment') END AS unmaterialized_file,
                CASE WHEN event_type='run.stream' AND sensitivity='normal'
                     AND json_type(metadata_json,'$.text')='text'
                     AND length(CAST(json_extract(metadata_json,'$.text') AS BLOB))<=?
@@ -209,7 +215,7 @@ async def _attest_journal(
     cuts: list[int] = []
     offset = 0
     verified_final = False
-    parameters = (len(text.encode()), run_id, tenant_id, session_id, run_id, _MAX_TURN_EVENTS + 1)
+    parameters = (has_parts, len(text.encode()), run_id, tenant_id, session_id, run_id, _MAX_TURN_EVENTS + 1)
     async with conn.execute(query, parameters) as cursor:
         count = 0
         async for event in cursor:
@@ -226,7 +232,9 @@ async def _attest_journal(
                     return None
                 offset += len(chunk)
             elif event["stream_kind"] == "done":
-                if event["text"] != text or offset != len(text) or len(cuts) != len(tool_ids):
+                # A text-only segment would hide a native attachment on clients
+                # rendering the interleaved page. Keep its canonical message.
+                if event["unmaterialized_file"] or event["text"] != text or offset != len(text) or len(cuts) != len(tool_ids):
                     return None
                 verified_final = True
             else:
