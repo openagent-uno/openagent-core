@@ -20,13 +20,14 @@ voice pipeline degrades to text-only replies (the historical behaviour).
 
 from __future__ import annotations
 
-from openagent_core.configuration import runtime_environment
 import logging
 import os
 import re
 from dataclasses import dataclass
+from inspect import isawaitable
 from typing import Any, AsyncIterator
 
+from openagent_core.configuration import runtime_environment
 from openagent_core.voice import _load_litellm, tts_local
 from openagent_core.core.logging import elog
 
@@ -334,7 +335,10 @@ async def synthesize_stream(
         return
     try:
         emitted = 0
-        async for chunk in response.aiter_bytes(chunk_size=16 * 1024):
+        chunks = response.aiter_bytes(chunk_size=16 * 1024)
+        if isawaitable(chunks):
+            chunks = await chunks
+        async for chunk in chunks:
             if chunk:
                 emitted += len(chunk)
                 yield chunk
