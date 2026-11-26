@@ -24,6 +24,11 @@ the retries are exhausted. During reconfiguration the previous graph continues
 to serve while the replacement is being prepared. Handshake recovery never
 invokes or replays a tool.
 
+A complete catalog with zero tools satisfies the source requirement on the
+first handshake or after recovery. The module service can then start with an
+empty tool list, and `MCPPool.connection_status()` reports `ready` with a
+`tool_count` of zero.
+
 The independently built wheels are `openagent-module-sessions`, `-search`,
 `-vault`, `-mcp`, `-workflows`, `-scheduler`, `-events`, `-delegation`, `-skills`,
 `-models`, `-budget`, `-attachments`, `-logs`, `-ptc` and `-tool-discovery`.

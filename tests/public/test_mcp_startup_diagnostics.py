@@ -84,6 +84,13 @@ class StartupDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('must-stay-private', json.dumps(snapshot))
         self.assertNotIn('secret-data', json.dumps(snapshot))
 
+    async def test_legacy_empty_toolkit_without_catalog_evidence_stays_dormant(self):
+        pool, _ = await self.connect(None)
+        self.assertIsNone(await pool.startup_toolkit("owned-fixture"))
+        self.assertEqual(pool.connection_status(), [
+            {"mcp_name": "owned-fixture", "state": "dormant", "tool_count": 0},
+        ])
+
     async def test_failed_partial_entry_is_in_snapshot_without_a_registered_toolkit(self):
         pool = MCPPool([_ServerSpec('failed-fixture')])
         class FailedEntry:
@@ -117,6 +124,7 @@ class StartupDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(pool.close_all)
         self.assertEqual(2, attempts)
         self.assertIsNone(pool.toolkit_by_name(spec.name))
+        self.assertIsNone(await pool.startup_toolkit(spec.name))
         self.assertEqual([{'mcp_name':spec.name,'state':'unavailable','tool_count':0,
             'failure':{'code':'process_not_found','phase':'connect'}}], pool.connection_status())
 

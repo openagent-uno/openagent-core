@@ -179,6 +179,42 @@ class RequiredNativeSource(unittest.IsolatedAsyncioTestCase):
             await self.runtime.capabilities.call_tool(tool.tool_ref, {}, self.context)
         self.assertEqual(calls.read_text(), "call\n")
 
+    def configure_empty_catalog(self, failed_lists):
+        self.command[-1:] = ["", str(failed_lists)]
+        (self.directory / "ready").touch()
+
+    async def assert_empty_catalog_published(self, failed_lists):
+        self.configure_empty_catalog(failed_lists)
+        await self.runtime.start()
+        service = self.runtime.service("vault.service")
+        self.assertIsNotNone(service)
+        self.assertFalse(await self.runtime.capabilities.discover(self.context, source_id="vault"))
+        entry = next(row for row in service.pool.list_mcp_tools() if row["mcp_name"] == "vault")
+        self.assertEqual(entry, {"mcp_name": "vault", "tools": []})
+        status = next(row for row in service.pool.connection_status() if row["mcp_name"] == "vault")
+        self.assertEqual(status, {"mcp_name": "vault", "state": "ready", "tool_count": 0})
+        self.assertEqual((self.directory / "discovery").read_text().splitlines(),
+                         ["initialize", "tools/list"] * (failed_lists + 1))
+        self.assertFalse((self.directory / "calls").exists())
+
+    async def test_complete_empty_catalog_needs_one_handshake(self):
+        await self.assert_empty_catalog_published(0)
+
+    async def test_recovered_empty_catalog_clears_previous_discovery_failure(self):
+        await self.assert_empty_catalog_published(2)
+
+    async def test_failed_discovery_retains_its_diagnostic(self):
+        self.configure_empty_catalog(100)
+        pool = MCPPool.from_config([{"name": "sample", "command": self.command}], include_defaults=False)
+        self.addAsyncCleanup(pool.close_all)
+        await pool.connect_all()
+        self.assertIsNone(await pool.startup_toolkit("sample"))
+        self.assertEqual(pool.connection_status(), [{
+            "mcp_name": "sample", "state": "dormant", "tool_count": 0,
+            "failure": {"code": "initialization_failed", "phase": "build_tools"},
+        }])
+        self.assertFalse((self.directory / "calls").exists())
+
     async def test_permanent_error_and_exhausted_recovery_leave_service_unpublished(self):
         with patch.object(self, "command", [str(self.directory / "absent")]), \
              patch.object(MCPPool, "schedule_startup_retry") as retry:

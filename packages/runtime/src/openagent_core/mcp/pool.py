@@ -602,6 +602,14 @@ def _toolkit_ready(toolkit: Any) -> bool:
     return not hasattr(toolkit, "session") or toolkit.session is not None
 
 
+def _discovery_complete(toolkit: Any, tool_count: int) -> bool:
+    """A current catalog can be empty. Older subprocess toolkits report only a count."""
+    if toolkit is None or not _toolkit_ready(toolkit):
+        return False
+    generation = getattr(toolkit, "capability_generation", NotImplemented)
+    return tool_count > 0 if generation is NotImplemented else generation is not None
+
+
 # Bounds one in-task session reconnect (close the dead session, reopen it,
 # re-run the MCP handshake) as seen by the caller that asked for it.
 _MCP_RECONNECT_WAIT = 30 + 5 + 5 + 5 + 5
@@ -925,7 +933,7 @@ class MCPPool:
                     # MCPTools.functions is the dict of registered tools
                     # (populated during MCPTools.initialize()).
                     count = len(getattr(toolkit, "functions", {}) or {})
-                    if count == 0:
+                    if not _discovery_complete(toolkit, count):
                         # Stealth-fail recovery — see _DORMANT_RECOVERY_ATTEMPTS
                         # docstring above. The subprocess is alive (we entered
                         # the stack); the runtime just lost the init result.
@@ -949,12 +957,13 @@ class MCPPool:
                             and spec.name in self._dead_recovery_sessions
                         ):
                             count = await self._respawn_after_dead_session(spec, toolkit)
+                            toolkit = self._toolkit_by_name.get(spec.name)
                     self._tool_counts[spec.name] = count
-                    if count > 0:
+                    elog("mcp.connect", name=spec.name, tools=count)
+                    if _discovery_complete(toolkit, count):
                         self._last_connect_error.pop(spec.name, None)
                         self._connection_failures.pop(spec.name, None)
-                    elog("mcp.connect", name=spec.name, tools=count)
-                    if count == 0:
+                    else:
                         # Ensure a dormant MCP carries *some* cause for the
                         # validator/UI even when recovery saw no explicit
                         # exception (the runtime's blanket-except swallowed
@@ -1255,9 +1264,9 @@ class MCPPool:
         # caller (connect_all) will mark it dormant via the standard
         # path. Capping at one re-spawn keeps the worst-case wallclock
         # bounded for a permanently-broken MCP.
-        if count == 0:
+        if not _discovery_complete(new_toolkit, count):
             count = await self._recover_dormant_toolkit(new_toolkit, spec)
-        if count > 0:
+        if _discovery_complete(new_toolkit, count):
             elog("mcp.respawn_succeeded", name=spec.name, tools=count)
         return count
 
@@ -1694,7 +1703,7 @@ class MCPPool:
             elog("mcp.respawn_failed", level="warning", name=sup.name)
         else:
             count = len(getattr(new_toolkit, "functions", {}) or {})
-            if count == 0 or not _toolkit_ready(new_toolkit):
+            if not _discovery_complete(new_toolkit, count):
                 # MCPTools.initialize() swallows handshake failures: give the
                 # build the same stealth-fail recovery connect_all() gives it.
                 count = await self._recover_dormant_toolkit(new_toolkit, spec)
@@ -1708,8 +1717,9 @@ class MCPPool:
             self._runtime_toolkits.append(new_toolkit)
             self._toolkit_by_name[sup.name] = new_toolkit
             self._tool_counts[sup.name] = count
-            if count > 0:
+            if _discovery_complete(new_toolkit, count):
                 self._last_connect_error.pop(sup.name, None)
+                self._connection_failures.pop(sup.name, None)
                 elog("mcp.respawn_succeeded", name=sup.name, tools=count)
             else:
                 # Same state connect_all() leaves a server in when it cannot
@@ -1970,7 +1980,7 @@ class MCPPool:
                 err = e
 
             count = len(getattr(toolkit, "functions", {}) or {})
-            if count > 0:
+            if err is None and _discovery_complete(toolkit, count):
                 self._last_connect_error.pop(spec.name, None)
                 self._connection_failures.pop(spec.name, None)
                 self._dead_recovery_sessions.discard(spec.name)
@@ -2199,10 +2209,10 @@ class MCPPool:
         rows = []
         for spec in self.specs:
             toolkit = self._toolkit_by_name.get(spec.name)
-            count = self._toolkit_tool_count(toolkit) if toolkit is not None else 0
-            complete = toolkit is not None and getattr(toolkit, "capability_generation", NotImplemented) is not None
-            state = "ready" if complete and count > 0 else ("dormant" if toolkit is not None else "unavailable")
-            row = {"mcp_name": spec.name, "state": state, "tool_count": count if complete else 0}
+            count = self._toolkit_tool_count(toolkit)
+            ready = spec.name not in self._connection_failures and _discovery_complete(toolkit, count)
+            state = "ready" if ready else ("dormant" if toolkit is not None else "unavailable")
+            row = {"mcp_name": spec.name, "state": state, "tool_count": count if ready else 0}
             if state != "ready" and spec.name in self._connection_failures:
                 row["failure"] = dict(self._connection_failures[spec.name])
             rows.append(row)
@@ -2223,8 +2233,7 @@ class MCPPool:
         if recovery is not None:
             await asyncio.shield(recovery)
         toolkit = self.toolkit_by_name(name)
-        if (toolkit is None or name in self._connection_failures or not _toolkit_ready(toolkit)
-                or getattr(toolkit, "capability_generation", NotImplemented) is None):
+        if name in self._connection_failures or not _discovery_complete(toolkit, self._toolkit_tool_count(toolkit)):
             return None
         return toolkit
 
