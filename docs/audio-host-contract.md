@@ -1,9 +1,9 @@
 <!-- Concrete host labels in this historical record are anonymized; original bytes and hashes are retained in the protected operator audit. -->
 # Explicit host audio
 
-Opening a text stream leaves the optional LiteLLM speech SDK unloaded. The cloud speech adapters import it on a worker thread when they first transcribe or synthesize audio.
+Opening a text stream leaves the optional LiteLLM speech SDK unloaded. The first transcription or synthesis routed through a LiteLLM speech adapter imports the SDK on a worker thread.
 
-Streaming speech accepts SDK responses that return the byte iterator directly or through an awaitable. It closes the response on completion, cancellation, or when the caller closes the stream early.
+The LiteLLM streaming synthesis adapter accepts an `aiter_bytes()` result that supplies an async iterator directly or through an awaitable. It forwards each nonempty chunk as the iterator yields it and closes the response on completion, cancellation, or when the caller closes the stream early.
 
 `openagent_core.audio.VoiceService(db, fallback=None, worker_command=None, timeout_seconds=120)` resolves the latest enabled audio model using the existing provider/model IDs and metadata. `transcribe(path, language=None)` returns text or `None`; `synthesize(text, language=None)` returns `SynthesizedAudio(data, media_type)` or `None`.
 
