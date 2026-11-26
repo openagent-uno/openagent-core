@@ -2217,6 +2217,17 @@ class MCPPool:
         """
         return self.runtime_toolkits_tool_search_only()
 
+    async def startup_toolkit(self, name: str) -> Any | None:
+        """Resolve a required module source after its current, bounded startup recovery."""
+        recovery = self._startup_retries.get(name)
+        if recovery is not None:
+            await asyncio.shield(recovery)
+        toolkit = self.toolkit_by_name(name)
+        if (toolkit is None or name in self._connection_failures or not _toolkit_ready(toolkit)
+                or getattr(toolkit, "capability_generation", NotImplemented) is None):
+            return None
+        return toolkit
+
     def toolkit_by_name(self, mcp_name: str) -> Any | None:
         """Resolve a connected toolkit by MCP name, or ``None`` when
         the MCP isn't loaded. Covers both subprocess and in-process

@@ -15,6 +15,13 @@ mutation. A contribution may bind typed services, capability sources, prompt
 blocks, routes, health checks, search providers, workers, event ingress and
 rebuildable indices. The host remains the only authority that can change a graph.
 
+A selected module publishes its services and capabilities only after its required
+native sources complete startup and discovery. If the initial handshake times
+out, module startup waits for the pool's existing bounded recovery. Permanent
+failures and exhausted recovery fail graph preparation. During reconfiguration
+the previous graph continues to serve while the replacement is being prepared.
+Handshake recovery never invokes or replays a tool.
+
 The independently built wheels are `openagent-module-sessions`, `-search`,
 `-vault`, `-mcp`, `-workflows`, `-scheduler`, `-events`, `-delegation`, `-skills`,
 `-models`, `-budget`, `-attachments`, `-logs`, `-ptc` and `-tool-discovery`.

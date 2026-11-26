@@ -120,16 +120,18 @@ class _NativeCapabilityInstance:
                         entry["in_process"] = True
             self.pool = MCPPool.from_config(entries, include_defaults=False,
                                             db_path=str(db_path) if db_path else None)
+            required_sources = []
             try:
                 await self.pool.connect_all()
+                for builtin in self.descriptor.native_sources:
+                    toolkit = await self.pool.startup_toolkit(builtin)
+                    if toolkit is None:
+                        raise RuntimeError(f"Module {self.descriptor.id} failed to start capability source {builtin}")
+                    required_sources.append((builtin, toolkit))
             except BaseException:
                 await self.close()
                 raise
-            for builtin in self.descriptor.native_sources:
-                toolkit = self.pool.toolkit_by_name(builtin)
-                if toolkit is None:
-                    await self.close()
-                    raise RuntimeError(f"Module {self.descriptor.id} failed to start capability source {builtin}")
+            for builtin, toolkit in required_sources:
                 canonical = self.descriptor.source_names.get(builtin, builtin)
                 effects = _trusted_effects(self.descriptor.id, builtin, toolkit)
                 source = PoolCapabilitySource(self.pool, canonical, toolkit,

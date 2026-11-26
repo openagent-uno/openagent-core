@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import unittest
 import sqlite3
 import json
+import sys
+from unittest.mock import patch
 
 from openagent_core import (
     CapabilityCatalog,
@@ -45,7 +47,7 @@ from openagent_module_skills import descriptor as skills_descriptor
 from openagent_module_tool_discovery import descriptor as tool_discovery_descriptor
 from openagent_core.module_adapters import NativeCapabilityDescriptor
 from openagent_core.modules import ServiceRegistry
-from openagent_core.contracts import DelegationService, ModelCatalog, SessionStore
+from openagent_core.contracts import AuthorizationDenied, DelegationService, ModelCatalog, SessionStore
 from openagent_core.code_execution import CodeExecutor
 from openagent_core.mcp.pool import MCPPool
 from openagent_core.automation_runtime import AutomationRuntime
@@ -117,6 +119,88 @@ class FederatedSearch(unittest.IsolatedAsyncioTestCase):
             {"domain": "scheduler", "reason": "unauthorized", "error_type": "RuntimeError"},
         ])
         self.assertIn("It does not search\nthe public web", SEARCH_PROMPT.text)
+
+
+class RequiredNativeSource(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.directory = Path(self.enterContext(TemporaryDirectory()))
+        self.command = [sys.executable, str(Path(__file__).parent / "fixtures" / "mcp_startup_stdio.py"),
+                        str(self.directory), "0", "read_note"]
+        from openagent_core.mcp import pool
+
+        resolve = pool.resolve_builtin_entry
+
+        def resolve_entry(name, *args, **kwargs):
+            if name == "vault":
+                return {"name": name, "command": self.command, "_trusted_module": name}
+            return resolve(name, *args, **kwargs)
+
+        self.enterContext(patch.object(pool, "resolve_builtin_entry", resolve_entry))
+        self.enterContext(patch.object(pool, "_MCP_CONNECT_TIMEOUT", 0.25))
+        self.enterContext(patch("mcp.client.stdio.PROCESS_TERMINATION_TIMEOUT", 0.045))
+        self.policy = Policy()
+        principal = PrincipalRef("fixture", "tenant", "owner")
+        self.context = ExecutionContext(principal, principal, principal, "session", "agent", (principal,))
+        self.runtime = Runtime(
+            RuntimeSettings("agent", self.directory, (("OPENAGENT_MCP_STARTUP_RETRY_SECONDS", ".05"),)),
+            RuntimeServices(SqliteRuntimeStore(self.directory / "state.sqlite3"), ProfileExecutor(), self.policy),
+            profile=RuntimeProfile(1, {"vault": ModuleConfig(frozenset({"service", "agent_tools"}),
+                                                            {"vault_path": str(self.directory)})}),
+            module_catalog=ModuleCatalog((vault_descriptor,)),
+        )
+        self.addAsyncCleanup(self.runtime.close)
+
+    async def wait_until_retry(self, startup):
+        starts = self.directory / "starts"
+        async with asyncio.timeout(6):
+            while not starts.exists() or len(starts.read_text().splitlines()) < 2:
+                if startup.done():
+                    await startup
+                    self.fail("Module became ready before the required source")
+                await asyncio.sleep(.01)
+
+    async def test_recovered_source_publishes_only_after_discovery_with_its_trusted_effects(self):
+        startup = asyncio.create_task(self.runtime.start())
+        await self.wait_until_retry(startup)
+        self.assertIsNone(self.runtime.service("vault.service"))
+        self.assertFalse(await self.runtime.capabilities.discover(self.context, source_id="vault"))
+        (self.directory / "ready").touch()
+        await asyncio.wait_for(startup, 6)
+        self.assertIsNotNone(self.runtime.service("vault.service"))
+        (tool,) = await self.runtime.capabilities.discover(self.context, source_id="vault")
+        self.assertEqual(tool.name, "vault_read_note")
+        self.assertEqual(tool.effects, {"vault.read", "vault.recall.path"})
+        calls = self.directory / "calls"
+        self.assertFalse(calls.exists())
+        result = await self.runtime.capabilities.call_tool(tool.tool_ref, {}, self.context)
+        self.assertIn("local-stdio-answer", str(result))
+        self.policy.denied.add("tool.call")
+        with self.assertRaisesRegex(AuthorizationDenied, "tool.call"):
+            await self.runtime.capabilities.call_tool(tool.tool_ref, {}, self.context)
+        self.assertEqual(calls.read_text(), "call\n")
+
+    async def test_permanent_error_and_exhausted_recovery_leave_service_unpublished(self):
+        with patch.object(self, "command", [str(self.directory / "absent")]), \
+             patch.object(MCPPool, "schedule_startup_retry") as retry:
+            with self.assertRaisesRegex(RuntimeError, "Module vault failed to start capability source vault"):
+                await self.runtime.start()
+            retry.assert_not_called()
+        with self.assertRaisesRegex(RuntimeError, "Module vault failed to start capability source vault"):
+            await asyncio.wait_for(self.runtime.start(), 10)
+        self.assertEqual((self.directory / "starts").read_text().splitlines(), ["start"] * 4)
+        self.assertIsNone(self.runtime.service("vault.service"))
+        self.assertFalse(await self.runtime.capabilities.discover(self.context, source_id="vault"))
+        self.assertFalse((self.directory / "calls").exists())
+
+    async def test_cancelled_module_start_closes_its_recovering_pool(self):
+        startup = asyncio.create_task(self.runtime.start())
+        await self.wait_until_retry(startup)
+        startup.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await startup
+        self.assertFalse({"mcp-startup-retry:vault", "mcp-supervisor:vault"}
+                         & {task.get_name() for task in asyncio.all_tasks()})
+        self.assertIsNone(self.runtime.service("vault.service"))
 
 
 class ModularRuntime(unittest.IsolatedAsyncioTestCase):

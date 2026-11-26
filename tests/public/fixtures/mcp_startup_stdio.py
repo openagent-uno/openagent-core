@@ -28,7 +28,7 @@ for line in sys.stdin:
         result = {
             "tools": [
                 {
-                    "name": "read_sample",
+                    "name": sys.argv[3] if len(sys.argv) > 3 else "read_sample",
                     "description": "Read a sample",
                     "inputSchema": {"type": "object", "properties": {}},
                 }
